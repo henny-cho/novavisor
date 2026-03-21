@@ -1,0 +1,6 @@
+.docs/
+.agents/
+.toolchain/
+build/
+compile_commands.json
+.cache/

@@ -1,0 +1,41 @@
+name: NovaVisor Bare-Metal CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install ARM Toolchain & Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build python3 xz-utils qemu-system-arm wget clang-tidy clang-format
+        ./scripts/setup_env.sh
+
+    - name: Ensure Code Formatting (clang-format)
+      run: |
+        find . -type d \( -name ".toolchain" -o -name "build" -o -name "external" \) -prune -o -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.c' -o -name '*.h' \) -print | xargs clang-format --dry-run --Werror
+
+    - name: Configure CMake (Cross Compile)
+      run: |
+        source .toolchain/env.sh
+        cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-aarch64.cmake
+
+    - name: Run Clang-Tidy (Static Analysis)
+      run: |
+        source .toolchain/env.sh
+        # Re-configure with clang-tidy enabled and run build to trigger it
+        cmake -B build -DENABLE_CLANG_TIDY=ON
+        cmake --build build
+
+    - name: Build Project
+      run: |
+        source .toolchain/env.sh
+        cmake --build build --config Release

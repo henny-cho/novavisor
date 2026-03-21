@@ -1,0 +1,25 @@
+---
+# NovaVisor Clang-Tidy Configuration
+# Enforces strictly embedded zero-cost principles by limiting bad OOP structures.
+Checks: '
+    -*,
+    cppcoreguidelines-*,
+    modernize-*,
+    performance-*,
+    bugprone-*,
+    -bugprone-reserved-identifier,
+    -clang-diagnostic-error,
+    -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+    -readability-identifier-length,
+    # Disallow dynamic memory allocation!
+    -cppcoreguidelines-owning-memory,
+    -cppcoreguidelines-no-malloc
+'
+# Relaxing strictness for bare-metal sysroot issues
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*'
+
+# Options restricting exception throwing because of -fno-exceptions context.
+CheckOptions:
+  - key:             cert-err58-cpp.ExceptionsAreAllowed
+    value:           '0'

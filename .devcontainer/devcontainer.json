@@ -1,0 +1,28 @@
+{
+  "name": "NovaVisor DevContainer",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "editor.formatOnSave": true,
+        "C_Cpp.default.compilerPath": "/opt/toolchain/current/bin/aarch64-none-elf-g++",
+        "C_Cpp.default.cStandard": "c17",
+        "C_Cpp.default.cppStandard": "c++23",
+        "C_Cpp.default.intelliSenseMode": "linux-gcc-arm64",
+        "C_Cpp.formatting": "clangFormat",
+        "C_Cpp.codeAnalysis.runAutomatically": true,
+        "C_Cpp.codeAnalysis.clangTidy.enabled": true
+      },
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cpptools-extension-pack",
+        "twxs.cmake",
+        "ms-vscode.cmake-tools"
+      ]
+    }
+  },
+  "remoteUser": "dev",
+  "postCreateCommand": "aarch64-none-elf-gcc --version"
+}
