@@ -9,6 +9,9 @@ UseTab: Never
 ColumnLimit: 120
 BreakBeforeBraces: Attach
 
+# Template declarations: always put `using`/class/function on a new line after `template<...>`
+AlwaysBreakTemplateDeclarations: Yes
+
 PointerAlignment: Left
 ReferenceAlignment: Left
 
