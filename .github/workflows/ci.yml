@@ -34,3 +34,6 @@ jobs:
 
       - name: Lint
         run: scripts/task.sh lint --release
+
+      - name: Host unit tests
+        run: scripts/task.sh test

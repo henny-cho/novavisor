@@ -16,6 +16,11 @@ _start:
     ldr x0, =__stack_top
     mov sp, x0
 
+    // Install exception vector table
+    ldr x0, =_vector_table
+    msr vbar_el2, x0
+    isb
+
     // Branch to C++ main entry
     bl novavisor_main
 

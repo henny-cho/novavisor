@@ -13,7 +13,9 @@ MEMORY
 SECTIONS
 {
     .text : {
-         KEEP(*(.text.boot)) /* Ensure boot.S is placed first */
+         KEEP(*(.text.boot))   /* boot.S: _start entry point, must be first */
+         . = ALIGN(2048);      /* VBAR_EL2 requires 2^11-byte alignment */
+         KEEP(*(.text.vec))    /* vec.S: EL2 exception vector table */
          *(.text*)
     } > RAM
 

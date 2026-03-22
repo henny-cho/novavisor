@@ -8,15 +8,21 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Zero-cost abstraction rules: No RTTI, No Exceptions
+# Universal warning flags
 add_compile_options(
-    $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
-    $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
     $<$<COMPILE_LANGUAGE:CXX>:-Wall>
     $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
     $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
     $<$<COMPILE_LANGUAGE:CXX>:-Werror>
 )
+
+# Zero-cost abstraction rules: No RTTI, No Exceptions (bare-metal only)
+if(CMAKE_CROSSCOMPILING)
+    add_compile_options(
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
+    )
+endif()
 
 # Enable exporting of compile_commands.json for clang-tidy/clangd via VSCode
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -108,42 +114,71 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(etl)
 
 # ==============================================================================
-# Target Definitions
+# Target Definitions — bare-metal ELF (cross) vs host GTest (native)
 # ==============================================================================
 
-set(SOURCES
-    hal/armv8_aarch64/boot.S
-    projects/qemu_virt_arm64/main.cpp
-    components/nova_panic/src/nova_panic.cpp
-)
+if(CMAKE_CROSSCOMPILING)
 
-add_executable(novavisor.elf ${SOURCES})
+    set(SOURCES
+        hal/armv8_aarch64/boot.S
+        hal/armv8_aarch64/vec.S
+        projects/qemu_virt_arm64/main.cpp
+        components/nova_panic/src/nova_panic.cpp
+        components/trap_handler/src/trap_handler.cpp
+    )
 
-# Link CIB (all sub-libraries) and ETL
-target_link_libraries(novavisor.elf PRIVATE cib etl)
+    add_executable(novavisor.elf ${SOURCES})
 
-# Project root as include base so all headers use absolute-from-root paths
-# e.g. #include "components/foo/include/foo.hpp"
-target_include_directories(novavisor.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    # Link CIB (all sub-libraries) and ETL
+    target_link_libraries(novavisor.elf PRIVATE cib etl)
 
-# Use STDX freestanding mode: bypasses {fmt} dependency, uses bare-metal safe
-# compile-time string formatting from cpp-std-extensions
-target_compile_definitions(novavisor.elf PRIVATE STDX_FREESTANDING)
+    # Project root as include base so all headers use absolute-from-root paths
+    # e.g. #include "components/foo/include/foo.hpp"
+    target_include_directories(novavisor.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# Add Linker script and bare-metal linking rules
-target_link_options(novavisor.elf PRIVATE
-    -T ${CMAKE_CURRENT_SOURCE_DIR}/hal/armv8_aarch64/linker.ld
-    -nostartfiles
-    -nostdlib
-    -Wl,--gc-sections
-    # Bare-metal C runtime builtins (strlen, memcpy, etc.) from newlib-nano.
-    # No dynamic allocation is introduced — we do not call malloc/free.
-    -lgcc
-    -lc
-)
+    # Use STDX freestanding mode: bypasses {fmt} dependency, uses bare-metal safe
+    # compile-time string formatting from cpp-std-extensions
+    target_compile_definitions(novavisor.elf PRIVATE STDX_FREESTANDING)
 
-# Custom command to generate raw flat binary required by some QEMU boots
-add_custom_command(TARGET novavisor.elf POST_BUILD
-    COMMAND ${CMAKE_OBJCOPY} -O binary novavisor.elf novavisor.bin
-    COMMENT "Generating flat binary novavisor.bin"
-)
+    # Add Linker script and bare-metal linking rules
+    target_link_options(novavisor.elf PRIVATE
+        -T ${CMAKE_CURRENT_SOURCE_DIR}/hal/armv8_aarch64/linker.ld
+        -nostartfiles
+        -nostdlib
+        -Wl,--gc-sections
+        # Bare-metal C runtime builtins (strlen, memcpy, etc.) from newlib-nano.
+        # No dynamic allocation is introduced — we do not call malloc/free.
+        -lgcc
+        -lc
+    )
+
+    # Custom command to generate raw flat binary required by some QEMU boots
+    add_custom_command(TARGET novavisor.elf POST_BUILD
+        COMMAND ${CMAKE_OBJCOPY} -O binary novavisor.elf novavisor.bin
+        COMMENT "Generating flat binary novavisor.bin"
+    )
+
+else()
+    # ===========================================================================
+    # Host GTest Target (x86_64, native build)
+    # Tests header-only utilities that depend only on <cstdint>: esr.hpp,
+    # trap_context.hpp.
+    # ===========================================================================
+    enable_testing()
+
+    find_package(GTest QUIET)
+    if(NOT GTest_FOUND)
+        CPMAddPackage(
+            NAME googletest
+            GITHUB_REPOSITORY google/googletest
+            GIT_TAG v1.14.0
+            OPTIONS "INSTALL_GTEST OFF" "BUILD_GMOCK OFF"
+        )
+    endif()
+
+    add_executable(esr_parse_test tests/host/esr_parse_test.cpp)
+    target_include_directories(esr_parse_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(esr_parse_test PRIVATE GTest::gtest_main)
+    add_test(NAME esr_parse_test COMMAND esr_parse_test)
+
+endif() # CMAKE_CROSSCOMPILING

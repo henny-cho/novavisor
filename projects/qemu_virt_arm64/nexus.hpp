@@ -17,13 +17,15 @@
 #include "components/boot_msg/include/boot_msg.hpp"
 #include "components/hal_init/include/hal_init.hpp"
 #include "components/idle/include/idle.hpp"
+#include "components/trap_handler/include/trap_handler.hpp"
 
 #include <cib/top.hpp>
 
 namespace novavisor {
 
 struct nova_project {
-  constexpr static auto config = cib::components<hal_init_component, boot_msg_component, idle_component>;
+  constexpr static auto config =
+      cib::components<hal_init_component, boot_msg_component, idle_component, trap_handler_component>;
 };
 
 // nova_top is the concrete cib::top instantiation for this target.

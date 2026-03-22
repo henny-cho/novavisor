@@ -26,7 +26,8 @@ print_usage() {
     echo "  format      Run clang-format on source files (--check for dry-run)"
     echo "  lint        Run clang-tidy static analysis"
     echo "  run         Run novavisor.elf in QEMU"
-    echo "  ci          Run the full CI pipeline (format check + build + lint)"
+    echo "  ci          Run the full CI pipeline (format check + build + lint + test)"
+    echo "  test        Build and run host GTest suite (x86_64, no toolchain)"
     echo ""
     echo "Options:"
     echo "  --release   Build in Release mode (default: Debug)"
@@ -154,6 +155,22 @@ cmd_run() {
         -kernel "${BUILD_DIR}/novavisor.elf"
 }
 
+cmd_test() {
+    local HOST_BUILD_DIR="${WORK_DIR}/build/host"
+
+    _setup_cpm_cache
+
+    echo "==> Configuring host GTest build..."
+    cmake -B "${HOST_BUILD_DIR}" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Debug
+
+    echo "==> Building host tests..."
+    cmake --build "${HOST_BUILD_DIR}"
+
+    echo "==> Running host tests..."
+    ctest --test-dir "${HOST_BUILD_DIR}" --output-on-failure
+}
+
 cmd_ci() {
     echo "==> Running Local CI Pipeline..."
     # Check only -- do not modify files. CI must fail on unformatted code,
@@ -161,6 +178,7 @@ cmd_ci() {
     cmd_format --check
     cmd_build --release
     cmd_lint --release
+    cmd_test
     echo "==> Local CI Pipeline Passed Successfully!"
 }
 
@@ -182,6 +200,7 @@ case "${SUBCOMMAND}" in
     format)    cmd_format "$@" ;;
     lint)      cmd_lint   "$@" ;;
     run)       cmd_run    "$@" ;;
+    test)      cmd_test   "$@" ;;
     ci)        cmd_ci     "$@" ;;
     -h|--help) print_usage ;;
     *)
