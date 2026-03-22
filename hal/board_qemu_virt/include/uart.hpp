@@ -4,12 +4,12 @@
 
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 namespace novavisor::board::qemu_virt {
 
-// Write a span of bytes to PL011 UART0 (polling).
-// This is the primary UART output primitive used by all higher-level
-// logging and console components.
+// Primary write primitive: all other overloads delegate here.
+// Writes a span of bytes to PL011 UART0 via polling.
 inline void uart_write(std::span<const uint8_t> data) noexcept {
   auto* const dr = reinterpret_cast<volatile uint32_t*>(UART0_BASE); // NOLINT
   for (const auto byte : data) {
@@ -17,13 +17,15 @@ inline void uart_write(std::span<const uint8_t> data) noexcept {
   }
 }
 
-// Convenience wrapper: write a null-terminated C string to UART0.
+// Write a string_view to UART0. Length is known; no null-termination required.
+inline void uart_write(std::string_view sv) noexcept {
+  uart_write(std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(sv.data()),
+                                      sv.size()}); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+}
+
+// Compatibility overload for null-terminated C strings.
 inline void uart_puts(const char* str) noexcept {
-  while (*str != '\0') {
-    auto* const dr = reinterpret_cast<volatile uint32_t*>(UART0_BASE); // NOLINT
-    *dr            = static_cast<uint32_t>(*str);
-    ++str; // NOLINT
-  }
+  uart_write(std::string_view{str});
 }
 
 } // namespace novavisor::board::qemu_virt
