@@ -23,13 +23,14 @@ print_usage() {
     echo "Subcommands:"
     echo "  build       Configure and build the project using CMake & Ninja"
     echo "  clean       Remove the build directory"
-    echo "  format      Run clang-format on all C/C++ source files"
+    echo "  format      Run clang-format on source files (--check for dry-run)"
     echo "  lint        Run clang-tidy static analysis"
     echo "  run         Run novavisor.elf in QEMU"
-    echo "  ci          Run the full CI pipeline steps locally"
+    echo "  ci          Run the full CI pipeline (format check + build + lint)"
     echo ""
     echo "Options:"
-    echo "  --release   Build in Release mode (default is Debug)"
+    echo "  --release   Build in Release mode (default: Debug)"
+    echo "  --check     (format only) Verify formatting without modifying files"
     echo "  -h, --help  Show this help message"
 }
 
@@ -37,20 +38,36 @@ print_usage() {
 # Internal helpers
 # ------------------------------------------------------------------------------
 
-# Set up the project-local CPM package cache.
-# Must be called before any cmake invocation so that CPM finds the cache and
-# does not re-download packages on every clean build.
+# Enumerate all project C/C++ source and header files, excluding generated
+# and vendored directories. Single source of truth for format and lint targets.
+_find_sources() {
+    find . \
+        -type d \( -name "external" -o -name ".toolchain" -o -name "build" \) -prune \
+        -o -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.c' -o -name '*.h' \) -print
+}
+
+# Set up the project-local CPM package cache and export CPM_SOURCE_CACHE.
+# Must be called before any cmake invocation.
 _setup_cpm_cache() {
     local CPM_VER="0.42.1"
     local CPM_CACHE_DIR="${WORK_DIR}/external/cache/cpm"
     local CPM_CACHE_FILE="${CPM_CACHE_DIR}/CPM_${CPM_VER}.cmake"
     mkdir -p "${CPM_CACHE_DIR}"
     # Bootstrap the cache from an existing build directory on first run.
-    # On a clean slate cmake/get_cpm.cmake will download it anyway.
     if [ ! -f "${CPM_CACHE_FILE}" ] && [ -f "${BUILD_DIR}/cmake/CPM_${CPM_VER}.cmake" ]; then
         cp "${BUILD_DIR}/cmake/CPM_${CPM_VER}.cmake" "${CPM_CACHE_FILE}"
     fi
     export CPM_SOURCE_CACHE="${WORK_DIR}/external/cache"
+}
+
+# Parse a --release flag from "$@" and echo the resulting BUILD_TYPE.
+# Callers: local BUILD_TYPE; BUILD_TYPE=$(_parse_build_type "$@")
+_parse_build_type() {
+    local type="Debug"
+    for arg in "$@"; do
+        [[ "${arg}" == "--release" ]] && type="Release"
+    done
+    echo "${type}"
 }
 
 # ------------------------------------------------------------------------------
@@ -58,20 +75,14 @@ _setup_cpm_cache() {
 # ------------------------------------------------------------------------------
 
 cmd_build() {
-    local BUILD_TYPE="Debug"
-
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --release) BUILD_TYPE="Release"; shift ;;
-            *) echo "Unknown option: $1"; print_usage; exit 1 ;;
-        esac
-    done
+    local BUILD_TYPE
+    BUILD_TYPE=$(_parse_build_type "$@")
 
     _setup_cpm_cache
 
     echo "==> Configuring CMake (${BUILD_TYPE})..."
-    # Explicitly disable clang-tidy so that a previous 'lint' run's cached
-    # ENABLE_CLANG_TIDY=ON does not contaminate regular builds.
+    # Explicitly disable clang-tidy to prevent a prior 'lint' run's cached
+    # ENABLE_CLANG_TIDY=ON from contaminating regular builds.
     cmake -B "${BUILD_DIR}" -G Ninja \
         -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
         -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
@@ -88,28 +99,41 @@ cmd_clean() {
 }
 
 cmd_format() {
-    echo "==> Running clang-format..."
-    find . -type d \( -name "external" -o -name ".toolchain" -o -name "build" \) -prune -o -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.c' -o -name '*.h' \) -print | xargs -r clang-format -i
-    echo "Formatting complete."
+    local CHECK_ONLY=0
+    for arg in "$@"; do
+        [[ "${arg}" == "--check" ]] && CHECK_ONLY=1
+    done
+
+    if [[ ${CHECK_ONLY} -eq 1 ]]; then
+        echo "==> Checking clang-format compliance..."
+        local violations
+        violations=$(_find_sources | xargs -r clang-format --dry-run --Werror 2>&1 || true)
+        if [[ -n "${violations}" ]]; then
+            echo "Error: formatting violations found:"
+            echo "${violations}"
+            echo "Run 'scripts/task.sh format' to fix."
+            exit 1
+        fi
+        echo "Format check passed."
+    else
+        echo "==> Running clang-format..."
+        _find_sources | xargs -r clang-format -i
+        echo "Formatting complete."
+    fi
 }
 
 cmd_lint() {
-    local BUILD_TYPE="Debug"
-
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --release) BUILD_TYPE="Release"; shift ;;
-            *) echo "Unknown option: $1"; print_usage; exit 1 ;;
-        esac
-    done
+    local BUILD_TYPE
+    BUILD_TYPE=$(_parse_build_type "$@")
 
     _setup_cpm_cache
 
     echo "==> Running clang-tidy (${BUILD_TYPE})..."
-    # Configure with clang-tidy enabled. If the build type matches the
-    # previous cmake configure, ninja reuses object files and only the
-    # clang-tidy pass runs -- no full recompile.
-    cmake -B "${BUILD_DIR}" \
+    # Pass all required flags so lint works even on a clean build directory.
+    # If BUILD_TYPE matches the previous cmake configure, ninja reuses object
+    # files and only the clang-tidy pass runs -- no full recompile.
+    cmake -B "${BUILD_DIR}" -G Ninja \
+        -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
         -DENABLE_CLANG_TIDY=ON \
         -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
     cmake --build "${BUILD_DIR}"
@@ -122,31 +146,19 @@ cmd_run() {
         echo "Executable not found. Building first..."
         cmd_build
     fi
-    qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a57 -nographic -m 1024 -kernel "${BUILD_DIR}/novavisor.elf"
+    qemu-system-aarch64 \
+        -machine virt,virtualization=on \
+        -cpu cortex-a57 \
+        -nographic \
+        -m 1024 \
+        -kernel "${BUILD_DIR}/novavisor.elf"
 }
 
 cmd_ci() {
     echo "==> Running Local CI Pipeline..."
-    cmd_format
-
-    # Verify all source files are properly formatted (dry-run check).
-    # This detects formatting issues regardless of git commit state.
-    echo "==> Checking clang-format compliance..."
-    local FORMAT_VIOLATIONS
-    FORMAT_VIOLATIONS=$(find . -type d \( -name "external" -o -name ".toolchain" -o -name "build" \) -prune -o \
-        -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.c' -o -name '*.h' \) -print | \
-        xargs -r clang-format --dry-run --Werror 2>&1 || true)
-    if [ -n "${FORMAT_VIOLATIONS}" ]; then
-        echo "Error: CI Failed. 'clang-format' found formatting violations:"
-        echo "${FORMAT_VIOLATIONS}"
-        echo "Please run 'scripts/task.sh format' and stage the changes."
-        exit 1
-    fi
-    echo "Format check passed."
-
-    # Build then lint using the same build type so cmake does not reconfigure
-    # between the two steps -- ninja reuses object files and only runs the
-    # clang-tidy pass on top of the already-compiled Release artifacts.
+    # Check only -- do not modify files. CI must fail on unformatted code,
+    # not silently reformat it. Run 'task.sh format' locally before committing.
+    cmd_format --check
     cmd_build --release
     cmd_lint --release
     echo "==> Local CI Pipeline Passed Successfully!"
@@ -165,12 +177,12 @@ SUBCOMMAND="$1"
 shift
 
 case "${SUBCOMMAND}" in
-    build)  cmd_build "$@" ;;
-    clean)  cmd_clean "$@" ;;
-    format) cmd_format "$@" ;;
-    lint)   cmd_lint "$@" ;;
-    run)    cmd_run "$@" ;;
-    ci)     cmd_ci "$@" ;;
+    build)     cmd_build  "$@" ;;
+    clean)     cmd_clean  "$@" ;;
+    format)    cmd_format "$@" ;;
+    lint)      cmd_lint   "$@" ;;
+    run)       cmd_run    "$@" ;;
+    ci)        cmd_ci     "$@" ;;
     -h|--help) print_usage ;;
     *)
         echo "Error: Unknown subcommand '${SUBCOMMAND}'"
