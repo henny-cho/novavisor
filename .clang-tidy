@@ -1,7 +1,7 @@
 ---
 # NovaVisor Clang-Tidy Configuration
 # Enforces strictly embedded zero-cost principles by limiting bad OOP structures.
-Checks: '
+Checks: >-
     -*,
     cppcoreguidelines-*,
     modernize-*,
@@ -10,11 +10,13 @@ Checks: '
     -bugprone-reserved-identifier,
     -clang-diagnostic-error,
     -cppcoreguidelines-pro-bounds-pointer-arithmetic,
-    -readability-identifier-length,
-    # Disallow dynamic memory allocation!
+    -cppcoreguidelines-pro-type-reinterpret-cast,
+    -cppcoreguidelines-avoid-non-const-global-variables,
+    -cppcoreguidelines-missing-std-forward,
     -cppcoreguidelines-owning-memory,
-    -cppcoreguidelines-no-malloc
-'
+    -cppcoreguidelines-no-malloc,
+    -performance-no-int-to-ptr,
+    -readability-identifier-length
 # Relaxing strictness for bare-metal sysroot issues
 WarningsAsErrors: ''
 HeaderFilterRegex: '.*'

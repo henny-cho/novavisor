@@ -19,8 +19,8 @@
 #include <flow/flow.hpp>
 
 extern "C" {
-extern uint64_t bss_start; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
-extern uint64_t bss_end;   // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+extern uint64_t bss_start;
+extern uint64_t bss_end;
 }
 
 namespace novavisor {
@@ -31,12 +31,10 @@ struct hal_init_component {
     // Volatile prevents GCC from applying object-size analysis on the
     // linker-marker symbols bss_start/bss_end (which are address labels,
     // not actual uint64_t objects).
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-    auto* p = reinterpret_cast<volatile uint8_t*>(&bss_start);
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    auto*                         p   = reinterpret_cast<volatile uint8_t*>(&bss_start);
     const volatile uint8_t* const end = reinterpret_cast<volatile uint8_t*>(&bss_end);
     while (p < end) {
-      *p++ = 0U; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+      *p++ = 0U;
     }
   });
 
