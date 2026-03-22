@@ -1,33 +1,19 @@
-#include "../../hal/board_qemu_virt/include/board.hpp"
+// NovaVisor bare-metal entry point for QEMU virt AArch64.
+//
+// Boot sequence (orchestrated by cib::top<nova_project>):
+//   1. EarlyRuntimeInit → hal_init_component: clears BSS
+//   2. RuntimeStart     → boot_msg_component: prints boot banner via UART
+//   3. MainLoop (∞)    → idle_component: WFI idle loop
 
-extern "C" {
-extern uint64_t bss_start;
-extern uint64_t bss_end;
-void            novavisor_main();
-}
+#include "nexus.hpp"
 
-static void clear_bss() {
-  auto* b_start = reinterpret_cast<uint8_t*>(&bss_start); // NOLINT
-  auto* b_end   = reinterpret_cast<uint8_t*>(&bss_end);   // NOLINT
-  for (uint8_t* ptr = b_start; ptr < b_end; ++ptr) {      // NOLINT
-    *ptr = 0;
-  }
-}
+// nova_panic.cpp must be compiled as a translation unit to avoid ODR
+// violations on the stdx::panic_handler<> specialization.
+// The include here is only for documentation; linking is handled by CMake.
 
-static void uart_print(const char* str) {
-  auto* uart0_dr = reinterpret_cast<volatile uint32_t*>(novavisor::board::qemu_virt::UART0_BASE); // NOLINT
-  while (*str != '\0') {
-    *uart0_dr = static_cast<uint32_t>(*str);
-    str++; // NOLINT
-  }
-}
+extern "C" void novavisor_main();
 
 void novavisor_main() {
-  clear_bss();
-  uart_print("NovaVisor Booted!\n");
-
-  // Infinite loop
-  while (true) {
-    asm volatile("wfi");
-  }
+  novavisor::nova_top top{};
+  top.main(); // [[noreturn]]
 }

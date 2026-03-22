@@ -1,6 +1,10 @@
 .docs/
 .agents/
+.claude
 .toolchain/
 build/
 compile_commands.json
 .cache/
+.vscode/
+cmake/get_cpm.cmake
+external/

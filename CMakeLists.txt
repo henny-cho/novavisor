@@ -55,6 +55,36 @@ if(ENABLE_CLANG_TIDY)
 endif()
 
 # ==============================================================================
+# CMake Package Manager (CPM) — v0.42.1
+# Must be included before any FetchContent/CPM dependency so that CIB's
+# bundled get_cpm.cmake (pinned at v0.40.2) finds CPM already loaded and
+# skips its own download via CPM's double-include guard.
+# ==============================================================================
+include(cmake/get_cpm.cmake)
+
+# Pre-register CIB transitive dependencies to suppress false-positive CPM
+# version-mismatch warnings.
+#
+# CIB pins cpp-baremetal-concurrency@536bdd7 and cpp-std-extensions@c932eba.
+# Its transitive dep cpp-baremetal-senders-and-receivers later requests them
+# at 63230eb and 2b7917f. CPM treats git hash prefixes as integers, so it
+# warns "63230 > 536" — even though 536bdd7 is the NEWER commit in git
+# history. Pre-registering both packages with VERSION 99999 ensures all
+# subsequent CPM requests satisfy the "included >= requested" check silently.
+CPMAddPackage(
+    NAME cpp-baremetal-concurrency
+    GITHUB_REPOSITORY intel/cpp-baremetal-concurrency
+    GIT_TAG 536bdd7
+    VERSION 99999
+)
+CPMAddPackage(
+    NAME cpp-std-extensions
+    GITHUB_REPOSITORY intel/cpp-std-extensions
+    GIT_TAG c932eba
+    VERSION 99999
+)
+
+# ==============================================================================
 # Fetch Dependencies
 # ==============================================================================
 include(FetchContent)
@@ -84,9 +114,21 @@ FetchContent_MakeAvailable(etl)
 set(SOURCES
     hal/armv8_aarch64/boot.S
     projects/qemu_virt_arm64/main.cpp
+    components/nova_panic/src/nova_panic.cpp
 )
 
 add_executable(novavisor.elf ${SOURCES})
+
+# Link CIB (all sub-libraries) and ETL
+target_link_libraries(novavisor.elf PRIVATE cib etl)
+
+# Project root as include base so all headers use absolute-from-root paths
+# e.g. #include "components/foo/include/foo.hpp"
+target_include_directories(novavisor.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Use STDX freestanding mode: bypasses {fmt} dependency, uses bare-metal safe
+# compile-time string formatting from cpp-std-extensions
+target_compile_definitions(novavisor.elf PRIVATE STDX_FREESTANDING)
 
 # Add Linker script and bare-metal linking rules
 target_link_options(novavisor.elf PRIVATE
@@ -94,13 +136,14 @@ target_link_options(novavisor.elf PRIVATE
     -nostartfiles
     -nostdlib
     -Wl,--gc-sections
+    # Bare-metal C runtime builtins (strlen, memcpy, etc.) from newlib-nano.
+    # No dynamic allocation is introduced — we do not call malloc/free.
+    -lgcc
+    -lc
 )
 
-# add_executable(novavisor.elf ${SOURCES})
-# target_link_libraries(novavisor.elf PRIVATE cib etl)
-#
-# # Custom command to generate raw flat binary required by some QEMU boots
-# add_custom_command(TARGET novavisor.elf POST_BUILD
-#     COMMAND ${CMAKE_OBJCOPY} -O binary novavisor.elf novavisor.bin
-#     COMMENT "Generating flat binary novavisor.bin"
-# )
+# Custom command to generate raw flat binary required by some QEMU boots
+add_custom_command(TARGET novavisor.elf POST_BUILD
+    COMMAND ${CMAKE_OBJCOPY} -O binary novavisor.elf novavisor.bin
+    COMMENT "Generating flat binary novavisor.bin"
+)

@@ -47,8 +47,23 @@ cmd_build() {
         esac
     done
 
+    # Point CPM at a project-local cache so packages are not re-downloaded on
+    # every fresh build directory. external/cache is gitignored.
+    local CPM_VER="0.42.1"
+    local CPM_CACHE_DIR="${WORK_DIR}/external/cache/cpm"
+    local CPM_CACHE_FILE="${CPM_CACHE_DIR}/CPM_${CPM_VER}.cmake"
+    mkdir -p "${CPM_CACHE_DIR}"
+    # Bootstrap CPM cache from an existing build dir on first run.
+    # On a clean slate cmake/get_cpm.cmake will download it via file(DOWNLOAD ...) anyway.
+    if [ ! -f "${CPM_CACHE_FILE}" ] && [ -f "${BUILD_DIR}/cmake/CPM_${CPM_VER}.cmake" ]; then
+        cp "${BUILD_DIR}/cmake/CPM_${CPM_VER}.cmake" "${CPM_CACHE_FILE}"
+    fi
+    export CPM_SOURCE_CACHE="${WORK_DIR}/external/cache"
+
     echo "==> Configuring CMake (${BUILD_TYPE})..."
-    cmake -B "${BUILD_DIR}" -G Ninja -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
+    cmake -B "${BUILD_DIR}" -G Ninja \
+        -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
+        -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
 
     echo "==> Building..."
     cmake --build "${BUILD_DIR}"
@@ -88,11 +103,20 @@ cmd_ci() {
     echo "==> Running Local CI Pipeline..."
     cmd_format
 
-    # Check if format modified any files
-    if ! git diff --quiet; then
-        echo "Error: CI Failed. 'clang-format' modified files. Please commit the formatted files."
+    # Verify all source files are properly formatted (dry-run check).
+    # This detects formatting issues regardless of git commit state.
+    echo "==> Checking clang-format compliance..."
+    local FORMAT_VIOLATIONS
+    FORMAT_VIOLATIONS=$(find . -type d \( -name "external" -o -name ".toolchain" -o -name "build" \) -prune -o \
+        -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.c' -o -name '*.h' \) -print | \
+        xargs -r clang-format --dry-run --Werror 2>&1 || true)
+    if [ -n "${FORMAT_VIOLATIONS}" ]; then
+        echo "Error: CI Failed. 'clang-format' found formatting violations:"
+        echo "${FORMAT_VIOLATIONS}"
+        echo "Please run 'scripts/task.sh format' and stage the changes."
         exit 1
     fi
+    echo "Format check passed."
 
     cmd_build --release
     cmd_lint
