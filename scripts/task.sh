@@ -34,6 +34,26 @@ print_usage() {
 }
 
 # ------------------------------------------------------------------------------
+# Internal helpers
+# ------------------------------------------------------------------------------
+
+# Set up the project-local CPM package cache.
+# Must be called before any cmake invocation so that CPM finds the cache and
+# does not re-download packages on every clean build.
+_setup_cpm_cache() {
+    local CPM_VER="0.42.1"
+    local CPM_CACHE_DIR="${WORK_DIR}/external/cache/cpm"
+    local CPM_CACHE_FILE="${CPM_CACHE_DIR}/CPM_${CPM_VER}.cmake"
+    mkdir -p "${CPM_CACHE_DIR}"
+    # Bootstrap the cache from an existing build directory on first run.
+    # On a clean slate cmake/get_cpm.cmake will download it anyway.
+    if [ ! -f "${CPM_CACHE_FILE}" ] && [ -f "${BUILD_DIR}/cmake/CPM_${CPM_VER}.cmake" ]; then
+        cp "${BUILD_DIR}/cmake/CPM_${CPM_VER}.cmake" "${CPM_CACHE_FILE}"
+    fi
+    export CPM_SOURCE_CACHE="${WORK_DIR}/external/cache"
+}
+
+# ------------------------------------------------------------------------------
 # Subcommand implementations
 # ------------------------------------------------------------------------------
 
@@ -47,23 +67,15 @@ cmd_build() {
         esac
     done
 
-    # Point CPM at a project-local cache so packages are not re-downloaded on
-    # every fresh build directory. external/cache is gitignored.
-    local CPM_VER="0.42.1"
-    local CPM_CACHE_DIR="${WORK_DIR}/external/cache/cpm"
-    local CPM_CACHE_FILE="${CPM_CACHE_DIR}/CPM_${CPM_VER}.cmake"
-    mkdir -p "${CPM_CACHE_DIR}"
-    # Bootstrap CPM cache from an existing build dir on first run.
-    # On a clean slate cmake/get_cpm.cmake will download it via file(DOWNLOAD ...) anyway.
-    if [ ! -f "${CPM_CACHE_FILE}" ] && [ -f "${BUILD_DIR}/cmake/CPM_${CPM_VER}.cmake" ]; then
-        cp "${BUILD_DIR}/cmake/CPM_${CPM_VER}.cmake" "${CPM_CACHE_FILE}"
-    fi
-    export CPM_SOURCE_CACHE="${WORK_DIR}/external/cache"
+    _setup_cpm_cache
 
     echo "==> Configuring CMake (${BUILD_TYPE})..."
+    # Explicitly disable clang-tidy so that a previous 'lint' run's cached
+    # ENABLE_CLANG_TIDY=ON does not contaminate regular builds.
     cmake -B "${BUILD_DIR}" -G Ninja \
         -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
-        -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
+        -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+        -DENABLE_CLANG_TIDY=OFF
 
     echo "==> Building..."
     cmake --build "${BUILD_DIR}"
@@ -82,10 +94,24 @@ cmd_format() {
 }
 
 cmd_lint() {
-    echo "==> Running clang-tidy via CMake..."
-    # Re-configure with clang-tidy enabled
-    cmake -B "${BUILD_DIR}" -DENABLE_CLANG_TIDY=ON -DCMAKE_BUILD_TYPE=Debug
-    # Run the build which will invoke clang-tidy
+    local BUILD_TYPE="Debug"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --release) BUILD_TYPE="Release"; shift ;;
+            *) echo "Unknown option: $1"; print_usage; exit 1 ;;
+        esac
+    done
+
+    _setup_cpm_cache
+
+    echo "==> Running clang-tidy (${BUILD_TYPE})..."
+    # Configure with clang-tidy enabled. If the build type matches the
+    # previous cmake configure, ninja reuses object files and only the
+    # clang-tidy pass runs -- no full recompile.
+    cmake -B "${BUILD_DIR}" \
+        -DENABLE_CLANG_TIDY=ON \
+        -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
     cmake --build "${BUILD_DIR}"
     echo "Linting complete."
 }
@@ -118,8 +144,11 @@ cmd_ci() {
     fi
     echo "Format check passed."
 
+    # Build then lint using the same build type so cmake does not reconfigure
+    # between the two steps -- ninja reuses object files and only runs the
+    # clang-tidy pass on top of the already-compiled Release artifacts.
     cmd_build --release
-    cmd_lint
+    cmd_lint --release
     echo "==> Local CI Pipeline Passed Successfully!"
 }
 

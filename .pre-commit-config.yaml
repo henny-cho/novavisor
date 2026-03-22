@@ -8,19 +8,13 @@ repos:
       - id: check-added-large-files
 
   - repo: https://github.com/pre-commit/mirrors-clang-format
-    rev: v17.0.6
+    rev: v18.1.8
     hooks:
       - id: clang-format
         types_or: [c++, c]
 
-  # Run clang-tidy
-  # Ensure compile_commands.json is present via cmake
-  # - repo: local
-  #   hooks:
-  #     - id: clang-tidy
-  #       name: clang-tidy
-  #       entry: clang-tidy
-  #       language: system
-  #       types_or: [c++, c]
-  #       args: ["-p=build/"]
-  #       pass_filenames: true
+  # clang-tidy is NOT run as a pre-commit hook.
+  # Reason: cross-compilation requires --target=aarch64-none-elf and -isystem
+  # paths that are only available after cmake configuration; a per-file hook
+  # cannot replicate the CMake-integrated invocation reliably.
+  # Use: scripts/task.sh lint
