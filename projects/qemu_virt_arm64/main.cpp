@@ -14,6 +14,6 @@
 extern "C" void novavisor_main();
 
 void novavisor_main() {
-  novavisor::nova_top top{};
+  nova::nova_top top{};
   top.main(); // [[noreturn]]
 }

@@ -10,7 +10,7 @@
 #include <cib/top.hpp>
 #include <flow/flow.hpp>
 
-namespace novavisor {
+namespace nova {
 
 struct idle_component {
   constexpr static auto WFI = flow::action<"wfi">([]() noexcept { asm volatile("wfi"); });
@@ -18,4 +18,4 @@ struct idle_component {
   constexpr static auto config = cib::config(cib::extend<cib::MainLoop>(*WFI));
 };
 
-} // namespace novavisor
+} // namespace nova

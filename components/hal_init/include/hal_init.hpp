@@ -23,7 +23,7 @@ extern uint64_t bss_start;
 extern uint64_t bss_end;
 }
 
-namespace novavisor {
+namespace nova {
 
 struct hal_init_component {
   constexpr static auto INIT = flow::action<"hal_init">([]() noexcept {
@@ -41,4 +41,4 @@ struct hal_init_component {
   constexpr static auto config = cib::config(cib::extend<cib::EarlyRuntimeInit>(*INIT));
 };
 
-} // namespace novavisor
+} // namespace nova

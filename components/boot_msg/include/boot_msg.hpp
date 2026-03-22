@@ -12,7 +12,7 @@
 #include <flow/flow.hpp>
 #include <string_view>
 
-namespace novavisor {
+namespace nova {
 namespace boot_msg_detail {
 
 constexpr std::string_view BANNER = "NovaVisor Booted! [CIB + ETL + std::span]\n";
@@ -26,4 +26,4 @@ struct boot_msg_component {
   constexpr static auto config = cib::config(cib::extend<cib::RuntimeStart>(*PRINT_BOOT_MSG));
 };
 
-} // namespace novavisor
+} // namespace nova

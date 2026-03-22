@@ -9,15 +9,15 @@
 
 #include "components/nova_panic/include/nova_panic.hpp"
 #include "hal/board_qemu_virt/include/uart.hpp"
-#include "novavisor/esr.hpp"
-#include "novavisor/trap_context.hpp"
+#include "nova/esr.hpp"
+#include "nova/trap_context.hpp"
 
 #include <array>
 #include <cib/top.hpp>
 #include <cstdint>
 #include <string_view>
 
-namespace novavisor {
+namespace nova {
 namespace {
 
 // ---------------------------------------------------------------------------
@@ -118,7 +118,7 @@ void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
   halt();
 }
 
-} // namespace novavisor
+} // namespace nova
 
 // ---------------------------------------------------------------------------
 // extern "C" entry points — called directly from vec.S
@@ -126,22 +126,22 @@ void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
 
 extern "C" {
 
-void el2_trap_lower_sync(novavisor::TrapContext* ctx) noexcept {
-  cib::service<novavisor::EL2SyncTrapService>(ctx);
+void el2_trap_lower_sync(nova::TrapContext* ctx) noexcept {
+  cib::service<nova::EL2SyncTrapService>(ctx);
 }
 
-void el2_trap_current_sync(novavisor::TrapContext* /*ctx*/) noexcept {
-  using novavisor::board::qemu_virt::uart_write;
+void el2_trap_current_sync(nova::TrapContext* /*ctx*/) noexcept {
+  using nova::board::qemu_virt::uart_write;
   uart_write("[NOVA PANIC] EL2 self-trap (current-EL sync)\n");
   // Dump manually — CIB service may not be safe to call in this path
   // because the exception occurred inside EL2 itself.
-  novavisor::halt();
+  nova::halt();
 }
 
-void el2_trap_unhandled(novavisor::TrapContext* /*ctx*/) noexcept {
-  using novavisor::board::qemu_virt::uart_write;
+void el2_trap_unhandled(nova::TrapContext* /*ctx*/) noexcept {
+  using nova::board::qemu_virt::uart_write;
   uart_write("[NOVA PANIC] Unhandled EL2 exception\n");
-  novavisor::halt();
+  nova::halt();
 }
 
 } // extern "C"

@@ -9,5 +9,5 @@ namespace stdx {
 // Specialize the panic_handler variable template for the default (empty)
 // template argument list. This replaces the no-op default_panic_handler
 // with our UART-based halt implementation.
-template <> inline auto panic_handler<> = novavisor::NovaPanicHandler{};
+template <> inline auto panic_handler<> = nova::NovaPanicHandler{};
 } // namespace stdx

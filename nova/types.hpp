@@ -1,18 +1,18 @@
 #pragma once
 
-// novavisor/types.hpp
+// nova/types.hpp
 //
 // Zero-overhead type alias hub for the NovaVisor project.
 //
 // All ETL and Pigweed types used across components are re-exported under the
-// novavisor:: namespace via 'using' declarations. No wrapper classes, no
+// nova:: namespace via 'using' declarations. No wrapper classes, no
 // virtual dispatch, no additional code generation — a 'using' alias is resolved
 // entirely at compile time and produces identical object code to using the
 // underlying type directly.
 //
 // Usage:
-//   #include "novavisor/types.hpp"
-//   novavisor::Vec<uint32_t, 16> regs;   // == etl::vector<uint32_t, 16>
+//   #include "nova/types.hpp"
+//   nova::Vec<uint32_t, 16> regs;   // == etl::vector<uint32_t, 16>
 //
 // Intentional omissions (see comments at bottom of file).
 
@@ -43,7 +43,7 @@
 #include "pw_string/string_builder.h"
 #endif
 
-namespace novavisor {
+namespace nova {
 
 // =============================================================================
 // ETL Container Aliases
@@ -127,7 +127,7 @@ template <std::size_t N> using InlineString = pw::InlineString<N>;
 template <std::size_t N> using StringBuffer = pw::StringBuffer<N>;
 #endif
 
-} // namespace novavisor
+} // namespace nova
 
 // =============================================================================
 // Intentional Omissions

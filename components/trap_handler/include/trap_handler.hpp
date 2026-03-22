@@ -10,12 +10,12 @@
 //   - HVC_AA64: advances ELR_EL2 by 4 and returns to guest.
 //   - All others: dumps TrapContext to UART and halts.
 
-#include "novavisor/trap_context.hpp"
+#include "nova/trap_context.hpp"
 
 #include <cib/top.hpp>
 #include <nexus/callback.hpp>
 
-namespace novavisor {
+namespace nova {
 
 // ---------------------------------------------------------------------------
 // EL2SyncTrapService
@@ -41,4 +41,4 @@ struct trap_handler_component {
       cib::exports<EL2SyncTrapService>, cib::extend<EL2SyncTrapService>(&trap_handler_component::handle_lower_sync));
 };
 
-} // namespace novavisor
+} // namespace nova

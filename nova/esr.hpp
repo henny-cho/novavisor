@@ -1,6 +1,6 @@
 #pragma once
 
-// novavisor/esr.hpp
+// nova/esr.hpp
 //
 // ESR_EL2 (Exception Syndrome Register, EL2) parsing utilities.
 //
@@ -17,7 +17,7 @@
 
 #include <cstdint>
 
-namespace novavisor::esr {
+namespace nova::esr {
 
 // Exception Class (EC) values — ESR_EL2 bits 31:26.
 // Only the classes relevant to a Type-1 AArch64 hypervisor are listed.
@@ -65,4 +65,4 @@ enum class ExceptionClass : std::uint8_t {
   return ((esr >> 25U) & 1U) != 0U;
 }
 
-} // namespace novavisor::esr
+} // namespace nova::esr

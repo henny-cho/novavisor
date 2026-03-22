@@ -16,7 +16,7 @@
 extern "C" {
 
 [[noreturn]] void pw_assert_HandleFailure() {
-  novavisor::board::qemu_virt::uart_write("[NOVA PANIC] PW_ASSERT/CHECK failed. System halted.\n");
+  nova::board::qemu_virt::uart_write("[NOVA PANIC] PW_ASSERT/CHECK failed. System halted.\n");
   while (true) {
     asm volatile("wfi");
   }

@@ -6,7 +6,7 @@ set -euo pipefail
 # Command central for development cycle, CI, and repetitive tasks.
 # ==============================================================================
 
-WORK_DIR="$(pwd)"
+WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${WORK_DIR}/build"
 TOOLCHAIN_FILE="${WORK_DIR}/cmake/toolchain-aarch64.cmake"
 

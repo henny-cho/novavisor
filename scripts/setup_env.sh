@@ -9,7 +9,7 @@ set -euo pipefail
 # It downloads the official ARM GCC toolchain and installs required dependencies.
 # ==============================================================================
 
-WORK_DIR="$(pwd)"
+WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.."; pwd)"
 TOOLCHAIN_DIR="${WORK_DIR}/.toolchain"
 # Load globally defined versions
 source "$(dirname "$0")/versions.sh"
@@ -59,21 +59,26 @@ else
     ln -sfn "${EXTRACT_DIR}" "${TOOLCHAIN_DIR}/current"
 fi
 
-# 3. Generating env export script
+# 3. Verify env.sh exists (managed in version control, not generated)
 ENV_SCRIPT="${TOOLCHAIN_DIR}/env.sh"
-echo "[3] Generating environment export script..."
-cat <<EOF > "${ENV_SCRIPT}"
+if [ ! -f "${ENV_SCRIPT}" ]; then
+    echo "[3] env.sh not found. Generating from template..."
+    cat > "${ENV_SCRIPT}" <<'EOF'
 #!/usr/bin/env bash
 # Source this file to add the custom ARM toolchain to your PATH
-export PATH="${TOOLCHAIN_DIR}/current/bin:\${PATH}"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PATH="${PROJECT_ROOT}/.toolchain/current/bin:${PATH}"
 export CROSS_COMPILE="aarch64-none-elf-"
 echo "NovaVisor environment loaded! Toolchain in use:"
 aarch64-none-elf-gcc --version | head -n 1
 EOF
+    chmod +x "${ENV_SCRIPT}"
+    echo "[3] env.sh generated at ${ENV_SCRIPT}"
+else
+    echo "[3] env.sh found at ${ENV_SCRIPT}"
+fi
 
-chmod +x "${ENV_SCRIPT}"
-
-# 4. Install pre-commit hooks
+# 4. Install pre-commit hooks (step numbering preserved)
 echo "[4] Installing git pre-commit hooks..."
 if [ -d "${WORK_DIR}/.git" ] && command -v pre-commit >/dev/null 2>&1; then
     pre-commit install
@@ -84,5 +89,5 @@ fi
 echo "=============================================================================="
 echo "Setup Complete!"
 echo "Run the following command to load the toolchain into your current session:"
-echo "  source ${ENV_SCRIPT}"
+echo "  source ${TOOLCHAIN_DIR}/env.sh"
 echo "=============================================================================="

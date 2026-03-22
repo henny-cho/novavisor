@@ -5,7 +5,7 @@
 #include <stdx/ct_string.hpp>
 #include <string_view>
 
-namespace novavisor {
+namespace nova {
 
 // Unconditionally halt the CPU. Used as the terminal action in all panic paths.
 [[noreturn]] inline void halt() noexcept {
@@ -32,4 +32,4 @@ struct NovaPanicHandler {
   }
 };
 
-} // namespace novavisor
+} // namespace nova

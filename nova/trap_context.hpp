@@ -1,6 +1,6 @@
 #pragma once
 
-// novavisor/trap_context.hpp
+// nova/trap_context.hpp
 //
 // TrapContext: snapshot of the CPU state at the moment an EL2 exception fires.
 //
@@ -23,7 +23,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace novavisor {
+namespace nova {
 
 struct alignas(16) TrapContext {
   std::uint64_t x[31]; // x0-x30 (general-purpose registers)
@@ -43,4 +43,4 @@ static_assert(offsetof(TrapContext, spsr) == 264, "spsr offset mismatch");
 static_assert(offsetof(TrapContext, esr) == 272, "esr offset mismatch");
 static_assert(offsetof(TrapContext, far) == 280, "far offset mismatch");
 
-} // namespace novavisor
+} // namespace nova

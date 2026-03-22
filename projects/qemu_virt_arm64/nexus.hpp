@@ -21,7 +21,7 @@
 
 #include <cib/top.hpp>
 
-namespace novavisor {
+namespace nova {
 
 struct nova_project {
   constexpr static auto config =
@@ -32,4 +32,4 @@ struct nova_project {
 // Calling nova_top{}.main() hands control to the CIB framework.
 using nova_top = cib::top<nova_project>;
 
-} // namespace novavisor
+} // namespace nova

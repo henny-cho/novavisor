@@ -1,16 +1,16 @@
 // tests/host/esr_parse_test.cpp
 //
-// Host-side GTest suite for ESR_EL2 parsing utilities (novavisor/esr.hpp)
-// and TrapContext layout assertions (novavisor/trap_context.hpp).
+// Host-side GTest suite for ESR_EL2 parsing utilities (nova/esr.hpp)
+// and TrapContext layout assertions (nova/trap_context.hpp).
 //
 // Depends only on <cstdint> — no bare-metal headers required.
 
-#include "novavisor/esr.hpp"
-#include "novavisor/trap_context.hpp"
+#include "nova/esr.hpp"
+#include "nova/trap_context.hpp"
 
 #include <gtest/gtest.h>
 
-using namespace novavisor::esr;
+using namespace nova::esr;
 
 // ---------------------------------------------------------------------------
 // ExceptionClass enum values
@@ -120,19 +120,19 @@ TEST(Is32BitInstruction, ClearWhenBit25IsZero) {
 // ---------------------------------------------------------------------------
 
 TEST(TrapContextLayout, Size) {
-  EXPECT_EQ(sizeof(novavisor::TrapContext), 288U);
+  EXPECT_EQ(sizeof(nova::TrapContext), 288U);
 }
 
 TEST(TrapContextLayout, Alignment) {
-  EXPECT_EQ(alignof(novavisor::TrapContext), 16U);
+  EXPECT_EQ(alignof(nova::TrapContext), 16U);
 }
 
 TEST(TrapContextLayout, FieldOffsets) {
-  EXPECT_EQ(offsetof(novavisor::TrapContext, x[0]), 0U);
-  EXPECT_EQ(offsetof(novavisor::TrapContext, x[30]), 240U);
-  EXPECT_EQ(offsetof(novavisor::TrapContext, sp), 248U);
-  EXPECT_EQ(offsetof(novavisor::TrapContext, elr), 256U);
-  EXPECT_EQ(offsetof(novavisor::TrapContext, spsr), 264U);
-  EXPECT_EQ(offsetof(novavisor::TrapContext, esr), 272U);
-  EXPECT_EQ(offsetof(novavisor::TrapContext, far), 280U);
+  EXPECT_EQ(offsetof(nova::TrapContext, x[0]), 0U);
+  EXPECT_EQ(offsetof(nova::TrapContext, x[30]), 240U);
+  EXPECT_EQ(offsetof(nova::TrapContext, sp), 248U);
+  EXPECT_EQ(offsetof(nova::TrapContext, elr), 256U);
+  EXPECT_EQ(offsetof(nova::TrapContext, spsr), 264U);
+  EXPECT_EQ(offsetof(nova::TrapContext, esr), 272U);
+  EXPECT_EQ(offsetof(nova::TrapContext, far), 280U);
 }
