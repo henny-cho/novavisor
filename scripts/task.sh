@@ -31,6 +31,7 @@ print_usage() {
     echo ""
     echo "Options:"
     echo "  --release   Build in Release mode (default: Debug)"
+    echo "  --clean     (build/lint) Remove the build directory first"
     echo "  --check     (format only) Verify formatting without modifying files"
     echo "  -h, --help  Show this help message"
 }
@@ -79,18 +80,25 @@ cmd_build() {
     local BUILD_TYPE
     BUILD_TYPE=$(_parse_build_type "$@")
 
+    local CLEAN=0
+    for arg in "$@"; do
+        [[ "${arg}" == "--clean" ]] && CLEAN=1
+    done
+
+    if [[ ${CLEAN} -eq 1 ]]; then
+        cmd_clean
+    fi
+
     _setup_cpm_cache
 
-    echo "==> Configuring CMake (${BUILD_TYPE})..."
-    # Explicitly disable clang-tidy to prevent a prior 'lint' run's cached
-    # ENABLE_CLANG_TIDY=ON from contaminating regular builds.
-    cmake -B "${BUILD_DIR}" -G Ninja \
-        -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
-        -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-        -DENABLE_CLANG_TIDY=OFF
+    local PRESET="aarch64-debug"
+    [[ "${BUILD_TYPE}" == "Release" ]] && PRESET="aarch64-release"
+
+    echo "==> Configuring CMake with preset: ${PRESET}..."
+    cmake --preset "${PRESET}"
 
     echo "==> Building..."
-    cmake --build "${BUILD_DIR}"
+    cmake --build --preset "${PRESET}"
 }
 
 cmd_clean() {
@@ -127,22 +135,30 @@ cmd_lint() {
     local BUILD_TYPE
     BUILD_TYPE=$(_parse_build_type "$@")
 
+    local CLEAN=0
+    for arg in "$@"; do
+        [[ "${arg}" == "--clean" ]] && CLEAN=1
+    done
+
+    if [[ ${CLEAN} -eq 1 ]]; then
+        cmd_clean
+    fi
+
+    local PRESET="aarch64-lint"
+
     _setup_cpm_cache
 
-    echo "==> Running clang-tidy (${BUILD_TYPE})..."
-    # Pass all required flags so lint works even on a clean build directory.
+    echo "==> Running clang-tidy with preset: ${PRESET}..."
     # If BUILD_TYPE matches the previous cmake configure, ninja reuses object
     # files and only the clang-tidy pass runs -- no full recompile.
-    cmake -B "${BUILD_DIR}" -G Ninja \
-        -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
-        -DENABLE_CLANG_TIDY=ON \
-        -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
-    cmake --build "${BUILD_DIR}"
+    cmake --preset "${PRESET}"
+    cmake --build --preset "${PRESET}"
     echo "Linting complete."
 }
 
 cmd_run() {
     echo "==> Running NovaVisor in QEMU..."
+    echo "==> Press Ctrl-A then x to exit QEMU."
     if [ ! -f "${BUILD_DIR}/novavisor.elf" ]; then
         echo "Executable not found. Building first..."
         cmd_build
@@ -156,19 +172,18 @@ cmd_run() {
 }
 
 cmd_test() {
-    local HOST_BUILD_DIR="${WORK_DIR}/build/host"
+    local PRESET="host-debug"
 
     _setup_cpm_cache
 
-    echo "==> Configuring host GTest build..."
-    cmake -B "${HOST_BUILD_DIR}" -G Ninja \
-        -DCMAKE_BUILD_TYPE=Debug
+    echo "==> Configuring host GTest build with preset: ${PRESET}..."
+    cmake --preset "${PRESET}"
 
     echo "==> Building host tests..."
-    cmake --build "${HOST_BUILD_DIR}"
+    cmake --build --preset "${PRESET}"
 
     echo "==> Running host tests..."
-    ctest --test-dir "${HOST_BUILD_DIR}" --output-on-failure
+    ctest --preset "${PRESET}" --output-on-failure
 }
 
 cmd_ci() {

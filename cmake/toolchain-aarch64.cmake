@@ -4,16 +4,21 @@
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR aarch64)
 
-# Look for the compiler in the PATH
-# setup_env.sh or devcontainer adds aarch64-none-elf to PATH
-find_program(CMAKE_C_COMPILER aarch64-none-elf-gcc)
-find_program(CMAKE_CXX_COMPILER aarch64-none-elf-g++)
-find_program(CMAKE_ASM_COMPILER aarch64-none-elf-gcc)
-find_program(CMAKE_OBJCOPY aarch64-none-elf-objcopy)
-find_program(CMAKE_OBJDUMP aarch64-none-elf-objdump)
+# Look for the compiler in the PATH or the project's .toolchain directory
+get_filename_component(TOOLCHAIN_BIN_DIR "${CMAKE_CURRENT_LIST_DIR}/../.toolchain/current/bin" ABSOLUTE)
+
+find_program(CMAKE_C_COMPILER aarch64-none-elf-gcc HINTS "${TOOLCHAIN_BIN_DIR}")
+find_program(CMAKE_CXX_COMPILER aarch64-none-elf-g++ HINTS "${TOOLCHAIN_BIN_DIR}")
+find_program(CMAKE_ASM_COMPILER aarch64-none-elf-gcc HINTS "${TOOLCHAIN_BIN_DIR}")
+find_program(CMAKE_OBJCOPY aarch64-none-elf-objcopy HINTS "${TOOLCHAIN_BIN_DIR}")
+find_program(CMAKE_OBJDUMP aarch64-none-elf-objdump HINTS "${TOOLCHAIN_BIN_DIR}")
 
 set(CMAKE_C_COMPILER_WORKS 1)
 set(CMAKE_CXX_COMPILER_WORKS 1)
+
+# Explicitly set architecture info to assist GNUInstallDirs and other modules
+# when ABI detection is skipped or fails.
+set(CMAKE_SIZEOF_VOID_P 8)
 
 # Basic bare-metal flags
 set(COMMON_FLAGS "-mcpu=cortex-a57 -static -nostdlib -fno-builtin -mstrict-align")

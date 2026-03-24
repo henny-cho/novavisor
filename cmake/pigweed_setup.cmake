@@ -50,6 +50,13 @@ FetchContent_Declare(
     GIT_TAG main
     GIT_SHALLOW TRUE
 )
+
+# Suppress "The PW_ROOT environment variable is not set" message by setting it
+# explicitly before Pigweed's CMakeLists.txt runs.
+if(NOT DEFINED ENV{PW_ROOT})
+    set(ENV{PW_ROOT} "${CMAKE_BINARY_DIR}/_deps/pigweed-src")
+endif()
+
 FetchContent_MakeAvailable(pigweed)
 
 # ==============================================================================
