@@ -83,43 +83,48 @@ FetchContent_MakeAvailable(etl)
 
 if(CMAKE_CROSSCOMPILING)
 
-    set(SOURCES
-        hal/armv8_aarch64/boot.S
-        hal/armv8_aarch64/vec.S
-        projects/qemu_virt_arm64/main.cpp
-        components/nova_panic/src/nova_panic.cpp
-        components/trap_handler/src/trap_handler.cpp
-    )
+    # HAL + components (each owns its own CMakeLists.txt).
+    add_subdirectory(hal/armv8_aarch64)
+    add_subdirectory(hal/board_qemu_virt)
+    add_subdirectory(components/nova_panic)
+    add_subdirectory(components/trap_handler)
+    add_subdirectory(components/hal_init)
+    add_subdirectory(components/boot_msg)
+    add_subdirectory(components/idle)
 
-    add_executable(novavisor.elf ${SOURCES})
+    add_executable(novavisor.elf projects/qemu_virt_arm64/main.cpp)
 
-    # Link CIB (all sub-libraries), ETL, and bare-metal C runtime builtins
-    # (strlen, memcpy, etc.) from newlib. --start-group/--end-group resolves
-    # libgcc↔libc circular deps — otherwise strlen references from
-    # char_traits::length only resolve at -O2 where the call is inlined.
-    # No dynamic allocation is introduced; malloc/free are not called.
     target_link_libraries(novavisor.elf PRIVATE
+        # Components and HAL
+        hal_armv8_aarch64
+        hal_board_qemu_virt
+        hal_init
+        boot_msg
+        idle
+        nova_panic
+        trap_handler
+        # Frameworks
         cib etl
+        # Bare-metal C runtime (strlen, memcpy, etc.) from newlib.
+        # --start-group/--end-group resolves libgcc↔libc circular deps —
+        # otherwise strlen references from char_traits::length only resolve
+        # at -O2 where the call is inlined. No dynamic allocation introduced.
         -Wl,--start-group -lgcc -lc -Wl,--end-group
     )
 
-    # Project root as include base so all headers use absolute-from-root paths
-    # e.g. #include "components/foo/include/foo.hpp"
     target_include_directories(novavisor.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-    # Use STDX freestanding mode: bypasses {fmt} dependency, uses bare-metal safe
-    # compile-time string formatting from cpp-std-extensions
+    # STDX freestanding: bypass {fmt} dependency in cpp-std-extensions.
     target_compile_definitions(novavisor.elf PRIVATE STDX_FREESTANDING)
 
-    # Add Linker script and bare-metal linking rules
     target_link_options(novavisor.elf PRIVATE
-        -T ${CMAKE_CURRENT_SOURCE_DIR}/hal/armv8_aarch64/linker.ld
+        -T ${HAL_ARMV8_LINKER_SCRIPT}
         -nostartfiles
         -nostdlib
         -Wl,--gc-sections
     )
 
-    # Custom command to generate raw flat binary required by some QEMU boots
+    # Raw flat binary required by some QEMU boot modes.
     add_custom_command(TARGET novavisor.elf POST_BUILD
         COMMAND ${CMAKE_OBJCOPY} -O binary novavisor.elf novavisor.bin
         COMMENT "Generating flat binary novavisor.bin"
