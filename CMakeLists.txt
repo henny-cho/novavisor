@@ -118,11 +118,13 @@ if(TARGET fmt)
 endif()
 
 # 2. Embedded Template Library (ETL)
+# Pinned to a specific commit for reproducible builds. Upstream tag 20.47.1
+# is the nearest tagged release; this commit is 1 ahead of that tag.
 message(STATUS "Fetching ETL library...")
 FetchContent_Declare(
     etl
     GIT_REPOSITORY https://github.com/ETLCPP/etl.git
-    GIT_TAG master
+    GIT_TAG 3e4d41ca57de475f4b769320308e80a103c8f5d6
 )
 FetchContent_MakeAvailable(etl)
 
