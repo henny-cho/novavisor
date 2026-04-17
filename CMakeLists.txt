@@ -101,7 +101,10 @@ message(STATUS "Fetching Intel cib library...")
 FetchContent_Declare(
     cib
     GIT_REPOSITORY https://github.com/intel/compile-time-init-build.git
-    GIT_TAG main # or specific release hash
+    # Pinned to the commit before cib main adopted add_versioned_package(URI ...)
+    # keyword syntax, which the bundled cicd-repo-infrastructure@3e2bef0 does not
+    # yet forward to CPM — causing CPM NAME inference to fail for boost_mp11.
+    GIT_TAG 488d892
 )
 FetchContent_MakeAvailable(cib)
 
