@@ -1,0 +1,11 @@
+# Dependabot — keeps the devcontainer base image and (future) features
+# current. Scoped to /.devcontainer because that is where devcontainer.json
+# and Dockerfile live; pointing at "/" would miss them.
+# https://containers.dev/guide/dependabot
+
+version: 2
+updates:
+  - package-ecosystem: "devcontainers"
+    directory: "/.devcontainer"
+    schedule:
+      interval: weekly
