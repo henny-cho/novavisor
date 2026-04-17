@@ -4,8 +4,7 @@
     {
       "name": "base",
       "hidden": true,
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build"
+      "generator": "Ninja"
     },
     {
       "name": "aarch64-base",
@@ -20,6 +19,7 @@
       "displayName": "AArch64 Debug",
       "description": "Debug build for AArch64 bare-metal",
       "inherits": "aarch64-base",
+      "binaryDir": "${sourceDir}/build/aarch64-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "ENABLE_CLANG_TIDY": "OFF"
@@ -30,6 +30,7 @@
       "displayName": "AArch64 Release",
       "description": "Release build for AArch64 bare-metal",
       "inherits": "aarch64-base",
+      "binaryDir": "${sourceDir}/build/aarch64-release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "ENABLE_CLANG_TIDY": "OFF"
@@ -39,8 +40,10 @@
       "name": "aarch64-lint",
       "displayName": "AArch64 Lint",
       "description": "Lint build for AArch64 (ENABLE_CLANG_TIDY=ON)",
-      "inherits": "aarch64-debug",
+      "inherits": "aarch64-base",
+      "binaryDir": "${sourceDir}/build/aarch64-lint",
       "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
         "ENABLE_CLANG_TIDY": "ON"
       }
     },
@@ -49,7 +52,7 @@
       "displayName": "Host Debug",
       "description": "Debug build for host (x86_64) GTest suite",
       "inherits": "base",
-      "binaryDir": "${sourceDir}/build/host",
+      "binaryDir": "${sourceDir}/build/host-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
       }

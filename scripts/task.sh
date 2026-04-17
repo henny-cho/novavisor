@@ -7,8 +7,14 @@ set -euo pipefail
 # ==============================================================================
 
 WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD_DIR="${WORK_DIR}/build"
-TOOLCHAIN_FILE="${WORK_DIR}/cmake/toolchain-aarch64.cmake"
+BUILD_ROOT="${WORK_DIR}/build"
+
+# Resolve a CMake preset's binaryDir. Presets use ${sourceDir}/build/<name>,
+# so this is a simple mapping — kept as a function so callers never hardcode
+# the layout.
+_preset_dir() {
+    echo "${BUILD_ROOT}/$1"
+}
 
 # Load the toolchain environment
 if [ -f "${WORK_DIR}/.toolchain/env.sh" ]; then
@@ -55,9 +61,11 @@ _setup_cpm_cache() {
     local CPM_CACHE_DIR="${WORK_DIR}/external/cache/cpm"
     local CPM_CACHE_FILE="${CPM_CACHE_DIR}/CPM_${CPM_VER}.cmake"
     mkdir -p "${CPM_CACHE_DIR}"
-    # Bootstrap the cache from an existing build directory on first run.
-    if [ ! -f "${CPM_CACHE_FILE}" ] && [ -f "${BUILD_DIR}/cmake/CPM_${CPM_VER}.cmake" ]; then
-        cp "${BUILD_DIR}/cmake/CPM_${CPM_VER}.cmake" "${CPM_CACHE_FILE}"
+    # Bootstrap the cache from any existing preset build dir on first run.
+    if [ ! -f "${CPM_CACHE_FILE}" ]; then
+        local found
+        found=$(find "${BUILD_ROOT}" -maxdepth 3 -name "CPM_${CPM_VER}.cmake" -print -quit 2>/dev/null || true)
+        [ -n "${found}" ] && cp "${found}" "${CPM_CACHE_FILE}"
     fi
     export CPM_SOURCE_CACHE="${WORK_DIR}/external/cache"
 }
@@ -103,7 +111,7 @@ cmd_build() {
 
 cmd_clean() {
     echo "==> Cleaning build directory..."
-    rm -rf "${BUILD_DIR}"
+    rm -rf "${BUILD_ROOT}"
     echo "Clean complete."
 }
 
@@ -157,18 +165,25 @@ cmd_lint() {
 }
 
 cmd_run() {
-    echo "==> Running NovaVisor in QEMU..."
+    local BUILD_TYPE
+    BUILD_TYPE=$(_parse_build_type "$@")
+    local PRESET="aarch64-debug"
+    [[ "${BUILD_TYPE}" == "Release" ]] && PRESET="aarch64-release"
+    local ELF
+    ELF="$(_preset_dir "${PRESET}")/novavisor.elf"
+
+    echo "==> Running NovaVisor (${PRESET}) in QEMU..."
     echo "==> Press Ctrl-A then x to exit QEMU."
-    if [ ! -f "${BUILD_DIR}/novavisor.elf" ]; then
+    if [ ! -f "${ELF}" ]; then
         echo "Executable not found. Building first..."
-        cmd_build
+        cmd_build "$@"
     fi
     qemu-system-aarch64 \
         -machine virt,virtualization=on \
         -cpu cortex-a57 \
         -nographic \
         -m 1024 \
-        -kernel "${BUILD_DIR}/novavisor.elf"
+        -kernel "${ELF}"
 }
 
 cmd_test() {
