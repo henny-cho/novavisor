@@ -1,8 +1,13 @@
+// NovaVisor DevContainer spec. JSONC — comments allowed.
+// Schema: https://containers.dev/implementors/json_reference/
 {
   "name": "NovaVisor DevContainer",
   "build": {
-    "dockerfile": "Dockerfile"
+    "dockerfile": "Dockerfile",
+    // Repo root as context so the Dockerfile can COPY scripts/versions.sh.
+    "context": ".."
   },
+  "remoteUser": "vscode",
   "customizations": {
     "vscode": {
       "settings": {
@@ -16,13 +21,11 @@
         "C_Cpp.codeAnalysis.clangTidy.enabled": true
       },
       "extensions": [
-        "ms-vscode.cpptools",
         "ms-vscode.cpptools-extension-pack",
-        "twxs.cmake",
-        "ms-vscode.cmake-tools"
+        "ms-vscode.cmake-tools",
+        "twxs.cmake"
       ]
     }
   },
-  "remoteUser": "dev",
-  "postCreateCommand": "aarch64-none-elf-gcc --version"
+  "postCreateCommand": "pre-commit install && aarch64-none-elf-gcc --version"
 }
