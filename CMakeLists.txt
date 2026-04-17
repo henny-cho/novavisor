@@ -1,5 +1,4 @@
 cmake_minimum_required(VERSION 3.20)
-set(CMAKE_TRY_COMPILE_TARGET_TYPE "STATIC_LIBRARY")
 project(NovaVisor LANGUAGES C CXX ASM)
 
 # ==============================================================================
@@ -108,6 +107,16 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(cib)
 
+# cib transitively adds {fmt} as a CPM dependency. We never link it
+# (STDX_FREESTANDING bypasses the stdx::cts_string → fmt path) but its
+# format.cc still ends up in the default build graph, where bare-metal
+# libstdc++ headers fail at -O0 because __throw_bad_cast/__throw_length_error
+# are referenced from template bodies that only survive dead-code elimination
+# at -O1+. Excluding fmt from the default build avoids this entirely.
+if(TARGET fmt)
+    set_target_properties(fmt PROPERTIES EXCLUDE_FROM_ALL TRUE)
+endif()
+
 # 2. Embedded Template Library (ETL)
 message(STATUS "Fetching ETL library...")
 FetchContent_Declare(
@@ -133,8 +142,15 @@ if(CMAKE_CROSSCOMPILING)
 
     add_executable(novavisor.elf ${SOURCES})
 
-    # Link CIB (all sub-libraries) and ETL
-    target_link_libraries(novavisor.elf PRIVATE cib etl)
+    # Link CIB (all sub-libraries), ETL, and bare-metal C runtime builtins
+    # (strlen, memcpy, etc.) from newlib. --start-group/--end-group resolves
+    # libgcc↔libc circular deps — otherwise strlen references from
+    # char_traits::length only resolve at -O2 where the call is inlined.
+    # No dynamic allocation is introduced; malloc/free are not called.
+    target_link_libraries(novavisor.elf PRIVATE
+        cib etl
+        -Wl,--start-group -lgcc -lc -Wl,--end-group
+    )
 
     # Project root as include base so all headers use absolute-from-root paths
     # e.g. #include "components/foo/include/foo.hpp"
@@ -150,10 +166,6 @@ if(CMAKE_CROSSCOMPILING)
         -nostartfiles
         -nostdlib
         -Wl,--gc-sections
-        # Bare-metal C runtime builtins (strlen, memcpy, etc.) from newlib-nano.
-        # No dynamic allocation is introduced — we do not call malloc/free.
-        -lgcc
-        -lc
     )
 
     # Custom command to generate raw flat binary required by some QEMU boots

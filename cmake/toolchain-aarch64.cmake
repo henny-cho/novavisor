@@ -16,17 +16,23 @@ find_program(CMAKE_OBJDUMP aarch64-none-elf-objdump HINTS "${TOOLCHAIN_BIN_DIR}"
 set(CMAKE_C_COMPILER_WORKS 1)
 set(CMAKE_CXX_COMPILER_WORKS 1)
 
-# Explicitly set architecture info to assist GNUInstallDirs and other modules
-# when ABI detection is skipped or fails.
-set(CMAKE_SIZEOF_VOID_P 8)
+# Bare-metal codegen flags common to C/C++/ASM.
+# Optimization level and -g are deliberately omitted: CMake's
+# CMAKE_{C,CXX}_FLAGS_{DEBUG,RELEASE} apply those so CMAKE_BUILD_TYPE is
+# honored (Debug = -O0 -g, Release = -O3 -DNDEBUG).
+# -ffreestanding is NOT used here because cib transitively brings in fmt
+# (via cpp-std-extensions non-freestanding path), whose format.cc pulls
+# <locale>/<system_error> — headers that omit __throw_* declarations when
+# __STDC_HOSTED__=0. -nostdlib is a link-only flag; it lives in
+# target_link_options on the final ELF.
+set(COMMON_FLAGS "-mcpu=cortex-a57 -mstrict-align")
 
-# Basic bare-metal flags
-set(COMMON_FLAGS "-mcpu=cortex-a57 -static -nostdlib -fno-builtin -mstrict-align")
+set(CMAKE_C_FLAGS_INIT   "${COMMON_FLAGS}")
+set(CMAKE_CXX_FLAGS_INIT "${COMMON_FLAGS}")
+set(CMAKE_ASM_FLAGS_INIT "${COMMON_FLAGS}")
 
-# Arch specific tuning
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${COMMON_FLAGS} -O2 -g")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${COMMON_FLAGS} -O2 -g")
-set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} ${COMMON_FLAGS}")
+# Bare-metal try_compile needs STATIC_LIBRARY since we have no runtime to link.
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
 # Tell CMake not to look for host environment dependencies (like /usr/lib)
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
