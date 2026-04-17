@@ -32,6 +32,9 @@ print_usage() {
     echo "  format      Run clang-format on source files (--check for dry-run)"
     echo "  lint        Run clang-tidy static analysis"
     echo "  run         Run novavisor.elf in QEMU"
+    echo "  debug       Run QEMU with -s -S (GDB server on :1234, halted at reset)"
+    echo "  size        Print section sizes of novavisor.elf"
+    echo "  objdump     Disassemble novavisor.elf (interleaved with source)"
     echo "  ci          Run the full CI pipeline (format check + build + lint + test)"
     echo "  test        Build and run host GTest suite (x86_64, no toolchain)"
     echo ""
@@ -201,12 +204,72 @@ cmd_test() {
     ctest --preset "${PRESET}" --output-on-failure
 }
 
+# Resolve the ELF path for the current build flavor, preferring Release if both
+# exist. Used by debug/size/objdump which don't care which flavor ran last.
+_resolve_elf() {
+    local BUILD_TYPE
+    BUILD_TYPE=$(_parse_build_type "$@")
+    local PRESET="aarch64-debug"
+    [[ "${BUILD_TYPE}" == "Release" ]] && PRESET="aarch64-release"
+
+    local ELF
+    ELF="$(_preset_dir "${PRESET}")/novavisor.elf"
+    if [ ! -f "${ELF}" ]; then
+        echo "${ELF} not found. Building first..." >&2
+        cmd_build "$@" >&2
+    fi
+    echo "${ELF}"
+}
+
+cmd_debug() {
+    local ELF
+    ELF=$(_resolve_elf "$@")
+    echo "==> Launching QEMU with GDB stub on :1234 (CPU halted)."
+    echo "==> In another shell:  aarch64-none-elf-gdb ${ELF} -ex 'target remote :1234'"
+    echo "==> Press Ctrl-A then x in QEMU to exit."
+    qemu-system-aarch64 \
+        -machine virt,virtualization=on \
+        -cpu cortex-a57 \
+        -nographic \
+        -m 1024 \
+        -kernel "${ELF}" \
+        -s -S
+}
+
+cmd_size() {
+    local ELF
+    ELF=$(_resolve_elf "$@")
+    aarch64-none-elf-size "${ELF}"
+}
+
+cmd_objdump() {
+    local ELF
+    ELF=$(_resolve_elf "$@")
+    # -d disassemble, -S interleave source (requires -g build), -C demangle.
+    aarch64-none-elf-objdump -d -S -C "${ELF}"
+}
+
 cmd_ci() {
     echo "==> Running Local CI Pipeline..."
-    # Check only -- do not modify files. CI must fail on unformatted code,
-    # not silently reformat it. Run 'task.sh format' locally before committing.
-    cmd_format --check
-    cmd_build --release
+    # Format check runs in parallel with release build (pure-CPU vs I/O).
+    # Lint and test are serialized after because they each trigger
+    # FetchContent/CPM configure; concurrent CPM cache writes can race.
+    cmd_format --check &
+    local FORMAT_PID=$!
+    cmd_build --release &
+    local BUILD_PID=$!
+
+    if ! wait "${FORMAT_PID}"; then
+        kill "${BUILD_PID}" 2>/dev/null || true
+        wait "${BUILD_PID}" 2>/dev/null || true
+        echo "==> CI aborted: format check failed" >&2
+        exit 1
+    fi
+    if ! wait "${BUILD_PID}"; then
+        echo "==> CI aborted: build failed" >&2
+        exit 1
+    fi
+
     cmd_lint --release
     cmd_test
     echo "==> Local CI Pipeline Passed Successfully!"
@@ -225,13 +288,16 @@ SUBCOMMAND="$1"
 shift
 
 case "${SUBCOMMAND}" in
-    build)     cmd_build  "$@" ;;
-    clean)     cmd_clean  "$@" ;;
-    format)    cmd_format "$@" ;;
-    lint)      cmd_lint   "$@" ;;
-    run)       cmd_run    "$@" ;;
-    test)      cmd_test   "$@" ;;
-    ci)        cmd_ci     "$@" ;;
+    build)     cmd_build   "$@" ;;
+    clean)     cmd_clean   "$@" ;;
+    format)    cmd_format  "$@" ;;
+    lint)      cmd_lint    "$@" ;;
+    run)       cmd_run     "$@" ;;
+    debug)     cmd_debug   "$@" ;;
+    size)      cmd_size    "$@" ;;
+    objdump)   cmd_objdump "$@" ;;
+    test)      cmd_test    "$@" ;;
+    ci)        cmd_ci      "$@" ;;
     -h|--help) print_usage ;;
     *)
         echo "Error: Unknown subcommand '${SUBCOMMAND}'"

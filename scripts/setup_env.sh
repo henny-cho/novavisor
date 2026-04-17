@@ -11,7 +11,9 @@ set -euo pipefail
 
 WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.."; pwd)"
 TOOLCHAIN_DIR="${WORK_DIR}/.toolchain"
-# Load globally defined versions
+
+# Exports TOOLCHAIN_URL / TOOLCHAIN_TAR / TOOLCHAIN_EXTRACT_NAME used below.
+# shellcheck source=versions.sh disable=SC1091
 source "$(dirname "$0")/versions.sh"
 EXTRACT_DIR="${TOOLCHAIN_DIR}/${TOOLCHAIN_EXTRACT_NAME}"
 
@@ -33,6 +35,7 @@ if command -v apt-get >/dev/null 2>&1; then
         device-tree-compiler \
         clang-format \
         clang-tidy \
+        shellcheck \
         pre-commit
 else
     echo "Warning: apt-get not found. Please ensure dependencies like cmake, ninja, qemu are installed manually."
@@ -43,6 +46,7 @@ echo "[2] Setting up ARM GCC aarch64-none-elf toolchain..."
 mkdir -p "${TOOLCHAIN_DIR}"
 
 if [ ! -d "${EXTRACT_DIR}" ]; then
+    # shellcheck disable=SC2153  # TOOLCHAIN_TAR is sourced from versions.sh
     echo "Downloading ${TOOLCHAIN_TAR}..."
     wget -q --show-progress -c "${TOOLCHAIN_URL}" -O "${TOOLCHAIN_DIR}/${TOOLCHAIN_TAR}"
 

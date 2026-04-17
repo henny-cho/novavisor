@@ -13,6 +13,13 @@ repos:
       - id: clang-format
         types_or: [c++, c]
 
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        # Follow `source` statements in setup_env.sh / task.sh.
+        args: ["-x"]
+
   # clang-tidy is NOT run as a pre-commit hook.
   # Reason: cross-compilation requires --target=aarch64-none-elf and -isystem
   # paths that are only available after cmake configuration; a per-file hook
