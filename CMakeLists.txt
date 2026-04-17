@@ -117,9 +117,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(etl)
 
-# 3. Google Pigweed (selective module integration) — cross-build only, guarded internally
-include(cmake/pigweed_setup.cmake)
-
 # ==============================================================================
 # Target Definitions — bare-metal ELF (cross) vs host GTest (native)
 # ==============================================================================
@@ -131,14 +128,13 @@ if(CMAKE_CROSSCOMPILING)
         hal/armv8_aarch64/vec.S
         projects/qemu_virt_arm64/main.cpp
         components/nova_panic/src/nova_panic.cpp
-        components/nova_panic/src/pw_assert_backend.cc
         components/trap_handler/src/trap_handler.cpp
     )
 
     add_executable(novavisor.elf ${SOURCES})
 
-    # Link CIB (all sub-libraries), ETL, and Pigweed tier1
-    target_link_libraries(novavisor.elf PRIVATE cib etl pw_tier1)
+    # Link CIB (all sub-libraries) and ETL
+    target_link_libraries(novavisor.elf PRIVATE cib etl)
 
     # Project root as include base so all headers use absolute-from-root paths
     # e.g. #include "components/foo/include/foo.hpp"

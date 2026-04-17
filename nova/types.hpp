@@ -38,19 +38,11 @@
 #include <etl/unordered_map.h>
 #include <etl/vector.h>
 
-// --- 3. Pigweed Headers ---
-#include <pw_containers/intrusive_list.h>
-#include <pw_function/function.h>
-#include <pw_result/result.h>
-#include <pw_ring_buffer/ring_buffer.h>
-#include <pw_span/span.h>
-#include <pw_status/status.h>
-#include <pw_string/string.h>
-#include <pw_string/string_builder.h>
-#include <pw_sync/interrupt_spin_lock.h>
-
-// --- 4. CIB Headers ---
+// --- 3. CIB Headers ---
 #include <cib/cib.hpp>
+
+// --- 4. NovaVisor Headers ---
+#include "nova/status.hpp"
 
 // ============================================================================
 // HARDWARE LEVEL POISONING
@@ -67,9 +59,15 @@ namespace nova {
 
 // Error Handling
 // Reason: std::expected is the C++23 standard for exception-less error handling.
-// Replaces pw::Result or etl::expected to avoid 3rd-party dependency for core logic.
+// Canonical exception-less return for any API that can fail.
 template <typename T, typename E>
 using Expected = std::expected<T, E>;
+
+// Reason: Status-typed Result alias. Use as the default return type for HAL
+// and component API functions that succeed-or-fail without a payload beyond
+// the error code. See nova/status.hpp for the Status enum.
+template <typename T>
+using Result = std::expected<T, Status>;
 
 // Memory Views
 // Reason: Zero-overhead, bounds-checked views of contiguous memory.
@@ -83,7 +81,7 @@ using MdSpan = std::mdspan<T, Extents, LayoutPolicy>;
 
 // Text Views
 // Reason: std::string_view does not allocate memory and is perfect for passing
-// read-only string literals or sliced Pigweed strings around.
+// read-only string literals or slices of etl::string around.
 using StringView = std::string_view;
 
 // Fixed-size Array
@@ -106,65 +104,7 @@ template <typename T>
 using Atomic = std::atomic<T>;
 
 // ============================================================================
-// [CATEGORY 2] Pigweed (System Tooling, Interfacing & Callbacks)
-// Rule: Use Pigweed for external communication, strings, and dynamic traits.
-// ============================================================================
-
-// Status Codes
-// Reason: Standardized Google status codes (OK, INVALID_ARGUMENT, etc.).
-// Use this as the 'E' type in nova::Expected<T, nova::Status>.
-using Status = pw::Status;
-
-// Result Type
-// Reason: pw::Result<T> carries either a value T or a pw::Status error code.
-// Canonical return type for all HAL and component API functions.
-template <typename T>
-using Result = pw::Result<T>;
-
-// Span (Pigweed)
-// Reason: pw::span provides bounds-checking on access (triggers pw_assert on overflow).
-// Preferred over std::span for IVC shared memory boundary checks.
-template <typename T>
-using PwSpan = pw::span<T>;
-
-template <typename T>
-using PwConstSpan = pw::span<const T>;
-
-// String Manipulation
-// Reason: pw::InlineString allocates space on the stack or inline within objects.
-// It guarantees null-termination and protects against buffer overflows.
-template <std::size_t Capacity>
-using String = pw::InlineString<Capacity>;
-
-// String Builder
-// Reason: pw::StringBuffer adds Format() for composing UART output safely without heap.
-template <std::size_t Capacity>
-using StringBuffer = pw::StringBuffer<Capacity>;
-
-// Intrusive Data Structures
-// Reason: pw::IntrusiveList embeds pointers directly inside the objects (like Linux kernel).
-// Perfect for O(1) scheduling queues where VCPU objects move between wait/ready lists.
-template <typename T>
-using IntrusiveList = pw::IntrusiveList<T>;
-
-// Callbacks
-// Reason: pw::Function is a fixed-size, heap-less alternative to std::function.
-// Ideal for registering dynamic hardware interrupt handlers (ISRs).
-template <typename Callable, std::size_t InlineBufferSize = 16>
-using Function = pw::Function<Callable, InlineBufferSize>;
-
-// Byte-stream Buffers
-// Reason: pw::ring_buffer is perfect for raw byte streams, such as multiplexing
-// UART console I/O between Linux and Zephyr VMs.
-using ByteRingBuffer = pw::ring_buffer::RingBuffer;
-
-// Synchronization
-// Reason: Bare-metal safe spinlock that masks interrupts to prevent deadlocks
-// in mixed-criticality SMP (Symmetric Multi-Processing) environments.
-using InterruptSpinLock = pw::sync::InterruptSpinLock;
-
-// ============================================================================
-// [CATEGORY 3] ETL (Internal Data Structures)
+// [CATEGORY 2] ETL (Internal Data Structures)
 // Rule: Use ETL to store and manage internal system states safely.
 // ============================================================================
 
@@ -232,8 +172,8 @@ template <std::size_t MaxSize>
 using BipBuffer = etl::bip_buffer_spsc_atomic<MaxSize>;
 
 // Object Ring Buffers
-// Reason: Unlike pw::ring_buffer (which is for raw bytes), etl::cyclic_buffer
-// is strongly typed for objects. Good for logging structured events.
+// Reason: etl::cyclic_buffer is strongly typed for objects. Good for logging
+// structured events. For raw byte streams prefer etl::circular_buffer<uint8_t, N>.
 template <typename T, std::size_t MaxSize>
 using CyclicBuffer = etl::cyclic_buffer<T, MaxSize>;
 
@@ -256,7 +196,7 @@ template <typename Sig, std::size_t InlineSize>
 using EtlFunction = etl::function<Sig, InlineSize>;
 
 // ============================================================================
-// [CATEGORY 4] CIB (Architecture & Event Loop)
+// [CATEGORY 3] CIB (Architecture & Event Loop)
 // Rule: Use CIB for compile-time design, state machines, and zero-cost routing.
 // ============================================================================
 
@@ -273,7 +213,7 @@ template <typename... Configs>
 using EventNexus = cib::nexus<Configs...>;
 
 // ============================================================================
-// [CATEGORY 5] Hardware Primitives (Future Scalability)
+// [CATEGORY 4] Hardware Primitives (Future Scalability)
 // Rule: Strictly type physical/virtual addresses to avoid catastrophic casting bugs.
 // ============================================================================
 
