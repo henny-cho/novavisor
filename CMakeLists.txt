@@ -27,68 +27,17 @@ endif()
 # Enable exporting of compile_commands.json for clang-tidy/clangd via VSCode
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# ==============================================================================
-# Clang-Tidy Configuration (Expert Cross-Compile Support)
-# ==============================================================================
-option(ENABLE_CLANG_TIDY "Enable clang-tidy during build" OFF)
+# Clang-Tidy integration (cross-compile aware).
+include(cmake/clang_tidy.cmake)
 
-if(ENABLE_CLANG_TIDY)
-    find_program(CLANG_TIDY_EXE NAMES clang-tidy)
-    if(CLANG_TIDY_EXE)
-        set(CMAKE_CXX_CLANG_TIDY ${CLANG_TIDY_EXE})
-
-        # When cross-compiling for AArch64 bare-metal, clang-tidy needs extra help
-        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
-            list(APPEND CMAKE_CXX_CLANG_TIDY --extra-arg=--target=aarch64-none-elf)
-
-            # Use implicit includes from the GCC compiler, but exclude GCC's builtin headers
-            # to let Clang use its own resource headers for intrinsics/builtins.
-            set(IMPLICIT_INCLUDES ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
-
-            foreach(inc_path ${IMPLICIT_INCLUDES})
-                if(inc_path MATCHES ".*lib/gcc.*")
-                    continue()
-                endif()
-                list(APPEND CMAKE_CXX_CLANG_TIDY "--extra-arg=-isystem${inc_path}")
-            endforeach()
-
-            # Print for debugging
-            message(STATUS "Clang-Tidy enabled with target: aarch64-none-elf")
-        endif()
-    else()
-        message(WARNING "clang-tidy not found, skipping linting")
-    endif()
-endif()
-
-# ==============================================================================
-# CMake Package Manager (CPM) — v0.42.1
-# Must be included before any FetchContent/CPM dependency so that CIB's
-# bundled get_cpm.cmake (pinned at v0.40.2) finds CPM already loaded and
-# skips its own download via CPM's double-include guard.
-# ==============================================================================
+# CMake Package Manager (CPM) — v0.42.1. Must be included before any
+# FetchContent/CPM dependency so CIB's bundled get_cpm.cmake (pinned at
+# v0.40.2) finds CPM already loaded and skips its own download.
 include(cmake/get_cpm.cmake)
 
-# Pre-register CIB transitive dependencies to suppress false-positive CPM
-# version-mismatch warnings.
-#
-# CIB pins cpp-baremetal-concurrency@536bdd7 and cpp-std-extensions@c932eba.
-# Its transitive dep cpp-baremetal-senders-and-receivers later requests them
-# at 63230eb and 2b7917f. CPM treats git hash prefixes as integers, so it
-# warns "63230 > 536" — even though 536bdd7 is the NEWER commit in git
-# history. Pre-registering both packages with VERSION 99999 ensures all
-# subsequent CPM requests satisfy the "included >= requested" check silently.
-CPMAddPackage(
-    NAME cpp-baremetal-concurrency
-    GITHUB_REPOSITORY intel/cpp-baremetal-concurrency
-    GIT_TAG 536bdd7
-    VERSION 99999
-)
-CPMAddPackage(
-    NAME cpp-std-extensions
-    GITHUB_REPOSITORY intel/cpp-std-extensions
-    GIT_TAG c932eba
-    VERSION 99999
-)
+# Silence CPM version-mismatch warnings from CIB's transitive deps.
+include(cmake/cib_cpm_pin.cmake)
+nova_pin_cib_transitive_packages()
 
 # ==============================================================================
 # Fetch Dependencies
