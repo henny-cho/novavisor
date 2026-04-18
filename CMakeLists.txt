@@ -153,4 +153,11 @@ else()
     target_link_libraries(esr_parse_test PRIVATE GTest::gtest_main)
     add_test(NAME esr_parse_test COMMAND esr_parse_test)
 
+    # Stage 2 descriptor encoding (components/core_mmu/include/stage2_descriptor.hpp).
+    # Header-only, constexpr — depends on <cstdint> only.
+    add_executable(stage2_descriptor_test tests/host/stage2_descriptor_test.cpp)
+    target_include_directories(stage2_descriptor_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(stage2_descriptor_test PRIVATE GTest::gtest_main)
+    add_test(NAME stage2_descriptor_test COMMAND stage2_descriptor_test)
+
 endif() # CMAKE_CROSSCOMPILING
