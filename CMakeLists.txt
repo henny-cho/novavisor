@@ -92,6 +92,7 @@ if(CMAKE_CROSSCOMPILING)
     add_subdirectory(components/boot_msg)
     add_subdirectory(components/idle)
     add_subdirectory(components/core_mmu)
+    add_subdirectory(components/demo_hvc)
 
     add_executable(novavisor.elf projects/qemu_virt_arm64/main.cpp)
 
@@ -105,6 +106,7 @@ if(CMAKE_CROSSCOMPILING)
         nova_panic
         trap_handler
         core_mmu
+        demo_hvc
         # Frameworks
         cib etl
         # Bare-metal C runtime (strlen, memcpy, etc.) from newlib.
