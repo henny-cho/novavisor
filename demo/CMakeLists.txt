@@ -56,9 +56,12 @@ function(add_demo_guest name)
     )
     # Produce raw binary next to the ELF. The demo runner reads
     # build/demo/<manifest-dir>/<binary> where <binary> is manifest.guests[i].binary.
+    # Use an explicit output path — mixing a generator expression with a
+    # ".bin" suffix in BYPRODUCTS trips the Ninja generator.
+    set(_bin_path ${CMAKE_CURRENT_BINARY_DIR}/${name}.bin)
     add_custom_command(TARGET ${name} POST_BUILD
-        COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:${name}> $<TARGET_FILE:${name}>.bin
-        BYPRODUCTS $<TARGET_FILE:${name}>.bin
+        COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:${name}> ${_bin_path}
+        BYPRODUCTS ${_bin_path}
         COMMENT "objcopy ${name} -> ${name}.bin"
     )
 endfunction()

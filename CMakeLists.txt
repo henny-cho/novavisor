@@ -92,6 +92,7 @@ if(CMAKE_CROSSCOMPILING)
     add_subdirectory(components/boot_msg)
     add_subdirectory(components/idle)
     add_subdirectory(components/core_mmu)
+    add_subdirectory(components/core_vcpu)
     add_subdirectory(components/demo_hvc)
 
     add_executable(novavisor.elf projects/qemu_virt_arm64/main.cpp)
@@ -102,10 +103,10 @@ if(CMAKE_CROSSCOMPILING)
         hal_board_qemu_virt
         hal_init
         boot_msg
-        idle
         nova_panic
         trap_handler
         core_mmu
+        core_vcpu
         demo_hvc
         # Frameworks
         cib etl

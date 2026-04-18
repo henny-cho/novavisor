@@ -101,12 +101,16 @@ void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
   const auto ec = esr::get_ec(ctx->esr);
 
   if (ec == esr::ExceptionClass::HVC_AA64) {
-    // Dispatch to all HvcService subscribers, then advance ELR past the
-    // HVC instruction so ERET resumes at the next guest instruction. A
-    // handler that halts the system (e.g. HVC_EXIT) never returns here.
-    const auto imm = static_cast<std::uint16_t>(esr::get_hvc_imm(ctx->esr));
-    cib::service<HvcService>(ctx, imm);
-    ctx->elr += 4U;
+    // SMCCC: the function ID lives in x0; the `hvc #imm16` instruction's
+    // own immediate (ESR_EL2.ISS) is conventionally 0 and is NOT the
+    // function selector. Pass the low 16 bits of x0 to the service.
+    //
+    // ELR_EL2 already points to the instruction AFTER the HVC per
+    // ARM ARM §D1.11 — do NOT advance it here or the guest will skip
+    // the next instruction on return. Handlers that halt (HVC_EXIT)
+    // never return through this path anyway.
+    const auto func_id = static_cast<std::uint16_t>(ctx->x[0] & 0xFFFFU);
+    cib::service<HvcService>(ctx, func_id);
     return;
   }
 
