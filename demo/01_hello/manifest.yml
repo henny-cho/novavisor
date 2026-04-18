@@ -1,8 +1,7 @@
 name: "01_hello"
 description: "First EL1 guest — prints via HVC_PUTS and exits cleanly."
 phase: 5
-# Flip to true once Phase 5 (Stage 2 MMU + VCPU + HVC dispatcher) lands.
-enabled: false
+enabled: true
 timeout_seconds: 10
 
 guests:
