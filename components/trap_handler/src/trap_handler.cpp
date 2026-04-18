@@ -101,13 +101,11 @@ void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
   const auto ec = esr::get_ec(ctx->esr);
 
   if (ec == esr::ExceptionClass::HVC_AA64) {
-    const auto imm = esr::get_hvc_imm(ctx->esr);
-    uart_write("[HVC] imm=0x");
-    uart_hex64(imm);
-    uart_write(" ELR=0x");
-    uart_hex64(ctx->elr);
-    uart_write("\n");
-    // Advance past the HVC instruction
+    // Dispatch to all HvcService subscribers, then advance ELR past the
+    // HVC instruction so ERET resumes at the next guest instruction. A
+    // handler that halts the system (e.g. HVC_EXIT) never returns here.
+    const auto imm = static_cast<std::uint16_t>(esr::get_hvc_imm(ctx->esr));
+    cib::service<HvcService>(ctx, imm);
     ctx->elr += 4U;
     return;
   }

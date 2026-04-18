@@ -27,6 +27,23 @@ namespace nova {
 struct EL2SyncTrapService : public callback::service<TrapContext*> {};
 
 // ---------------------------------------------------------------------------
+// HvcService
+//
+// Signature: void(TrapContext*, std::uint16_t imm)
+// Fired from handle_lower_sync whenever ESR_EL2.EC == HVC_AA64. Each
+// subscribed component should inspect `imm` and act only on its own
+// HVC ID range (see demo/README.md for the allocation table):
+//    0x1000..0x10FF  demo_hvc (PUTS/PUTC/EXIT/...)
+//    0x1100..0x11FF  ivc      (Phase 7+)
+//    0x1200..0x12FF  timer    (Phase 6+)
+//
+// Since every subscriber is called for every HVC, handlers must
+// silently return when `imm` is outside their range — no "unknown"
+// warnings.
+// ---------------------------------------------------------------------------
+struct HvcService : public callback::service<TrapContext*, std::uint16_t> {};
+
+// ---------------------------------------------------------------------------
 // trap_handler_component
 // ---------------------------------------------------------------------------
 struct trap_handler_component {
@@ -34,11 +51,12 @@ struct trap_handler_component {
   // Registered at compile time; invoked by el2_trap_lower_sync().
   static void handle_lower_sync(TrapContext* ctx) noexcept;
 
-  // Exports the service so other components can extend it.
-  // Provides a default handler that handles HVC stubs and panics on anything
-  // unexpected.
-  constexpr static auto config = cib::config(
-      cib::exports<EL2SyncTrapService>, cib::extend<EL2SyncTrapService>(&trap_handler_component::handle_lower_sync));
+  // Exports both services and registers the default sync trap handler.
+  // HvcService has no default subscriber; components (demo_hvc, ivc, ...)
+  // extend it as needed.
+  constexpr static auto config =
+      cib::config(cib::exports<EL2SyncTrapService, HvcService>,
+                  cib::extend<EL2SyncTrapService>(&trap_handler_component::handle_lower_sync));
 };
 
 } // namespace nova
