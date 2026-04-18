@@ -1,0 +1,21 @@
+name: "01_hello"
+description: "First EL1 guest — prints via HVC_PUTS and exits cleanly."
+phase: 5
+# Flip to true once Phase 5 (Stage 2 MMU + VCPU + HVC dispatcher) lands.
+enabled: false
+timeout_seconds: 10
+
+guests:
+  - name: "hello"
+    binary: "hello.bin"
+    load_addr:   0x50000000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+
+expect:
+  - pattern: "Hello from EL1 guest!"
+    within_seconds: 5
+  - pattern: "demo_exit code=0"
+    within_seconds: 10

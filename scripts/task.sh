@@ -35,8 +35,9 @@ print_usage() {
     echo "  debug       Run QEMU with -s -S (GDB server on :1234, halted at reset)"
     echo "  size        Print section sizes of novavisor.elf"
     echo "  objdump     Disassemble novavisor.elf (interleaved with source)"
-    echo "  ci          Run the full CI pipeline (format check + build + lint + test)"
+    echo "  ci          Run the full CI pipeline (format check + build + lint + test + demo)"
     echo "  test        Build and run host GTest suite (x86_64, no toolchain)"
+    echo "  demo        Manage demo guests (list | run | verify | verify-all)"
     echo ""
     echo "Options:"
     echo "  --release   Build in Release mode (default: Debug)"
@@ -249,6 +250,24 @@ cmd_objdump() {
     aarch64-none-elf-objdump -d -S -C "${ELF}"
 }
 
+cmd_demo() {
+    # Delegate all demo operations to the Python harness. The harness
+    # handles: manifest parsing, hypervisor + demo guest builds, QEMU
+    # invocation, and pexpect-based pattern verification.
+    local sub="${1:-list}"
+    shift || true
+    case "${sub}" in
+        list|run|verify|verify-all)
+            python3 "${WORK_DIR}/scripts/demo_runner.py" "${sub}" "$@"
+            ;;
+        *)
+            echo "Error: unknown demo subcommand '${sub}'" >&2
+            echo "Usage: $0 demo {list|run|verify|verify-all} [name]" >&2
+            exit 2
+            ;;
+    esac
+}
+
 cmd_ci() {
     echo "==> Running Local CI Pipeline..."
     # Format check runs in parallel with release build (pure-CPU vs I/O).
@@ -272,6 +291,10 @@ cmd_ci() {
 
     cmd_lint --release
     cmd_test
+    # Run all enabled demos. Before any phase 5+ lands, this is a no-op
+    # that prints "no enabled demos" and exits 0, so it's safe to include
+    # in CI from day one.
+    cmd_demo verify-all
     echo "==> Local CI Pipeline Passed Successfully!"
 }
 
@@ -297,6 +320,7 @@ case "${SUBCOMMAND}" in
     size)      cmd_size    "$@" ;;
     objdump)   cmd_objdump "$@" ;;
     test)      cmd_test    "$@" ;;
+    demo)      cmd_demo    "$@" ;;
     ci)        cmd_ci      "$@" ;;
     -h|--help) print_usage ;;
     *)
