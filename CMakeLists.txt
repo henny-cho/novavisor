@@ -160,4 +160,11 @@ else()
     target_link_libraries(stage2_descriptor_test PRIVATE GTest::gtest_main)
     add_test(NAME stage2_descriptor_test COMMAND stage2_descriptor_test)
 
+    # Stage 2 identity-map builder (components/core_mmu/include/stage2_builder.hpp).
+    # Header-only, depends only on stage2_descriptor.hpp + std arrays.
+    add_executable(stage2_builder_test tests/host/stage2_builder_test.cpp)
+    target_include_directories(stage2_builder_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(stage2_builder_test PRIVATE GTest::gtest_main)
+    add_test(NAME stage2_builder_test COMMAND stage2_builder_test)
+
 endif() # CMAKE_CROSSCOMPILING
