@@ -23,7 +23,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y cmake ninja-build clang-tidy clang-format qemu-system-arm wget xz-utils
+          sudo apt-get install -y \
+            cmake ninja-build clang-tidy clang-format \
+            qemu-system-arm qemu-system-aarch64 \
+            wget xz-utils \
+            python3-yaml python3-pexpect
           ./scripts/setup_env.sh
 
       - name: Check formatting
@@ -37,3 +41,20 @@ jobs:
 
       - name: Host unit tests
         run: scripts/task.sh test
+
+      - name: Demo verification (enabled demos only)
+        # Before Phase 5 lands, every demo has `enabled: false` in its
+        # manifest, so this step prints "no enabled demos" and exits 0.
+        # Each completed phase flips its demo's `enabled` flag to true
+        # and this step becomes the phase's acceptance gate.
+        run: scripts/task.sh demo verify-all
+
+      - name: Upload demo artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-artifacts
+          path: |
+            build/demo/**/*.bin
+            build/demo/**/*.elf
+          if-no-files-found: ignore
