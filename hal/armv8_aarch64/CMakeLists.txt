@@ -4,6 +4,7 @@ add_library(hal_armv8_aarch64 OBJECT
     boot.S
     vec.S
     mmu.S
+    vcpu_enter.S
 )
 target_include_directories(hal_armv8_aarch64 PUBLIC ${CMAKE_SOURCE_DIR})
 
