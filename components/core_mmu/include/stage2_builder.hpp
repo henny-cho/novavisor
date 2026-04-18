@@ -78,18 +78,28 @@ struct Stage2Tables {
 // multi-range and MMIO device variants.
 inline void build_identity_map(Stage2Tables& t, std::uint64_t ipa_base, std::uint64_t size,
                                std::uint64_t leaf_attrs) noexcept {
-  t.l1->fill(kInvalid);
-  t.l2->fill(kInvalid);
-  t.l3->fill(kInvalid);
+  // Subscript through raw pointers: the bare-metal libstdc++ std::array
+  // operator[] / fill() pull in __glibcxx_assert_fail which has no
+  // freestanding definition. data() is a trivial getter with no such
+  // dependency, so indexing stays identical on host and cross builds.
+  auto* l1 = t.l1->data();
+  auto* l2 = t.l2->data();
+  auto* l3 = t.l3->data();
 
-  (*t.l1)[l1_index(ipa_base)] = make_table(t.l2_pa);
-  (*t.l2)[l2_index(ipa_base)] = make_table(t.l3_pa);
+  for (std::size_t i = 0; i < kTableEntries; ++i) {
+    l1[i] = kInvalid;
+    l2[i] = kInvalid;
+    l3[i] = kInvalid;
+  }
+
+  l1[l1_index(ipa_base)] = make_table(t.l2_pa);
+  l2[l2_index(ipa_base)] = make_table(t.l3_pa);
 
   const std::size_t pages    = static_cast<std::size_t>(size / k4KiB);
   const std::size_t i3_start = l3_index(ipa_base);
   for (std::size_t i = 0; i < pages; ++i) {
-    const std::uint64_t page_pa = ipa_base + static_cast<std::uint64_t>(i) * k4KiB;
-    (*t.l3)[i3_start + i]       = make_page(page_pa, leaf_attrs);
+    const std::uint64_t page_pa = ipa_base + (static_cast<std::uint64_t>(i) * k4KiB);
+    l3[i3_start + i]            = make_page(page_pa, leaf_attrs);
   }
 }
 
