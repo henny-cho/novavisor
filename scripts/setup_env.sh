@@ -30,8 +30,11 @@ if command -v apt-get >/dev/null 2>&1; then
         wget \
         xz-utils \
         qemu-system-arm \
+        qemu-system-aarch64 \
         python3 \
         python3-pip \
+        python3-yaml \
+        python3-pexpect \
         device-tree-compiler \
         clang-format \
         clang-tidy \

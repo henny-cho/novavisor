@@ -28,6 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         device-tree-compiler \
         shellcheck \
         pipx \
+        python3-yaml \
+        python3-pexpect \
     && rm -rf /var/lib/apt/lists/*
 
 # pre-commit runs as the `vscode` user (git hook context); pipx keeps the
