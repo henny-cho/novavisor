@@ -1,0 +1,54 @@
+// Template for personal VS Code overrides of the NovaVisor workspace.
+// Copy to `novavisor.code-workspace` (git-ignored) and open with
+// `File > Open Workspace from File...`.
+//
+// Syntax: JSONC (JSON with // comments) — VS Code parses it natively.
+// Do not feed this file to strict JSON tools (e.g. `jq`) without stripping
+// comments first.
+//
+// Precedence recap:
+//   - `settings` here overrides .vscode/settings.json for this workspace only.
+//   - `launch` / `tasks` are MERGED with the committed configs — your entries
+//     appear alongside the shared ones in the Run/Task picker.
+//
+// All example entries below are commented out; uncomment what you want.
+{
+    "folders": [
+        { "path": "." }
+    ],
+    "settings": {
+        // "editor.rulers": [100],
+        // "cmake.parallelJobs": 16,
+        // "C_Cpp.intelliSenseCacheSize": 8192
+    },
+    "launch": {
+        "version": "0.2.0",
+        "configurations": [
+            // {
+            //     "name": "QEMU Remote (verbose gdb log)",
+            //     "type": "cppdbg",
+            //     "request": "launch",
+            //     "program": "${command:cmake.launchTargetPath}",
+            //     "cwd": "${workspaceFolder}",
+            //     "MIMode": "gdb",
+            //     "miDebuggerPath": "${workspaceFolder}/scripts/aarch64-gdb.sh",
+            //     "miDebuggerServerAddress": "localhost:1234",
+            //     "stopAtConnect": true,
+            //     "preLaunchTask": "qemu: start GDB stub",
+            //     "postDebugTask": "qemu: stop",
+            //     "logging": { "engineLogging": true, "trace": true }
+            // }
+        ]
+    },
+    "tasks": {
+        "version": "2.0.0",
+        "tasks": [
+            // {
+            //     "label": "my: quick run",
+            //     "type": "shell",
+            //     "command": "${workspaceFolder}/scripts/task.sh",
+            //     "args": ["run"]
+            // }
+        ]
+    }
+}

@@ -5,5 +5,10 @@
 build/
 compile_commands.json
 .cache/
-.vscode/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
+!.vscode/extensions.json
+*.code-workspace
 external/

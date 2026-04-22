@@ -1,0 +1,89 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "qemu: start GDB stub",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/task.sh",
+            "args": ["debug"],
+            "isBackground": true,
+            "problemMatcher": [
+                {
+                    "pattern": [
+                        {
+                            "regexp": ".",
+                            "file": 1,
+                            "location": 2,
+                            "message": 3
+                        }
+                    ],
+                    "background": {
+                        "activeOnStart": true,
+                        "beginsPattern": "==> Launching QEMU",
+                        "endsPattern": "==> Press Ctrl-A"
+                    }
+                }
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true,
+                "close": true
+            }
+        },
+        {
+            "label": "qemu: start GDB stub (demo)",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/task.sh",
+            "args": ["demo", "debug", "${input:demoName}"],
+            "isBackground": true,
+            "problemMatcher": [
+                {
+                    "pattern": [
+                        {
+                            "regexp": ".",
+                            "file": 1,
+                            "location": 2,
+                            "message": 3
+                        }
+                    ],
+                    "background": {
+                        "activeOnStart": true,
+                        "beginsPattern": "==> Launching QEMU",
+                        "endsPattern": "==> Press Ctrl-A"
+                    }
+                }
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true,
+                "close": true
+            }
+        },
+        {
+            "label": "qemu: stop",
+            "type": "shell",
+            "command": "pkill -f 'qemu-system-aarch64.*novavisor.elf.*-s -S' || true",
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "close": true
+            }
+        }
+    ],
+    // Keep `inputs[0].options` in sync with `demo/NN_*/` directories so the
+    // F5 `QEMU Demo Debug` picker shows every available demo. See README's
+    // Demo-driven phase completion section.
+    "inputs": [
+        {
+            "id": "demoName",
+            "type": "pickString",
+            "description": "Select demo to debug",
+            "options": [
+                "01_hello"
+            ],
+            "default": "01_hello"
+        }
+    ]
+}

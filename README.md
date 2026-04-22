@@ -71,6 +71,31 @@ While `debug` is running, connect in a second terminal:
 aarch64-none-elf-gdb build/aarch64-debug/novavisor.elf -ex 'target remote :1234'
 ```
 
+### One-click debugging in VS Code
+
+`.vscode/{launch,tasks,settings,extensions}.json` ship a ready-made configuration:
+
+- **Hypervisor only** — the CMake Tools **Debug** button (or `F5` with `QEMU Remote (aarch64-debug)`) starts `scripts/task.sh debug` as a background task and attaches `cppdbg` to the GDB stub on `:1234`.
+- **Demo guest + hypervisor** — `F5` with `QEMU Demo Debug` prompts for a demo (pickString of available demos), runs `scripts/task.sh demo debug <name>` under the hood, and `source`s the auto-generated `build/demo/debug-symbols.gdb` so breakpoints work in both the hypervisor and guest ELF. The demo list is maintained in `.vscode/tasks.json` → `inputs[0].options` — extend it when you add a demo.
+
+Prerequisites:
+
+- Install the recommended extensions when VS Code prompts (`ms-vscode.cpptools`, `ms-vscode.cmake-tools`).
+- Toolchain must be available via Method A (devcontainer) **or** Method B (`./scripts/setup_env.sh`). `scripts/aarch64-gdb.sh` resolves the GDB binary against both layouts.
+- Linux / macOS / WSL only — the `postDebugTask` uses `pkill` to tear down QEMU.
+- The GDB stub uses port `1234`; run at most one debug session per host to avoid collisions.
+
+#### Personal overrides
+
+VS Code settings precedence is `Default < User < Workspace (.code-workspace) < Folder (.vscode/)`. Keep personal tweaks at the narrowest layer that fits so the committed `.vscode/` stays shared:
+
+- **User Settings** for globally personal preferences (theme, font, keybindings). Command Palette → `Preferences: Open User Settings (JSON)`.
+- **`novavisor.code-workspace`** for repo-specific personal overrides, extra launch configs, or one-off tasks. Copy the template and open it via `File > Open Workspace from File...`:
+  ```bash
+  cp novavisor.code-workspace.example novavisor.code-workspace
+  ```
+  `*.code-workspace` is git-ignored, so personal workspaces stay local. Settings in the `.code-workspace` file override the folder `settings.json`; `launch` and `tasks` entries are *merged* with the committed ones (personal additions appear alongside the shared configs in the picker).
+
 ### Host unit tests
 
 ```bash
@@ -180,7 +205,7 @@ Installed by both setup methods. On `git commit`:
 
 Every roadmap phase ends with its demo's `manifest.enabled` flipping from `false` to `true`. The recommended flow:
 
-1. **Scaffold** — create `demo/NN_name/{main.c, CMakeLists.txt, manifest.yml}` with `enabled: false`. (If you already did this in an earlier commit, skip.)
+1. **Scaffold** — create `demo/NN_name/{main.c, CMakeLists.txt, manifest.yml}` with `enabled: false`, and append `NN_name` to `.vscode/tasks.json` → `inputs[0].options` so the F5 `QEMU Demo Debug` picker surfaces it. (If you already did this in an earlier commit, skip.)
 2. **Implement** — land hypervisor features in small atomic commits. Each commit keeps `./scripts/task.sh ci` green; Host-testable units ship with GTest cases.
 3. **Integrate** — once `./scripts/task.sh demo verify NN_name` passes locally, the demo is ready.
 4. **Close** — the final commit of the phase flips `enabled: true` in the manifest. This commit is the phase-completion marker; CI now gates every future PR against this demo.

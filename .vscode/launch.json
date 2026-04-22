@@ -1,0 +1,55 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "QEMU Remote (aarch64-debug)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${command:cmake.launchTargetPath}",
+            "cwd": "${workspaceFolder}",
+            "MIMode": "gdb",
+            "miDebuggerPath": "${workspaceFolder}/scripts/aarch64-gdb.sh",
+            "miDebuggerServerAddress": "localhost:1234",
+            "stopAtConnect": true,
+            "externalConsole": false,
+            "preLaunchTask": "qemu: start GDB stub",
+            "postDebugTask": "qemu: stop",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "QEMU Demo Debug",
+            "type": "cppdbg",
+            "request": "launch",
+            // Hardcoded to the hypervisor ELF (not ${command:cmake.launchTargetPath})
+            // because the demo flow always debugs the hypervisor — guest symbols
+            // are layered in via the setupCommands `source` below.
+            "program": "${workspaceFolder}/build/aarch64-debug/novavisor.elf",
+            "cwd": "${workspaceFolder}",
+            "MIMode": "gdb",
+            "miDebuggerPath": "${workspaceFolder}/scripts/aarch64-gdb.sh",
+            "miDebuggerServerAddress": "localhost:1234",
+            "stopAtConnect": true,
+            "externalConsole": false,
+            "preLaunchTask": "qemu: start GDB stub (demo)",
+            "postDebugTask": "qemu: stop",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Load demo guest symbols (written by scripts/task.sh demo debug)",
+                    "text": "source ${workspaceFolder}/build/demo/debug-symbols.gdb",
+                    "ignoreFailures": true
+                }
+            ]
+        }
+    ]
+}

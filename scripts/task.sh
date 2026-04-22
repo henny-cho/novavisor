@@ -37,7 +37,7 @@ print_usage() {
     echo "  objdump     Disassemble novavisor.elf (interleaved with source)"
     echo "  ci          Run the full CI pipeline (format check + build + lint + test + demo)"
     echo "  test        Build and run host GTest suite (x86_64, no toolchain)"
-    echo "  demo        Manage demo guests (list | run | verify | verify-all)"
+    echo "  demo        Manage demo guests (list | run | verify | verify-all | debug)"
     echo ""
     echo "Options:"
     echo "  --release   Build in Release mode (default: Debug)"
@@ -257,12 +257,15 @@ cmd_demo() {
     local sub="${1:-list}"
     shift || true
     case "${sub}" in
-        list|run|verify|verify-all)
-            python3 "${WORK_DIR}/scripts/demo_runner.py" "${sub}" "$@"
+        list|run|verify|verify-all|debug)
+            # -u: unbuffered stdout so VS Code's background problem matcher
+            # sees the ==> markers emitted by `demo debug` before QEMU
+            # replaces the process and output sits in a 4K block buffer.
+            python3 -u "${WORK_DIR}/scripts/demo_runner.py" "${sub}" "$@"
             ;;
         *)
             echo "Error: unknown demo subcommand '${sub}'" >&2
-            echo "Usage: $0 demo {list|run|verify|verify-all} [name]" >&2
+            echo "Usage: $0 demo {list|run|verify|verify-all|debug} [name]" >&2
             exit 2
             ;;
     esac

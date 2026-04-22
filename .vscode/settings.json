@@ -1,0 +1,25 @@
+{
+    "files.associations": {
+        "string_view": "cpp",
+        "demo_hvc.h": "c"
+    },
+    "cmake.debugConfig": {
+        "type": "cppdbg",
+        "request": "launch",
+        "cwd": "${workspaceFolder}",
+        "MIMode": "gdb",
+        "miDebuggerPath": "${workspaceFolder}/scripts/aarch64-gdb.sh",
+        "miDebuggerServerAddress": "localhost:1234",
+        "stopAtConnect": true,
+        "externalConsole": false,
+        "preLaunchTask": "qemu: start GDB stub",
+        "postDebugTask": "qemu: stop",
+        "setupCommands": [
+            {
+                "description": "Enable pretty-printing for gdb",
+                "text": "-enable-pretty-printing",
+                "ignoreFailures": true
+            }
+        ]
+    }
+}
