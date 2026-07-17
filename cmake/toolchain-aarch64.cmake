@@ -24,7 +24,10 @@ find_program(CMAKE_OBJDUMP aarch64-none-elf-objdump HINTS "${TOOLCHAIN_BIN_DIR}"
 # <locale>/<system_error> — headers that omit __throw_* declarations when
 # __STDC_HOSTED__=0. -nostdlib is a link-only flag; it lives in
 # target_link_options on the final ELF.
-set(COMMON_FLAGS "-mcpu=cortex-a57 -mstrict-align")
+# -f{function,data}-sections gives --gc-sections per-symbol granularity;
+# linker.ld keeps mandatory sections via KEEP(.text.boot/.text.vec) and
+# matches the split names with *(.text*)/*(.data*) wildcards.
+set(COMMON_FLAGS "-mcpu=cortex-a57 -mstrict-align -ffunction-sections -fdata-sections")
 
 set(CMAKE_C_FLAGS_INIT   "${COMMON_FLAGS}")
 set(CMAKE_CXX_FLAGS_INIT "${COMMON_FLAGS}")
