@@ -164,7 +164,11 @@ cmd_lint() {
     mapfile -t EXTRA_ARGS < "${BUILD_DIR}/clang_tidy_extra_args.txt"
     # .cpp only: the compile database also lists .S assembly TUs, which
     # clang-tidy cannot parse.
+    # -header-filter is passed explicitly because clang-tidy 19+ no longer
+    # honors HeaderFilterRegex from .clang-tidy — relying on the config file
+    # silently skips all header diagnostics on newer versions.
     run-clang-tidy -quiet -p "${BUILD_DIR}" "${EXTRA_ARGS[@]}" \
+        '-header-filter=/(components|hal|nova|projects)/' \
         "^${WORK_DIR}/(components|hal|nova|projects)/.*\.cpp\$"
     echo "Linting complete."
 }

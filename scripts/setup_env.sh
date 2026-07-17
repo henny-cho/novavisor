@@ -2,75 +2,100 @@
 set -euo pipefail
 
 # ==============================================================================
-# NovaVisor Environment Setup Script
+# NovaVisor Environment Setup
 # ==============================================================================
-# This script sets up the local development environment for building the
-# NovaVisor bare-metal hypervisor.
-# It downloads the official ARM GCC toolchain and installs required dependencies.
+# Installs the apt packages and the ARM GNU aarch64-none-elf toolchain needed
+# to build, lint, test, and run NovaVisor. Single source of truth for host
+# dependencies, shared by developer machines and CI.
+#
+# Usage:
+#   scripts/setup_env.sh          Full developer setup: core + dev packages,
+#                                 toolchain, git pre-commit hooks.
+#   scripts/setup_env.sh --ci     CI subset: core packages + toolchain only.
 # ==============================================================================
 
-WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.."; pwd)"
+WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOLCHAIN_DIR="${WORK_DIR}/.toolchain"
 
 # Exports TOOLCHAIN_URL / TOOLCHAIN_TAR / TOOLCHAIN_EXTRACT_NAME used below.
 # shellcheck source=versions.sh disable=SC1091
-source "$(dirname "$0")/versions.sh"
+source "${WORK_DIR}/scripts/versions.sh"
 EXTRACT_DIR="${TOOLCHAIN_DIR}/${TOOLCHAIN_EXTRACT_NAME}"
 
-echo "=== NovaVisor Environment Setup ==="
+CI_MODE=0
+case "${1:-}" in
+    --ci) CI_MODE=1 ;;
+    "") ;;
+    *)
+        echo "Usage: $0 [--ci]" >&2
+        exit 2
+        ;;
+esac
 
-# 1. Install host dependencies (Ubuntu/Debian based)
-echo "[1] Checking and installing host dependencies..."
-if command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update -y
-    sudo apt-get install -y \
-        build-essential \
-        cmake \
-        ninja-build \
-        ccache \
-        wget \
-        xz-utils \
-        qemu-system-arm \
-        qemu-system-aarch64 \
-        python3 \
-        python3-pip \
-        python3-yaml \
-        python3-pexpect \
-        device-tree-compiler \
-        clang-format \
-        clang-tidy \
-        shellcheck \
-        pre-commit
-else
-    echo "Warning: apt-get not found. Please ensure dependencies like cmake, ninja, qemu are installed manually."
-fi
+# Everything scripts/task.sh needs for build / lint / test / demo.
+CORE_PACKAGES=(
+    build-essential
+    cmake
+    ninja-build
+    ccache
+    clang-format
+    clang-tidy
+    qemu-system-aarch64
+    python3
+    python3-yaml
+    python3-pexpect
+    wget
+    xz-utils
+)
 
-# 2. Setup ARM GCC Toolchain
-echo "[2] Setting up ARM GCC aarch64-none-elf toolchain..."
-mkdir -p "${TOOLCHAIN_DIR}"
+# Developer-workstation extras, not needed by CI (mirrors
+# .devcontainer/Dockerfile): pre-commit hook stack and DTB tooling for
+# roadmap Phase 12.
+DEV_PACKAGES=(
+    shellcheck
+    pre-commit
+    device-tree-compiler
+)
 
-if [ ! -d "${EXTRACT_DIR}" ]; then
-    # shellcheck disable=SC2153  # TOOLCHAIN_TAR is sourced from versions.sh
-    echo "Downloading ${TOOLCHAIN_TAR}..."
-    wget -q --show-progress -c "${TOOLCHAIN_URL}" -O "${TOOLCHAIN_DIR}/${TOOLCHAIN_TAR}"
+install_packages() {
+    echo "==> Installing host packages..."
+    if ! command -v apt-get >/dev/null 2>&1; then
+        echo "Warning: apt-get not found. Please install manually:"
+        echo "  ${CORE_PACKAGES[*]}"
+        return
+    fi
+    local packages=("${CORE_PACKAGES[@]}")
+    if [[ ${CI_MODE} -eq 0 ]]; then
+        packages+=("${DEV_PACKAGES[@]}")
+    fi
+    sudo apt-get update -q
+    sudo apt-get install -y "${packages[@]}"
+}
 
-    echo "Extracting toolchain (this may take a moment)..."
-    tar -xf "${TOOLCHAIN_DIR}/${TOOLCHAIN_TAR}" -C "${TOOLCHAIN_DIR}"
-
-    echo "Cleaning up tarball..."
-    rm -f "${TOOLCHAIN_DIR}/${TOOLCHAIN_TAR}"
-
-    echo "Creating symlink to 'current'..."
+install_toolchain() {
+    echo "==> Setting up ARM GNU aarch64-none-elf toolchain..."
+    mkdir -p "${TOOLCHAIN_DIR}"
+    if [ -d "${EXTRACT_DIR}" ]; then
+        echo "Toolchain already present at ${EXTRACT_DIR}"
+    else
+        # shellcheck disable=SC2153  # TOOLCHAIN_TAR is sourced from versions.sh
+        echo "Downloading ${TOOLCHAIN_TAR}..."
+        wget -q --show-progress -c "${TOOLCHAIN_URL}" -O "${TOOLCHAIN_DIR}/${TOOLCHAIN_TAR}"
+        echo "Extracting toolchain (this may take a moment)..."
+        tar -xf "${TOOLCHAIN_DIR}/${TOOLCHAIN_TAR}" -C "${TOOLCHAIN_DIR}"
+        rm -f "${TOOLCHAIN_DIR}/${TOOLCHAIN_TAR}"
+    fi
     ln -sfn "${EXTRACT_DIR}" "${TOOLCHAIN_DIR}/current"
-else
-    echo "Toolchain already exists at ${EXTRACT_DIR}"
-    ln -sfn "${EXTRACT_DIR}" "${TOOLCHAIN_DIR}/current"
-fi
+}
 
-# 3. Verify env.sh exists (managed in version control, not generated)
-ENV_SCRIPT="${TOOLCHAIN_DIR}/env.sh"
-if [ ! -f "${ENV_SCRIPT}" ]; then
-    echo "[3] env.sh not found. Generating from template..."
+# task.sh sources .toolchain/env.sh at startup; generate it if missing.
+ensure_env_script() {
+    local ENV_SCRIPT="${TOOLCHAIN_DIR}/env.sh"
+    if [ -f "${ENV_SCRIPT}" ]; then
+        echo "==> env.sh found at ${ENV_SCRIPT}"
+        return
+    fi
+    echo "==> Generating ${ENV_SCRIPT}..."
     cat > "${ENV_SCRIPT}" <<'EOF'
 #!/usr/bin/env bash
 # Source this file to add the custom ARM toolchain to your PATH
@@ -81,21 +106,27 @@ echo "NovaVisor environment loaded! Toolchain in use:"
 aarch64-none-elf-gcc --version | head -n 1
 EOF
     chmod +x "${ENV_SCRIPT}"
-    echo "[3] env.sh generated at ${ENV_SCRIPT}"
-else
-    echo "[3] env.sh found at ${ENV_SCRIPT}"
+}
+
+install_hooks() {
+    echo "==> Installing git pre-commit hooks..."
+    if [ -d "${WORK_DIR}/.git" ] && command -v pre-commit >/dev/null 2>&1; then
+        (cd "${WORK_DIR}" && pre-commit install)
+    else
+        echo "Warning: .git not found or pre-commit not installed. Skipping hooks."
+    fi
+}
+
+echo "=== NovaVisor Environment Setup ==="
+install_packages
+install_toolchain
+ensure_env_script
+if [[ ${CI_MODE} -eq 0 ]]; then
+    install_hooks
 fi
 
-# 4. Install pre-commit hooks (step numbering preserved)
-echo "[4] Installing git pre-commit hooks..."
-if [ -d "${WORK_DIR}/.git" ] && command -v pre-commit >/dev/null 2>&1; then
-    pre-commit install
-else
-    echo "Warning: .git directory not found or pre-commit not installed. Skipping git hook installation."
+echo "=== Setup complete ==="
+if [[ ${CI_MODE} -eq 0 ]]; then
+    echo "Load the toolchain into your current shell:"
+    echo "  source ${TOOLCHAIN_DIR}/env.sh"
 fi
-
-echo "=============================================================================="
-echo "Setup Complete!"
-echo "Run the following command to load the toolchain into your current session:"
-echo "  source ${TOOLCHAIN_DIR}/env.sh"
-echo "=============================================================================="

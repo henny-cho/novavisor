@@ -153,14 +153,15 @@ If `ci` passes locally, the branch is expected to pass GitHub Actions as well. A
 
 ## 🤖 Continuous Integration
 
-`.github/workflows/ci.yml` runs on every push and every PR targeting `main`:
+`.github/workflows/ci.yml` runs on every push and every PR targeting `main`, as two parallel jobs plus an aggregate gate:
 
-1. Install apt dependencies — CMake, Ninja, clang-{format,tidy}, `qemu-system-aarch64`, `python3-yaml`, `python3-pexpect`.
-2. Execute `./scripts/setup_env.sh` to fetch and unpack the ARM toolchain.
-3. Check formatting, build Release, lint, run host tests, and run `demo verify-all`.
-4. On failure, upload `build/demo/**/*.{bin,elf}` as an artifact so QEMU-reproducible binaries are available from the run logs.
+- **host** — clang-format check and the native GTest suite. Needs neither the ARM toolchain nor QEMU, so it reports within a couple of minutes.
+- **target** — `./scripts/setup_env.sh --ci` (apt packages + ARM toolchain, both cached), then Release build, clang-tidy lint, and `demo verify-all`. On failure it uploads `build/demo/**/*.{bin,elf}` as an artifact so QEMU-reproducible binaries are available from the run logs.
+- **ci** — aggregates the two jobs into one stable status-check name for branch protection.
 
-Dependabot (`.github/dependabot.yml`) updates the devcontainer base image weekly.
+A newer push to the same branch or PR cancels the superseded run.
+
+Dependabot (`.github/dependabot.yml`) updates the devcontainer base image and the workflow's GitHub Actions weekly.
 
 ---
 

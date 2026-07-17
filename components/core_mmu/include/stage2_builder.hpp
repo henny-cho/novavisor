@@ -25,10 +25,18 @@
 
 namespace nova::mmu {
 
-inline constexpr std::size_t   kTableEntries = 512;
-inline constexpr std::uint64_t k1GiB         = 1ULL << 30U;
-inline constexpr std::uint64_t k2MiB         = 1ULL << 21U;
-inline constexpr std::uint64_t k4KiB         = 1ULL << 12U;
+inline constexpr std::size_t kTableEntries = 512;
+
+// IPA bit positions where each level's index field starts (4 KiB granule).
+inline constexpr std::uint64_t kL1Shift = 30U; // entry covers 1 GiB
+inline constexpr std::uint64_t kL2Shift = 21U; // entry covers 2 MiB
+inline constexpr std::uint64_t kL3Shift = 12U; // entry covers 4 KiB
+// 9-bit index field — one entry per table slot.
+inline constexpr std::uint64_t kIndexMask = kTableEntries - 1;
+
+inline constexpr std::uint64_t k1GiB = 1ULL << kL1Shift;
+inline constexpr std::uint64_t k2MiB = 1ULL << kL2Shift;
+inline constexpr std::uint64_t k4KiB = 1ULL << kL3Shift;
 
 using Table = std::array<std::uint64_t, kTableEntries>;
 
@@ -45,16 +53,16 @@ struct Stage2Tables {
 
 // --- Index extractors -------------------------------------------------------
 
-[[nodiscard]] constexpr std::size_t l1_index(std::uint64_t ipa) noexcept {
-  return static_cast<std::size_t>((ipa >> 30U) & 0x1FFU);
+[[nodiscard]] constexpr auto l1_index(std::uint64_t ipa) noexcept -> std::size_t {
+  return static_cast<std::size_t>((ipa >> kL1Shift) & kIndexMask);
 }
 
-[[nodiscard]] constexpr std::size_t l2_index(std::uint64_t ipa) noexcept {
-  return static_cast<std::size_t>((ipa >> 21U) & 0x1FFU);
+[[nodiscard]] constexpr auto l2_index(std::uint64_t ipa) noexcept -> std::size_t {
+  return static_cast<std::size_t>((ipa >> kL2Shift) & kIndexMask);
 }
 
-[[nodiscard]] constexpr std::size_t l3_index(std::uint64_t ipa) noexcept {
-  return static_cast<std::size_t>((ipa >> 12U) & 0x1FFU);
+[[nodiscard]] constexpr auto l3_index(std::uint64_t ipa) noexcept -> std::size_t {
+  return static_cast<std::size_t>((ipa >> kL3Shift) & kIndexMask);
 }
 
 // --- Identity-map builder ---------------------------------------------------
@@ -95,7 +103,7 @@ inline void build_identity_map(Stage2Tables& t, std::uint64_t ipa_base, std::uin
   l1[l1_index(ipa_base)] = make_table(t.l2_pa);
   l2[l2_index(ipa_base)] = make_table(t.l3_pa);
 
-  const std::size_t pages    = static_cast<std::size_t>(size / k4KiB);
+  const auto        pages    = static_cast<std::size_t>(size / k4KiB);
   const std::size_t i3_start = l3_index(ipa_base);
   for (std::size_t i = 0; i < pages; ++i) {
     const std::uint64_t page_pa = ipa_base + (static_cast<std::uint64_t>(i) * k4KiB);

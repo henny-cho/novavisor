@@ -92,19 +92,19 @@ inline constexpr std::uint64_t kAttrDeviceRw = (kMemAttrDevice_nGnRE << kMemAttr
 
 // Block descriptor, valid at L1 (1 GiB) or L2 (2 MiB). The caller is
 // responsible for ensuring output_pa is block-aligned for the level.
-[[nodiscard]] constexpr std::uint64_t make_block(std::uint64_t output_pa, std::uint64_t attrs) noexcept {
+[[nodiscard]] constexpr auto make_block(std::uint64_t output_pa, std::uint64_t attrs) noexcept -> std::uint64_t {
   return (output_pa & desc::kOutputAddrMask) | attrs | desc::kTypeBlock;
 }
 
 // Page descriptor, valid only at L3 (4 KiB). output_pa must be 4KiB-aligned.
-[[nodiscard]] constexpr std::uint64_t make_page(std::uint64_t output_pa, std::uint64_t attrs) noexcept {
+[[nodiscard]] constexpr auto make_page(std::uint64_t output_pa, std::uint64_t attrs) noexcept -> std::uint64_t {
   return (output_pa & desc::kOutputAddrMask) | attrs | desc::kTypePage;
 }
 
 // Table descriptor, valid at L0/L1/L2. next_table_pa is the PA of the
 // next-level table (must be 4KiB-aligned). Stage 2 table descriptors
 // carry no additional attribute bits.
-[[nodiscard]] constexpr std::uint64_t make_table(std::uint64_t next_table_pa) noexcept {
+[[nodiscard]] constexpr auto make_table(std::uint64_t next_table_pa) noexcept -> std::uint64_t {
   return (next_table_pa & desc::kOutputAddrMask) | desc::kTypeTable;
 }
 
@@ -112,35 +112,35 @@ inline constexpr std::uint64_t kInvalid = 0;
 
 // --- Field extraction (for tests and future invalidation logic) -------------
 
-[[nodiscard]] constexpr std::uint64_t descriptor_type(std::uint64_t d) noexcept {
+[[nodiscard]] constexpr auto descriptor_type(std::uint64_t d) noexcept -> std::uint64_t {
   return d & desc::kTypeMask;
 }
 
-[[nodiscard]] constexpr bool is_valid(std::uint64_t d) noexcept {
+[[nodiscard]] constexpr auto is_valid(std::uint64_t d) noexcept -> bool {
   return descriptor_type(d) != desc::kTypeInvalid;
 }
 
-[[nodiscard]] constexpr std::uint64_t output_addr(std::uint64_t d) noexcept {
+[[nodiscard]] constexpr auto output_addr(std::uint64_t d) noexcept -> std::uint64_t {
   return d & desc::kOutputAddrMask;
 }
 
-[[nodiscard]] constexpr std::uint64_t mem_attr(std::uint64_t d) noexcept {
+[[nodiscard]] constexpr auto mem_attr(std::uint64_t d) noexcept -> std::uint64_t {
   return (d & desc::kMemAttrMask) >> desc::kMemAttrShift;
 }
 
-[[nodiscard]] constexpr std::uint64_t s2ap(std::uint64_t d) noexcept {
+[[nodiscard]] constexpr auto s2ap(std::uint64_t d) noexcept -> std::uint64_t {
   return (d & desc::kS2apMask) >> desc::kS2apShift;
 }
 
-[[nodiscard]] constexpr std::uint64_t shareability(std::uint64_t d) noexcept {
+[[nodiscard]] constexpr auto shareability(std::uint64_t d) noexcept -> std::uint64_t {
   return (d & desc::kShMask) >> desc::kShShift;
 }
 
-[[nodiscard]] constexpr bool access_flag(std::uint64_t d) noexcept {
+[[nodiscard]] constexpr auto access_flag(std::uint64_t d) noexcept -> bool {
   return (d & desc::kAfBit) != 0;
 }
 
-[[nodiscard]] constexpr bool execute_never(std::uint64_t d) noexcept {
+[[nodiscard]] constexpr auto execute_never(std::uint64_t d) noexcept -> bool {
   return (d & desc::kXnBit) != 0;
 }
 

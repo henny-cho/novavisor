@@ -6,15 +6,22 @@ on:
   pull_request:
     branches: ["main"]
 
-jobs:
-  ci:
-    runs-on: ubuntu-24.04
+# A newer push to the same branch or PR supersedes the in-flight run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
+jobs:
+  # Fast-feedback lane: formatting + native GTest suite. Needs neither the
+  # ARM toolchain nor QEMU, so it reports within a couple of minutes.
+  host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache CPM packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: external/cache
           # Dependency pins live in CMakeLists.txt AND cmake/ (get_cpm.cmake,
@@ -22,58 +29,81 @@ jobs:
           key: cpm-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake') }}
           restore-keys: cpm-
 
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y cmake ninja-build clang-format
+
+      - name: Check formatting
+        run: scripts/task.sh format --check
+
+      - name: Host unit tests
+        run: scripts/task.sh test
+
+  # Cross lane: Release build, clang-tidy, and QEMU demo verification.
+  target:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache CPM packages
+        uses: actions/cache@v6
+        with:
+          path: external/cache
+          key: cpm-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake') }}
+          restore-keys: cpm-
+
       - name: Cache ARM toolchain
         # setup_env.sh skips the ~700 MB download when the extracted
         # toolchain is already present.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .toolchain
           key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/versions.sh') }}
 
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ccache
           key: ccache-${{ github.sha }}
           restore-keys: ccache-
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y \
-            cmake ninja-build ccache clang-tidy clang-format \
-            qemu-system-arm qemu-system-aarch64 \
-            wget xz-utils \
-            python3-yaml python3-pexpect
-          ./scripts/setup_env.sh
+      - name: Install dependencies and ARM toolchain
+        run: ./scripts/setup_env.sh --ci
 
-      - name: Check formatting
-        run: scripts/task.sh format --check
-
-      - name: Build
+      - name: Build (Release)
         run: scripts/task.sh build --release
 
       - name: Lint
-        # Configures the debug tree and runs run-clang-tidy over its compile
-        # database; the debug objects are reused by the demo step below.
+        # run-clang-tidy over the debug tree's compile database; the debug
+        # objects are reused by the demo step below.
         run: scripts/task.sh lint
 
-      - name: Host unit tests
-        run: scripts/task.sh test
-
       - name: Demo verification (enabled demos only)
-        # Before Phase 5 lands, every demo has `enabled: false` in its
-        # manifest, so this step prints "no enabled demos" and exits 0.
-        # Each completed phase flips its demo's `enabled` flag to true
-        # and this step becomes the phase's acceptance gate.
+        # Each completed phase flips its demo's `enabled` flag to true,
+        # making this step the phase's acceptance gate.
         run: scripts/task.sh demo verify-all
 
       - name: Upload demo artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: demo-artifacts
           path: |
             build/demo/**/*.bin
             build/demo/**/*.elf
           if-no-files-found: ignore
+
+  # Aggregate gate: one stable status-check name for branch protection,
+  # independent of how the jobs above are split or renamed.
+  ci:
+    if: always()
+    needs: [host, target]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify all jobs passed
+        run: |
+          test "${{ needs.host.result }}" = "success"
+          test "${{ needs.target.result }}" = "success"

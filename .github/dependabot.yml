@@ -1,11 +1,22 @@
-# Dependabot — keeps the devcontainer base image and (future) features
-# current. Scoped to /.devcontainer because that is where devcontainer.json
-# and Dockerfile live; pointing at "/" would miss them.
-# https://containers.dev/guide/dependabot
+# Dependabot — keeps the devcontainer base image and the workflow actions
+# current.
 
 version: 2
 updates:
-  - package-ecosystem: "devcontainers"
+  # The devcontainer's only updatable dependency is the Dockerfile FROM
+  # image — devcontainer.json declares no features — so the docker
+  # ecosystem is the one that tracks it. (The former "devcontainers" entry
+  # failed every run: that ecosystem treats `directory` as the repo root
+  # and looks for .devcontainer/devcontainer.json beneath it, so
+  # "/.devcontainer" resolved to /.devcontainer/.devcontainer/.)
+  - package-ecosystem: "docker"
     directory: "/.devcontainer"
+    schedule:
+      interval: weekly
+
+  # Keeps the actions used by .github/workflows/ current (e.g. Node runtime
+  # deprecations surface as major-version bumps).
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
       interval: weekly

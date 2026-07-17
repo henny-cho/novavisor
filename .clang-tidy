@@ -8,6 +8,7 @@ Checks: >-
     performance-*,
     bugprone-*,
     -bugprone-reserved-identifier,
+    -bugprone-easily-swappable-parameters,
     -clang-diagnostic-error,
     -cppcoreguidelines-pro-bounds-pointer-arithmetic,
     -cppcoreguidelines-pro-type-reinterpret-cast,
@@ -19,6 +20,8 @@ Checks: >-
     -readability-identifier-length
 # Diagnostics only for NovaVisor's own headers — third-party (external/cache,
 # toolchain sysroot) is out of scope and would drown real findings.
+# NOTE: clang-tidy 19+ ignores HeaderFilterRegex from this file; task.sh lint
+# passes the same regex via -header-filter. Keep the two in sync.
 WarningsAsErrors: '*'
 HeaderFilterRegex: '/(components|hal|nova|projects)/'
 

@@ -43,26 +43,33 @@ enum class ExceptionClass : std::uint8_t {
   BRK                = 0x3C, // BRK instruction
 };
 
+// Field positions and masks (see the layout table above).
+inline constexpr std::uint64_t kEcShift    = 26U;
+inline constexpr std::uint64_t kEcMask     = 0x3FU;
+inline constexpr std::uint64_t kIlShift    = 25U;
+inline constexpr std::uint64_t kIssMask    = 0x01FF'FFFFU;
+inline constexpr std::uint64_t kHvcImmMask = 0xFFFFU;
+
 // Extract the Exception Class from ESR_EL2.
 [[nodiscard]] inline auto get_ec(std::uint64_t esr) noexcept -> ExceptionClass {
-  return static_cast<ExceptionClass>((esr >> 26U) & 0x3FU);
+  return static_cast<ExceptionClass>((esr >> kEcShift) & kEcMask);
 }
 
 // Extract the Instruction-Specific Syndrome (bits 24:0).
 [[nodiscard]] inline auto get_iss(std::uint64_t esr) noexcept -> std::uint32_t {
-  return static_cast<std::uint32_t>(esr & 0x01FF'FFFFU);
+  return static_cast<std::uint32_t>(esr & kIssMask);
 }
 
 // Extract the HVC/SVC immediate operand (ISS bits 15:0).
 // Valid only when EC == HVC_AA64 or SVC_AA64.
 [[nodiscard]] inline auto get_hvc_imm(std::uint64_t esr) noexcept -> std::uint16_t {
-  return static_cast<std::uint16_t>(esr & 0xFFFFU);
+  return static_cast<std::uint16_t>(esr & kHvcImmMask);
 }
 
 // Extract the Instruction Length bit (ISS bit 25).
 // Returns true for a 32-bit instruction, false for a 16-bit (Thumb) instruction.
 [[nodiscard]] inline auto is_32bit_instruction(std::uint64_t esr) noexcept -> bool {
-  return ((esr >> 25U) & 1U) != 0U;
+  return ((esr >> kIlShift) & 1U) != 0U;
 }
 
 } // namespace nova::esr
