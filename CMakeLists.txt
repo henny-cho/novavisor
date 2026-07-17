@@ -32,6 +32,13 @@ if(CMAKE_CROSSCOMPILING)
     target_compile_options(nova_warnings INTERFACE
         $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti;-fno-exceptions>
     )
+    # Debug builds get libstdc++ hardening: std::array/string_view subscripts
+    # bounds-check at runtime and land in the freestanding
+    # __glibcxx_assert_fail panic sink (components/nova_panic). Release stays
+    # unchecked — zero-cost in the shipped image.
+    target_compile_definitions(nova_warnings INTERFACE
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:_GLIBCXX_ASSERTIONS>
+    )
 endif()
 
 # Clang-Tidy retarget args for `scripts/task.sh lint` (cross builds only).

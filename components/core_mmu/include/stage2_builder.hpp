@@ -86,19 +86,13 @@ struct Stage2Tables {
 // multi-range and MMIO device variants.
 inline void build_identity_map(Stage2Tables& t, std::uint64_t ipa_base, std::uint64_t size,
                                std::uint64_t leaf_attrs) noexcept {
-  // Subscript through raw pointers: the bare-metal libstdc++ std::array
-  // operator[] / fill() pull in __glibcxx_assert_fail which has no
-  // freestanding definition. data() is a trivial getter with no such
-  // dependency, so indexing stays identical on host and cross builds.
-  auto* l1 = t.l1->data();
-  auto* l2 = t.l2->data();
-  auto* l3 = t.l3->data();
+  Table& l1 = *t.l1;
+  Table& l2 = *t.l2;
+  Table& l3 = *t.l3;
 
-  for (std::size_t i = 0; i < kTableEntries; ++i) {
-    l1[i] = kInvalid;
-    l2[i] = kInvalid;
-    l3[i] = kInvalid;
-  }
+  l1.fill(kInvalid);
+  l2.fill(kInvalid);
+  l3.fill(kInvalid);
 
   l1[l1_index(ipa_base)] = make_table(t.l2_pa);
   l2[l2_index(ipa_base)] = make_table(t.l3_pa);

@@ -128,8 +128,8 @@ TEST(TrapContextLayout, Alignment) {
 }
 
 TEST(TrapContextLayout, FieldOffsets) {
-  EXPECT_EQ(offsetof(nova::TrapContext, x[0]), 0U);
-  EXPECT_EQ(offsetof(nova::TrapContext, x[30]), 240U);
+  EXPECT_EQ(offsetof(nova::TrapContext, x), 0U);
+  EXPECT_EQ(offsetof(nova::TrapContext, x) + (30 * sizeof(std::uint64_t)), 240U);
   EXPECT_EQ(offsetof(nova::TrapContext, sp), 248U);
   EXPECT_EQ(offsetof(nova::TrapContext, elr), 256U);
   EXPECT_EQ(offsetof(nova::TrapContext, spsr), 264U);

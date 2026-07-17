@@ -20,6 +20,7 @@
 //     272    esr       ESR_EL2: exception syndrome (EC field, ISS, etc.)
 //     280    far       FAR_EL2: faulting virtual address (for aborts)
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -39,21 +40,19 @@ inline constexpr std::size_t kCtxOffFar   = 280;
 inline constexpr std::size_t kTrapCtxSize = 288;
 
 struct alignas(kTrapCtxAlign) TrapContext {
-  // C array (not std::array): handlers index registers on the bare-metal
-  // path, and std::array::operator[] pulls __glibcxx_assert_fail into the
-  // -O0 cross link, which has no freestanding definition.
-  // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
-  std::uint64_t x[kNumGpRegs]; // x0-x30 (general-purpose registers)
-  std::uint64_t sp;            // SP_EL1 — guest EL1 stack pointer
-  std::uint64_t elr;           // ELR_EL2 — exception link register
-  std::uint64_t spsr;          // SPSR_EL2 — saved program state register
-  std::uint64_t esr;           // ESR_EL2 — exception syndrome register
-  std::uint64_t far;           // FAR_EL2 — fault address register
+  std::array<std::uint64_t, kNumGpRegs> x; // x0-x30 (general-purpose registers)
+
+  std::uint64_t sp;   // SP_EL1 — guest EL1 stack pointer
+  std::uint64_t elr;  // ELR_EL2 — exception link register
+  std::uint64_t spsr; // SPSR_EL2 — saved program state register
+  std::uint64_t esr;  // ESR_EL2 — exception syndrome register
+  std::uint64_t far;  // FAR_EL2 — fault address register
 };
 
 static_assert(sizeof(TrapContext) == kTrapCtxSize, "TrapContext size must match TRAP_CTX_SIZE in vec.S");
 static_assert(alignof(TrapContext) == kTrapCtxAlign, "TrapContext must be 16-byte aligned for stp/ldp correctness");
-static_assert(offsetof(TrapContext, x[30]) == kCtxOffX30, "x[30] offset mismatch");
+static_assert(offsetof(TrapContext, x) + ((kNumGpRegs - 1) * sizeof(std::uint64_t)) == kCtxOffX30,
+              "x[30] offset mismatch");
 static_assert(offsetof(TrapContext, sp) == kCtxOffSp, "sp offset mismatch");
 static_assert(offsetof(TrapContext, elr) == kCtxOffElr, "elr offset mismatch");
 static_assert(offsetof(TrapContext, spsr) == kCtxOffSpsr, "spsr offset mismatch");

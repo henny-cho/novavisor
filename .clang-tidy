@@ -11,6 +11,7 @@ Checks: >-
     -bugprone-easily-swappable-parameters,
     -clang-diagnostic-error,
     -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+    -cppcoreguidelines-pro-bounds-constant-array-index,
     -cppcoreguidelines-pro-type-reinterpret-cast,
     -cppcoreguidelines-avoid-non-const-global-variables,
     -cppcoreguidelines-missing-std-forward,

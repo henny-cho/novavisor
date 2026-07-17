@@ -29,11 +29,9 @@ constexpr std::size_t   kHexCharsPerU64 = 16; // 64 bits / 4 bits per hex digit
 constexpr std::uint64_t kNibbleMask     = 0xFU;
 constexpr std::size_t   kDecimalBase    = 10;
 
-// ASCII hex digit for a nibble (0..15). Plain pointer lookup —
-// string_view::operator[] would pull __glibcxx_assert_fail into the
-// bare-metal link at -O0.
+// ASCII hex digit for a nibble (0..15).
 constexpr auto nibble_to_hex(std::uint8_t n) noexcept -> char {
-  constexpr const char* digits = "0123456789abcdef";
+  constexpr std::string_view digits = "0123456789abcdef";
   return digits[n];
 }
 
