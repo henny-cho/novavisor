@@ -30,23 +30,26 @@ enum : std::uint16_t {
 // under this.
 constexpr std::size_t kMaxPutsLen = 1024;
 
-char digit_to_char(std::uint8_t d) noexcept {
+constexpr std::uint64_t kDecimalBase = 10U;
+// Maximum decimal digits of UINT64_MAX (18446744073709551615).
+constexpr std::size_t kMaxDec64Digits = 20;
+
+constexpr auto digit_to_char(std::uint8_t d) noexcept -> char {
   return static_cast<char>('0' + d);
 }
 
-// Minimal base-10 formatter for 64-bit unsigned. 20 digits is the
-// maximum for UINT64_MAX (18446744073709551615).
+// Minimal base-10 formatter for 64-bit unsigned.
 void uart_write_dec64(std::uint64_t v) noexcept {
   using board::qemu_virt::uart_write;
   if (v == 0U) {
-    uart_write(std::string_view{"0", 1});
+    uart_write("0");
     return;
   }
-  std::array<char, 20> buf{};
-  std::size_t          n = 0;
+  std::array<char, kMaxDec64Digits> buf{};
+  std::size_t                       n = 0;
   while (v > 0U && n < buf.size()) {
-    buf.data()[buf.size() - 1U - n] = digit_to_char(static_cast<std::uint8_t>(v % 10U));
-    v /= 10U;
+    buf.data()[buf.size() - 1U - n] = digit_to_char(static_cast<std::uint8_t>(v % kDecimalBase));
+    v /= kDecimalBase;
     ++n;
   }
   uart_write(std::string_view{buf.data() + buf.size() - n, n});
@@ -74,9 +77,9 @@ void handle_putc(TrapContext* ctx) noexcept {
 // terminates the whole hypervisor.
 [[noreturn]] void handle_exit(TrapContext* ctx) noexcept {
   using board::qemu_virt::uart_write;
-  uart_write(std::string_view{"demo_exit code=", 15});
+  uart_write("demo_exit code=");
   uart_write_dec64(ctx->x[1]);
-  uart_write(std::string_view{"\n", 1});
+  uart_write("\n");
   halt();
 }
 

@@ -59,7 +59,7 @@ void init_and_activate() noexcept {
   const auto l2_pa = reinterpret_cast<std::uint64_t>(&stage2_l2);
   const auto l3_pa = reinterpret_cast<std::uint64_t>(&stage2_l3);
 
-  Stage2Tables tables{&stage2_l1, &stage2_l2, &stage2_l3, l2_pa, l3_pa};
+  Stage2Tables tables{.l1 = &stage2_l1, .l2 = &stage2_l2, .l3 = &stage2_l3, .l2_pa = l2_pa, .l3_pa = l3_pa};
   build_identity_map(tables, qemu_virt::kGuestIpaBase, qemu_virt::kGuestIpaSize, desc::kAttrNormalRwx);
 
   // VTTBR_EL2 layout:

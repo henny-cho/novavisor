@@ -15,6 +15,7 @@
 #include <array>
 #include <cib/top.hpp>
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 namespace nova {
@@ -24,22 +25,29 @@ namespace {
 // Minimal hex formatter — avoids printf/itoa dependencies
 // ---------------------------------------------------------------------------
 
-// Write a single nibble as an ASCII hex digit to buf[0]. Returns next position.
-constexpr char nibble_to_hex(std::uint8_t n) noexcept {
-  return static_cast<char>(n < 10U ? '0' + n : 'a' + (n - 10U));
+constexpr std::size_t   kHexCharsPerU64 = 16; // 64 bits / 4 bits per hex digit
+constexpr std::uint64_t kNibbleMask     = 0xFU;
+constexpr std::size_t   kDecimalBase    = 10;
+
+// ASCII hex digit for a nibble (0..15). Plain pointer lookup —
+// string_view::operator[] would pull __glibcxx_assert_fail into the
+// bare-metal link at -O0.
+constexpr auto nibble_to_hex(std::uint8_t n) noexcept -> char {
+  constexpr const char* digits = "0123456789abcdef";
+  return digits[n];
 }
 
-// Format a 64-bit value as exactly 16 hex characters into buf (no NUL).
-// buf must be at least 16 bytes.
+// Format a 64-bit value as exactly kHexCharsPerU64 hex characters into buf
+// (no NUL). buf must be at least kHexCharsPerU64 bytes.
 void format_hex64(std::uint64_t v, char* buf) noexcept {
-  for (int i = 15; i >= 0; --i) {
-    buf[i] = nibble_to_hex(static_cast<std::uint8_t>(v & 0xFU));
+  for (std::size_t i = kHexCharsPerU64; i > 0U; --i) {
+    buf[i - 1U] = nibble_to_hex(static_cast<std::uint8_t>(v & kNibbleMask));
     v >>= 4U;
   }
 }
 
 void uart_hex64(std::uint64_t v) noexcept {
-  std::array<char, 16> buf{};
+  std::array<char, kHexCharsPerU64> buf{};
   format_hex64(v, buf.data());
   board::qemu_virt::uart_write(std::string_view{buf.data(), buf.size()});
 }
@@ -69,18 +77,21 @@ void dump_trap_context(const TrapContext* ctx) noexcept {
   uart_hex64(ctx->sp);
   uart_write("\n");
 
-  for (int i = 0; i <= 30; ++i) {
+  std::size_t reg_idx = 0; // x0..x30 — at most two decimal digits
+  for (const auto reg : std::span{ctx->x}) {
     uart_write("x");
-    if (i < 10) {
-      std::array<char, 1> d{static_cast<char>('0' + i)};
+    if (reg_idx < kDecimalBase) {
+      const std::array<char, 1> d{static_cast<char>('0' + reg_idx)};
       uart_write(std::string_view{d.data(), 1});
     } else {
-      std::array<char, 2> d{static_cast<char>('0' + i / 10), static_cast<char>('0' + i % 10)};
+      const std::array<char, 2> d{static_cast<char>('0' + reg_idx / kDecimalBase),
+                                  static_cast<char>('0' + reg_idx % kDecimalBase)};
       uart_write(std::string_view{d.data(), 2});
     }
     uart_write(" : 0x");
-    uart_hex64(ctx->x[static_cast<std::size_t>(i)]);
+    uart_hex64(reg);
     uart_write("\n");
+    ++reg_idx;
   }
 
   uart_write("---------------------\n");

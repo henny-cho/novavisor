@@ -162,8 +162,10 @@ cmd_lint() {
     # to aarch64-none-elf and injects GCC's implicit include dirs.
     local EXTRA_ARGS=()
     mapfile -t EXTRA_ARGS < "${BUILD_DIR}/clang_tidy_extra_args.txt"
+    # .cpp only: the compile database also lists .S assembly TUs, which
+    # clang-tidy cannot parse.
     run-clang-tidy -quiet -p "${BUILD_DIR}" "${EXTRA_ARGS[@]}" \
-        "^${WORK_DIR}/(components|hal|nova|projects)/"
+        "^${WORK_DIR}/(components|hal|nova|projects)/.*\.cpp\$"
     echo "Linting complete."
 }
 

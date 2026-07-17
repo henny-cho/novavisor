@@ -17,9 +17,10 @@ Checks: >-
     -cppcoreguidelines-no-malloc,
     -performance-no-int-to-ptr,
     -readability-identifier-length
-# Relaxing strictness for bare-metal sysroot issues
-WarningsAsErrors: ''
-HeaderFilterRegex: '.*'
+# Diagnostics only for NovaVisor's own headers — third-party (external/cache,
+# toolchain sysroot) is out of scope and would drown real findings.
+WarningsAsErrors: '*'
+HeaderFilterRegex: '/(components|hal|nova|projects)/'
 
 # Options restricting exception throwing because of -fno-exceptions context.
 CheckOptions:
