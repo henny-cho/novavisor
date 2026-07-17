@@ -168,6 +168,7 @@ else()
     endif()
 
     nova_add_host_test(esr_parse_test)         # nova/esr.hpp + trap_context.hpp
+    nova_add_host_test(fmt_test)               # nova/fmt.hpp integer formatters
     nova_add_host_test(stage2_descriptor_test) # core_mmu Stage 2 descriptor encoding
     nova_add_host_test(stage2_builder_test)    # core_mmu Stage 2 identity-map builder
 

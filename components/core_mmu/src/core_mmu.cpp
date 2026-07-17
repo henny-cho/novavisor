@@ -10,7 +10,7 @@
 
 #include "components/core_mmu/include/stage2_builder.hpp"
 #include "components/core_mmu/include/stage2_descriptor.hpp"
-#include "hal/board_qemu_virt/include/uart.hpp"
+#include "hal/console.hpp"
 #include "projects/qemu_virt_arm64/include/guest_config.hpp"
 
 #include <cstdint>
@@ -76,7 +76,15 @@ void init_and_activate() noexcept {
 
   nova_stage2_activate(vttbr, kVtcrEl2, kHcrEl2);
 
-  board::qemu_virt::uart_write("Stage 2: activated VMID=1 IPA=0x50000000..0x50100000\n");
+  // Status line is rendered from guest_config so it can never drift from
+  // the mapping that was actually installed.
+  console::write("Stage 2: activated VMID=");
+  console::write_dec64(qemu_virt::kGuestVmid);
+  console::write(" IPA=0x");
+  console::write_hex64(qemu_virt::kGuestIpaBase);
+  console::write("..0x");
+  console::write_hex64(qemu_virt::kGuestIpaBase + qemu_virt::kGuestIpaSize);
+  console::write("\n");
 }
 
 } // namespace mmu

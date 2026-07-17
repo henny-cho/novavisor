@@ -1,6 +1,6 @@
 #pragma once
 
-#include "hal/board_qemu_virt/include/uart.hpp"
+#include "hal/console.hpp"
 
 #include <stdx/ct_string.hpp>
 #include <string_view>
@@ -16,20 +16,20 @@ namespace nova {
 
 // Custom stdx panic handler for bare-metal.
 // On any CIB assertion failure (e.g. calling an uninitialized service),
-// prints a UART message then halts the CPU.
+// prints a console message then halts the CPU.
 struct NovaPanicHandler {
   template <typename... Args>
   static auto panic(Args&&... /*args*/) noexcept -> void {
-    board::qemu_virt::uart_write("[NOVA PANIC] System halted.\n");
+    console::write("[NOVA PANIC] System halted.\n");
     halt();
   }
 
   template <stdx::ct_string S, typename... Args>
   static auto panic(Args&&... /*args*/) noexcept -> void {
     using namespace std::string_view_literals;
-    board::qemu_virt::uart_write("[NOVA PANIC] "sv);
-    board::qemu_virt::uart_write(std::string_view{S.data(), S.size()});
-    board::qemu_virt::uart_write("\n[NOVA PANIC] System halted.\n"sv);
+    console::write("[NOVA PANIC] "sv);
+    console::write(std::string_view{S.data(), S.size()});
+    console::write("\n[NOVA PANIC] System halted.\n"sv);
     halt();
   }
 };

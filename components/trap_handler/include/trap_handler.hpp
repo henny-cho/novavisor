@@ -48,6 +48,10 @@ struct HvcService : public callback::service<TrapContext*, std::uint16_t> {};
 // ---------------------------------------------------------------------------
 // trap_handler_component
 // ---------------------------------------------------------------------------
+// Dump every TrapContext register to the console. Shared by all fatal
+// trap paths (lower-EL default handler, EL2 self-trap, unhandled vector).
+void dump_trap_context(const TrapContext* ctx) noexcept;
+
 struct trap_handler_component {
   // Default EL2 synchronous trap handler (lower EL).
   // Registered at compile time; invoked by el2_trap_lower_sync().

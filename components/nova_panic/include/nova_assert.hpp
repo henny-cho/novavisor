@@ -4,7 +4,7 @@
 //
 // Bare-metal assertion helpers. All paths terminate via stdx::panic<ct_string>()
 // which is specialized in components/nova_panic/src/nova_panic.cpp and converges
-// on uart_write + WFI halt (see nova::NovaPanicHandler).
+// on console::write + WFI halt (see nova::NovaPanicHandler).
 //
 // Why macros (not functions): the panic message is a ct_string template
 // argument, so the literal must be visible at the call site.

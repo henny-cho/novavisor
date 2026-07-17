@@ -8,11 +8,8 @@
 // Responsibilities:
 //   1. Clear the .bss section (zero-initialize all uninitialized globals)
 //
-// NOTE: uart.hpp uses UART0_BASE which is a compile-time constant from
-// board.hpp, so UART output in later phases is immediately available
-// after this component runs.
-
-#include "hal/board_qemu_virt/include/board.hpp"
+// NOTE: the console needs no init on QEMU virt (PL011 is usable at reset),
+// so console output is available to every action that runs after this one.
 
 #include <cib/top.hpp>
 #include <cstdint>

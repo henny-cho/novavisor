@@ -3,7 +3,7 @@
 
 #include "components/nova_panic/include/nova_panic.hpp"
 
-#include "hal/board_qemu_virt/include/uart.hpp"
+#include "hal/console.hpp"
 
 #include <stdx/panic.hpp>
 
@@ -27,12 +27,12 @@ namespace std {
 // and rejects a definition that adds it. The attribute is inherited from the
 // declaration; the body ends in nova::halt() either way.
 void __glibcxx_assert_fail(const char* /*file*/, int /*line*/, const char* function, const char* condition) noexcept {
-  using nova::board::qemu_virt::uart_puts;
-  uart_puts("[NOVA PANIC] libstdc++ assertion failed: ");
-  uart_puts(condition != nullptr ? condition : "?");
-  uart_puts("\n  in: ");
-  uart_puts(function != nullptr ? function : "?");
-  uart_puts("\n");
+  using nova::console::write;
+  write("[NOVA PANIC] libstdc++ assertion failed: ");
+  write(condition != nullptr ? condition : "?");
+  write("\n  in: ");
+  write(function != nullptr ? function : "?");
+  write("\n");
   nova::halt();
 }
 
