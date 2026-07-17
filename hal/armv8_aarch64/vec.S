@@ -3,15 +3,15 @@
 // Layout: VBAR_EL2 must be 2048-byte (2^11) aligned.
 // Each of the 16 entries occupies exactly 128 bytes (2^7).
 //
-// Offset  Level/Type
-// +0x000  EL2h SPh — Synchronous
-// +0x080  EL2h SPh — IRQ
-// +0x100  EL2h SPh — FIQ
-// +0x180  EL2h SPh — SError
-// +0x200  EL2h SP0 — Synchronous  ← EL2 self-trap (current EL)
-// +0x280  EL2h SP0 — IRQ
-// +0x300  EL2h SP0 — FIQ
-// +0x380  EL2h SP0 — SError
+// Offset  Level/Type (order per ARM ARM D1.10.2: SP0 group first, then SPx)
+// +0x000  Current EL, SP_EL0 (EL2t) — Synchronous
+// +0x080  Current EL, SP_EL0 (EL2t) — IRQ
+// +0x100  Current EL, SP_EL0 (EL2t) — FIQ
+// +0x180  Current EL, SP_EL0 (EL2t) — SError
+// +0x200  Current EL, SP_EL2 (EL2h) — Synchronous  ← EL2 self-trap
+// +0x280  Current EL, SP_EL2 (EL2h) — IRQ
+// +0x300  Current EL, SP_EL2 (EL2h) — FIQ
+// +0x380  Current EL, SP_EL2 (EL2h) — SError
 // +0x400  Lower AArch64 — Synchronous  ← HVC / guest memory faults
 // +0x480  Lower AArch64 — IRQ
 // +0x500  Lower AArch64 — FIQ
@@ -109,13 +109,13 @@
     .align 11                   // 2^11 = 2048-byte alignment for VBAR_EL2
 
 _vector_table:
-    // --- EL2h / SPh (current EL with EL2 SP) ---
+    // --- Current EL with SP_EL0 (EL2t — unused, SPSel is never cleared) ---
     TRAP_ENTRY _handle_el2h_sync      // +0x000 Synchronous
     TRAP_ENTRY _handle_unhandled      // +0x080 IRQ
     TRAP_ENTRY _handle_unhandled      // +0x100 FIQ
     TRAP_ENTRY _handle_unhandled      // +0x180 SError
 
-    // --- EL2h / SP0 (current EL with SP0) ---
+    // --- Current EL with SP_ELx (EL2h — EL2 self-trap path) ---
     TRAP_ENTRY _handle_el2h_sync      // +0x200 Synchronous
     TRAP_ENTRY _handle_unhandled      // +0x280 IRQ
     TRAP_ENTRY _handle_unhandled      // +0x300 FIQ

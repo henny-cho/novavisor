@@ -2,8 +2,9 @@
 //
 // Boot sequence (orchestrated by cib::top<nova_project>):
 //   1. EarlyRuntimeInit → hal_init_component: clears BSS
-//   2. RuntimeStart     → boot_msg_component: prints boot banner via UART
-//   3. MainLoop (∞)    → idle_component: WFI idle loop
+//   2. RuntimeStart     → core_mmu_component: activates Stage 2 MMU
+//                         boot_msg_component: prints boot banner via UART
+//   3. MainLoop         → core_vcpu_component: ERET into EL1 guest ([[noreturn]])
 
 #include "nexus.hpp"
 

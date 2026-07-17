@@ -12,7 +12,7 @@
 //                         boot_msg_component  (UART boot banner)
 //   - MainLoop          ← core_vcpu_component (ERET to EL1, [[noreturn]])
 //
-// idle_component is built but not composed here: Phase 5 replaces the
+// components/idle/ is not composed (nor built): Phase 5 replaced the
 // WFI idle loop with EL1 guest execution. Phase 11 may reintroduce it
 // as a watchdog fallback.
 
