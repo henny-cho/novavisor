@@ -11,6 +11,14 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Enable exporting of compile_commands.json for clang-tidy/clangd via VSCode
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Opportunistic ccache: transparently reused across all build trees and CI
+# runs; a plain compiler invocation when ccache is absent.
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set(CMAKE_C_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
+    set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
+endif()
+
 # Warning and codegen flags for NovaVisor's own targets. An INTERFACE target
 # instead of directory-wide add_compile_options so fetched third-party code
 # never inherits -Werror — a dep warning must not break our build on
