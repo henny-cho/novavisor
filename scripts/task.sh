@@ -30,7 +30,7 @@ print_usage() {
     echo "  build       Configure and build the project using CMake & Ninja"
     echo "  clean       Remove the build directory"
     echo "  format      Run clang-format on source files (--check for dry-run)"
-    echo "  lint        Run clang-tidy static analysis"
+    echo "  lint        Run clang-tidy (run-clang-tidy over the debug compile database)"
     echo "  run         Run novavisor.elf in QEMU"
     echo "  debug       Run QEMU with -s -S (GDB server on :1234, halted at reset)"
     echo "  size        Print section sizes of novavisor.elf"
@@ -41,7 +41,7 @@ print_usage() {
     echo ""
     echo "Options:"
     echo "  --release   Build in Release mode (default: Debug)"
-    echo "  --clean     (build/lint) Remove the build directory first"
+    echo "  --clean     (build only) Remove the build directory first"
     echo "  --check     (format only) Verify formatting without modifying files"
     echo "  -h, --help  Show this help message"
 }
@@ -51,26 +51,18 @@ print_usage() {
 # ------------------------------------------------------------------------------
 
 # Enumerate all project C/C++ source and header files, excluding generated
-# and vendored directories. Single source of truth for format and lint targets.
+# and vendored directories. NUL-delimited; pipe into `xargs -0`.
+# Single source of truth for format and lint targets.
 _find_sources() {
     find . \
         -type d \( -name "external" -o -name ".toolchain" -o -name "build" \) -prune \
-        -o -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.c' -o -name '*.h' \) -print
+        -o -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.c' -o -name '*.h' \) -print0
 }
 
-# Set up the project-local CPM package cache and export CPM_SOURCE_CACHE.
-# Must be called before any cmake invocation.
+# Route CPM/FetchContent source checkouts to a project-local cache shared by
+# all build trees. cmake/get_cpm.cmake downloads CPM itself into the same
+# cache (hash-verified). Must be called before any cmake invocation.
 _setup_cpm_cache() {
-    local CPM_VER="0.42.1"
-    local CPM_CACHE_DIR="${WORK_DIR}/external/cache/cpm"
-    local CPM_CACHE_FILE="${CPM_CACHE_DIR}/CPM_${CPM_VER}.cmake"
-    mkdir -p "${CPM_CACHE_DIR}"
-    # Bootstrap the cache from any existing preset build dir on first run.
-    if [ ! -f "${CPM_CACHE_FILE}" ]; then
-        local found
-        found=$(find "${BUILD_ROOT}" -maxdepth 3 -name "CPM_${CPM_VER}.cmake" -print -quit 2>/dev/null || true)
-        [ -n "${found}" ] && cp "${found}" "${CPM_CACHE_FILE}"
-    fi
     export CPM_SOURCE_CACHE="${WORK_DIR}/external/cache"
 }
 
@@ -106,10 +98,14 @@ cmd_build() {
     local PRESET="aarch64-debug"
     [[ "${BUILD_TYPE}" == "Release" ]] && PRESET="aarch64-release"
 
-    echo "==> Configuring CMake with preset: ${PRESET}..."
-    cmake --preset "${PRESET}"
+    # Configure only on the first run; afterwards Ninja re-runs CMake by
+    # itself whenever a CMakeLists.txt changes, so repeat builds stay fast.
+    if [ ! -f "$(_preset_dir "${PRESET}")/build.ninja" ]; then
+        echo "==> Configuring CMake with preset: ${PRESET}..."
+        cmake --preset "${PRESET}"
+    fi
 
-    echo "==> Building..."
+    echo "==> Building (${PRESET})..."
     cmake --build --preset "${PRESET}"
 }
 
@@ -128,7 +124,7 @@ cmd_format() {
     if [[ ${CHECK_ONLY} -eq 1 ]]; then
         echo "==> Checking clang-format compliance..."
         local violations
-        violations=$(_find_sources | xargs -r clang-format --dry-run --Werror 2>&1 || true)
+        violations=$(_find_sources | xargs -0 -r clang-format --dry-run --Werror 2>&1 || true)
         if [[ -n "${violations}" ]]; then
             echo "Error: formatting violations found:"
             echo "${violations}"
@@ -138,50 +134,45 @@ cmd_format() {
         echo "Format check passed."
     else
         echo "==> Running clang-format..."
-        _find_sources | xargs -r clang-format -i
+        _find_sources | xargs -0 -r clang-format -i
         echo "Formatting complete."
     fi
 }
 
 cmd_lint() {
-    local BUILD_TYPE
-    BUILD_TYPE=$(_parse_build_type "$@")
-
-    local CLEAN=0
-    for arg in "$@"; do
-        [[ "${arg}" == "--clean" ]] && CLEAN=1
-    done
-
-    if [[ ${CLEAN} -eq 1 ]]; then
-        cmd_clean
-    fi
-
-    local PRESET="aarch64-lint"
+    # Lint reuses the debug tree's compile_commands.json — no dedicated lint
+    # build tree, no recompile beyond a normal incremental debug build.
+    local PRESET="aarch64-debug"
+    local BUILD_DIR
+    BUILD_DIR="$(_preset_dir "${PRESET}")"
 
     _setup_cpm_cache
 
-    echo "==> Running clang-tidy with preset: ${PRESET}..."
-    # If BUILD_TYPE matches the previous cmake configure, ninja reuses object
-    # files and only the clang-tidy pass runs -- no full recompile.
-    cmake --preset "${PRESET}"
+    if [ ! -f "${BUILD_DIR}/clang_tidy_extra_args.txt" ]; then
+        echo "==> Configuring CMake with preset: ${PRESET}..."
+        cmake --preset "${PRESET}"
+    fi
+    # Building keeps compile_commands.json fresh: Ninja re-runs CMake when
+    # any CMakeLists.txt changed, and a no-change rebuild is nearly free.
     cmake --build --preset "${PRESET}"
+
+    echo "==> Running run-clang-tidy over the ${PRESET} compile database..."
+    # clang-tidy replays GCC compile commands with Clang's driver; the args
+    # file (written at configure time by cmake/clang_tidy.cmake) retargets it
+    # to aarch64-none-elf and injects GCC's implicit include dirs.
+    local EXTRA_ARGS=()
+    mapfile -t EXTRA_ARGS < "${BUILD_DIR}/clang_tidy_extra_args.txt"
+    run-clang-tidy -quiet -p "${BUILD_DIR}" "${EXTRA_ARGS[@]}" \
+        "^${WORK_DIR}/(components|hal|nova|projects)/"
     echo "Linting complete."
 }
 
 cmd_run() {
-    local BUILD_TYPE
-    BUILD_TYPE=$(_parse_build_type "$@")
-    local PRESET="aarch64-debug"
-    [[ "${BUILD_TYPE}" == "Release" ]] && PRESET="aarch64-release"
     local ELF
-    ELF="$(_preset_dir "${PRESET}")/novavisor.elf"
+    ELF=$(_resolve_elf "$@")
 
-    echo "==> Running NovaVisor (${PRESET}) in QEMU..."
+    echo "==> Running NovaVisor in QEMU: ${ELF}"
     echo "==> Press Ctrl-A then x to exit QEMU."
-    if [ ! -f "${ELF}" ]; then
-        echo "Executable not found. Building first..."
-        cmd_build "$@"
-    fi
     qemu-system-aarch64 \
         -machine virt,virtualization=on \
         -cpu cortex-a57 \
@@ -292,7 +283,7 @@ cmd_ci() {
         exit 1
     fi
 
-    cmd_lint --release
+    cmd_lint
     cmd_test
     # Run all enabled demos. Before any phase 5+ lands, this is a no-op
     # that prints "no enabled demos" and exits 0, so it's safe to include

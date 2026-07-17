@@ -1,33 +1,30 @@
-# Clang-Tidy integration for cross-compiled bare-metal AArch64.
+# Clang-Tidy support for cross-compiled bare-metal AArch64.
 #
-# Gated by ENABLE_CLANG_TIDY (option defined by caller). When cross-compiling
-# with GCC, we retarget clang-tidy to aarch64-none-elf and feed it GCC's
-# implicit include dirs — minus GCC's builtin headers, which must come from
-# Clang's own resource dir for intrinsic declarations to resolve.
+# clang-tidy replays GCC compile commands with Clang's driver, so it must be
+# retargeted to aarch64-none-elf and fed GCC's implicit include dirs — minus
+# GCC's builtin headers, which must come from Clang's own resource dir for
+# intrinsic declarations to resolve.
+#
+# Rather than wiring CMAKE_CXX_CLANG_TIDY into the build (which would force a
+# dedicated build tree and a full recompile per lint run), this writes the
+# computed arguments to <build>/clang_tidy_extra_args.txt at configure time.
+# `scripts/task.sh lint` feeds them to run-clang-tidy against this build's
+# compile_commands.json.
 
-option(ENABLE_CLANG_TIDY "Enable clang-tidy during build" OFF)
-
-if(NOT ENABLE_CLANG_TIDY)
+if(NOT (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64"))
     return()
 endif()
 
-find_program(CLANG_TIDY_EXE NAMES clang-tidy)
-if(NOT CLANG_TIDY_EXE)
-    message(WARNING "clang-tidy not found, skipping linting")
-    return()
-endif()
+# Single-dash -extra-arg: run-clang-tidy's argparse rejects the
+# double-dash spelling.
+set(_tidy_args "-extra-arg=--target=aarch64-none-elf")
+foreach(inc_path ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
+    if(inc_path MATCHES ".*lib/gcc.*")
+        continue()
+    endif()
+    list(APPEND _tidy_args "-extra-arg=-isystem${inc_path}")
+endforeach()
 
-set(CMAKE_CXX_CLANG_TIDY ${CLANG_TIDY_EXE})
-
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
-    list(APPEND CMAKE_CXX_CLANG_TIDY --extra-arg=--target=aarch64-none-elf)
-
-    foreach(inc_path ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
-        if(inc_path MATCHES ".*lib/gcc.*")
-            continue()
-        endif()
-        list(APPEND CMAKE_CXX_CLANG_TIDY "--extra-arg=-isystem${inc_path}")
-    endforeach()
-
-    message(STATUS "Clang-Tidy enabled with target: aarch64-none-elf")
-endif()
+list(JOIN _tidy_args "\n" _tidy_lines)
+file(WRITE "${CMAKE_BINARY_DIR}/clang_tidy_extra_args.txt" "${_tidy_lines}\n")
+message(STATUS "Clang-Tidy retarget args written to clang_tidy_extra_args.txt")

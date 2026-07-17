@@ -21,8 +21,7 @@
       "inherits": "aarch64-base",
       "binaryDir": "${sourceDir}/build/aarch64-debug",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "ENABLE_CLANG_TIDY": "OFF"
+        "CMAKE_BUILD_TYPE": "Debug"
       }
     },
     {
@@ -32,19 +31,7 @@
       "inherits": "aarch64-base",
       "binaryDir": "${sourceDir}/build/aarch64-release",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "ENABLE_CLANG_TIDY": "OFF"
-      }
-    },
-    {
-      "name": "aarch64-lint",
-      "displayName": "AArch64 Lint",
-      "description": "Lint build for AArch64 (ENABLE_CLANG_TIDY=ON)",
-      "inherits": "aarch64-base",
-      "binaryDir": "${sourceDir}/build/aarch64-lint",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "ENABLE_CLANG_TIDY": "ON"
+        "CMAKE_BUILD_TYPE": "Release"
       }
     },
     {
@@ -66,10 +53,6 @@
     {
       "name": "aarch64-release",
       "configurePreset": "aarch64-release"
-    },
-    {
-      "name": "aarch64-lint",
-      "configurePreset": "aarch64-lint"
     },
     {
       "name": "host-debug",

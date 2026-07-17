@@ -122,7 +122,7 @@ Before a phase is complete its demo has `enabled: false` in the manifest, and `d
 ```bash
 ./scripts/task.sh format              # apply clang-format
 ./scripts/task.sh format --check      # dry-run (CI uses this)
-./scripts/task.sh lint                # clang-tidy over the release build cache
+./scripts/task.sh lint                # run-clang-tidy over the debug compile database
 ```
 
 ### Misc inspection helpers
@@ -144,7 +144,7 @@ Before a phase is complete its demo has `enabled: false` in the manifest, and `d
 This is equivalent to, and parallelizes wherever safe:
 
 ```
-format --check   ∥   build --release   →   lint --release   →   test   →   demo verify-all
+format --check   ∥   build --release   →   lint   →   test   →   demo verify-all
 ```
 
 If `ci` passes locally, the branch is expected to pass GitHub Actions as well. A local green run is effectively mandatory before opening a pull request.

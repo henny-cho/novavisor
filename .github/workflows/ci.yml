@@ -17,8 +17,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: external/cache
-          key: cpm-${{ hashFiles('CMakeLists.txt') }}
+          # Dependency pins live in CMakeLists.txt AND cmake/ (get_cpm.cmake,
+          # cib_cpm_pin.cmake), so both must key the cache.
+          key: cpm-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake') }}
           restore-keys: cpm-
+
+      - name: Cache ARM toolchain
+        # setup_env.sh skips the ~700 MB download when the extracted
+        # toolchain is already present.
+        uses: actions/cache@v4
+        with:
+          path: .toolchain
+          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/versions.sh') }}
 
       - name: Install dependencies
         run: |
@@ -37,7 +47,9 @@ jobs:
         run: scripts/task.sh build --release
 
       - name: Lint
-        run: scripts/task.sh lint --release
+        # Configures the debug tree and runs run-clang-tidy over its compile
+        # database; the debug objects are reused by the demo step below.
+        run: scripts/task.sh lint
 
       - name: Host unit tests
         run: scripts/task.sh test

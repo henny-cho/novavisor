@@ -83,8 +83,10 @@ def run(cmd: list[str], **kw) -> None:
 
 
 def build_hypervisor() -> Path:
-    if not HV_ELF.exists():
-        run([str(REPO / "scripts" / "task.sh"), "build"])
+    # Always delegate to task.sh: a no-change Ninja rebuild is nearly free,
+    # while skipping on HV_ELF existence would verify against a stale binary
+    # after source edits.
+    run([str(REPO / "scripts" / "task.sh"), "build"])
     return HV_ELF
 
 
