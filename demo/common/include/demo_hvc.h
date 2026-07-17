@@ -1,27 +1,29 @@
 // NovaVisor demo HVC helpers.
 //
 // Inline stubs for the NovaVisor guest hypercall ABI. Shared by every
-// demo guest. The ABI is documented in demo/README.md and is the
-// contract between guests and the hypervisor's HVC dispatcher.
+// demo guest. Function IDs come from nova/hvc_abi.h — the single source
+// shared with the hypervisor's dispatcher (components/demo_hvc).
 //
 // Function ID lives in x0. Arguments in x1..x6. Return (if any) in x0.
 
 #ifndef NOVAVISOR_DEMO_HVC_H
 #define NOVAVISOR_DEMO_HVC_H
 
+#include "nova/hvc_abi.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
 enum {
-  HVC_PUTS      = 0x1000,
-  HVC_PUTC      = 0x1001,
-  HVC_EXIT      = 0x1002,
-  HVC_YIELD     = 0x1003,
-  HVC_HEARTBEAT = 0x1004,
+  HVC_PUTS      = NOVA_HVC_FN_PUTS,
+  HVC_PUTC      = NOVA_HVC_FN_PUTC,
+  HVC_EXIT      = NOVA_HVC_FN_EXIT,
+  HVC_YIELD     = NOVA_HVC_FN_YIELD,
+  HVC_HEARTBEAT = NOVA_HVC_FN_HEARTBEAT,
   // IVC range (Phase 7)
-  HVC_IVC_DOORBELL = 0x1100,
+  HVC_IVC_DOORBELL = NOVA_HVC_FN_IVC_DOORBELL,
   // Timer range (Phase 6)
-  HVC_TIMER_SET = 0x1200,
+  HVC_TIMER_SET = NOVA_HVC_FN_TIMER_SET,
 };
 
 static inline void hvc_putc(char c) {

@@ -7,6 +7,8 @@ timeout_seconds: 10
 guests:
   - name: "hello"
     binary: "hello.bin"
+    # load_addr must match NOVA_GUEST_IPA_BASE in nova/guest_layout.h —
+    # the runner reads this file at runtime and cannot include the header.
     load_addr:   0x50000000
     ipa_base:    0x50000000
     entry:       0x50000000

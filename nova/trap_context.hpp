@@ -4,9 +4,9 @@
 //
 // TrapContext: snapshot of the CPU state at the moment an EL2 exception fires.
 //
-// This struct is laid out to match the register-save sequence in vec.S exactly.
-// Any changes to the field order or padding must be reflected in the assembly
-// macros (CTX_* offsets) in vec.S.
+// This struct is laid out to match the register-save sequence in vec.S
+// exactly. Both sides consume the same offset macros from
+// nova/trap_context_offsets.h; change the layout there first.
 //
 // Layout (288 bytes, 16-byte aligned):
 //   Offset   Field     Content
@@ -20,6 +20,8 @@
 //     272    esr       ESR_EL2: exception syndrome (EC field, ISS, etc.)
 //     280    far       FAR_EL2: faulting virtual address (for aborts)
 
+#include "nova/trap_context_offsets.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -29,15 +31,16 @@ namespace nova {
 inline constexpr std::size_t kNumGpRegs    = 31; // x0-x30
 inline constexpr std::size_t kTrapCtxAlign = 16; // stp/ldp pair alignment
 
-// Byte offsets and total size — must match the CTX_* / TRAP_CTX_SIZE
-// constants in vec.S.
-inline constexpr std::size_t kCtxOffX30   = 240;
-inline constexpr std::size_t kCtxOffSp    = 248;
-inline constexpr std::size_t kCtxOffElr   = 256;
-inline constexpr std::size_t kCtxOffSpsr  = 264;
-inline constexpr std::size_t kCtxOffEsr   = 272;
-inline constexpr std::size_t kCtxOffFar   = 280;
-inline constexpr std::size_t kTrapCtxSize = 288;
+// Byte offsets and total size, from the header shared with vec.S. The
+// static_asserts below pin the struct layout to these values, so a
+// drift between C++ and assembly cannot compile.
+inline constexpr std::size_t kCtxOffX30   = NOVA_CTX_OFF_X30;
+inline constexpr std::size_t kCtxOffSp    = NOVA_CTX_OFF_SP;
+inline constexpr std::size_t kCtxOffElr   = NOVA_CTX_OFF_ELR;
+inline constexpr std::size_t kCtxOffSpsr  = NOVA_CTX_OFF_SPSR;
+inline constexpr std::size_t kCtxOffEsr   = NOVA_CTX_OFF_ESR;
+inline constexpr std::size_t kCtxOffFar   = NOVA_CTX_OFF_FAR;
+inline constexpr std::size_t kTrapCtxSize = NOVA_TRAP_CTX_SIZE;
 
 struct alignas(kTrapCtxAlign) TrapContext {
   std::array<std::uint64_t, kNumGpRegs> x; // x0-x30 (general-purpose registers)

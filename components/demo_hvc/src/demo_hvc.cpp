@@ -9,6 +9,7 @@
 
 #include "components/nova_panic/include/nova_panic.hpp"
 #include "hal/console.hpp"
+#include "nova/hvc_abi.h"
 #include "nova/trap_context.hpp"
 
 #include <cstddef>
@@ -18,10 +19,11 @@
 namespace nova {
 namespace {
 
+// Function IDs from the ABI header shared with the guest-side stubs.
 enum : std::uint16_t {
-  HVC_PUTS = 0x1000,
-  HVC_PUTC = 0x1001,
-  HVC_EXIT = 0x1002,
+  HVC_PUTS = NOVA_HVC_FN_PUTS,
+  HVC_PUTC = NOVA_HVC_FN_PUTC,
+  HVC_EXIT = NOVA_HVC_FN_EXIT,
 };
 
 // Upper bound on bytes we will copy out of guest memory for HVC_PUTS.

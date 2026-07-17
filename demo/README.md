@@ -10,8 +10,8 @@ demo/
 ├── CMakeLists.txt               # builds all custom EL1 guests
 ├── common/
 │   ├── startup.S                # EL1 entry: stack, BSS, call main(), HVC_EXIT
-│   ├── linker.ld                # default linker script (IPA base 0x50000000)
-│   └── include/demo_hvc.h       # HVC ABI helpers
+│   ├── linker.ld.S              # linker script template (window from nova/guest_layout.h)
+│   └── include/demo_hvc.h       # HVC ABI helpers (IDs from nova/hvc_abi.h)
 ├── 01_hello/                    # Phase 5 demo
 │   ├── CMakeLists.txt
 │   ├── main.c
@@ -28,7 +28,10 @@ demo/
 
 ## Hypercall ABI (demo ↔ hypervisor contract)
 
-| HVC imm16 | Name | Args | Description |
+Function IDs are defined once in `nova/hvc_abi.h`, shared by the guest
+stubs and the hypervisor dispatcher. This table documents them:
+
+| Function ID (x0) | Name | Args | Description |
 | --- | --- | --- | --- |
 | `0x1000` | `PUTS`  | x1=ptr, x2=len | Write string to UART via hypervisor |
 | `0x1001` | `PUTC`  | x1=char        | Write one character |

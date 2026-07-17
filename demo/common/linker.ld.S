@@ -1,14 +1,19 @@
-/* NovaVisor demo EL1 guest linker script.
+/* NovaVisor demo EL1 guest linker script TEMPLATE.
  *
- * Default layout: load at IPA 0x50000000, 1 MiB window.
+ * Preprocessed by demo/CMakeLists.txt (cc -E -P -x c) into the linker.ld
+ * actually passed to ld, so the guest window comes from nova/guest_layout.h
+ * — the same header the hypervisor's Stage 2 map is built from.
+ *
  * A demo that needs a different base can copy and override this file
  * in its own directory.
  */
 
+#include "nova/guest_layout.h"
+
 ENTRY(_start)
 
 MEMORY {
-    RAM (rwx) : ORIGIN = 0x50000000, LENGTH = 1M
+    RAM (rwx) : ORIGIN = NOVA_GUEST_IPA_BASE, LENGTH = NOVA_GUEST_IPA_SIZE
 }
 
 SECTIONS {

@@ -37,12 +37,29 @@ add_compile_options(
 add_link_options(-nostdlib -static -Wl,--build-id=none)
 
 set(DEMO_COMMON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/common)
+# Repo root, for the ABI headers shared with the hypervisor
+# (nova/hvc_abi.h, nova/guest_layout.h).
+set(NOVA_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 # Shared startup + linker fragments. Every demo links against these.
 add_library(demo_common OBJECT
     ${DEMO_COMMON_DIR}/startup.S
 )
-target_include_directories(demo_common PUBLIC ${DEMO_COMMON_DIR}/include)
+target_include_directories(demo_common PUBLIC ${DEMO_COMMON_DIR}/include ${NOVA_ROOT})
+
+# The guest linker script is preprocessed from a template so its memory
+# window comes from nova/guest_layout.h — the same single source the
+# hypervisor's Stage 2 map uses. -P strips linemarkers; -x c treats the
+# .ld.S template as C for the preprocessor only.
+set(DEMO_LINKER_SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/linker.ld)
+add_custom_command(
+    OUTPUT ${DEMO_LINKER_SCRIPT}
+    COMMAND ${CMAKE_C_COMPILER} -E -P -x c -I${NOVA_ROOT}
+            ${DEMO_COMMON_DIR}/linker.ld.S -o ${DEMO_LINKER_SCRIPT}
+    DEPENDS ${DEMO_COMMON_DIR}/linker.ld.S ${NOVA_ROOT}/nova/guest_layout.h
+    COMMENT "Preprocessing demo guest linker script"
+)
+add_custom_target(demo_linker_script DEPENDS ${DEMO_LINKER_SCRIPT})
 
 # add_demo_guest(<name> <sources...>)
 #   Produces <name> (ELF) and <name>.bin (raw binary for QEMU -device loader).
@@ -50,10 +67,12 @@ target_include_directories(demo_common PUBLIC ${DEMO_COMMON_DIR}/include)
 #   load_addr.
 function(add_demo_guest name)
     add_executable(${name} ${ARGN} $<TARGET_OBJECTS:demo_common>)
-    target_include_directories(${name} PRIVATE ${DEMO_COMMON_DIR}/include)
+    target_include_directories(${name} PRIVATE ${DEMO_COMMON_DIR}/include ${NOVA_ROOT})
+    add_dependencies(${name} demo_linker_script)
     target_link_options(${name} PRIVATE
-        -T ${DEMO_COMMON_DIR}/linker.ld
+        -T ${DEMO_LINKER_SCRIPT}
     )
+    set_target_properties(${name} PROPERTIES LINK_DEPENDS ${DEMO_LINKER_SCRIPT})
     # Produce raw binary next to the ELF. The demo runner reads
     # build/demo/<manifest-dir>/<binary> where <binary> is manifest.guests[i].binary.
     # Use an explicit output path — mixing a generator expression with a

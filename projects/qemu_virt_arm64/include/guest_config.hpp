@@ -13,16 +13,19 @@
 // Phase 12 (YAML→DTB dynamic provisioning) replaces these compile-time
 // constants with a runtime descriptor parsed from hypervisor.dtb.
 
+#include "nova/guest_layout.h"
+
 #include <cstdint>
 
 namespace nova::qemu_virt {
 
-// Guest IPA window.
-// QEMU -device loader,file=<binary>,addr=0x50000000,force-raw=on places
-// the guest binary at PA 0x5000_0000; Stage 2 identity-maps that PA
-// back into IPA 0x5000_0000 for the single VM.
-inline constexpr std::uint64_t kGuestIpaBase = 0x5000'0000ULL;
-inline constexpr std::uint64_t kGuestIpaSize = 0x0010'0000ULL; // 1 MiB
+// Guest IPA window, from the layout header shared with the demo guest
+// linker script (demo/common/linker.ld.S).
+// QEMU -device loader,file=<binary>,addr=<base>,force-raw=on places the
+// guest binary at that PA; Stage 2 identity-maps it back into the same
+// IPA for the single VM.
+inline constexpr std::uint64_t kGuestIpaBase = NOVA_GUEST_IPA_BASE;
+inline constexpr std::uint64_t kGuestIpaSize = NOVA_GUEST_IPA_SIZE;
 
 // EL1 entry PC. The demo's linker.ld places .text.start at IPA base.
 inline constexpr std::uint64_t kGuestEntry = kGuestIpaBase;

@@ -21,7 +21,9 @@
 // +0x700  Lower AArch32 — FIQ
 // +0x780  Lower AArch32 — SError
 //
-// TrapContext offsets (must match novavisor/trap_context.hpp):
+// TrapContext offsets come from nova/trap_context_offsets.h — the single
+// source shared with nova/trap_context.hpp (which static_asserts the
+// struct layout against the same macros):
 //   0..240   x0–x30
 //   248      SP_EL1
 //   256      ELR_EL2
@@ -29,20 +31,10 @@
 //   272      ESR_EL2
 //   280      FAR_EL2
 
+#include "nova/trap_context_offsets.h"
+
 .global _vector_table
 .section .text.vec, "ax", @progbits
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-#define TRAP_CTX_SIZE  288
-#define CTX_X30        240
-#define CTX_SP         248
-#define CTX_ELR        256
-#define CTX_SPSR       264
-#define CTX_ESR        272
-#define CTX_FAR        280
 
 // ---------------------------------------------------------------------------
 // TRAP_ENTRY macro — exactly 128 bytes per entry
@@ -53,7 +45,7 @@
 
 .macro TRAP_ENTRY handler
     .align 7                    // 128-byte slot boundary
-    sub sp, sp, #TRAP_CTX_SIZE
+    sub sp, sp, #NOVA_TRAP_CTX_SIZE
     b \handler
     .align 7                    // pad to fill the full 128-byte slot
 .endm
@@ -87,16 +79,16 @@
 
     // Save x30 (guest LR) and SP_EL1 at offset 240 and 248
     mrs x0, sp_el1
-    stp x30, x0, [sp, #CTX_X30]
+    stp x30, x0, [sp, #NOVA_CTX_OFF_X30]
 
     // Save ELR_EL2, SPSR_EL2, ESR_EL2, FAR_EL2
     mrs x0, elr_el2
     mrs x1, spsr_el2
-    stp x0, x1, [sp, #CTX_ELR]
+    stp x0, x1, [sp, #NOVA_CTX_OFF_ELR]
 
     mrs x0, esr_el2
     mrs x1, far_el2
-    stp x0, x1, [sp, #CTX_ESR]
+    stp x0, x1, [sp, #NOVA_CTX_OFF_ESR]
 
     // Pass TrapContext* as first argument
     mov x0, sp
@@ -175,12 +167,12 @@ _handle_unhandled:
 
 _trap_restore_and_eret:
     // Restore ELR_EL2 and SPSR_EL2
-    ldp x0, x1, [sp, #CTX_ELR]
+    ldp x0, x1, [sp, #NOVA_CTX_OFF_ELR]
     msr elr_el2,  x0
     msr spsr_el2, x1
 
     // Restore SP_EL1 and x30
-    ldp x30, x0, [sp, #CTX_X30]
+    ldp x30, x0, [sp, #NOVA_CTX_OFF_X30]
     msr sp_el1, x0
 
     // Restore x0–x29
@@ -201,6 +193,6 @@ _trap_restore_and_eret:
     ldp x0,  x1,  [sp, #0]
 
     // Deallocate TrapContext frame
-    add sp, sp, #TRAP_CTX_SIZE
+    add sp, sp, #NOVA_TRAP_CTX_SIZE
 
     eret

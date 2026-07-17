@@ -33,11 +33,8 @@ struct EL2SyncTrapService : public callback::service<TrapContext*> {};
 // Fired from handle_lower_sync whenever ESR_EL2.EC == HVC_AA64. The
 // function ID is read from ctx->x[0] (SMCCC convention — the `hvc #imm16`
 // instruction's own immediate is always 0). Each subscribed component
-// should inspect `func_id` and act only on its own range (see
-// demo/README.md for the allocation table):
-//    0x1000..0x10FF  demo_hvc (PUTS/PUTC/EXIT/...)
-//    0x1100..0x11FF  ivc      (Phase 7+)
-//    0x1200..0x12FF  timer    (Phase 6+)
+// should inspect `func_id` and act only on its own range — the ID
+// allocation table lives in nova/hvc_abi.h (shared with the guests).
 //
 // Since every subscriber is called for every HVC, handlers must
 // silently return when `imm` is outside their range — no "unknown"

@@ -4,6 +4,8 @@
 // We set up the stack, zero BSS, call main(), then issue HVC_EXIT with
 // main()'s return value.
 
+#include "nova/hvc_abi.h"
+
 .section .text.start, "ax"
 .global _start
 _start:
@@ -29,7 +31,7 @@ _start:
     // main returned: propagate its int return value as the demo exit code.
     // x0 already holds main's return value per AAPCS64.
     mov     x1, x0                 // x1 = exit code
-    mov     x0, #0x1002            // HVC function ID: EXIT
+    mov     x0, #NOVA_HVC_FN_EXIT
     hvc     #0
 
     // Should not be reached. If the hypervisor misbehaves, wedge here.
