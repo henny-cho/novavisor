@@ -8,11 +8,20 @@
 
 namespace nova::board::qemu_virt {
 
+// PL011 register offsets and flags (ARM DDI0183, §3.2).
+inline constexpr uintptr_t kUartFrOffset = 0x18;    // Flag Register
+inline constexpr uint32_t  kUartFrTxFull = 1U << 5; // FR.TXFF — TX FIFO full
+
 // Primary write primitive: all other overloads delegate here.
-// Writes a span of bytes to PL011 UART0 via polling.
+// Polls FR.TXFF before each byte so nothing is dropped when the TX FIFO
+// fills — QEMU never reports a full FIFO, but real PL011 hardware does.
 inline void uart_write(std::span<const uint8_t> data) noexcept {
-  auto* const dr = reinterpret_cast<volatile uint32_t*>(UART0_BASE);
+  auto* const       dr = reinterpret_cast<volatile uint32_t*>(UART0_BASE);
+  const auto* const fr = reinterpret_cast<const volatile uint32_t*>(UART0_BASE + kUartFrOffset);
   for (const auto byte : data) {
+    while ((*fr & kUartFrTxFull) != 0U) {
+      // busy-wait for TX FIFO space
+    }
     *dr = static_cast<uint32_t>(byte);
   }
 }

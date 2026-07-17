@@ -9,6 +9,7 @@
 
 #include "components/nova_panic/include/nova_panic.hpp"
 #include "hal/console.hpp"
+#include "nova/guest_layout.h"
 #include "nova/hvc_abi.h"
 #include "nova/trap_context.hpp"
 
@@ -39,7 +40,19 @@ void handle_puts(TrapContext* ctx) noexcept {
   const auto        ipa     = ctx->x[1];
   const auto        req_len = ctx->x[2];
   const std::size_t len     = (req_len > kMaxPutsLen) ? kMaxPutsLen : static_cast<std::size_t>(req_len);
-  const auto*       data    = reinterpret_cast<const char*>(ipa);
+
+  // Reject buffers that are not fully inside the guest IPA window —
+  // otherwise a guest could point x1 at hypervisor memory and leak EL2
+  // contents through the UART. (len <= kMaxPutsLen <= window size, so
+  // kWinEnd - len cannot underflow.)
+  constexpr std::uint64_t kWinBase = NOVA_GUEST_IPA_BASE;
+  constexpr std::uint64_t kWinEnd  = kWinBase + NOVA_GUEST_IPA_SIZE;
+  if (ipa < kWinBase || ipa > kWinEnd - len) {
+    console::write("[demo_hvc] PUTS rejected: buffer outside guest window\n");
+    return;
+  }
+
+  const auto* data = reinterpret_cast<const char*>(ipa);
   console::write(std::string_view{data, len});
 }
 
