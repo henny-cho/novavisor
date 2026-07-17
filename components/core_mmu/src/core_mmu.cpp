@@ -27,7 +27,7 @@ alignas(mmu::k4KiB) mmu::Table stage2_l2;
 alignas(mmu::k4KiB) mmu::Table stage2_l3;
 
 // VTCR_EL2 field encoding:
-//   T0SZ  = 24    → 40-bit IPA (64 - 24)              bits 5:0
+//   T0SZ  = 25    → 39-bit IPA (64 - 25)              bits 5:0
 //   SL0   = 0b01  → start translation at L1            bits 7:6
 //   IRGN0 = 0b11  → Normal WB RA WA (inner)            bits 9:8
 //   ORGN0 = 0b11  → Normal WB RA WA (outer)            bits 11:10
@@ -36,7 +36,14 @@ alignas(mmu::k4KiB) mmu::Table stage2_l3;
 //   PS    = 0b010 → 40-bit physical address size       bits 18:16
 //   VS    = 0     → 8-bit VMID                         bit 19
 //   RES1                                               bit 31
-inline constexpr std::uint64_t kVtcrEl2 = (24ULL) | (0b01ULL << 6U) | (0b11ULL << 8U) | (0b11ULL << 10U) |
+//
+// T0SZ must be 25, not 24: a 40-bit IPA starting at L1 would index IPA
+// bits [39:30] — a 1024-entry (8 KiB, 8 KiB-aligned) concatenated L1 table,
+// while stage2_l1 and l1_index() provide a single 512-entry 4 KiB table.
+// With T0SZ=24 the VTTBR alignment check raises an Address size fault
+// (level 1) whenever the linker happens to place stage2_l1 on a 4 KiB but
+// not 8 KiB boundary.
+inline constexpr std::uint64_t kVtcrEl2 = (25ULL) | (0b01ULL << 6U) | (0b11ULL << 8U) | (0b11ULL << 10U) |
                                           (0b11ULL << 12U) | (0b010ULL << 16U) | (1ULL << 31U);
 
 // HCR_EL2:  VM=1 (Stage 2 translation enable, bit 0)
