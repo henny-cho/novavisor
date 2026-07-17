@@ -39,6 +39,12 @@ if(CMAKE_CROSSCOMPILING)
     target_compile_definitions(nova_warnings INTERFACE
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:_GLIBCXX_ASSERTIONS>
     )
+    # STDX freestanding: bypass the {fmt} dependency in cpp-std-extensions.
+    # On the shared interface target (not just the ELF) so every cross TU
+    # compiles the stdx headers the same way.
+    target_compile_definitions(nova_warnings INTERFACE
+        $<$<COMPILE_LANGUAGE:CXX>:STDX_FREESTANDING>
+    )
 endif()
 
 # Clang-Tidy retarget args for `scripts/task.sh lint` (cross builds only).
@@ -118,9 +124,6 @@ if(CMAKE_CROSSCOMPILING)
     add_executable(novavisor.elf projects/qemu_virt_arm64/main.cpp)
 
     target_include_directories(novavisor.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
-    # STDX freestanding: bypass {fmt} dependency in cpp-std-extensions.
-    target_compile_definitions(novavisor.elf PRIVATE STDX_FREESTANDING)
 
     target_link_libraries(novavisor.elf PRIVATE
         hal_armv8_aarch64
