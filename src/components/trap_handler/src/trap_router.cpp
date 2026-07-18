@@ -24,15 +24,15 @@ namespace nova {
 namespace {
 
 void dispatch_hvc(TrapContext* ctx) noexcept {
-  // SMCCC: the function ID lives in x0; the `hvc #imm16` instruction's
-  // own immediate (ESR_EL2.ISS) is conventionally 0 and is NOT the
-  // function selector. Pass the low 16 bits of x0 to the service.
+  // SMCCC: the function ID lives in x0 (bits 31:0); the `hvc #imm16`
+  // instruction's own immediate (ESR_EL2.ISS) is conventionally 0 and
+  // is NOT the function selector.
   //
   // ELR_EL2 already points to the instruction AFTER the HVC per
   // ARM ARM §D1.11 — do NOT advance it here or the guest will skip
   // the next instruction on return. Handlers that halt (HVC_EXIT)
   // never return through this path anyway.
-  HvcCall call{.ctx = ctx, .func_id = static_cast<std::uint16_t>(ctx->x[0] & esr::kHvcImmMask), .handled = false};
+  HvcCall call{.ctx = ctx, .func_id = static_cast<std::uint32_t>(ctx->x[0]), .handled = false};
   cib::service<HvcService>(&call);
 
   if (!call.handled) {

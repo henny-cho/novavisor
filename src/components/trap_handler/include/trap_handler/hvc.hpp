@@ -24,8 +24,10 @@ namespace nova {
 inline constexpr std::uint64_t kSmcccNotSupported = ~0ULL;
 
 struct HvcCall {
-  TrapContext*  ctx     = nullptr;
-  std::uint16_t func_id = 0;
+  TrapContext* ctx = nullptr;
+  // Full SMCCC function ID (x0 bits 31:0) — standard ranges like PSCI
+  // (0x8400_xxxx) need all 32 bits; NOVA's own IDs stay below 0x10000.
+  std::uint32_t func_id = 0;
   bool          handled = false;
 };
 
