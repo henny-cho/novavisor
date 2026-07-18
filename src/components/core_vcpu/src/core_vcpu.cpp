@@ -49,11 +49,12 @@ inline constexpr std::uint64_t kSpsrEl1h = 0x3C5ULL;
 // (single-source trigger discipline).
 inline constexpr std::uint64_t kSliceMs = 10;
 
-std::array<Vcpu, kMaxGuests> g_vcpus;
-std::size_t                  g_count       = 0;
-std::size_t                  g_current     = 0;
-std::uint64_t                g_slice_ticks = 0;
-fp::Ownership                g_fp;
+std::array<Vcpu, kMaxGuests>         g_vcpus;
+std::size_t                          g_count       = 0;
+std::size_t                          g_current     = 0;
+std::uint64_t                        g_slice_ticks = 0;
+fp::Ownership                        g_fp;
+lifecycle::RestartBudget<kMaxGuests> g_budget;
 
 auto states() noexcept -> std::array<sched::State, kMaxGuests> {
   std::array<sched::State, kMaxGuests> s{};
@@ -85,6 +86,9 @@ void seed(std::size_t index, const GuestDescriptor& guest) noexcept {
   // drop ownership so no one ever saves it over a fresh bank.
   g_fp.invalidate(index);
   vgic::cpu_reset(index);
+  // A reseeded guest owes nothing to its past life: drop the parked-CNTV
+  // wake-up mirror (a fresh bank has CNTV disabled).
+  soft_timer::cancel(soft_timer::kSlotCntvWake + index);
 }
 
 // Swap the resident VCPU: park the outgoing guest's state (trap frame,
@@ -242,9 +246,45 @@ auto start_vm(std::size_t index) noexcept -> bool {
     return false;
   }
   seed(index, guest_table()[index]);
+  g_budget.refill(index); // cold start — fresh warm-reset budget
   g_vcpus[index].state = sched::State::kReady;
   reschedule_slice(); // the resident VCPU just gained a competitor
   return true;
+}
+
+void reset_vm(std::size_t index, TrapContext* live) noexcept {
+  if (index >= g_count || g_vcpus[index].state == sched::State::kOff) {
+    return; // stopped VMs are revived by start_vm only
+  }
+
+  if (!g_budget.take(index)) {
+    console::write("[core_vcpu] VM ");
+    console::write_dec64(index);
+    console::write(" restart budget exhausted — stopping\n");
+    g_vcpus[index].state = sched::State::kOff;
+    if (index == g_current) {
+      schedule_out(live);
+    }
+    return;
+  }
+
+  mmu::reload_guest_image(index);
+  seed(index, guest_table()[index]);
+
+  Vcpu& v = g_vcpus[index];
+  if (index == g_current) {
+    // Reset in place: load the fresh context straight into the live
+    // frame and keep running — switch_to would save the live frame
+    // over the seed. Stage 2 already targets this VM.
+    *live = v.ctx;
+    arch::write_el1_bank(v.el1);
+    vgic::cpu_restore(index);
+    arch::set_fp_trap(g_fp.trap_needed(index));
+    v.state = sched::State::kRunning;
+  } else {
+    v.state = sched::State::kReady;
+  }
+  reschedule_slice();
 }
 
 void exit_current(TrapContext* live) noexcept {

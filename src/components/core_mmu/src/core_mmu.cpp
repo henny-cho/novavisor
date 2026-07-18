@@ -20,6 +20,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 namespace nova {
 namespace {
@@ -85,6 +86,12 @@ inline constexpr std::uint64_t kHcrEl2 =
 //   bits 55:48 VMID (8-bit when VTCR_EL2.VS == 0)
 inline constexpr std::uint64_t kVttbrVmidShift = 48U;
 
+// Pristine slot backing guest `index` — EL2's flat view of the PAs
+// reserved in nova/abi/guest_layout.h.
+auto pristine_slot(std::size_t index, std::uint64_t size) noexcept -> void* {
+  return reinterpret_cast<void*>(NOVA_GUEST_PRISTINE_PA + index * size);
+}
+
 [[noreturn]] void panic_stage2(std::size_t guest_index) noexcept {
   console::write("[NOVA PANIC] Stage 2 map failed for guest ");
   console::write_dec64(guest_index);
@@ -143,6 +150,15 @@ void init_and_activate() noexcept {
 
   nova_stage2_activate(g_vttbr[0], kVtcrEl2, kHcrEl2);
 
+  // Preserve every guest window for warm reset. The whole window is
+  // copied (the hypervisor does not know the binary's size); at this
+  // point it holds the loader's image plus zeroed RAM — exactly the
+  // state a reboot must restore.
+  for (std::size_t i = 0; i < guests.size(); ++i) {
+    std::memcpy(pristine_slot(i, guests[i].ipa_size), reinterpret_cast<const void*>(guests[i].load_pa),
+                static_cast<std::size_t>(guests[i].ipa_size));
+  }
+
   // Status line is rendered from the descriptors so it can never drift
   // from the mappings that were actually installed.
   for (std::size_t i = 0; i < guests.size(); ++i) {
@@ -160,6 +176,12 @@ void init_and_activate() noexcept {
 
 void switch_vm(std::size_t guest_index) noexcept {
   nova_stage2_switch(g_vttbr[guest_index]);
+}
+
+void reload_guest_image(std::size_t guest_index) noexcept {
+  const GuestDescriptor& guest = guest_table()[guest_index];
+  std::memcpy(reinterpret_cast<void*>(guest.load_pa), pristine_slot(guest_index, guest.ipa_size),
+              static_cast<std::size_t>(guest.ipa_size));
 }
 
 } // namespace mmu

@@ -38,6 +38,13 @@
 #define NOVA_IVC_SHM_PA   0x50800000
 #define NOVA_IVC_SHM_SIZE 0x00001000 /* 4 KiB */
 
+/* Pristine image area: at boot the hypervisor copies each guest window
+ * here (one NOVA_GUEST_IPA_SIZE slot per guest), and a warm reset
+ * copies it back — guests dirty their .data/BSS/stack, so reseeding
+ * the CPU context alone cannot reboot them. EL2-only: never mapped
+ * into Stage 2, so no guest can corrupt its own reset image. */
+#define NOVA_GUEST_PRISTINE_PA 0x50A00000
+
 /* Emulated GICv3 frames: left unmapped in Stage 2 so every access traps
  * into the vGIC. The IPAs equal the board's physical GIC addresses so
  * the guest sees the memory map a DTB would advertise. Register offsets

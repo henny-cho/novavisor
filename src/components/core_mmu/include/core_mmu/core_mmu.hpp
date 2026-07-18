@@ -31,6 +31,13 @@ void init_and_activate() noexcept;
 // on the switch path. Called by the VCPU scheduler with a valid index.
 void switch_vm(std::size_t guest_index) noexcept;
 
+// Warm-reset support: init_and_activate() preserves every guest window
+// in the pristine area (NOVA_GUEST_PRISTINE_PA — the loader ran before
+// the CPU started, so the windows still hold unmodified images plus
+// zeroed RAM); reload_guest_image() copies one window back. The IVC
+// shared page lies outside the windows and is never touched.
+void reload_guest_image(std::size_t guest_index) noexcept;
+
 } // namespace nova::mmu
 
 namespace nova {

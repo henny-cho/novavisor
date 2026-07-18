@@ -17,6 +17,7 @@
 // Entries past [0] stay kOff until a guest issues HVC_VM_START.
 
 #include "core_vcpu/fp_model.hpp"
+#include "core_vcpu/lifecycle_model.hpp"
 #include "core_vcpu/sched_model.hpp"
 #include "hal/arch/aarch64/el1_context.hpp"
 #include "hal/arch/aarch64/fp.hpp"
@@ -76,6 +77,14 @@ void wake(std::size_t index) noexcept;
 // HVC_VM_START: (re)seed and mark a kOff VCPU ready. False when the
 // index is out of range or the target is not kOff.
 [[nodiscard]] auto start_vm(std::size_t index) noexcept -> bool;
+
+// Warm reset: reload the pristine guest image and reseed the whole
+// execution context (trap frame, EL1/FP banks, vGIC, timers). The
+// resident VCPU is reset in place — the fresh context is loaded into
+// `live` and it keeps running; a non-resident one becomes kReady. A
+// kOff VM is ignored (start_vm is the only revival path), and an
+// exhausted restart budget (lifecycle_model.hpp) stops the VM instead.
+void reset_vm(std::size_t index, TrapContext* live) noexcept;
 
 // HVC_EXIT epilogue: retire the calling VCPU and schedule away; halts
 // the machine once every VCPU is kOff (kBlocked ones keep it alive —

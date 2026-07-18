@@ -163,5 +163,6 @@ else()
     nova_add_component_test(soft_timer timer_queue_test)     # deadline-slot queue
     nova_add_component_test(core_vcpu sched_model_test)      # scheduler pick/predicates
     nova_add_component_test(core_vcpu fp_model_test)         # lazy FP ownership
+    nova_add_component_test(core_vcpu lifecycle_model_test)  # micro-reboot budget
 
 endif() # CMAKE_CROSSCOMPILING
