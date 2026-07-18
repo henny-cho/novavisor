@@ -10,7 +10,7 @@
 // vcpu::post_virq. The message protocol inside the shared page is
 // entirely guest-owned (demo/common/include/ivc_shm.h).
 
-#include "components/trap_handler/include/trap_handler.hpp"
+#include "components/trap_handler/include/hvc.hpp"
 
 #include <cib/top.hpp>
 

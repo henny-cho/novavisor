@@ -8,16 +8,21 @@
 //
 // Default handler (registered by trap_handler_component itself) routes
 // by ESR_EL2.EC:
-//   - HVC_AA64   : dispatch HvcService; warn + SMCCC NOT_SUPPORTED if
-//                  no subscriber claims the call.
-//   - all others : dump TrapContext to UART and halt.
-// Phase 6 (WFx) and Phase 8 (DATA_ABORT_LOWER) add cases to the same
-// switch and route to their own services.
+//   - HVC_AA64         : dispatch HvcService (include/hvc.hpp)
+//   - DATA_ABORT_LOWER : dispatch MmioService (include/mmio.hpp),
+//                        escalating to GuestFaultService
+//                        (include/guest_fault.hpp)
+//   - all others       : dump TrapContext to UART and halt.
+//
+// Subscribers include only the service header they extend; this header
+// is for the component itself (nexus composition) and the dump helper.
 
+#include "components/trap_handler/include/guest_fault.hpp"
+#include "components/trap_handler/include/hvc.hpp"
+#include "components/trap_handler/include/mmio.hpp"
 #include "nova/arch/trap_context.hpp"
 
 #include <cib/top.hpp>
-#include <cstdint>
 #include <nexus/callback.hpp>
 
 namespace nova {
@@ -30,71 +35,6 @@ namespace nova {
 // ---------------------------------------------------------------------------
 struct EL2SyncTrapService : public callback::service<TrapContext*> {};
 
-// ---------------------------------------------------------------------------
-// HvcService
-//
-// One guest HVC, dispatched to every subscriber. The function ID is
-// read from ctx->x[0] (SMCCC convention — the `hvc #imm16` instruction's
-// own immediate is always 0); the allocation table lives in
-// nova/abi/hvc_abi.h (shared with the guests).
-//
-// Each subscriber inspects `func_id`, acts only on IDs it implements,
-// and sets `handled = true` for those — silently returning otherwise.
-// If no subscriber claims the call, trap_handler warns and returns
-// SMCCC NOT_SUPPORTED (-1) in the guest's x0.
-// ---------------------------------------------------------------------------
-// SMCCC v1.x: unimplemented functions and invalid arguments return -1
-// in x0. Shared by the dispatcher and every HvcService subscriber.
-inline constexpr std::uint64_t kSmcccNotSupported = ~0ULL;
-
-struct HvcCall {
-  TrapContext*  ctx     = nullptr;
-  std::uint16_t func_id = 0;
-  bool          handled = false;
-};
-
-struct HvcService : public callback::service<HvcCall*> {};
-
-// ---------------------------------------------------------------------------
-// MmioService
-//
-// One emulatable guest MMIO access (Stage 2 translation fault with a
-// valid syndrome), dispatched to every subscriber. Subscribers claim
-// the IPA ranges they emulate: act, set `handled = true`, and for reads
-// leave the raw device value in `value` — the dispatcher performs the
-// architectural widening into the guest register and advances ELR past
-// the faulting instruction. Unclaimed accesses are dumped and escalate
-// to GuestFaultService.
-// ---------------------------------------------------------------------------
-struct MmioCall {
-  TrapContext*  ctx     = nullptr;
-  std::uint64_t ipa     = 0;
-  std::uint32_t size    = 0; // access size in bytes (1/2/4/8)
-  bool          write   = false;
-  std::uint64_t value   = 0; // write: guest data (truncated to size); read: result
-  bool          handled = false;
-};
-
-struct MmioService : public callback::service<MmioCall*> {};
-
-// ---------------------------------------------------------------------------
-// GuestFaultService
-//
-// Escalation point for unrecoverable guest faults (unclaimed MMIO,
-// unemulatable aborts). The subscriber that owns VM lifecycles
-// (core_vcpu) sets `handled` and retires the offending VCPU — other
-// VMs keep running. With no subscriber the dispatcher halts.
-// ---------------------------------------------------------------------------
-struct GuestFaultCall {
-  TrapContext* ctx     = nullptr;
-  bool         handled = false;
-};
-
-struct GuestFaultService : public callback::service<GuestFaultCall*> {};
-
-// ---------------------------------------------------------------------------
-// trap_handler_component
-// ---------------------------------------------------------------------------
 // Dump every TrapContext register to the console. Shared by all fatal
 // trap paths (lower-EL default handler, EL2 self-trap, unhandled vector).
 void dump_trap_context(const TrapContext* ctx) noexcept;

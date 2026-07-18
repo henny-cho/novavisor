@@ -19,7 +19,7 @@
 // vINTID 27, to the arming VCPU.
 
 #include "components/core_gic/include/core_gic.hpp"
-#include "components/trap_handler/include/trap_handler.hpp"
+#include "components/trap_handler/include/hvc.hpp"
 #include "hal/gic.hpp"
 #include "hal/timer.hpp"
 

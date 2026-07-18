@@ -15,7 +15,7 @@
 // unallocated IDs inside the demo range (trap_handler then reports
 // them as unknown).
 
-#include "components/trap_handler/include/trap_handler.hpp"
+#include "components/trap_handler/include/hvc.hpp"
 
 #include <cib/top.hpp>
 

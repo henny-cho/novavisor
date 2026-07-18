@@ -19,7 +19,7 @@
 // cpu_reset on seed) and funnels vcpu::post_virq into post().
 
 #include "components/core_gic/include/core_gic.hpp"
-#include "components/trap_handler/include/trap_handler.hpp"
+#include "components/trap_handler/include/mmio.hpp"
 
 #include <cib/top.hpp>
 #include <cstddef>

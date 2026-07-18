@@ -182,6 +182,7 @@ else()
     endif()
 
     nova_add_host_test(esr_parse_test)         # nova/arch/esr.hpp + trap_context.hpp
+    nova_add_host_test(data_abort_test)        # nova/arch/data_abort.hpp MMIO decode
     nova_add_host_test(fmt_test)               # nova/fmt.hpp integer formatters
     nova_add_host_test(stage2_descriptor_test) # core_mmu Stage 2 descriptor encoding
     nova_add_host_test(stage2_builder_test)    # core_mmu Stage 2 identity-map builder
