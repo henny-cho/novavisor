@@ -115,6 +115,7 @@ if(CMAKE_CROSSCOMPILING)
         boot_msg
         core_mmu
         core_gic
+        core_timer
         core_vcpu
         demo_hvc
     )

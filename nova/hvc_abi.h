@@ -33,7 +33,10 @@
 /* IVC range (Phase 7) */
 #define NOVA_HVC_FN_IVC_DOORBELL 0x1100
 
-/* Timer range (Phase 6) */
+/* Timer range (Phase 6).
+ * TIMER_SET: x1 = delay in counter ticks (CNTFRQ rate). One-shot: on
+ * expiry the hypervisor injects vINTID 27 (virtual timer PPI) into the
+ * guest. Returns 0 in x0. */
 #define NOVA_HVC_FN_TIMER_SET 0x1200
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
