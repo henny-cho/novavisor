@@ -1,0 +1,42 @@
+name: "07_lifecycle"
+description: "PSCI SYSTEM_RESET self-reboot + watchdog recovery of a hung guest, both via warm reset from the pristine image."
+phase: 11
+enabled: false
+timeout_seconds: 30
+
+guests:
+  - name: "reset"
+    binary: "reset.bin"
+    load_addr:   0x50000000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+  - name: "hang"
+    binary: "hang.bin"
+    load_addr:   0x50200000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+
+# Order is deterministic: A's in-place reset keeps A resident, so its
+# lines (and exit) precede B's first slice; the watchdog expiry lands
+# >= 700 ms of wall time after B boots, long after A's quick exit; B's
+# second run follows its reset causally. The final halt line proves
+# SYSTEM_OFF retired B cleanly.
+expect:
+  - pattern: "A: boot 1"
+    within_seconds: 10
+  - pattern: "A: boot 2"
+    within_seconds: 12
+  - pattern: "demo_exit code=0"
+    within_seconds: 14
+  - pattern: "missed its heartbeat window"
+    within_seconds: 20
+  - pattern: "B: boot 2"
+    within_seconds: 22
+  - pattern: "B: done"
+    within_seconds: 26
+  - pattern: "all VCPUs off"
+    within_seconds: 28

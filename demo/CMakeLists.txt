@@ -101,5 +101,6 @@ add_subdirectory(03_ivc_pingpong)     # Phase 7
 add_subdirectory(04_native_gic)       # Phase 8
 add_subdirectory(05_preempt)          # Phase 9
 add_subdirectory(06_el1_mmu_fp)       # Phase 10
+add_subdirectory(07_lifecycle)        # Phase 11
 # Real-OS demos (Zephyr/Linux, Phase 16+) reference external images and
 # need no cmake subdir.
