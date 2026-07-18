@@ -60,4 +60,13 @@ static inline void hvc_heartbeat(uint64_t vm_id) {
   __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
 }
 
+// One-shot hypervisor timer: injects vINTID 27 (virtual timer PPI)
+// after `ticks` counter cycles (CNTFRQ rate). Returns 0 on success.
+static inline uint64_t hvc_timer_set(uint64_t ticks) {
+  register uint64_t x0 __asm__("x0") = HVC_TIMER_SET;
+  register uint64_t x1 __asm__("x1") = ticks;
+  __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
+  return x0;
+}
+
 #endif // NOVAVISOR_DEMO_HVC_H

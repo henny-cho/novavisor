@@ -89,6 +89,6 @@ endfunction()
 # when its phase starts; the demo itself is marked enabled=true in
 # manifest.yml only once the hypervisor features pass its manifest checks.
 add_subdirectory(01_hello)
-# add_subdirectory(02_timer)          # Phase 6
+add_subdirectory(02_timer)            # Phase 6
 # add_subdirectory(03_ivc_pingpong)   # Phase 7
 # 04_zephyr+ reference external images; no cmake subdir needed.

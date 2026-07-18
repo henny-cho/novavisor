@@ -81,7 +81,8 @@
             "type": "pickString",
             "description": "Select demo to debug",
             "options": [
-                "01_hello"
+                "01_hello",
+                "02_timer"
             ],
             "default": "01_hello"
         }

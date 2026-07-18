@@ -1,0 +1,22 @@
+name: "02_timer"
+description: "Virtual timer interrupt — HVC_TIMER_SET arms CNTHP; guest takes injected vINTID 27."
+phase: 6
+enabled: true
+timeout_seconds: 15
+
+guests:
+  - name: "timer"
+    binary: "timer.bin"
+    # load_addr must match NOVA_GUEST_IPA_BASE in nova/guest_layout.h —
+    # the runner reads this file at runtime and cannot include the header.
+    load_addr:   0x50000000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+
+expect:
+  - pattern: "timer_fired"
+    within_seconds: 10
+  - pattern: "demo_exit code=0"
+    within_seconds: 15

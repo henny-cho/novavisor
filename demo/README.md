@@ -16,7 +16,11 @@ demo/
 │   ├── CMakeLists.txt
 │   ├── main.c
 │   └── manifest.yml
-├── 02_timer/                    # Phase 6 demo (created when Phase 6 starts)
+├── 02_timer/                    # Phase 6 demo
+│   ├── CMakeLists.txt
+│   ├── main.c
+│   ├── vectors.S                # guest EL1 vector table (vIRQ handler)
+│   └── manifest.yml
 ├── 03_ivc_pingpong/             # Phase 7
 ├── 04_zephyr/                   # Phase 8 (references external Zephyr image)
 ├── 05_linux/                    # Phase 9 (references external Linux kernel)
@@ -39,7 +43,7 @@ stubs and the hypervisor dispatcher. This table documents them:
 | `0x1003` | `YIELD` | —              | Yield the VCPU (Phase 7+) |
 | `0x1004` | `HEARTBEAT` | x1=vm_id   | Liveness tick (Phase 11) |
 | `0x1100..0x11FF` | IVC range    | see Phase 7 | Inter-VM communication |
-| `0x1200..0x12FF` | Timer range  | see Phase 6 | Timer helpers |
+| `0x1200` | `TIMER_SET` | x1=ticks | One-shot: injects vINTID 27 after `ticks` counter cycles; returns 0 in x0 |
 
 The hypervisor's HVC dispatcher recognizes these IDs. Guest programs use the inline helpers in `common/include/demo_hvc.h`.
 
