@@ -7,9 +7,10 @@
 
 #include "components/demo_hvc/include/demo_hvc.hpp"
 
+#include "components/core_vcpu/include/core_vcpu.hpp"
 #include "components/nova_panic/include/nova_panic.hpp"
 #include "hal/console.hpp"
-#include "nova/guest_layout.h"
+#include "nova/guest.hpp"
 #include "nova/hvc_abi.h"
 #include "nova/trap_context.hpp"
 
@@ -33,9 +34,9 @@ enum : std::uint16_t {
 constexpr std::size_t kMaxPutsLen = 1024;
 
 // HVC_PUTS: x1 = guest IPA of byte buffer, x2 = length.
-// Phase 5 guest IPA space is identity-mapped to PA, so we dereference
-// the IPA directly from EL2. Phase 8+ MMIO-trap guests will need an
-// IPA-to-EL2-VA translation helper.
+// The IPA is translated to its backing PA through the calling guest's
+// descriptor (EL2 runs with a flat physical view). Phase 8+ MMIO-trap
+// guests will need a richer IPA-to-EL2-VA translation helper.
 void handle_puts(TrapContext* ctx) noexcept {
   const auto        ipa     = ctx->x[1];
   const auto        req_len = ctx->x[2];
@@ -44,15 +45,14 @@ void handle_puts(TrapContext* ctx) noexcept {
   // Reject buffers that are not fully inside the guest IPA window —
   // otherwise a guest could point x1 at hypervisor memory and leak EL2
   // contents through the UART. (len <= kMaxPutsLen <= window size, so
-  // kWinEnd - len cannot underflow.)
-  constexpr std::uint64_t kWinBase = NOVA_GUEST_IPA_BASE;
-  constexpr std::uint64_t kWinEnd  = kWinBase + NOVA_GUEST_IPA_SIZE;
-  if (ipa < kWinBase || ipa > kWinEnd - len) {
+  // the end-of-window subtraction in contains() cannot underflow.)
+  const GuestDescriptor& guest = *vcpu::current().guest;
+  if (!guest.contains(ipa, len)) {
     console::write("[demo_hvc] PUTS rejected: buffer outside guest window\n");
     return;
   }
 
-  const auto* data = reinterpret_cast<const char*>(ipa);
+  const auto* data = reinterpret_cast<const char*>(guest.to_pa(ipa));
   console::write(std::string_view{data, len});
 }
 

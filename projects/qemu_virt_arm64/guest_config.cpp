@@ -10,20 +10,29 @@
 #include "nova/guest.hpp"
 
 #include <array>
+#include <cstdint>
 #include <span>
 
 namespace nova {
 namespace {
 
-constexpr std::array kGuestTable{
-    GuestDescriptor{
-        .ipa_base  = qemu_virt::kGuestIpaBase,
-        .ipa_size  = qemu_virt::kGuestIpaSize,
-        .entry_pc  = qemu_virt::kGuestEntry,
-        .stack_top = qemu_virt::kGuestStackTop,
-        .vmid      = qemu_virt::kGuestVmid,
-    },
-};
+// Entry [0] boots automatically; entry [1] stays off until a guest
+// issues HVC_VM_START (demo/03_ivc_pingpong). Both see the same IPA
+// window and differ only in PA slot and VMID (0 is reserved).
+constexpr auto make_guest(std::size_t index) noexcept -> GuestDescriptor {
+  return GuestDescriptor{
+      .ipa_base  = qemu_virt::kGuestIpaBase,
+      .ipa_size  = qemu_virt::kGuestIpaSize,
+      .load_pa   = qemu_virt::guest_slot_pa(index),
+      .entry_pc  = qemu_virt::kGuestEntry,
+      .stack_top = qemu_virt::kGuestStackTop,
+      .vmid      = static_cast<std::uint16_t>(index + 1),
+  };
+}
+
+constexpr std::array kGuestTable{make_guest(0), make_guest(1)};
+
+static_assert(kGuestTable.size() <= kMaxGuests);
 
 } // namespace
 

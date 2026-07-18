@@ -8,20 +8,28 @@
 // live) is cleared by boot.S before any C++ runs, so the build step
 // can write valid descriptors without being zeroed afterwards.
 //
-// Effect: on boot, identity-maps the Phase 5 guest window into Stage 2
-// and writes VTCR_EL2 / VTTBR_EL2 / HCR_EL2. After this component's
+// Effect: on boot, builds one Stage 2 table set per guest_table()
+// entry (window PA slot + IVC shared page) and writes VTCR_EL2 /
+// VTTBR_EL2 / HCR_EL2 for the boot guest. After this component's
 // action completes, any subsequent ERET to EL1 sees its accesses
 // translated through Stage 2.
 
 #include <cib/top.hpp>
+#include <cstddef>
 #include <flow/flow.hpp>
 
 namespace nova::mmu {
 
-// Populate L1/L2/L3 tables, program VTCR/VTTBR/HCR, invalidate TLB.
-// [[noreturn]]-safe — returns normally; the Stage 2 MMU is active on
-// return, but has no effect until control transfers to EL1.
+// Populate all per-guest table sets, program VTCR/VTTBR/HCR for guest
+// [0], invalidate TLB. [[noreturn]]-safe — returns normally; the
+// Stage 2 MMU is active on return, but has no effect until control
+// transfers to EL1.
 void init_and_activate() noexcept;
+
+// Retarget VTTBR_EL2 to another guest's table set (index into
+// guest_table()). VMID tagging keeps the TLB coherent — no invalidation
+// on the switch path. Called by the VCPU scheduler with a valid index.
+void switch_vm(std::size_t guest_index) noexcept;
 
 } // namespace nova::mmu
 

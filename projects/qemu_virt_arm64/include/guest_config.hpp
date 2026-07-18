@@ -14,17 +14,24 @@
 
 #include "nova/guest_layout.h"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace nova::qemu_virt {
 
 // Guest IPA window, from the layout header shared with the demo guest
-// linker script (demo/common/linker.ld.S).
-// QEMU -device loader,file=<binary>,addr=<base>,force-raw=on places the
-// guest binary at that PA; Stage 2 identity-maps it back into the same
-// IPA for the single VM.
+// linker script (demo/common/linker.ld.S). Every guest sees (and links
+// against) the same window; only the backing PA slot differs.
+// QEMU -device loader,file=<binary>,addr=<slot PA>,force-raw=on places
+// each guest binary at its slot; Stage 2 maps the window onto it.
 inline constexpr std::uint64_t kGuestIpaBase = NOVA_GUEST_IPA_BASE;
 inline constexpr std::uint64_t kGuestIpaSize = NOVA_GUEST_IPA_SIZE;
+
+// PA slot for guest i. Slot 0 is identity with the IPA window, so the
+// Phase 5/6 single-guest demos keep their manifests unchanged.
+[[nodiscard]] constexpr auto guest_slot_pa(std::size_t index) noexcept -> std::uint64_t {
+  return NOVA_GUEST_IPA_BASE + (index * NOVA_GUEST_PA_STRIDE);
+}
 
 // EL1 entry PC. The demo's linker.ld places .text.start at IPA base.
 inline constexpr std::uint64_t kGuestEntry = kGuestIpaBase;
@@ -33,8 +40,5 @@ inline constexpr std::uint64_t kGuestEntry = kGuestIpaBase;
 // demo/common/startup.S resolves __stack_top from its own linker script;
 // this constant is the hypervisor's view, matched at build time.
 inline constexpr std::uint64_t kGuestStackTop = kGuestIpaBase + kGuestIpaSize;
-
-// VMID tag for VTTBR_EL2. 0 is reserved; Phase 5 uses 1 for the sole VM.
-inline constexpr std::uint16_t kGuestVmid = 1;
 
 } // namespace nova::qemu_virt
