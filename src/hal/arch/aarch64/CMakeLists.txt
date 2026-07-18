@@ -5,8 +5,13 @@ add_library(hal_arch_aarch64 OBJECT
     vec.S
     mmu.S
     vcpu_enter.S
+    mem.cpp
 )
 target_include_directories(hal_arch_aarch64 PUBLIC ${CMAKE_SOURCE_DIR}/src)
+
+# mem.cpp implements the mem* libcalls themselves: -fno-builtin keeps
+# GCC from recognizing the loops and emitting recursive libcalls.
+set_source_files_properties(mem.cpp PROPERTIES COMPILE_OPTIONS "-fno-builtin")
 
 # The linker script is preprocessed from a template so the RAM window
 # comes from the board's board_layout.h (same lds.S pattern as
