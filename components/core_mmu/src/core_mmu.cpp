@@ -1,7 +1,8 @@
 // components/core_mmu/src/core_mmu.cpp
 //
-// Stage 2 MMU initialization and activation for the QEMU virt single-guest
-// layout. Called once from core_mmu_component during RuntimeStart.
+// Stage 2 MMU initialization and activation for the single boot guest
+// described by the project-injected guest table (nova/guest.hpp).
+// Called once from core_mmu_component during RuntimeStart.
 //
 // References: ARM ARM DDI0487 §D13.2.138 (VTCR_EL2), §D13.2.137 (VTTBR_EL2),
 // §D13.2.48 (HCR_EL2).
@@ -11,7 +12,7 @@
 #include "components/core_mmu/include/stage2_builder.hpp"
 #include "components/core_mmu/include/stage2_descriptor.hpp"
 #include "hal/console.hpp"
-#include "projects/qemu_virt_arm64/include/guest_config.hpp"
+#include "nova/guest.hpp"
 
 #include <cstdint>
 
@@ -62,28 +63,32 @@ extern "C" void nova_stage2_activate(std::uint64_t vttbr, std::uint64_t vtcr, st
 namespace mmu {
 
 void init_and_activate() noexcept {
+  // Phase 5/6: one set of Stage 2 tables for the sole boot guest.
+  // Phase 7 (multi-VM) allocates one table set per guest-table entry.
+  const GuestDescriptor& guest = guest_table().front();
+
   const auto l1_pa = reinterpret_cast<std::uint64_t>(&stage2_l1);
   const auto l2_pa = reinterpret_cast<std::uint64_t>(&stage2_l2);
   const auto l3_pa = reinterpret_cast<std::uint64_t>(&stage2_l3);
 
   Stage2Tables tables{.l1 = &stage2_l1, .l2 = &stage2_l2, .l3 = &stage2_l3, .l2_pa = l2_pa, .l3_pa = l3_pa};
-  build_identity_map(tables, qemu_virt::kGuestIpaBase, qemu_virt::kGuestIpaSize, desc::kAttrNormalRwx);
+  build_identity_map(tables, guest.ipa_base, guest.ipa_size, desc::kAttrNormalRwx);
 
   // VTTBR_EL2 layout:
   //   bits 47:1  BADDR (L1 table PA; bit 0 is always 0 for 4K-aligned)
   //   bits 55:48 VMID (8-bit when VTCR_EL2.VS == 0)
-  const std::uint64_t vttbr = l1_pa | (static_cast<std::uint64_t>(qemu_virt::kGuestVmid) << 48U);
+  const std::uint64_t vttbr = l1_pa | (static_cast<std::uint64_t>(guest.vmid) << 48U);
 
   nova_stage2_activate(vttbr, kVtcrEl2, kHcrEl2);
 
-  // Status line is rendered from guest_config so it can never drift from
-  // the mapping that was actually installed.
+  // Status line is rendered from the descriptor so it can never drift
+  // from the mapping that was actually installed.
   console::write("Stage 2: activated VMID=");
-  console::write_dec64(qemu_virt::kGuestVmid);
+  console::write_dec64(guest.vmid);
   console::write(" IPA=0x");
-  console::write_hex64(qemu_virt::kGuestIpaBase);
+  console::write_hex64(guest.ipa_base);
   console::write("..0x");
-  console::write_hex64(qemu_virt::kGuestIpaBase + qemu_virt::kGuestIpaSize);
+  console::write_hex64(guest.ipa_base + guest.ipa_size);
   console::write("\n");
 }
 

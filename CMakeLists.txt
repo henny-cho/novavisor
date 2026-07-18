@@ -121,7 +121,12 @@ if(CMAKE_CROSSCOMPILING)
         add_subdirectory(components/${component})
     endforeach()
 
-    add_executable(novavisor.elf projects/qemu_virt_arm64/main.cpp)
+    add_executable(novavisor.elf
+        projects/qemu_virt_arm64/main.cpp
+        # Defines nova::guest_table() — the project-side injection point
+        # consumed by core_mmu/core_vcpu via nova/guest.hpp.
+        projects/qemu_virt_arm64/guest_config.cpp
+    )
 
     target_include_directories(novavisor.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 

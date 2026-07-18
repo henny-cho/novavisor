@@ -1,11 +1,11 @@
 // components/core_vcpu/src/core_vcpu.cpp
 //
-// Seeds the first (and in Phase 5, only) EL1 entry from the static
-// guest descriptor in projects/qemu_virt_arm64/include/guest_config.hpp.
+// Seeds vcpu 0 from the guest table injected by the project composition
+// (nova/guest.hpp) and performs the first ERET into EL1.
 
 #include "components/core_vcpu/include/core_vcpu.hpp"
 
-#include "projects/qemu_virt_arm64/include/guest_config.hpp"
+#include "nova/guest.hpp"
 
 #include <cstdint>
 
@@ -16,6 +16,7 @@ extern "C" [[noreturn]] void nova_vcpu_enter(std::uint64_t entry_pc, std::uint64
                                              std::uint64_t spsr_el2) noexcept;
 
 namespace vcpu {
+namespace {
 
 // SPSR_EL2 value to restore on ERET into the fresh guest:
 //   M[3:0]   = 0b0101  EL1h  (EL1, using SP_EL1)
@@ -28,8 +29,27 @@ namespace vcpu {
 // Phase 6 will clear I/F when vGIC injection comes online.
 inline constexpr std::uint64_t kSpsrEl1h = 0x3C5ULL;
 
+// Phase 5/6: single VCPU. Phase 7 sizes the backing store from the
+// guest table and adds a scheduler-owned "current" pointer.
+Vcpu g_vcpu0;
+
+} // namespace
+
+auto current() noexcept -> Vcpu& {
+  return g_vcpu0;
+}
+
 [[noreturn]] void enter_guest() noexcept {
-  nova_vcpu_enter(qemu_virt::kGuestEntry, qemu_virt::kGuestStackTop, kSpsrEl1h);
+  const GuestDescriptor& guest = guest_table().front();
+
+  Vcpu& vcpu = g_vcpu0;
+  vcpu.guest = &guest;
+  vcpu.elr   = guest.entry_pc;
+  vcpu.sp    = guest.stack_top;
+  vcpu.spsr  = kSpsrEl1h;
+  vcpu.state = Vcpu::State::kRunning;
+
+  nova_vcpu_enter(vcpu.elr, vcpu.sp, vcpu.spsr);
 }
 
 } // namespace vcpu

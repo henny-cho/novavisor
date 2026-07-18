@@ -2,13 +2,12 @@
 
 // projects/qemu_virt_arm64/include/guest_config.hpp
 //
-// Static guest descriptor for the QEMU virt AArch64 target.
+// Static guest configuration for the QEMU virt AArch64 target.
 //
 // Phase 5 supports a single guest, identity-mapped through Stage 2.
-// These constants are the single source of truth for:
-//   - core_mmu  : builds Stage 2 tables covering [kGuestIpaBase, +kGuestIpaSize)
-//   - core_vcpu : seeds ELR_EL2/SP_EL1 from kGuestEntry/kGuestStackTop,
-//                 tags VTTBR_EL2 with kGuestVmid
+// These constants feed the GuestDescriptor table defined in
+// ../guest_config.cpp — components consume them only through
+// nova::guest_table() (nova/guest.hpp), never by including this header.
 //
 // Phase 12 (YAML→DTB dynamic provisioning) replaces these compile-time
 // constants with a runtime descriptor parsed from hypervisor.dtb.
