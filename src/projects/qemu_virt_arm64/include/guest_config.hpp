@@ -7,12 +7,12 @@
 // Phase 5 supports a single guest, identity-mapped through Stage 2.
 // These constants feed the GuestDescriptor table defined in
 // ../guest_config.cpp — components consume them only through
-// nova::guest_table() (nova/guest.hpp), never by including this header.
+// nova::guest_table() (nova/abi/guest.hpp), never by including this header.
 //
 // Phase 12 (YAML→DTB dynamic provisioning) replaces these compile-time
 // constants with a runtime descriptor parsed from hypervisor.dtb.
 
-#include "nova/guest_layout.h"
+#include "nova/abi/guest_layout.h"
 
 #include <cstddef>
 #include <cstdint>

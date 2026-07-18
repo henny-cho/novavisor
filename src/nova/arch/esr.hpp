@@ -1,6 +1,6 @@
 #pragma once
 
-// nova/esr.hpp
+// nova/arch/esr.hpp
 //
 // ESR_EL2 (Exception Syndrome Register, EL2) parsing utilities.
 //

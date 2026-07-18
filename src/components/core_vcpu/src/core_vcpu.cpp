@@ -11,8 +11,8 @@
 #include "components/nova_panic/include/nova_panic.hpp"
 #include "components/vgic/include/vgic.hpp"
 #include "hal/console.hpp"
-#include "nova/guest.hpp"
-#include "nova/hvc_abi.h"
+#include "nova/abi/guest.hpp"
+#include "nova/abi/hvc_abi.h"
 
 #include <array>
 #include <cstddef>

@@ -1,12 +1,12 @@
 #pragma once
 
-// nova/trap_context.hpp
+// nova/arch/trap_context.hpp
 //
 // TrapContext: snapshot of the CPU state at the moment an EL2 exception fires.
 //
 // This struct is laid out to match the register-save sequence in vec.S
 // exactly. Both sides consume the same offset macros from
-// nova/trap_context_offsets.h; change the layout there first.
+// nova/arch/trap_context_offsets.h; change the layout there first.
 //
 // Layout (288 bytes, 16-byte aligned):
 //   Offset   Field     Content
@@ -20,7 +20,7 @@
 //     272    esr       ESR_EL2: exception syndrome (EC field, ISS, etc.)
 //     280    far       FAR_EL2: faulting virtual address (for aborts)
 
-#include "nova/trap_context_offsets.h"
+#include "nova/arch/trap_context_offsets.h"
 
 #include <array>
 #include <cstddef>

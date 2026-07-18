@@ -21,8 +21,8 @@
 // +0x700  Lower AArch32 — FIQ
 // +0x780  Lower AArch32 — SError
 //
-// TrapContext offsets come from nova/trap_context_offsets.h — the single
-// source shared with nova/trap_context.hpp (which static_asserts the
+// TrapContext offsets come from nova/arch/trap_context_offsets.h — the single
+// source shared with nova/arch/trap_context.hpp (which static_asserts the
 // struct layout against the same macros):
 //   0..240   x0–x30
 //   248      SP_EL1
@@ -31,7 +31,7 @@
 //   272      ESR_EL2
 //   280      FAR_EL2
 
-#include "nova/trap_context_offsets.h"
+#include "nova/arch/trap_context_offsets.h"
 
 .global _vector_table
 .section .text.vec, "ax", @progbits

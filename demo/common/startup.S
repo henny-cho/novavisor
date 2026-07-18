@@ -4,7 +4,7 @@
 // We set up the stack, zero BSS, call main(), then issue HVC_EXIT with
 // main()'s return value.
 
-#include "nova/hvc_abi.h"
+#include "nova/abi/hvc_abi.h"
 
 .section .text.start, "ax"
 .global _start

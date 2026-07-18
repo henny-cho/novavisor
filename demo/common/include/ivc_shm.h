@@ -1,7 +1,7 @@
 // NovaVisor demo IVC shared-memory mailbox.
 //
 // Guest-owned protocol on the shared page the hypervisor maps into
-// every VM at NOVA_IVC_SHM_IPA (nova/guest_layout.h). One mailbox per
+// every VM at NOVA_IVC_SHM_IPA (nova/abi/guest_layout.h). One mailbox per
 // direction: the sender writes the payload, publishes it by bumping
 // `seq`, then rings the peer's doorbell (hvc_ivc_doorbell).
 //
@@ -13,7 +13,7 @@
 #ifndef NOVAVISOR_DEMO_IVC_SHM_H
 #define NOVAVISOR_DEMO_IVC_SHM_H
 
-#include "nova/guest_layout.h"
+#include "nova/abi/guest_layout.h"
 
 #include <stdint.h>
 

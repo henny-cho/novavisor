@@ -1,7 +1,7 @@
 // components/core_mmu/src/core_mmu.cpp
 //
 // Stage 2 MMU initialization and activation. Builds one table set per
-// guest_table() entry (nova/guest.hpp) during RuntimeStart, activates
+// guest_table() entry (nova/abi/guest.hpp) during RuntimeStart, activates
 // the boot guest's set, and provides the VTTBR switch used by the VCPU
 // scheduler.
 //
@@ -14,8 +14,8 @@
 #include "components/core_mmu/include/stage2_descriptor.hpp"
 #include "components/nova_panic/include/nova_panic.hpp"
 #include "hal/console.hpp"
-#include "nova/guest.hpp"
-#include "nova/guest_layout.h"
+#include "nova/abi/guest.hpp"
+#include "nova/abi/guest_layout.h"
 
 #include <array>
 #include <cstddef>

@@ -14,7 +14,7 @@
 // Phase 6 (WFx) and Phase 8 (DATA_ABORT_LOWER) add cases to the same
 // switch and route to their own services.
 
-#include "nova/trap_context.hpp"
+#include "nova/arch/trap_context.hpp"
 
 #include <cib/top.hpp>
 #include <cstdint>
@@ -36,7 +36,7 @@ struct EL2SyncTrapService : public callback::service<TrapContext*> {};
 // One guest HVC, dispatched to every subscriber. The function ID is
 // read from ctx->x[0] (SMCCC convention — the `hvc #imm16` instruction's
 // own immediate is always 0); the allocation table lives in
-// nova/hvc_abi.h (shared with the guests).
+// nova/abi/hvc_abi.h (shared with the guests).
 //
 // Each subscriber inspects `func_id`, acts only on IDs it implements,
 // and sets `handled = true` for those — silently returning otherwise.

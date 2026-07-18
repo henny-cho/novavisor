@@ -27,7 +27,7 @@ int main(void) {
   __asm__ volatile("msr vbar_el1, %0" ::"r"(_demo_vectors));
 
   gicr_wake();
-  gicr_enable(27); // virtual timer PPI — vINTID injected by HVC_TIMER_SET
+  gicr_enable(NOVA_TIMER_VINTID); // vINTID injected by HVC_TIMER_SET
 
   __asm__ volatile("msr daifclr, #2"); // unmask IRQ (vIRQ under HCR_EL2.IMO)
 

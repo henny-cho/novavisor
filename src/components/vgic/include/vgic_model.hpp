@@ -25,6 +25,8 @@
 //
 // Reference: Arm IHI 0069 (GICv3/v4 Architecture Specification).
 
+#include "nova/arch/gicv3_regs.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -56,46 +58,48 @@ inline constexpr std::uint64_t kLrVintidMask    = 0xFFFF'FFFFULL;
   return static_cast<std::uint32_t>(lr & kLrVintidMask);
 }
 
-// --- Register frame layout --------------------------------------------------
+// --- Register frame layout ---------------------------------------------------
+// Offsets and bits come from the shared architecture header; only the
+// values this model chooses to advertise are defined here.
 
-inline constexpr std::uint64_t kGicdFrameSize = 0x10000; // 64 KiB distributor
-inline constexpr std::uint64_t kGicrFrameSize = 0x20000; // RD + SGI frame
+inline constexpr std::uint64_t kGicdFrameSize = NOVA_GICD_FRAME_SIZE;
+inline constexpr std::uint64_t kGicrFrameSize = NOVA_GICR_FRAME_SIZE;
 
 // Distributor offsets.
-inline constexpr std::uint64_t kGicdCtlr  = 0x0000;
-inline constexpr std::uint64_t kGicdTyper = 0x0004;
-inline constexpr std::uint64_t kGicdIidr  = 0x0008;
-inline constexpr std::uint64_t kGicdPidr2 = 0xFFE8;
+inline constexpr std::uint64_t kGicdCtlr  = NOVA_GICD_CTLR;
+inline constexpr std::uint64_t kGicdTyper = NOVA_GICD_TYPER;
+inline constexpr std::uint64_t kGicdIidr  = NOVA_GICD_IIDR;
+inline constexpr std::uint64_t kGicdPidr2 = NOVA_GICD_PIDR2;
 
 // Redistributor RD_base frame offsets.
-inline constexpr std::uint64_t kGicrCtlr    = 0x0000;
-inline constexpr std::uint64_t kGicrIidr    = 0x0004;
-inline constexpr std::uint64_t kGicrTyper   = 0x0008; // 64-bit
-inline constexpr std::uint64_t kGicrTyperHi = 0x000C;
-inline constexpr std::uint64_t kGicrWaker   = 0x0014;
-inline constexpr std::uint64_t kGicrPidr2   = 0xFFE8;
+inline constexpr std::uint64_t kGicrCtlr    = NOVA_GICR_CTLR;
+inline constexpr std::uint64_t kGicrIidr    = NOVA_GICR_IIDR;
+inline constexpr std::uint64_t kGicrTyper   = NOVA_GICR_TYPER; // 64-bit
+inline constexpr std::uint64_t kGicrTyperHi = NOVA_GICR_TYPER_HI;
+inline constexpr std::uint64_t kGicrWaker   = NOVA_GICR_WAKER;
+inline constexpr std::uint64_t kGicrPidr2   = NOVA_GICR_PIDR2;
 
 // Redistributor SGI_base frame offsets (RD_base + 64 KiB).
-inline constexpr std::uint64_t kGicrSgiFrame     = 0x10000;
-inline constexpr std::uint64_t kGicrIgroupr0     = kGicrSgiFrame + 0x0080;
-inline constexpr std::uint64_t kGicrIsenabler0   = kGicrSgiFrame + 0x0100;
-inline constexpr std::uint64_t kGicrIcenabler0   = kGicrSgiFrame + 0x0180;
-inline constexpr std::uint64_t kGicrIspendr0     = kGicrSgiFrame + 0x0200;
-inline constexpr std::uint64_t kGicrIcpendr0     = kGicrSgiFrame + 0x0280;
-inline constexpr std::uint64_t kGicrIpriorityr   = kGicrSgiFrame + 0x0400; // 32 bytes
+inline constexpr std::uint64_t kGicrSgiFrame     = NOVA_GICR_SGI_FRAME;
+inline constexpr std::uint64_t kGicrIgroupr0     = NOVA_GICR_IGROUPR0;
+inline constexpr std::uint64_t kGicrIsenabler0   = NOVA_GICR_ISENABLER0;
+inline constexpr std::uint64_t kGicrIcenabler0   = NOVA_GICR_ICENABLER0;
+inline constexpr std::uint64_t kGicrIspendr0     = NOVA_GICR_ISPENDR0;
+inline constexpr std::uint64_t kGicrIcpendr0     = NOVA_GICR_ICPENDR0;
+inline constexpr std::uint64_t kGicrIpriorityr   = NOVA_GICR_IPRIORITYR; // 32 bytes
 inline constexpr std::uint64_t kGicrIpriorityEnd = kGicrIpriorityr + kNumPrivate;
-inline constexpr std::uint64_t kGicrIcfgr0       = kGicrSgiFrame + 0x0C00;
-inline constexpr std::uint64_t kGicrIcfgr1       = kGicrSgiFrame + 0x0C04;
+inline constexpr std::uint64_t kGicrIcfgr0       = NOVA_GICR_ICFGR0;
+inline constexpr std::uint64_t kGicrIcfgr1       = NOVA_GICR_ICFGR1;
 
-// Read-only identification values.
+// Read-only identification values (emulation policy, not architecture).
 inline constexpr std::uint32_t kGicdTyperValue = 0;          // ITLinesNumber=0: no SPIs
 inline constexpr std::uint32_t kGicrTyperLast  = 1U << 4U;   // sole redistributor
 inline constexpr std::uint32_t kGicIidrValue   = 0x43B;      // implementer: Arm
 inline constexpr std::uint32_t kPidr2GicV3     = 0x3U << 4U; // ArchRev = GICv3
 
 // GICR_WAKER bits.
-inline constexpr std::uint32_t kWakerProcessorSleep = 1U << 1U;
-inline constexpr std::uint32_t kWakerChildrenAsleep = 1U << 2U;
+inline constexpr std::uint32_t kWakerProcessorSleep = NOVA_GICR_WAKER_PROCESSOR_SLEEP;
+inline constexpr std::uint32_t kWakerChildrenAsleep = NOVA_GICR_WAKER_CHILDREN_ASLEEP;
 
 // --- State ------------------------------------------------------------------
 

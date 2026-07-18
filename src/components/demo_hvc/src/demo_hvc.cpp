@@ -9,9 +9,9 @@
 
 #include "components/core_vcpu/include/core_vcpu.hpp"
 #include "hal/console.hpp"
-#include "nova/guest.hpp"
-#include "nova/hvc_abi.h"
-#include "nova/trap_context.hpp"
+#include "nova/abi/guest.hpp"
+#include "nova/abi/hvc_abi.h"
+#include "nova/arch/trap_context.hpp"
 
 #include <cstddef>
 #include <cstdint>

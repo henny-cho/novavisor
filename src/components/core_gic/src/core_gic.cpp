@@ -7,7 +7,7 @@
 
 #include "hal/console.hpp"
 #include "hal/gic.hpp"
-#include "nova/trap_context.hpp"
+#include "nova/arch/trap_context.hpp"
 
 #include <cib/top.hpp>
 #include <cstdint>

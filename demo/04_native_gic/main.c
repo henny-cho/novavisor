@@ -18,7 +18,7 @@
 
 #include <stdint.h>
 
-#define VTIMER_INTID 27
+#define VTIMER_INTID NOVA_TIMER_VINTID
 #define TICKS        5
 
 extern char       _demo_vectors[]; // vectors.S

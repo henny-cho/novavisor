@@ -1,4 +1,4 @@
-/* nova/guest_layout.h
+/* nova/abi/guest_layout.h
  *
  * Phase 5 guest memory window — the single source of truth shared by:
  *   - projects/qemu_virt_arm64/include/guest_config.hpp (Stage 2 map,
@@ -37,6 +37,13 @@
 #define NOVA_IVC_SHM_IPA  0x50100000
 #define NOVA_IVC_SHM_PA   0x50800000
 #define NOVA_IVC_SHM_SIZE 0x00001000 /* 4 KiB */
+
+/* Emulated GICv3 frames: left unmapped in Stage 2 so every access traps
+ * into the vGIC. The IPAs equal the board's physical GIC addresses so
+ * the guest sees the memory map a DTB would advertise. Register offsets
+ * within the frames come from nova/arch/gicv3_regs.h. */
+#define NOVA_GICD_IPA_BASE 0x08000000
+#define NOVA_GICR_IPA_BASE 0x080A0000
 
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 

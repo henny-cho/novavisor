@@ -1,6 +1,6 @@
 #pragma once
 
-// nova/guest.hpp
+// nova/abi/guest.hpp
 //
 // GuestDescriptor: static per-guest configuration, and the contract
 // between the project composition (which defines the table) and the

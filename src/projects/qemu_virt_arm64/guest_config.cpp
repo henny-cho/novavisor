@@ -1,13 +1,13 @@
 // projects/qemu_virt_arm64/guest_config.cpp
 //
-// Defines the nova::guest_table() contract (nova/guest.hpp) for this
+// Defines the nova::guest_table() contract (nova/abi/guest.hpp) for this
 // target from the compile-time constants in include/guest_config.hpp.
 // This TU is linked directly into novavisor.elf — it is the injection
 // point that keeps core components free of projects/ includes.
 
 #include "projects/qemu_virt_arm64/include/guest_config.hpp"
 
-#include "nova/guest.hpp"
+#include "nova/abi/guest.hpp"
 
 #include <array>
 #include <cstdint>

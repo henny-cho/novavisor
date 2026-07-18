@@ -9,8 +9,8 @@
 
 #include "components/nova_panic/include/nova_panic.hpp"
 #include "hal/console.hpp"
-#include "nova/esr.hpp"
-#include "nova/trap_context.hpp"
+#include "nova/arch/esr.hpp"
+#include "nova/arch/trap_context.hpp"
 
 #include <cib/top.hpp>
 #include <cstdint>

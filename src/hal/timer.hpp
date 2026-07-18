@@ -11,13 +11,16 @@
 // and read-only access to the physical counter; programming the EL1
 // physical timer traps to EL2.
 
+#include "nova/abi/hvc_abi.h"
+
 #include <cstdint>
 
 namespace nova::hyp_timer {
 
-// Standard generic-timer PPIs.
-inline constexpr std::uint32_t kHypTimerIntid    = 26; // CNTHP  — EL2 physical timer
-inline constexpr std::uint32_t kGuestTimerVintid = 27; // CNTV   — guest-visible virtual timer
+// Standard generic-timer PPIs. The guest-visible one is fixed by the
+// ABI contract — physical PPI 27 and the injected vINTID coincide.
+inline constexpr std::uint32_t kHypTimerIntid    = 26;                // CNTHP — EL2 physical timer
+inline constexpr std::uint32_t kGuestTimerVintid = NOVA_TIMER_VINTID; // CNTV
 
 // CNTHCTL_EL2 (HCR_EL2.E2H = 0):
 //   EL1PCTEN (bit 0) = 1 → EL1/EL0 may read the physical counter

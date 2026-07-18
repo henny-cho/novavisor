@@ -12,6 +12,7 @@
 // values between that model and the hardware.
 
 #include "hal/board_qemu_virt/include/gicv3.hpp"
+#include "nova/abi/guest_layout.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -25,11 +26,11 @@ inline constexpr std::uint32_t kSpecialIntidBase = 1020;
 // vGIC maintenance interrupt (standard SBSA PPI assignment).
 inline constexpr std::uint32_t kMaintenanceIntid = 25;
 
-// Emulated GIC frames sit at the board's physical addresses so the
-// guest sees the same memory map a DTB would advertise; the IPAs are
-// left unmapped in Stage 2 on purpose (accesses trap into vgic).
-inline constexpr std::uint64_t kGicdIpaBase = board::qemu_virt::GICD_BASE;
-inline constexpr std::uint64_t kGicrIpaBase = board::qemu_virt::GICR_BASE;
+// Emulated GIC frames — the guest-platform contract fixes the IPAs
+// (they equal this board's physical addresses); the IPAs are left
+// unmapped in Stage 2 on purpose (accesses trap into vgic).
+inline constexpr std::uint64_t kGicdIpaBase = NOVA_GICD_IPA_BASE;
+inline constexpr std::uint64_t kGicrIpaBase = NOVA_GICR_IPA_BASE;
 
 // ICH_HCR_EL2 / ICH_VMCR_EL2 values banked per VCPU by vgic.
 inline constexpr std::uint64_t kIchHcrEn  = board::qemu_virt::gicv3::kIchHcrEn;

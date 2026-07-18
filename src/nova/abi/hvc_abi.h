@@ -1,4 +1,4 @@
-/* nova/hvc_abi.h
+/* nova/abi/hvc_abi.h
  *
  * Guest <-> hypervisor HVC function IDs — the single source of truth for
  * the hypercall ABI. Included by the hypervisor dispatcher
@@ -45,9 +45,14 @@
 
 /* Timer range (Phase 6).
  * TIMER_SET: x1 = delay in counter ticks (CNTFRQ rate). One-shot: on
- * expiry the hypervisor injects vINTID 27 (virtual timer PPI) into the
- * guest. Returns 0 in x0. */
+ * expiry the hypervisor injects NOVA_TIMER_VINTID into the guest.
+ * Returns 0 in x0. */
 #define NOVA_HVC_FN_TIMER_SET 0x1200
+
+/* Virtual timer PPI as the guest sees it — delivered on TIMER_SET
+ * expiry and on native CNTV expiry alike. A guest must enable it at its
+ * redistributor before expecting delivery. */
+#define NOVA_TIMER_VINTID 27
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
 #endif /* NOVA_HVC_ABI_H */

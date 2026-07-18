@@ -1,14 +1,14 @@
 /* NovaVisor demo EL1 guest linker script TEMPLATE.
  *
  * Preprocessed by demo/CMakeLists.txt (cc -E -P -x c) into the linker.ld
- * actually passed to ld, so the guest window comes from nova/guest_layout.h
+ * actually passed to ld, so the guest window comes from nova/abi/guest_layout.h
  * — the same header the hypervisor's Stage 2 map is built from.
  *
  * A demo that needs a different base can copy and override this file
  * in its own directory.
  */
 
-#include "nova/guest_layout.h"
+#include "nova/abi/guest_layout.h"
 
 ENTRY(_start)
 

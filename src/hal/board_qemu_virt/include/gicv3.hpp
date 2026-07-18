@@ -2,8 +2,8 @@
 
 // GICv3 driver for the QEMU virt board (-machine gic-version=3).
 //
-// Register offsets and bit layouts are architectural (Arm IHI 0069,
-// GICv3/v4 Architecture Specification); only GICD_BASE / GICR_BASE come
+// Register offsets and bit layouts come from the shared architecture
+// header (nova/arch/gicv3_regs.h); only GICD_BASE / GICR_BASE come
 // from the board memory map. Single-PE bring-up only — Phase 9 (SMP)
 // generalizes the per-CPU redistributor lookup.
 //
@@ -12,6 +12,7 @@
 // is given next to each access.
 
 #include "board.hpp"
+#include "nova/arch/gicv3_regs.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -19,19 +20,18 @@
 namespace nova::board::qemu_virt::gicv3 {
 
 // --- Distributor (GICD_BASE + offset) ---
-inline constexpr uintptr_t kGicdCtlr           = 0x0;
-inline constexpr uint32_t  kGicdCtlrEnableGrp1 = 1U << 1; // Group 1 forwarding
-inline constexpr uint32_t  kGicdCtlrAre        = 1U << 4; // affinity routing
+inline constexpr uintptr_t kGicdCtlr           = NOVA_GICD_CTLR;
+inline constexpr uint32_t  kGicdCtlrEnableGrp1 = NOVA_GICD_CTLR_ENABLE_GRP1;
+inline constexpr uint32_t  kGicdCtlrAre        = NOVA_GICD_CTLR_ARE;
 
 // --- Redistributor, RD_base frame (GICR_BASE + offset) ---
-inline constexpr uintptr_t kGicrWaker               = 0x14;
-inline constexpr uint32_t  kGicrWakerProcessorSleep = 1U << 1;
-inline constexpr uint32_t  kGicrWakerChildrenAsleep = 1U << 2;
+inline constexpr uintptr_t kGicrWaker               = NOVA_GICR_WAKER;
+inline constexpr uint32_t  kGicrWakerProcessorSleep = NOVA_GICR_WAKER_PROCESSOR_SLEEP;
+inline constexpr uint32_t  kGicrWakerChildrenAsleep = NOVA_GICR_WAKER_CHILDREN_ASLEEP;
 
 // --- Redistributor, SGI_base frame (RD_base + 64 KiB + offset) ---
-inline constexpr uintptr_t kGicrSgiFrame   = 0x10000;
-inline constexpr uintptr_t kGicrIgroupr0   = kGicrSgiFrame + 0x80;  // SGI/PPI group select
-inline constexpr uintptr_t kGicrIsenabler0 = kGicrSgiFrame + 0x100; // SGI/PPI enable set
+inline constexpr uintptr_t kGicrIgroupr0   = NOVA_GICR_IGROUPR0;   // SGI/PPI group select
+inline constexpr uintptr_t kGicrIsenabler0 = NOVA_GICR_ISENABLER0; // SGI/PPI enable set
 
 inline auto mmio32(uintptr_t addr) noexcept -> volatile uint32_t* {
   return reinterpret_cast<volatile uint32_t*>(addr);

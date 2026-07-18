@@ -18,7 +18,7 @@
 // NOLINTBEGIN(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
 /* QEMU virt: RAM starts at 1 GiB. The hypervisor image + stack must fit
- * in this budget; guest windows (nova/guest_layout.h) live above it. */
+ * in this budget; guest windows (nova/abi/guest_layout.h) live above it. */
 #define NOVA_BOARD_RAM_BASE 0x40000000
 #define NOVA_BOARD_RAM_SIZE 0x08000000 /* 128 MiB */
 

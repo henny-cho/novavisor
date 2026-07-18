@@ -42,7 +42,7 @@ add_link_options(-nostdlib -static -Wl,--build-id=none)
 
 set(DEMO_COMMON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/common)
 # Hypervisor source root, for the ABI headers shared with the
-# hypervisor (nova/hvc_abi.h, nova/guest_layout.h).
+# hypervisor (nova/abi/hvc_abi.h, nova/abi/guest_layout.h).
 set(NOVA_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
 # Shared startup + linker fragments. Every demo links against these.
@@ -52,7 +52,7 @@ add_library(demo_common OBJECT
 target_include_directories(demo_common PUBLIC ${DEMO_COMMON_DIR}/include ${NOVA_ROOT})
 
 # The guest linker script is preprocessed from a template so its memory
-# window comes from nova/guest_layout.h — the same single source the
+# window comes from nova/abi/guest_layout.h — the same single source the
 # hypervisor's Stage 2 map uses. -P strips linemarkers; -x c treats the
 # .ld.S template as C for the preprocessor only.
 set(DEMO_LINKER_SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/linker.ld)
@@ -60,7 +60,7 @@ add_custom_command(
     OUTPUT ${DEMO_LINKER_SCRIPT}
     COMMAND ${CMAKE_C_COMPILER} -E -P -x c -I${NOVA_ROOT}
             ${DEMO_COMMON_DIR}/linker.ld.S -o ${DEMO_LINKER_SCRIPT}
-    DEPENDS ${DEMO_COMMON_DIR}/linker.ld.S ${NOVA_ROOT}/nova/guest_layout.h
+    DEPENDS ${DEMO_COMMON_DIR}/linker.ld.S ${NOVA_ROOT}/nova/abi/guest_layout.h
     COMMENT "Preprocessing demo guest linker script"
 )
 add_custom_target(demo_linker_script DEPENDS ${DEMO_LINKER_SCRIPT})

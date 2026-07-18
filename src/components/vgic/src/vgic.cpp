@@ -10,7 +10,7 @@
 #include "components/vgic/include/vgic_model.hpp"
 #include "hal/console.hpp"
 #include "hal/gic.hpp"
-#include "nova/guest.hpp"
+#include "nova/abi/guest.hpp"
 
 #include <array>
 #include <cstddef>

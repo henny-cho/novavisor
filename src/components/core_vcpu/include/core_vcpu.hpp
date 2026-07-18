@@ -15,8 +15,8 @@
 // Entries past [0] stay kOff until a guest issues HVC_VM_START.
 
 #include "components/trap_handler/include/trap_handler.hpp"
-#include "nova/guest.hpp"
-#include "nova/trap_context.hpp"
+#include "nova/abi/guest.hpp"
+#include "nova/arch/trap_context.hpp"
 
 #include <cib/top.hpp>
 #include <cstddef>

@@ -1,7 +1,7 @@
 // NovaVisor demo HVC helpers.
 //
 // Inline stubs for the NovaVisor guest hypercall ABI. Shared by every
-// demo guest. Function IDs come from nova/hvc_abi.h — the single source
+// demo guest. Function IDs come from nova/abi/hvc_abi.h — the single source
 // shared with the hypervisor's dispatcher (components/demo_hvc).
 //
 // Function ID lives in x0. Arguments in x1..x6. Return (if any) in x0.
@@ -9,7 +9,7 @@
 #ifndef NOVAVISOR_DEMO_HVC_H
 #define NOVAVISOR_DEMO_HVC_H
 
-#include "nova/hvc_abi.h"
+#include "nova/abi/hvc_abi.h"
 
 #include <stddef.h>
 #include <stdint.h>

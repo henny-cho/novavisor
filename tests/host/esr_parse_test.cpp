@@ -1,12 +1,12 @@
 // tests/host/esr_parse_test.cpp
 //
-// Host-side GTest suite for ESR_EL2 parsing utilities (nova/esr.hpp)
-// and TrapContext layout assertions (nova/trap_context.hpp).
+// Host-side GTest suite for ESR_EL2 parsing utilities (nova/arch/esr.hpp)
+// and TrapContext layout assertions (nova/arch/trap_context.hpp).
 //
 // Depends only on <cstdint> — no bare-metal headers required.
 
-#include "nova/esr.hpp"
-#include "nova/trap_context.hpp"
+#include "nova/arch/esr.hpp"
+#include "nova/arch/trap_context.hpp"
 
 #include <gtest/gtest.h>
 
