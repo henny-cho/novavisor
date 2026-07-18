@@ -44,9 +44,15 @@ namespace {
 // The guest unmasks I itself once its vector table is installed.
 inline constexpr std::uint64_t kSpsrEl1h = 0x3C5ULL;
 
+// Preemption quantum. Converted to counter ticks at init from the
+// platform clock; board-specific tuning waits for a second board
+// (single-source trigger discipline).
+inline constexpr std::uint64_t kSliceMs = 10;
+
 std::array<Vcpu, kMaxGuests> g_vcpus;
-std::size_t                  g_count   = 0;
-std::size_t                  g_current = 0;
+std::size_t                  g_count       = 0;
+std::size_t                  g_current     = 0;
+std::uint64_t                g_slice_ticks = 0;
 
 auto states() noexcept -> std::array<sched::State, kMaxGuests> {
   std::array<sched::State, kMaxGuests> s{};
@@ -60,6 +66,8 @@ auto pick_next() noexcept -> std::size_t {
   const auto s = states();
   return sched::pick_next(std::span{s.data(), g_count}, g_current);
 }
+
+void reschedule_slice() noexcept;
 
 // Reset a VCPU to its descriptor's boot state. GP registers are zeroed
 // so no EL2 (or previous-guest) values leak into a fresh guest.
@@ -97,6 +105,7 @@ void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
 
   next.state = sched::State::kRunning;
   g_current  = next_idx;
+  reschedule_slice();
 }
 
 // Soft-timer callback: the mirrored CNTV deadline of a blocked VCPU
@@ -105,6 +114,27 @@ void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
 // physical PPI (single delivery path, no duplication).
 void on_cntv_wake(TrapContext* /*ctx*/, std::uint64_t index) noexcept {
   wake(static_cast<std::size_t>(index));
+}
+
+void on_slice(TrapContext* ctx, std::uint64_t arg) noexcept;
+
+// Keep the preemption slice armed exactly while the resident VCPU has
+// a runnable competitor. Re-evaluated at every ready-set change:
+// switch-in, wake, VM start, and slice expiry itself.
+void reschedule_slice() noexcept {
+  const auto s = states();
+  if (sched::slice_needed(std::span{s.data(), g_count})) {
+    soft_timer::arm(soft_timer::kSlotSlice, hyp_timer::now() + g_slice_ticks, &on_slice, 0);
+  } else {
+    soft_timer::cancel(soft_timer::kSlotSlice);
+  }
+}
+
+// Slice expiry (runs in soft_timer's IRQ drain, HVC-identical frame
+// swap): round-robin away from the resident VCPU.
+void on_slice(TrapContext* ctx, std::uint64_t /*arg*/) noexcept {
+  yield_current(ctx);
+  reschedule_slice(); // yield may have found nobody — re-arm or park
 }
 
 // Leave the current VCPU as its caller marked it (kBlocked/kOff) and
@@ -119,6 +149,7 @@ void schedule_out(TrapContext* live) noexcept {
       if (next == g_current) {
         // Woke itself while idling — resume without a frame swap.
         g_vcpus[g_current].state = sched::State::kRunning;
+        reschedule_slice();
       } else {
         switch_to(live, next);
       }
@@ -153,6 +184,7 @@ void init() noexcept {
     seed(i, guests[i]);
   }
   g_vcpus[0].state = sched::State::kReady;
+  g_slice_ticks    = hyp_timer::freq() * kSliceMs / 1000U;
 }
 
 [[noreturn]] void enter_guest() noexcept {
@@ -191,6 +223,7 @@ void wake(std::size_t index) noexcept {
   }
   g_vcpus[index].state = sched::State::kReady;
   soft_timer::cancel(soft_timer::kSlotCntvWake + index);
+  reschedule_slice(); // the resident VCPU just gained a competitor
 }
 
 auto start_vm(std::size_t index) noexcept -> bool {
@@ -199,6 +232,7 @@ auto start_vm(std::size_t index) noexcept -> bool {
   }
   seed(index, guest_table()[index]);
   g_vcpus[index].state = sched::State::kReady;
+  reschedule_slice(); // the resident VCPU just gained a competitor
   return true;
 }
 
