@@ -41,9 +41,9 @@ add_compile_options(
 add_link_options(-nostdlib -static -Wl,--build-id=none)
 
 set(DEMO_COMMON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/common)
-# Repo root, for the ABI headers shared with the hypervisor
-# (nova/hvc_abi.h, nova/guest_layout.h).
-set(NOVA_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
+# Hypervisor source root, for the ABI headers shared with the
+# hypervisor (nova/hvc_abi.h, nova/guest_layout.h).
+set(NOVA_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
 # Shared startup + linker fragments. Every demo links against these.
 add_library(demo_common OBJECT

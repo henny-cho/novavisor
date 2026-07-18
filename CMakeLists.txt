@@ -101,8 +101,8 @@ if(CMAKE_CROSSCOMPILING)
     )
 
     # HAL (each owns its own CMakeLists.txt).
-    add_subdirectory(hal/armv8_aarch64)
-    add_subdirectory(hal/board_qemu_virt)
+    add_subdirectory(src/hal/armv8_aarch64)
+    add_subdirectory(src/hal/board_qemu_virt)
 
     # Components — one add_subdirectory and one link entry per name.
     # Only components composed in projects/*/nexus.hpp belong here; idle
@@ -121,17 +121,17 @@ if(CMAKE_CROSSCOMPILING)
         ivc
     )
     foreach(component IN LISTS NOVA_COMPONENTS)
-        add_subdirectory(components/${component})
+        add_subdirectory(src/components/${component})
     endforeach()
 
     add_executable(novavisor.elf
-        projects/qemu_virt_arm64/main.cpp
+        src/projects/qemu_virt_arm64/main.cpp
         # Defines nova::guest_table() — the project-side injection point
         # consumed by core_mmu/core_vcpu via nova/guest.hpp.
-        projects/qemu_virt_arm64/guest_config.cpp
+        src/projects/qemu_virt_arm64/guest_config.cpp
     )
 
-    target_include_directories(novavisor.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_include_directories(novavisor.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
     target_link_libraries(novavisor.elf PRIVATE
         hal_armv8_aarch64
