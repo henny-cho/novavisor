@@ -98,11 +98,16 @@ struct core_vcpu_component {
   // Claims HVC_YIELD and HVC_VM_START.
   static void handle_hvc(HvcCall* call) noexcept;
 
+  // Unrecoverable guest fault: retire the faulting VCPU, keep the rest
+  // of the machine running.
+  static void handle_guest_fault(GuestFaultCall* call) noexcept;
+
   constexpr static auto INIT  = flow::action<"core_vcpu_init">([]() noexcept { vcpu::init(); });
   constexpr static auto ENTER = flow::action<"core_vcpu_enter">([]() noexcept { vcpu::enter_guest(); });
 
   constexpr static auto config = cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<cib::MainLoop>(*ENTER),
-                                             cib::extend<HvcService>(&core_vcpu_component::handle_hvc));
+                                             cib::extend<HvcService>(&core_vcpu_component::handle_hvc),
+                                             cib::extend<GuestFaultService>(&core_vcpu_component::handle_guest_fault));
 };
 
 } // namespace nova

@@ -86,6 +86,62 @@ void dispatch_hvc(TrapContext* ctx) noexcept {
   }
 }
 
+// Escalate an unrecoverable guest fault. When a subscriber claims it,
+// it has retired the faulting VCPU and swapped the live frame to the
+// next runnable one — returning resumes that guest. Unclaimed means
+// nobody owns VM lifecycles: stop the machine.
+void dispatch_guest_fault(TrapContext* ctx) noexcept {
+  GuestFaultCall call{.ctx = ctx, .handled = false};
+  cib::service<GuestFaultService>(&call);
+  if (!call.handled) {
+    halt();
+  }
+}
+
+// Stage 2 Data Abort from the guest: decode the syndrome and emulate
+// the access through MmioService. Anything without a full syndrome
+// (ISV=0: load/store pair, writeback, ...) or that is not a plain
+// translation fault is not emulatable and faults the VM.
+void dispatch_data_abort(TrapContext* ctx) noexcept {
+  const auto da = esr::parse_data_abort(ctx->esr);
+  if (!da.isv || da.s1ptw || !esr::is_translation_fault(da.dfsc)) {
+    console::write("[trap_handler] unemulatable guest data abort\n");
+    dump_trap_context(ctx);
+    dispatch_guest_fault(ctx);
+    return;
+  }
+
+  std::uint64_t hpfar = 0;
+  __asm__ volatile("mrs %0, hpfar_el2" : "=r"(hpfar));
+
+  MmioCall call{.ctx     = ctx,
+                .ipa     = esr::fault_ipa(hpfar, ctx->far),
+                .size    = da.size,
+                .write   = da.write,
+                .value   = 0,
+                .handled = false};
+  if (da.write && da.srt != esr::kSrtZeroReg) {
+    call.value = esr::extend_mmio_read(ctx->x[da.srt], da.size, false, true); // truncate to size
+  }
+  cib::service<MmioService>(&call);
+
+  if (!call.handled) {
+    console::write("[trap_handler] unclaimed MMIO access at IPA=0x");
+    console::write_hex64(call.ipa);
+    console::write("\n");
+    dump_trap_context(ctx);
+    dispatch_guest_fault(ctx);
+    return;
+  }
+
+  if (!da.write && da.srt != esr::kSrtZeroReg) {
+    ctx->x[da.srt] = esr::extend_mmio_read(call.value, da.size, da.sign_extend, da.sixty_four);
+  }
+  // Unlike HVC, a Data Abort's ELR points AT the faulting instruction:
+  // step over it now that the access has been emulated (A64 = 4 bytes).
+  ctx->elr += 4;
+}
+
 } // namespace
 
 void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
@@ -94,8 +150,9 @@ void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
     dispatch_hvc(ctx);
     return;
 
-    // Phase 6: case ExceptionClass::WFx → WfxService (guest idle).
-    // Phase 8: case ExceptionClass::DATA_ABORT_LOWER → MMIO emulation.
+  case esr::ExceptionClass::DATA_ABORT_LOWER:
+    dispatch_data_abort(ctx);
+    return;
 
   default:
     console::write("[NOVA PANIC] Unexpected lower-EL sync exception\n");

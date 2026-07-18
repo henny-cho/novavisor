@@ -180,6 +180,14 @@ auto post_virq(std::size_t index, std::uint32_t vintid) noexcept -> bool {
 
 } // namespace vcpu
 
+void core_vcpu_component::handle_guest_fault(GuestFaultCall* call) noexcept {
+  call->handled = true;
+  console::write("[core_vcpu] guest fault — stopping VCPU ");
+  console::write_dec64(vcpu::current_index());
+  console::write("\n");
+  vcpu::exit_current(call->ctx);
+}
+
 void core_vcpu_component::handle_hvc(HvcCall* call) noexcept {
   switch (call->func_id) {
   case NOVA_HVC_FN_YIELD:

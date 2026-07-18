@@ -56,6 +56,43 @@ struct HvcCall {
 struct HvcService : public callback::service<HvcCall*> {};
 
 // ---------------------------------------------------------------------------
+// MmioService
+//
+// One emulatable guest MMIO access (Stage 2 translation fault with a
+// valid syndrome), dispatched to every subscriber. Subscribers claim
+// the IPA ranges they emulate: act, set `handled = true`, and for reads
+// leave the raw device value in `value` — the dispatcher performs the
+// architectural widening into the guest register and advances ELR past
+// the faulting instruction. Unclaimed accesses are dumped and escalate
+// to GuestFaultService.
+// ---------------------------------------------------------------------------
+struct MmioCall {
+  TrapContext*  ctx     = nullptr;
+  std::uint64_t ipa     = 0;
+  std::uint32_t size    = 0; // access size in bytes (1/2/4/8)
+  bool          write   = false;
+  std::uint64_t value   = 0; // write: guest data (truncated to size); read: result
+  bool          handled = false;
+};
+
+struct MmioService : public callback::service<MmioCall*> {};
+
+// ---------------------------------------------------------------------------
+// GuestFaultService
+//
+// Escalation point for unrecoverable guest faults (unclaimed MMIO,
+// unemulatable aborts). The subscriber that owns VM lifecycles
+// (core_vcpu) sets `handled` and retires the offending VCPU — other
+// VMs keep running. With no subscriber the dispatcher halts.
+// ---------------------------------------------------------------------------
+struct GuestFaultCall {
+  TrapContext* ctx     = nullptr;
+  bool         handled = false;
+};
+
+struct GuestFaultService : public callback::service<GuestFaultCall*> {};
+
+// ---------------------------------------------------------------------------
 // trap_handler_component
 // ---------------------------------------------------------------------------
 // Dump every TrapContext register to the console. Shared by all fatal
@@ -67,11 +104,12 @@ struct trap_handler_component {
   // Registered at compile time; invoked by el2_trap_lower_sync().
   static void handle_lower_sync(TrapContext* ctx) noexcept;
 
-  // Exports both services and registers the default sync trap handler.
-  // HvcService has no default subscriber; components (demo_hvc, ivc, ...)
-  // extend it as needed.
+  // Exports the trap services and registers the default sync trap
+  // handler. HvcService / MmioService / GuestFaultService have no
+  // default subscriber; components (demo_hvc, vgic, core_vcpu, ...)
+  // extend them as needed.
   constexpr static auto config =
-      cib::config(cib::exports<EL2SyncTrapService, HvcService>,
+      cib::config(cib::exports<EL2SyncTrapService, HvcService, MmioService, GuestFaultService>,
                   cib::extend<EL2SyncTrapService>(&trap_handler_component::handle_lower_sync));
 };
 
