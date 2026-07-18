@@ -2,17 +2,12 @@
 
 // components/vgic/include/vgic_model.hpp
 //
-// Pure vGICv3 model — no bare-metal runtime dependency, fully
-// host-testable. Two concerns live here:
-//
-//   1. Register emulation: GICD / GICR frame reads and writes operating
-//      on plain state structs. Unknown offsets are reported to the
-//      caller (the component logs them and completes the access RAZ/WI
-//      so uncovered guest accesses are visible, not fatal).
-//   2. Delivery: a per-VCPU software pending bitmap for private
-//      interrupts (SGI/PPI) multiplexed onto a shadow array of ICH list
-//      registers — refill() moves deliverable INTIDs into free LRs in
-//      priority order.
+// Pure vGICv3 register model — no bare-metal runtime dependency, fully
+// host-testable. GICD / GICR frame reads and writes operating on plain
+// state structs. Unknown offsets are reported to the caller (the
+// component logs them and completes the access RAZ/WI so uncovered
+// guest accesses are visible, not fatal). LR injection lives in
+// vgic_delivery.hpp.
 //
 // Model simplifications (deliberate, documented):
 //   - No SPIs: GICD_TYPER advertises 32 INTIDs; SPI registers are
@@ -28,35 +23,11 @@
 #include "nova/arch/gicv3_regs.h"
 
 #include <array>
-#include <cstddef>
 #include <cstdint>
 
 namespace nova::vgic {
 
-inline constexpr std::size_t   kMaxLrs     = 16; // architectural maximum
 inline constexpr std::uint32_t kNumPrivate = 32; // SGI 0..15 + PPI 16..31
-
-// --- ICH_LR<n>_EL2 field encoding (Arm IHI 0069 §9.4.6) --------------------
-
-inline constexpr std::uint64_t kLrStateMask     = 3ULL << 62U; // 00 = inactive
-inline constexpr std::uint64_t kLrStatePending  = 1ULL << 62U;
-inline constexpr std::uint64_t kLrGroup1        = 1ULL << 60U;
-inline constexpr std::uint64_t kLrPriorityShift = 48U;
-inline constexpr std::uint64_t kLrVintidMask    = 0xFFFF'FFFFULL;
-
-[[nodiscard]] constexpr auto make_lr(std::uint32_t vintid, std::uint8_t priority) noexcept -> std::uint64_t {
-  return kLrStatePending | kLrGroup1 | (static_cast<std::uint64_t>(priority) << kLrPriorityShift) | vintid;
-}
-
-// True while the entry is pending or active — the guest has not
-// finished consuming it.
-[[nodiscard]] constexpr auto lr_in_flight(std::uint64_t lr) noexcept -> bool {
-  return (lr & kLrStateMask) != 0U;
-}
-
-[[nodiscard]] constexpr auto lr_vintid(std::uint64_t lr) noexcept -> std::uint32_t {
-  return static_cast<std::uint32_t>(lr & kLrVintidMask);
-}
 
 // --- Register frame layout ---------------------------------------------------
 // Offsets and bits come from the shared architecture header; only the
@@ -111,19 +82,14 @@ struct DistState {
 // enabled (GICv3 allows SGI enables to be RAO/WI) — hypervisor-injected
 // doorbell SGIs work before the guest ever touches its redistributor.
 // PPIs start disabled: guests enable them through ISENABLER0.
+// `pending` is the ISPENDR0/ICPENDR0 view; delivery drains it into
+// list registers (vgic_delivery.hpp).
 struct RedistState {
   bool                                  asleep     = true;
   std::uint32_t                         igroupr0   = ~0U;
   std::uint32_t                         isenabler0 = 0xFFFFU;
+  std::uint32_t                         pending    = 0; // software pending, not in any LR
   std::array<std::uint8_t, kNumPrivate> prio{};
-};
-
-// Full per-VCPU virtual interrupt state. `lr` shadows the hardware list
-// registers while the VCPU is not resident.
-struct CpuState {
-  RedistState                        redist;
-  std::uint32_t                      pending = 0; // software pending, not in any LR
-  std::array<std::uint64_t, kMaxLrs> lr{};
 };
 
 struct MmioRead {
@@ -181,8 +147,8 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
   return false;
 }
 
-[[nodiscard]] inline auto redist_read(const CpuState& c, std::uint64_t off, std::uint32_t size) noexcept -> MmioRead {
-  const RedistState& r = c.redist;
+[[nodiscard]] inline auto redist_read(const RedistState& r, std::uint64_t off, std::uint32_t size) noexcept
+    -> MmioRead {
   if (off >= kGicrIpriorityr && off + size <= kGicrIpriorityEnd) {
     return {.known = true, .value = detail::prio_read(r.prio, off - kGicrIpriorityr, size)};
   }
@@ -208,7 +174,7 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
     return {.known = true, .value = r.isenabler0};
   case kGicrIspendr0:
   case kGicrIcpendr0:
-    return {.known = true, .value = c.pending};
+    return {.known = true, .value = r.pending};
   case kGicrIcfgr0:
   case kGicrIcfgr1:
     return {.known = true, .value = 0};
@@ -217,9 +183,8 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
   }
 }
 
-[[nodiscard]] inline auto redist_write(CpuState& c, std::uint64_t off, std::uint32_t size, std::uint64_t value) noexcept
-    -> bool {
-  RedistState& r = c.redist;
+[[nodiscard]] inline auto redist_write(RedistState& r, std::uint64_t off, std::uint32_t size,
+                                       std::uint64_t value) noexcept -> bool {
   if (off >= kGicrIpriorityr && off + size <= kGicrIpriorityEnd) {
     detail::prio_write(r.prio, off - kGicrIpriorityr, size, value);
     return true;
@@ -241,10 +206,10 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
     r.isenabler0 &= ~word; // write-1-to-clear
     return true;
   case kGicrIspendr0:
-    c.pending |= word;
+    r.pending |= word;
     return true;
   case kGicrIcpendr0:
-    c.pending &= ~word;
+    r.pending &= ~word;
     return true;
   case kGicrIcfgr0:
   case kGicrIcfgr1:
@@ -252,62 +217,6 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
   default:
     return false;
   }
-}
-
-// --- Delivery -----------------------------------------------------------------
-
-// Pending INTIDs the guest is currently willing to take.
-[[nodiscard]] inline auto deliverable(const CpuState& c) noexcept -> std::uint32_t {
-  return c.pending & c.redist.isenabler0 & c.redist.igroupr0;
-}
-
-[[nodiscard]] inline auto lr_holds(const CpuState& c, std::size_t lr_count, std::uint32_t vintid) noexcept -> bool {
-  for (std::size_t i = 0; i < lr_count; ++i) {
-    if (lr_in_flight(c.lr[i]) && lr_vintid(c.lr[i]) == vintid) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// Move deliverable pending INTIDs into free list registers, highest
-// priority (lowest value, then lowest INTID) first. An INTID already in
-// flight in an LR stays pending — the queued edge is injected once the
-// guest consumes the current one. Returns true when deliverable work
-// remains undelivered (the caller arms the underflow maintenance IRQ).
-inline auto refill(CpuState& c, std::size_t lr_count) noexcept -> bool {
-  constexpr std::uint32_t kPriorityLimit = 0x100; // above every 8-bit priority
-  for (;;) {
-    std::uint32_t       best      = kNumPrivate;
-    std::uint32_t       best_prio = kPriorityLimit;
-    const std::uint32_t cand      = deliverable(c);
-    for (std::uint32_t id = 0; id < kNumPrivate; ++id) {
-      if (((cand >> id) & 1U) == 0U || lr_holds(c, lr_count, id)) {
-        continue;
-      }
-      if (c.redist.prio[id] < best_prio) {
-        best      = id;
-        best_prio = c.redist.prio[id];
-      }
-    }
-    if (best == kNumPrivate) {
-      break; // nothing left that is not already in flight
-    }
-
-    std::size_t slot = lr_count;
-    for (std::size_t i = 0; i < lr_count; ++i) {
-      if (!lr_in_flight(c.lr[i])) {
-        slot = i;
-        break;
-      }
-    }
-    if (slot == lr_count) {
-      return true; // all LRs busy — maintenance IRQ refills later
-    }
-    c.lr[slot] = make_lr(best, c.redist.prio[best]);
-    c.pending &= ~(1U << best);
-  }
-  return deliverable(c) != 0U; // only in-flight duplicates remain
 }
 
 } // namespace nova::vgic

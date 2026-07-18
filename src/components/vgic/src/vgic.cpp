@@ -1,13 +1,13 @@
 // components/vgic/src/vgic.cpp
 //
 // vGICv3 component implementation. All register semantics live in the
-// pure model (vgic_model.hpp); this file only routes MMIO traps,
+// pure model (vgic_model.hpp + vgic_delivery.hpp); this file only routes MMIO traps,
 // maintains residency, and mirrors model state to the hardware virtual
 // CPU interface.
 
 #include "components/vgic/include/vgic.hpp"
 
-#include "components/vgic/include/vgic_model.hpp"
+#include "components/vgic/include/vgic_delivery.hpp"
 #include "hal/console.hpp"
 #include "hal/gic.hpp"
 #include "hal/gic_virt.hpp"
@@ -87,14 +87,14 @@ void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
 void redist_mmio(MmioCall* call, std::uint64_t off) noexcept {
   CpuState& cpu = g_cpu[g_resident];
   if (call->write) {
-    if (redist_write(cpu, off, call->size, call->value)) {
+    if (redist_write(cpu.redist, off, call->size, call->value)) {
       flush(g_resident); // enable/pending changes may unlock queued vIRQs
     } else {
       log_raz_wi("GICR", off);
     }
     return;
   }
-  const MmioRead r = redist_read(cpu, off, call->size);
+  const MmioRead r = redist_read(cpu.redist, off, call->size);
   if (!r.known) {
     log_raz_wi("GICR", off);
   }
@@ -144,7 +144,7 @@ auto post(std::size_t index, std::uint32_t vintid) noexcept -> bool {
   if (vintid >= kNumPrivate) {
     return false; // SPIs are not modeled (GICD_TYPER advertises none)
   }
-  g_cpu[index].pending |= 1U << vintid;
+  g_cpu[index].redist.pending |= 1U << vintid;
   flush(index);
   return true;
 }

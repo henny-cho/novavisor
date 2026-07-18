@@ -2,7 +2,7 @@
 
 // components/vgic/include/vgic.hpp
 //
-// Virtual GICv3 component — glue between the pure model (vgic_model.hpp)
+// Virtual GICv3 component — glue between the pure model (vgic_model.hpp + vgic_delivery.hpp)
 // and the hardware virtual CPU interface:
 //
 //   - Emulates the GICD/GICR frames through MmioService (the frames'
