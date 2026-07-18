@@ -35,13 +35,11 @@ demo/
 │   ├── main.c                   # GICD/GICR programming + native periodic timer
 │   ├── vectors.S                # IRQ handler: ack, re-arm CNTV, EOI
 │   └── manifest.yml
-├── 05_zephyr/                   # Phase 9 (references external Zephyr image)
-├── 06_smp_pingpong/             # Phase 10
-├── 07_linux/                    # Phase 11 (references external Linux kernel)
-├── 08_mixed_workload/           # Phase 12
-├── 09_fault_recovery/           # Phase 13
-├── 10_configurable/             # Phase 14
-└── 11_passthrough/              # Phase 15
+├── 05_preempt/                  # Phase 9 demo — preemptive slice + wfi idle
+├── 06_el1_mmu_fp/               # Phase 10 demo — EL1 MMU + lazy FP/SIMD
+├── 07_lifecycle/                # Phase 11 demo — PSCI reset + watchdog recovery
+├── 08_smp_pingpong/             # Phase 12 demo — two VMs on two physical cores
+└── 09_guest_smp/                # Phase 13 demo — one VM, two vCPUs (PSCI CPU_ON + vSGI)
 ```
 
 ## Hypercall ABI (demo ↔ hypervisor contract)
@@ -73,6 +71,16 @@ Guests on different cores run truly in parallel and can talk through
 the lock-free SPSC rings in the IVC shared page (layout in
 `nova/abi/ivc_ring.h`, helpers in `common/include/guest_ring.h`,
 acquire/release only — no exclusives, safe with the EL1 MMU off).
+
+Guest SMP (Phase 13): the boot slot's VM carries two vCPUs (cores 0
+and 1) and the manifest `vcpus:` field is validated against the
+supported range. A guest identifies its vCPU by MPIDR Aff0, brings the
+sibling up with `psci_cpu_on()` (entry stub in `common/secondary.S` —
+pass the stack top as context_id; BSS is not re-zeroed), programs its
+own redistributor frame (`gicr_wake_at()` — frames are strided per
+vCPU with per-frame GICR_TYPER), and sends IPIs with `icc_send_sgi()`
+— the ICC_SGI1R write is trapped and routed across physical cores.
+`psci_cpu_off()` retires one vCPU; `psci_affinity_info()` observes it.
 
 Multi-VM notes (Phase 7): every guest links against the same IPA window
 and is loaded at its own PA slot (`load_addr` = `NOVA_GUEST_IPA_BASE +

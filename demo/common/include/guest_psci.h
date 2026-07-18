@@ -34,4 +34,33 @@ static inline void psci_system_reset(void) {
   __builtin_unreachable();
 }
 
+// Power on a sibling vCPU (target_mpidr Aff0 = vCPU index). The target
+// enters at `entry` with x0 = context_id and SP undefined — pass the
+// stack top as context_id and let the entry stub install it
+// (common/secondary.S). Returns PSCI_SUCCESS / ALREADY_ON / INVALID.
+static inline int64_t psci_cpu_on(uint64_t target_mpidr, uint64_t entry, uint64_t context_id) {
+  register uint64_t x0 __asm__("x0") = PSCI_FN_CPU_ON;
+  register uint64_t x1 __asm__("x1") = target_mpidr;
+  register uint64_t x2 __asm__("x2") = entry;
+  register uint64_t x3 __asm__("x3") = context_id;
+  __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x3) : "memory");
+  return (int64_t)x0;
+}
+
+// Retire the calling vCPU only — its siblings keep running. Does not
+// return.
+static inline void psci_cpu_off(void) {
+  register uint64_t x0 __asm__("x0") = PSCI_FN_CPU_OFF;
+  __asm__ volatile("hvc #0" : "+r"(x0)::"memory");
+  __builtin_unreachable();
+}
+
+// Power state of a sibling vCPU: PSCI_AFFINITY_ON / PSCI_AFFINITY_OFF.
+static inline int64_t psci_affinity_info(uint64_t target_mpidr) {
+  register uint64_t x0 __asm__("x0") = PSCI_FN_AFFINITY_INFO;
+  register uint64_t x1 __asm__("x1") = target_mpidr;
+  __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
+  return (int64_t)x0;
+}
+
 #endif // NOVAVISOR_GUEST_PSCI_H

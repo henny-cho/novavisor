@@ -32,21 +32,52 @@ static inline void gicd_enable_group1(void) {
   *gic_reg32(GICD_BASE + NOVA_GICD_CTLR) = NOVA_GICD_CTLR_ARE | NOVA_GICD_CTLR_ENABLE_GRP1;
 }
 
-// Redistributor wake handshake: clear ProcessorSleep, wait for
-// ChildrenAsleep to drop.
-static inline void gicr_wake(void) {
-  volatile uint32_t* waker = gic_reg32(GICR_BASE + NOVA_GICR_WAKER);
+// A vCPU's redistributor frame base: frames are strided per vCPU
+// (SMP guests), and each vCPU programs its own (index = MPIDR Aff0).
+static inline unsigned long gicr_frame(unsigned vcpu) {
+  return GICR_BASE + (unsigned long)vcpu * NOVA_GICR_FRAME_SIZE;
+}
+
+// This vCPU's index within the VM (virtual MPIDR Aff0).
+static inline unsigned my_vcpu(void) {
+  uint64_t mpidr;
+  __asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
+  return (unsigned)(mpidr & 0xFFU);
+}
+
+// Redistributor wake handshake on one frame: clear ProcessorSleep,
+// wait for ChildrenAsleep to drop.
+static inline void gicr_wake_at(unsigned vcpu) {
+  volatile uint32_t* waker = gic_reg32(gicr_frame(vcpu) + NOVA_GICR_WAKER);
   *waker                   = *waker & ~NOVA_GICR_WAKER_PROCESSOR_SLEEP;
   while ((*waker & NOVA_GICR_WAKER_CHILDREN_ASLEEP) != 0U) {
   }
 }
 
-// Put one SGI/PPI in Group 1 at a mid priority and enable it.
+static inline void gicr_wake(void) {
+  gicr_wake_at(0);
+}
+
+// Put one SGI/PPI in Group 1 at a mid priority and enable it, on one
+// vCPU's frame.
+static inline void gicr_enable_at(unsigned vcpu, unsigned intid) {
+  const unsigned long base                                = gicr_frame(vcpu);
+  volatile uint32_t*  igroupr0                            = gic_reg32(base + NOVA_GICR_IGROUPR0);
+  *igroupr0                                               = *igroupr0 | (1U << intid);
+  *gic_reg32(base + NOVA_GICR_IPRIORITYR + (intid & ~3U)) = 0x80808080U;
+  *gic_reg32(base + NOVA_GICR_ISENABLER0)                 = 1U << intid; // write-1-to-set
+}
+
 static inline void gicr_enable(unsigned intid) {
-  volatile uint32_t* igroupr0                                  = gic_reg32(GICR_BASE + NOVA_GICR_IGROUPR0);
-  *igroupr0                                                    = *igroupr0 | (1U << intid);
-  *gic_reg32(GICR_BASE + NOVA_GICR_IPRIORITYR + (intid & ~3U)) = 0x80808080U;
-  *gic_reg32(GICR_BASE + NOVA_GICR_ISENABLER0)                 = 1U << intid; // write-1-to-set
+  gicr_enable_at(0, intid);
+}
+
+// Generate a Group 1 SGI toward sibling vCPUs (one TargetList bit per
+// vCPU index). The write is trapped (ICH_HCR.TC) and routed by the
+// hypervisor — this is the guest's cross-vCPU IPI.
+static inline void icc_send_sgi(uint32_t target_list, uint32_t intid) {
+  const uint64_t v = ((uint64_t)(intid & 0xFU) << 24) | (target_list & 0xFFFFU);
+  __asm__ volatile("dsb ishst\n\tmsr S3_0_C12_C11_5, %0\n\tisb" ::"r"(v)); // ICC_SGI1R_EL1
 }
 
 // CPU interface (ICV view): accept all priorities, enable Group 1.

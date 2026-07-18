@@ -163,6 +163,10 @@ def build_qemu_cmd(elf: Path, demo_name: str, demo_build: Path, manifest: dict) 
     for guest in manifest.get("guests", []):
         binary = resolve_guest_binary(demo_name, demo_build, manifest, guest)
         addr = guest["load_addr"]
+        vcpus = guest.get("vcpus", 1)
+        if not 1 <= vcpus <= 2:  # kMaxVcpusPerVm (nova/abi/guest.hpp)
+            raise SystemExit(f"[demo_runner] {demo_name}: guest '{guest.get('name')}' asks for "
+                             f"{vcpus} vcpus (supported: 1..2)")
         cmd += ["-device", f"loader,file={binary},addr={addr:#x},force-raw=on"]
     return cmd
 
