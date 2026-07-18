@@ -25,6 +25,7 @@
 #include "components/core_timer/include/core_timer.hpp"
 #include "components/core_vcpu/include/core_vcpu.hpp"
 #include "components/demo_hvc/include/demo_hvc.hpp"
+#include "components/ivc/include/ivc.hpp"
 #include "components/trap_handler/include/trap_handler.hpp"
 
 #include <cib/top.hpp>
@@ -34,7 +35,7 @@ namespace nova {
 struct nova_project {
   constexpr static auto config =
       cib::components<core_mmu_component, core_gic_component, core_timer_component, boot_msg_component,
-                      trap_handler_component, demo_hvc_component, core_vcpu_component>;
+                      trap_handler_component, demo_hvc_component, ivc_component, core_vcpu_component>;
 };
 
 // nova_top is the concrete cib::top instantiation for this target.

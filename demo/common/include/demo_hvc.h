@@ -20,6 +20,7 @@ enum {
   HVC_EXIT      = NOVA_HVC_FN_EXIT,
   HVC_YIELD     = NOVA_HVC_FN_YIELD,
   HVC_HEARTBEAT = NOVA_HVC_FN_HEARTBEAT,
+  HVC_VM_START  = NOVA_HVC_FN_VM_START,
   // IVC range (Phase 7)
   HVC_IVC_DOORBELL = NOVA_HVC_FN_IVC_DOORBELL,
   // Timer range (Phase 6)
@@ -65,6 +66,24 @@ static inline void hvc_heartbeat(uint64_t vm_id) {
 static inline uint64_t hvc_timer_set(uint64_t ticks) {
   register uint64_t x0 __asm__("x0") = HVC_TIMER_SET;
   register uint64_t x1 __asm__("x1") = ticks;
+  __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
+  return x0;
+}
+
+// Start a not-yet-running VM (guest_table index). The new VM runs when
+// someone yields. Returns 0 on success.
+static inline uint64_t hvc_vm_start(uint64_t vm_index) {
+  register uint64_t x0 __asm__("x0") = HVC_VM_START;
+  register uint64_t x1 __asm__("x1") = vm_index;
+  __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
+  return x0;
+}
+
+// Ring the doorbell of another VM: injects the doorbell vIRQ
+// (vINTID NOVA_IVC_DOORBELL_VINTID) into it. Returns 0 on success.
+static inline uint64_t hvc_ivc_doorbell(uint64_t vm_index) {
+  register uint64_t x0 __asm__("x0") = HVC_IVC_DOORBELL;
+  register uint64_t x1 __asm__("x1") = vm_index;
   __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
   return x0;
 }

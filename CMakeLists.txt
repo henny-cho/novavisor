@@ -117,6 +117,7 @@ if(CMAKE_CROSSCOMPILING)
         core_timer
         core_vcpu
         demo_hvc
+        ivc
     )
     foreach(component IN LISTS NOVA_COMPONENTS)
         add_subdirectory(components/${component})
