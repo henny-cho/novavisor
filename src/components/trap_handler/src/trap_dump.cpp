@@ -2,9 +2,9 @@
 //
 // TrapContext register dump — shared by every fatal trap path.
 
-#include "components/trap_handler/include/trap_handler.hpp"
 #include "hal/console.hpp"
 #include "nova/arch/trap_context.hpp"
+#include "trap_handler/trap_handler.hpp"
 
 #include <cstddef>
 

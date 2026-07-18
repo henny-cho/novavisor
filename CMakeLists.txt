@@ -123,46 +123,8 @@ if(CMAKE_CROSSCOMPILING)
         add_subdirectory(src/components/${component})
     endforeach()
 
-    add_executable(novavisor.elf
-        src/projects/qemu_virt_arm64/main.cpp
-        # Defines nova::guest_table() — the project-side injection point
-        # consumed by core_mmu/core_vcpu via nova/abi/guest.hpp.
-        src/projects/qemu_virt_arm64/guest_config.cpp
-    )
-
-    target_include_directories(novavisor.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-
-    target_link_libraries(novavisor.elf PRIVATE
-        hal_arch_aarch64
-        hal_board_qemu_virt
-        ${NOVA_COMPONENTS}
-        # Frameworks
-        cib etl
-        nova_warnings
-        # Bare-metal C runtime (strlen, memcpy, etc.) from newlib.
-        # --start-group/--end-group resolves libgcc↔libc circular deps —
-        # otherwise strlen references from char_traits::length only resolve
-        # at -O2 where the call is inlined. No dynamic allocation introduced.
-        -Wl,--start-group -lgcc -lc -Wl,--end-group
-    )
-
-    target_link_options(novavisor.elf PRIVATE
-        -T ${HAL_ARCH_LINKER_SCRIPT}
-        -nostartfiles
-        -nostdlib
-        -Wl,--gc-sections
-    )
-    # The script is generated (linker.ld.S template + board_layout.h);
-    # make sure it exists before linking and relink when it changes.
-    add_dependencies(novavisor.elf hal_arch_linker_script)
-    set_target_properties(novavisor.elf PROPERTIES LINK_DEPENDS ${HAL_ARCH_LINKER_SCRIPT})
-
-    # Raw flat binary required by some QEMU boot modes.
-    add_custom_command(TARGET novavisor.elf POST_BUILD
-        COMMAND ${CMAKE_OBJCOPY} -O binary novavisor.elf novavisor.bin
-        BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/novavisor.bin
-        COMMENT "Generating flat binary novavisor.bin"
-    )
+    # Composition root: nexus + guest table + the novavisor.elf target.
+    add_subdirectory(src/projects/qemu_virt_arm64)
 
 else()
     # ===========================================================================
@@ -181,12 +143,15 @@ else()
         )
     endif()
 
-    nova_add_host_test(esr_parse_test)         # nova/arch/esr.hpp + trap_context.hpp
-    nova_add_host_test(data_abort_test)        # nova/arch/data_abort.hpp MMIO decode
-    nova_add_host_test(fmt_test)               # nova/fmt.hpp integer formatters
-    nova_add_host_test(stage2_descriptor_test) # core_mmu Stage 2 descriptor encoding
-    nova_add_host_test(stage2_builder_test)    # core_mmu Stage 2 identity-map builder
-    nova_add_host_test(vgic_model_test)        # vgic GICD/GICR register model
-    nova_add_host_test(vgic_delivery_test)     # vgic pending → LR multiplexing
+    # Foundation-tree tests (tests/host/).
+    nova_add_host_test(esr_parse_test)  # nova/arch/esr.hpp + trap_context.hpp
+    nova_add_host_test(data_abort_test) # nova/arch/data_abort.hpp MMIO decode
+    nova_add_host_test(fmt_test)        # nova/fmt.hpp integer formatters
+
+    # Component tests (src/components/<name>/test/).
+    nova_add_component_test(core_mmu stage2_descriptor_test) # Stage 2 descriptor encoding
+    nova_add_component_test(core_mmu stage2_builder_test)    # Stage 2 identity-map builder
+    nova_add_component_test(vgic vgic_model_test)            # GICD/GICR register model
+    nova_add_component_test(vgic vgic_delivery_test)         # pending → LR multiplexing
 
 endif() # CMAKE_CROSSCOMPILING

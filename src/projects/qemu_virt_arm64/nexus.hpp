@@ -20,15 +20,15 @@
 // WFI idle loop with EL1 guest execution. Phase 11 may reintroduce it
 // as a watchdog fallback.
 
-#include "components/boot_msg/include/boot_msg.hpp"
-#include "components/core_gic/include/core_gic.hpp"
-#include "components/core_mmu/include/core_mmu.hpp"
-#include "components/core_timer/include/core_timer.hpp"
-#include "components/core_vcpu/include/core_vcpu.hpp"
-#include "components/demo_hvc/include/demo_hvc.hpp"
-#include "components/ivc/include/ivc.hpp"
-#include "components/trap_handler/include/trap_handler.hpp"
-#include "components/vgic/include/vgic.hpp"
+#include "boot_msg/boot_msg.hpp"
+#include "core_gic/core_gic.hpp"
+#include "core_mmu/core_mmu.hpp"
+#include "core_timer/core_timer.hpp"
+#include "core_vcpu/core_vcpu.hpp"
+#include "demo_hvc/demo_hvc.hpp"
+#include "ivc/ivc.hpp"
+#include "trap_handler/trap_handler.hpp"
+#include "vgic/vgic.hpp"
 
 #include <cib/top.hpp>
 

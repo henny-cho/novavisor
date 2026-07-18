@@ -7,12 +7,12 @@
 // Per-class dispatch lives in its own TU (data_abort.cpp); the register
 // dump in trap_dump.cpp.
 
-#include "components/nova_panic/include/nova_panic.hpp"
-#include "components/trap_handler/include/trap_handler.hpp"
-#include "components/trap_handler/src/dispatch.hpp"
+#include "dispatch.hpp"
 #include "hal/console.hpp"
 #include "nova/arch/esr.hpp"
 #include "nova/arch/trap_context.hpp"
+#include "nova_panic/nova_panic.hpp"
+#include "trap_handler/trap_handler.hpp"
 
 #include <cib/top.hpp>
 #include <cstdint>

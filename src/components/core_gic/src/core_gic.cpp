@@ -3,7 +3,7 @@
 // el2_trap_irq — called from vec.S (+0x480 lower-EL IRQ vector) whenever
 // a physical IRQ is taken to EL2 while the guest runs (HCR_EL2.IMO=1).
 
-#include "components/core_gic/include/core_gic.hpp"
+#include "core_gic/core_gic.hpp"
 
 #include "hal/console.hpp"
 #include "hal/gic.hpp"

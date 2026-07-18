@@ -7,7 +7,7 @@
 // hypervisor uses the same header to program VTTBR_EL2-backed tables, so any
 // regression here would corrupt guest memory translation in silent ways.
 
-#include "components/core_mmu/include/stage2_descriptor.hpp"
+#include "core_mmu/stage2_descriptor.hpp"
 
 #include <gtest/gtest.h>
 

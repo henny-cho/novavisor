@@ -1,6 +1,6 @@
 #pragma once
 
-// components/ivc/include/ivc.hpp
+// components/ivc/include/ivc/ivc.hpp
 //
 // Inter-VM communication doorbell.
 //
@@ -10,7 +10,7 @@
 // vcpu::post_virq. The message protocol inside the shared page is
 // entirely guest-owned (demo/common/include/ivc_shm.h).
 
-#include "components/trap_handler/include/hvc.hpp"
+#include "trap_handler/hvc.hpp"
 
 #include <cib/top.hpp>
 

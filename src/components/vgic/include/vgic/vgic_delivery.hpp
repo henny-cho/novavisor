@@ -1,6 +1,6 @@
 #pragma once
 
-// components/vgic/include/vgic_delivery.hpp
+// components/vgic/include/vgic/vgic_delivery.hpp
 //
 // Pure vGICv3 delivery logic — no bare-metal runtime dependency, fully
 // host-testable. Multiplexes the per-VCPU pending bitmap (register
@@ -10,7 +10,7 @@
 //
 // Reference: Arm IHI 0069 (GICv3/v4 Architecture Specification).
 
-#include "components/vgic/include/vgic_model.hpp"
+#include "vgic/vgic_model.hpp"
 
 #include <array>
 #include <cstddef>

@@ -1,6 +1,6 @@
 #pragma once
 
-// components/demo_hvc/include/demo_hvc.hpp
+// components/demo_hvc/include/demo_hvc/demo_hvc.hpp
 //
 // Hypervisor-side implementation of the demo guest HVC ABI
 // (see demo/README.md HVC allocation table). Phase 5 implements:
@@ -15,7 +15,7 @@
 // unallocated IDs inside the demo range (trap_handler then reports
 // them as unknown).
 
-#include "components/trap_handler/include/hvc.hpp"
+#include "trap_handler/hvc.hpp"
 
 #include <cib/top.hpp>
 

@@ -1,6 +1,6 @@
 #pragma once
 
-// components/trap_handler/include/mmio.hpp
+// components/trap_handler/include/trap_handler/mmio.hpp
 //
 // MmioService — one emulatable guest MMIO access (Stage 2 translation
 // fault with a valid syndrome), dispatched to every subscriber.

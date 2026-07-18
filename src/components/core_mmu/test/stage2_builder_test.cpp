@@ -8,7 +8,7 @@
 // and the failure modes (pool exhaustion, 1 GiB crossing, overlap,
 // bad alignment).
 
-#include "components/core_mmu/include/stage2_builder.hpp"
+#include "core_mmu/stage2_builder.hpp"
 
 #include <array>
 #include <gtest/gtest.h>

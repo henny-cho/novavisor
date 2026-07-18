@@ -1,6 +1,6 @@
 #pragma once
 
-// components/core_gic/include/core_gic.hpp
+// components/core_gic/include/core_gic/core_gic.hpp
 //
 // GICv3 bring-up and EL2 IRQ dispatch.
 //

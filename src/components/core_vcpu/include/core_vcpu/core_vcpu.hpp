@@ -1,6 +1,6 @@
 #pragma once
 
-// components/core_vcpu/include/core_vcpu.hpp
+// components/core_vcpu/include/core_vcpu/core_vcpu.hpp
 //
 // VCPU state, cooperative scheduler, and EL1 entry component.
 //
@@ -14,11 +14,11 @@
 // Boot: RuntimeStart seeds every VCPU; MainLoop ERETs into VCPU 0.
 // Entries past [0] stay kOff until a guest issues HVC_VM_START.
 
-#include "components/trap_handler/include/guest_fault.hpp"
-#include "components/trap_handler/include/hvc.hpp"
 #include "hal/arch/aarch64/el1_context.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/arch/trap_context.hpp"
+#include "trap_handler/guest_fault.hpp"
+#include "trap_handler/hvc.hpp"
 
 #include <cib/top.hpp>
 #include <cstddef>

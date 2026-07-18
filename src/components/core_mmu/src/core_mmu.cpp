@@ -8,14 +8,14 @@
 // References: ARM ARM DDI0487 §D13.2.138 (VTCR_EL2), §D13.2.137 (VTTBR_EL2),
 // §D13.2.48 (HCR_EL2).
 
-#include "components/core_mmu/include/core_mmu.hpp"
+#include "core_mmu/core_mmu.hpp"
 
-#include "components/core_mmu/include/stage2_builder.hpp"
-#include "components/core_mmu/include/stage2_descriptor.hpp"
-#include "components/nova_panic/include/nova_panic.hpp"
+#include "core_mmu/stage2_builder.hpp"
+#include "core_mmu/stage2_descriptor.hpp"
 #include "hal/console.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/guest_layout.h"
+#include "nova_panic/nova_panic.hpp"
 
 #include <array>
 #include <cstddef>

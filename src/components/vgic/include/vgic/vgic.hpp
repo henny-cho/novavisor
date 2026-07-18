@@ -1,6 +1,6 @@
 #pragma once
 
-// components/vgic/include/vgic.hpp
+// components/vgic/include/vgic/vgic.hpp
 //
 // Virtual GICv3 component — glue between the pure model (vgic_model.hpp + vgic_delivery.hpp)
 // and the hardware virtual CPU interface:
@@ -18,8 +18,8 @@
 // core_vcpu drives residency (cpu_save/cpu_restore on switches,
 // cpu_reset on seed) and funnels vcpu::post_virq into post().
 
-#include "components/core_gic/include/core_gic.hpp"
-#include "components/trap_handler/include/mmio.hpp"
+#include "core_gic/core_gic.hpp"
+#include "trap_handler/mmio.hpp"
 
 #include <cib/top.hpp>
 #include <cstddef>

@@ -4,7 +4,7 @@
 // (components/vgic/include/vgic_model.hpp): register emulation on the
 // GICD/GICR frames. Delivery is covered by vgic_delivery_test.cpp.
 
-#include "components/vgic/include/vgic_model.hpp"
+#include "vgic/vgic_model.hpp"
 
 #include <gtest/gtest.h>
 

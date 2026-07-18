@@ -5,7 +5,7 @@
 // This TU is linked directly into novavisor.elf — it is the injection
 // point that keeps core components free of projects/ includes.
 
-#include "projects/qemu_virt_arm64/include/guest_config.hpp"
+#include "guest_config.hpp"
 
 #include "nova/abi/guest.hpp"
 

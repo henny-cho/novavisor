@@ -1,6 +1,6 @@
 #pragma once
 
-// components/core_mmu/include/stage2_builder.hpp
+// components/core_mmu/include/core_mmu/stage2_builder.hpp
 //
 // Pure Stage 2 page table population logic — no bare-metal runtime
 // dependency, fully host-testable.
@@ -19,7 +19,7 @@
 //   L2  bits 29:21   (entry covers 2 MiB; Block or Table)
 //   L3  bits 20:12   (entry covers 4 KiB, always a Page)
 
-#include "components/core_mmu/include/stage2_descriptor.hpp"
+#include "core_mmu/stage2_descriptor.hpp"
 
 #include <array>
 #include <cstddef>

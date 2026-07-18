@@ -5,9 +5,9 @@
 // it — CNTHP is a single hardware one-shot, so it has one owner at a
 // time (per-VCPU virtual timer queues are a backlog item).
 
-#include "components/core_timer/include/core_timer.hpp"
+#include "core_timer/core_timer.hpp"
 
-#include "components/core_vcpu/include/core_vcpu.hpp"
+#include "core_vcpu/core_vcpu.hpp"
 #include "hal/timer.hpp"
 #include "nova/abi/hvc_abi.h"
 #include "nova/arch/trap_context.hpp"

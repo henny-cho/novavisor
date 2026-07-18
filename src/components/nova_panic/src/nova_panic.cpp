@@ -1,7 +1,7 @@
 // Override the default stdx panic handler with our bare-metal implementation.
 // This must be in a .cpp (not a header) to avoid multiple-definition errors.
 
-#include "components/nova_panic/include/nova_panic.hpp"
+#include "nova_panic/nova_panic.hpp"
 
 #include "hal/console.hpp"
 

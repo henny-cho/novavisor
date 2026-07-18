@@ -1,6 +1,6 @@
 #pragma once
 
-// components/trap_handler/include/hvc.hpp
+// components/trap_handler/include/trap_handler/hvc.hpp
 //
 // HvcService — one guest HVC, dispatched to every subscriber. The
 // function ID is read from ctx->x[0] (SMCCC convention — the

@@ -1,6 +1,6 @@
 #pragma once
 
-// components/vgic/include/vgic_model.hpp
+// components/vgic/include/vgic/vgic_model.hpp
 //
 // Pure vGICv3 register model — no bare-metal runtime dependency, fully
 // host-testable. GICD / GICR frame reads and writes operating on plain

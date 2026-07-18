@@ -6,14 +6,14 @@
 // and retargets VTTBR_EL2 — the common vec.S restore path then resumes
 // the new guest.
 
-#include "components/core_vcpu/include/core_vcpu.hpp"
+#include "core_vcpu/core_vcpu.hpp"
 
-#include "components/core_mmu/include/core_mmu.hpp"
-#include "components/nova_panic/include/nova_panic.hpp"
-#include "components/vgic/include/vgic.hpp"
+#include "core_mmu/core_mmu.hpp"
 #include "hal/console.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/hvc_abi.h"
+#include "nova_panic/nova_panic.hpp"
+#include "vgic/vgic.hpp"
 
 #include <array>
 #include <cstddef>

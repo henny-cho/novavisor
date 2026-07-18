@@ -1,6 +1,6 @@
 #pragma once
 
-// components/core_mmu/include/stage2_descriptor.hpp
+// components/core_mmu/include/core_mmu/stage2_descriptor.hpp
 //
 // Stage 2 page table descriptor encoding for ARMv8-A, 4KB granule.
 // Header-only, constexpr — host-testable.

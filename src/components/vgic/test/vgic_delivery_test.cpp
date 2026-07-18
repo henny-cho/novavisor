@@ -5,7 +5,7 @@
 // list-register multiplexing. Register emulation is covered by
 // vgic_model_test.cpp.
 
-#include "components/vgic/include/vgic_delivery.hpp"
+#include "vgic/vgic_delivery.hpp"
 
 #include <gtest/gtest.h>
 

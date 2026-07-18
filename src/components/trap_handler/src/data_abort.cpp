@@ -6,12 +6,12 @@
 
 #include "nova/arch/data_abort.hpp"
 
-#include "components/nova_panic/include/nova_panic.hpp"
-#include "components/trap_handler/include/guest_fault.hpp"
-#include "components/trap_handler/include/mmio.hpp"
-#include "components/trap_handler/include/trap_handler.hpp"
-#include "components/trap_handler/src/dispatch.hpp"
+#include "dispatch.hpp"
 #include "hal/console.hpp"
+#include "nova_panic/nova_panic.hpp"
+#include "trap_handler/guest_fault.hpp"
+#include "trap_handler/mmio.hpp"
+#include "trap_handler/trap_handler.hpp"
 
 #include <cib/top.hpp>
 #include <cstdint>

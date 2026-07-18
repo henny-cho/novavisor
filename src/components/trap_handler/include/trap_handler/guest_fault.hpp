@@ -1,6 +1,6 @@
 #pragma once
 
-// components/trap_handler/include/guest_fault.hpp
+// components/trap_handler/include/trap_handler/guest_fault.hpp
 //
 // GuestFaultService — escalation point for unrecoverable guest faults
 // (unclaimed MMIO, unemulatable aborts). The subscriber that owns VM

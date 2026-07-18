@@ -1,6 +1,6 @@
 #pragma once
 
-// components/trap_handler/include/trap_handler.hpp
+// components/trap_handler/include/trap_handler/trap_handler.hpp
 //
 // EL2SyncTrapService: CIB callback service dispatched on every EL2
 // synchronous exception from a lower EL.  Components register handlers
@@ -17,10 +17,10 @@
 // Subscribers include only the service header they extend; this header
 // is for the component itself (nexus composition) and the dump helper.
 
-#include "components/trap_handler/include/guest_fault.hpp"
-#include "components/trap_handler/include/hvc.hpp"
-#include "components/trap_handler/include/mmio.hpp"
 #include "nova/arch/trap_context.hpp"
+#include "trap_handler/guest_fault.hpp"
+#include "trap_handler/hvc.hpp"
+#include "trap_handler/mmio.hpp"
 
 #include <cib/top.hpp>
 #include <nexus/callback.hpp>

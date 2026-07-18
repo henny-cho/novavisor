@@ -5,13 +5,13 @@
 // maintains residency, and mirrors model state to the hardware virtual
 // CPU interface.
 
-#include "components/vgic/include/vgic.hpp"
+#include "vgic/vgic.hpp"
 
-#include "components/vgic/include/vgic_delivery.hpp"
 #include "hal/console.hpp"
 #include "hal/gic.hpp"
 #include "hal/gic_virt.hpp"
 #include "nova/abi/guest.hpp"
+#include "vgic/vgic_delivery.hpp"
 
 #include <array>
 #include <cstddef>

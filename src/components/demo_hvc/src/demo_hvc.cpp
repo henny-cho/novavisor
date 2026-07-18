@@ -5,9 +5,9 @@
 // otherwise so Phase 6+/7+ components (timer, ivc) can extend the
 // same service without conflict.
 
-#include "components/demo_hvc/include/demo_hvc.hpp"
+#include "demo_hvc/demo_hvc.hpp"
 
-#include "components/core_vcpu/include/core_vcpu.hpp"
+#include "core_vcpu/core_vcpu.hpp"
 #include "hal/console.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/hvc_abi.h"

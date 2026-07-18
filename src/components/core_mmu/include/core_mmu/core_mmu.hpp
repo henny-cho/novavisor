@@ -1,6 +1,6 @@
 #pragma once
 
-// components/core_mmu/include/core_mmu.hpp
+// components/core_mmu/include/core_mmu/core_mmu.hpp
 //
 // Stage 2 MMU CIB component.
 //

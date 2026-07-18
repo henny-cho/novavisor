@@ -1,6 +1,6 @@
 #pragma once
 
-// components/core_timer/include/core_timer.hpp
+// components/core_timer/include/core_timer/core_timer.hpp
 //
 // Hypervisor timer service.
 //
@@ -18,10 +18,10 @@
 // the EL2 physical timer (CNTHP); its expiry is also delivered as
 // vINTID 27, to the arming VCPU.
 
-#include "components/core_gic/include/core_gic.hpp"
-#include "components/trap_handler/include/hvc.hpp"
+#include "core_gic/core_gic.hpp"
 #include "hal/gic.hpp"
 #include "hal/timer.hpp"
+#include "trap_handler/hvc.hpp"
 
 #include <cib/top.hpp>
 #include <flow/flow.hpp>

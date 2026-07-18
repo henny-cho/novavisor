@@ -1,8 +1,8 @@
 // components/ivc/src/ivc.cpp
 
-#include "components/ivc/include/ivc.hpp"
+#include "ivc/ivc.hpp"
 
-#include "components/core_vcpu/include/core_vcpu.hpp"
+#include "core_vcpu/core_vcpu.hpp"
 #include "nova/abi/hvc_abi.h"
 #include "nova/arch/trap_context.hpp"
 
