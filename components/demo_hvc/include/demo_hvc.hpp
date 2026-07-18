@@ -10,18 +10,19 @@
 //   HVC_EXIT  (0x1002)  x1 = exit code; prints "demo_exit code=<n>"
 //                               and halts the hypervisor.
 //
-// Extends HvcService. Called on every HVC — silently returns for imms
-// outside the demo range (0x1000..0x10FF).
+// Extends HvcService. Called on every HVC — claims (sets handled on)
+// the IDs above and silently returns for everything else, including
+// unallocated IDs inside the demo range (trap_handler then reports
+// them as unknown).
 
 #include "components/trap_handler/include/trap_handler.hpp"
 
 #include <cib/top.hpp>
-#include <cstdint>
 
 namespace nova {
 
 struct demo_hvc_component {
-  static void handle_hvc(TrapContext* ctx, std::uint16_t imm) noexcept;
+  static void handle_hvc(HvcCall* call) noexcept;
 
   constexpr static auto config = cib::config(cib::extend<HvcService>(&demo_hvc_component::handle_hvc));
 };

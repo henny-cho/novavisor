@@ -2,7 +2,7 @@
 //
 // Implements:
 //   - C extern "C" entry points called from vec.S
-//   - trap_handler_component::handle_lower_sync (default HVC stub)
+//   - trap_handler_component::handle_lower_sync (EC-class router)
 //   - dump_trap_context register dump
 
 #include "components/trap_handler/include/trap_handler.hpp"
@@ -58,32 +58,53 @@ void dump_trap_context(const TrapContext* ctx) noexcept {
 // ---------------------------------------------------------------------------
 // trap_handler_component::handle_lower_sync
 //
-// Default handler for lower-EL synchronous exceptions.
-//   - HVC_AA64: dispatch to HvcService with the SMCCC function ID.
-//   - All others: dump and halt.
+// EC-class router for lower-EL synchronous exceptions. Each supported
+// class gets a case that forwards to its service; everything else dumps
+// and halts. Phase 6 (WFx) and Phase 8 (DATA_ABORT_LOWER) extend the
+// switch with their own cases.
 // ---------------------------------------------------------------------------
 
-void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
-  const auto ec = esr::get_ec(ctx->esr);
+namespace {
 
-  if (ec == esr::ExceptionClass::HVC_AA64) {
-    // SMCCC: the function ID lives in x0; the `hvc #imm16` instruction's
-    // own immediate (ESR_EL2.ISS) is conventionally 0 and is NOT the
-    // function selector. Pass the low 16 bits of x0 to the service.
-    //
-    // ELR_EL2 already points to the instruction AFTER the HVC per
-    // ARM ARM §D1.11 — do NOT advance it here or the guest will skip
-    // the next instruction on return. Handlers that halt (HVC_EXIT)
-    // never return through this path anyway.
-    const auto func_id = static_cast<std::uint16_t>(ctx->x[0] & 0xFFFFU);
-    cib::service<HvcService>(ctx, func_id);
-    return;
+// SMCCC v1.x: functions not implemented by the callee return -1.
+constexpr std::uint64_t kSmcccNotSupported = ~0ULL;
+
+void dispatch_hvc(TrapContext* ctx) noexcept {
+  // SMCCC: the function ID lives in x0; the `hvc #imm16` instruction's
+  // own immediate (ESR_EL2.ISS) is conventionally 0 and is NOT the
+  // function selector. Pass the low 16 bits of x0 to the service.
+  //
+  // ELR_EL2 already points to the instruction AFTER the HVC per
+  // ARM ARM §D1.11 — do NOT advance it here or the guest will skip
+  // the next instruction on return. Handlers that halt (HVC_EXIT)
+  // never return through this path anyway.
+  HvcCall call{.ctx = ctx, .func_id = static_cast<std::uint16_t>(ctx->x[0] & esr::kHvcImmMask), .handled = false};
+  cib::service<HvcService>(&call);
+
+  if (!call.handled) {
+    console::write("[trap_handler] unknown HVC func_id=0x");
+    console::write_hex64(call.func_id);
+    console::write(" — returning SMCCC NOT_SUPPORTED\n");
+    ctx->x[0] = kSmcccNotSupported;
   }
+}
 
-  // Unexpected synchronous exception from lower EL
-  console::write("[NOVA PANIC] Unexpected lower-EL sync exception\n");
-  dump_trap_context(ctx);
-  halt();
+} // namespace
+
+void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
+  switch (esr::get_ec(ctx->esr)) {
+  case esr::ExceptionClass::HVC_AA64:
+    dispatch_hvc(ctx);
+    return;
+
+    // Phase 6: case ExceptionClass::WFx → WfxService (guest idle).
+    // Phase 8: case ExceptionClass::DATA_ABORT_LOWER → MMIO emulation.
+
+  default:
+    console::write("[NOVA PANIC] Unexpected lower-EL sync exception\n");
+    dump_trap_context(ctx);
+    halt();
+  }
 }
 
 } // namespace nova

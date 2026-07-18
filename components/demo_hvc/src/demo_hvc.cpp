@@ -1,9 +1,9 @@
 // components/demo_hvc/src/demo_hvc.cpp
 //
 // Guest HVC handlers for the demo ABI. Subscribers of HvcService see
-// every HVC; we respond only to imms in 0x1000..0x10FF and silently
-// return otherwise so Phase 6+/7+ components (timer, ivc) can extend
-// the same service without conflict.
+// every HVC; we claim only the demo function IDs and silently return
+// otherwise so Phase 6+/7+ components (timer, ivc) can extend the
+// same service without conflict.
 
 #include "components/demo_hvc/include/demo_hvc.hpp"
 
@@ -73,18 +73,20 @@ void handle_putc(TrapContext* ctx) noexcept {
 
 } // namespace
 
-void demo_hvc_component::handle_hvc(TrapContext* ctx, std::uint16_t imm) noexcept {
-  switch (imm) {
+void demo_hvc_component::handle_hvc(HvcCall* call) noexcept {
+  switch (call->func_id) {
   case HVC_PUTS:
-    handle_puts(ctx);
+    call->handled = true;
+    handle_puts(call->ctx);
     return;
   case HVC_PUTC:
-    handle_putc(ctx);
+    call->handled = true;
+    handle_putc(call->ctx);
     return;
   case HVC_EXIT:
-    handle_exit(ctx); // [[noreturn]]
+    handle_exit(call->ctx); // [[noreturn]]
   default:
-    // Outside the demo range — leave for other HvcService subscribers.
+    // Not ours — leave unclaimed for other HvcService subscribers.
     return;
   }
 }

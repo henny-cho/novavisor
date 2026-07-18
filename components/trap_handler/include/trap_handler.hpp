@@ -2,17 +2,22 @@
 
 // components/trap_handler/include/trap_handler.hpp
 //
-// EL2SyncTrapService: CIB callback service dispatched on every EL2 synchronous
-// exception (lower-EL or current-EL).  Components register handlers at compile
-// time via cib::extend<EL2SyncTrapService>.
+// EL2SyncTrapService: CIB callback service dispatched on every EL2
+// synchronous exception from a lower EL.  Components register handlers
+// at compile time via cib::extend<EL2SyncTrapService>.
 //
-// Default stub handler (registered by trap_handler_component itself):
-//   - HVC_AA64: advances ELR_EL2 by 4 and returns to guest.
-//   - All others: dumps TrapContext to UART and halts.
+// Default handler (registered by trap_handler_component itself) routes
+// by ESR_EL2.EC:
+//   - HVC_AA64   : dispatch HvcService; warn + SMCCC NOT_SUPPORTED if
+//                  no subscriber claims the call.
+//   - all others : dump TrapContext to UART and halt.
+// Phase 6 (WFx) and Phase 8 (DATA_ABORT_LOWER) add cases to the same
+// switch and route to their own services.
 
 #include "nova/trap_context.hpp"
 
 #include <cib/top.hpp>
+#include <cstdint>
 #include <nexus/callback.hpp>
 
 namespace nova {
@@ -22,25 +27,29 @@ namespace nova {
 //
 // Signature: void(TrapContext*)
 // All registered callbacks are invoked in registration order on each trap.
-// For HVC dispatch, a single component should own the routing.
 // ---------------------------------------------------------------------------
 struct EL2SyncTrapService : public callback::service<TrapContext*> {};
 
 // ---------------------------------------------------------------------------
 // HvcService
 //
-// Signature: void(TrapContext*, std::uint16_t func_id)
-// Fired from handle_lower_sync whenever ESR_EL2.EC == HVC_AA64. The
-// function ID is read from ctx->x[0] (SMCCC convention — the `hvc #imm16`
-// instruction's own immediate is always 0). Each subscribed component
-// should inspect `func_id` and act only on its own range — the ID
-// allocation table lives in nova/hvc_abi.h (shared with the guests).
+// One guest HVC, dispatched to every subscriber. The function ID is
+// read from ctx->x[0] (SMCCC convention — the `hvc #imm16` instruction's
+// own immediate is always 0); the allocation table lives in
+// nova/hvc_abi.h (shared with the guests).
 //
-// Since every subscriber is called for every HVC, handlers must
-// silently return when `imm` is outside their range — no "unknown"
-// warnings.
+// Each subscriber inspects `func_id`, acts only on IDs it implements,
+// and sets `handled = true` for those — silently returning otherwise.
+// If no subscriber claims the call, trap_handler warns and returns
+// SMCCC NOT_SUPPORTED (-1) in the guest's x0.
 // ---------------------------------------------------------------------------
-struct HvcService : public callback::service<TrapContext*, std::uint16_t> {};
+struct HvcCall {
+  TrapContext*  ctx     = nullptr;
+  std::uint16_t func_id = 0;
+  bool          handled = false;
+};
+
+struct HvcService : public callback::service<HvcCall*> {};
 
 // ---------------------------------------------------------------------------
 // trap_handler_component
@@ -50,7 +59,7 @@ struct HvcService : public callback::service<TrapContext*, std::uint16_t> {};
 void dump_trap_context(const TrapContext* ctx) noexcept;
 
 struct trap_handler_component {
-  // Default EL2 synchronous trap handler (lower EL).
+  // Default EL2 synchronous trap handler (lower EL): EC-class router.
   // Registered at compile time; invoked by el2_trap_lower_sync().
   static void handle_lower_sync(TrapContext* ctx) noexcept;
 
