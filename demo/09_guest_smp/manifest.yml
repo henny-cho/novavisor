@@ -1,7 +1,7 @@
 name: "09_guest_smp"
 description: "One VM as an SMP guest: PSCI CPU_ON brings vCPU 1 up on the other physical core, per-vCPU GICR frames, and 100 trapped-SGI IPI round-trips."
 phase: 13
-enabled: false
+enabled: true
 timeout_seconds: 30
 
 # Slot 0 carries two vCPUs (guest_table: cores 0 and 1); the single
