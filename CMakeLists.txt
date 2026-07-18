@@ -169,5 +169,6 @@ else()
     nova_add_component_test(core_vcpu fp_model_test)         # lazy FP ownership
     nova_add_component_test(core_vcpu lifecycle_model_test)  # micro-reboot budget
     nova_add_component_test(psci psci_model_test)            # SMCCC range dispatch
+    nova_add_component_test(ivc ring_test)                   # SPSC ring protocol (threads)
 
 endif() # CMAKE_CROSSCOMPILING
