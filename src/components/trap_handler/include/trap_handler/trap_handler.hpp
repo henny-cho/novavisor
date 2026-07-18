@@ -12,6 +12,8 @@
 //   - WFx              : dispatch WfxService (include/wfx.hpp)
 //   - FP_SIMD          : dispatch FpSimdService (include/fp_simd.hpp),
 //                        escalating to GuestFaultService when unclaimed
+//   - MSR_MRS          : dispatch SysregService (include/sysreg.hpp),
+//                        panicking when unclaimed (EL2 asked for the trap)
 //   - DATA_ABORT_LOWER : dispatch MmioService (include/mmio.hpp),
 //                        escalating to GuestFaultService
 //                        (include/guest_fault.hpp)
@@ -25,6 +27,7 @@
 #include "trap_handler/guest_fault.hpp"
 #include "trap_handler/hvc.hpp"
 #include "trap_handler/mmio.hpp"
+#include "trap_handler/sysreg.hpp"
 #include "trap_handler/wfx.hpp"
 
 #include <cib/top.hpp>
@@ -53,9 +56,10 @@ struct trap_handler_component {
   // handler. HvcService / MmioService / GuestFaultService have no
   // default subscriber; components (demo_hvc, vgic, core_vcpu, ...)
   // extend them as needed.
-  constexpr static auto config = cib::config(
-      cib::exports<EL2SyncTrapService, HvcService, WfxService, FpSimdService, MmioService, GuestFaultService>,
-      cib::extend<EL2SyncTrapService>(&trap_handler_component::handle_lower_sync));
+  constexpr static auto config =
+      cib::config(cib::exports<EL2SyncTrapService, HvcService, WfxService, FpSimdService, SysregService, MmioService,
+                               GuestFaultService>,
+                  cib::extend<EL2SyncTrapService>(&trap_handler_component::handle_lower_sync));
 };
 
 } // namespace nova

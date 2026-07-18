@@ -131,3 +131,34 @@ TEST(VgicRedist, UnknownOffsetReported) {
   EXPECT_FALSE(redist_read(c, 0x1F000, 4).known);
   EXPECT_FALSE(redist_write(c, 0x1F000, 4, 1));
 }
+
+// ---------------------------------------------------------------------------
+// ICC_SGI1R decode (trapped vSGI routing)
+// ---------------------------------------------------------------------------
+
+TEST(VgicSgi1r, TargetListSelectsSiblings) {
+  // INTID 3 to vCPU 1 of a 2-vCPU VM, sent by vCPU 0.
+  const std::uint64_t v = (3ULL << 24U) | 0b10U;
+  EXPECT_EQ(sgi1r_intid(v), 3U);
+  EXPECT_EQ(sgi1r_targets(v, /*sender=*/0, /*vcpus=*/2), 0b10U);
+}
+
+TEST(VgicSgi1r, TargetListClampsToVcpuCount) {
+  EXPECT_EQ(sgi1r_targets(0xFFFF, 0, 2), 0b11U); // slots past vcpus dropped
+}
+
+TEST(VgicSgi1r, SelfTargetingIsAllowed) {
+  EXPECT_EQ(sgi1r_targets(0b01U, 0, 2), 0b01U);
+}
+
+TEST(VgicSgi1r, IrmBroadcastsToAllButSelf) {
+  EXPECT_EQ(sgi1r_targets(kSgi1rIrm | 0xFFFF, /*sender=*/0, /*vcpus=*/2), 0b10U);
+  EXPECT_EQ(sgi1r_targets(kSgi1rIrm, /*sender=*/1, /*vcpus=*/2), 0b01U);
+}
+
+TEST(VgicSgi1r, NonzeroAffinityOrRangeSelectsNobody) {
+  EXPECT_EQ(sgi1r_targets((1ULL << 16U) | 1U, 0, 2), 0U); // Aff1
+  EXPECT_EQ(sgi1r_targets((1ULL << 32U) | 1U, 0, 2), 0U); // Aff2
+  EXPECT_EQ(sgi1r_targets((1ULL << 48U) | 1U, 0, 2), 0U); // Aff3
+  EXPECT_EQ(sgi1r_targets((1ULL << 44U) | 1U, 0, 2), 0U); // RS
+}

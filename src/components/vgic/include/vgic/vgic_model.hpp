@@ -87,6 +87,38 @@ struct RedistId {
 inline constexpr std::uint32_t kWakerProcessorSleep = NOVA_GICR_WAKER_PROCESSOR_SLEEP;
 inline constexpr std::uint32_t kWakerChildrenAsleep = NOVA_GICR_WAKER_CHILDREN_ASLEEP;
 
+// --- ICC_SGI1R_EL1 decode -----------------------------------------------------
+// A trapped Group 1 SGI write (ICH_HCR_EL2.TC), routed by the smp
+// component. Field layout (Arm IHI 0069): TargetList[15:0], Aff1[23:16],
+// INTID[27:24], Aff2[39:32], IRM[40], RS[47:44], Aff3[55:48].
+
+inline constexpr std::uint64_t kSgi1rTargetMask = 0xFFFFULL;
+inline constexpr std::uint64_t kSgi1rIrm        = 1ULL << 40U;
+inline constexpr std::uint64_t kSgi1rRsMask     = 0xFULL << 44U;
+
+[[nodiscard]] constexpr auto sgi1r_intid(std::uint64_t v) noexcept -> std::uint32_t {
+  return static_cast<std::uint32_t>((v >> 24U) & 0xFU);
+}
+
+// The set of target vCPU indices (bitmask) within the sender's VM.
+// IRM broadcasts to every sibling but the sender; otherwise the flat
+// virtual topology (all upper affinities zero, VMPIDR Aff0 = vCPU
+// index) means Aff3/Aff2/Aff1 must be zero and RS must be zero
+// (RangeSelector blocks past the first need 16+ vCPUs). Self-targeting
+// through TargetList is architecturally allowed and kept.
+[[nodiscard]] constexpr auto sgi1r_targets(std::uint64_t v, std::size_t sender, std::size_t vcpus) noexcept
+    -> std::uint32_t {
+  const auto all = static_cast<std::uint32_t>((1U << vcpus) - 1U);
+  if ((v & kSgi1rIrm) != 0U) {
+    return all & ~(1U << sender);
+  }
+  constexpr std::uint64_t kAff123 = (0xFFULL << 48U) | (0xFFULL << 32U) | (0xFFULL << 16U);
+  if ((v & (kAff123 | kSgi1rRsMask)) != 0U) {
+    return 0;
+  }
+  return static_cast<std::uint32_t>(v & kSgi1rTargetMask) & all;
+}
+
 // --- State ------------------------------------------------------------------
 
 struct DistState {

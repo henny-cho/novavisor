@@ -27,6 +27,7 @@
 #include "core_vcpu/core_vcpu.hpp"
 #include "soft_timer/soft_timer.hpp"
 #include "trap_handler/hvc.hpp"
+#include "trap_handler/sysreg.hpp"
 #include "vgic/vgic.hpp"
 
 #include <cib/top.hpp>
@@ -68,6 +69,11 @@ struct smp_component {
   // Claims the cross-call SGI: executes queued foreign requests.
   static void handle_irq(IrqCall* call) noexcept;
 
+  // Claims trapped ICC_SGI1R_EL1 writes (ICH_HCR.TC): decodes the
+  // guest's SGI targets and posts the vINTID to each sibling vCPU,
+  // affinity-routed — the guest's own IPIs cross physical cores here.
+  static void handle_sysreg(SysregCall* call) noexcept;
+
   constexpr static auto INIT = flow::action<"smp_start_secondaries">([]() noexcept { smp::start_secondaries(); });
 
   // Explicit flow edges: a secondary begins touching shared state
@@ -79,7 +85,8 @@ struct smp_component {
       cib::extend<cib::RuntimeStart>(core_mmu_component::INIT >> core_gic_component::INIT >> vgic_component::INIT >>
                                      core_timer_component::INIT >> soft_timer_component::INIT >>
                                      core_vcpu_component::INIT >> boot_msg_component::PRINT_BOOT_MSG >> *INIT),
-      cib::extend<HvcService>(&smp_component::handle_hvc), cib::extend<IrqService>(&smp_component::handle_irq));
+      cib::extend<HvcService>(&smp_component::handle_hvc), cib::extend<IrqService>(&smp_component::handle_irq),
+      cib::extend<SysregService>(&smp_component::handle_sysreg));
 };
 
 } // namespace nova

@@ -14,8 +14,10 @@
 #include "nova/abi/guest.hpp"
 #include "nova/abi/hvc_abi.h"
 #include "nova/abi/psci.h"
+#include "nova/arch/data_abort.hpp" // esr::kSrtZeroReg
 #include "nova/arch/trap_context.hpp"
 #include "nova/sync.hpp"
+#include "vgic/vgic_model.hpp"
 
 #include <array>
 #include <atomic>
@@ -202,6 +204,25 @@ void smp_component::handle_hvc(HvcCall* call) noexcept {
   }
   call->handled   = true;
   call->ctx->x[0] = smp::start_vm(static_cast<std::size_t>(call->ctx->x[1])) ? 0 : kSmcccNotSupported;
+}
+
+void smp_component::handle_sysreg(SysregCall* call) noexcept {
+  if (!call->sysreg.write || !esr::is_icc_sgi1r(call->sysreg)) {
+    return; // not ours (reads of trapped common regs stay unclaimed)
+  }
+  call->handled = true;
+
+  const std::uint64_t value = call->sysreg.rt == esr::kSrtZeroReg ? 0 : call->ctx->x[call->sysreg.rt];
+  const std::size_t   self  = vcpu::current_index();
+  const std::size_t   vm    = vm_of(self);
+  const std::uint32_t intid = vgic::sgi1r_intid(value);
+
+  std::uint32_t targets = vgic::sgi1r_targets(value, vcpu_of(self), guest_table()[vm].vcpus);
+  for (std::size_t t = 0; targets != 0U; ++t, targets >>= 1U) {
+    if ((targets & 1U) != 0U) {
+      (void)smp::post_virq(slot_of(vm, t), intid); // off targets drop the SGI — matches hardware
+    }
+  }
 }
 
 void smp_component::handle_irq(IrqCall* call) noexcept {

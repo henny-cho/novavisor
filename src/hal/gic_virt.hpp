@@ -26,10 +26,13 @@ inline constexpr std::uint32_t kMaintenanceIntid = 25;
 inline constexpr std::uint64_t kGicdIpaBase = NOVA_GICD_IPA_BASE;
 inline constexpr std::uint64_t kGicrIpaBase = NOVA_GICR_IPA_BASE;
 
-// ICH_HCR_EL2 / ICH_VMCR_EL2 values banked per VCPU by vgic.
-inline constexpr std::uint64_t kIchHcrEn  = arch::gicv3::kIchHcrEn;
-inline constexpr std::uint64_t kIchHcrUie = arch::gicv3::kIchHcrUie;
-inline constexpr std::uint64_t kVmcrReset = arch::gicv3::kIchVmcrVpmrAll | arch::gicv3::kIchVmcrVeng1;
+// ICH_HCR_EL2 / ICH_VMCR_EL2 values banked per VCPU by vgic. The base
+// value keeps SGI-generation writes trapping (vSGI routing) alongside
+// the interface enable.
+inline constexpr std::uint64_t kIchHcrEn   = arch::gicv3::kIchHcrEn;
+inline constexpr std::uint64_t kIchHcrUie  = arch::gicv3::kIchHcrUie;
+inline constexpr std::uint64_t kIchHcrBase = arch::gicv3::kIchHcrEn | arch::gicv3::kIchHcrTc;
+inline constexpr std::uint64_t kVmcrReset  = arch::gicv3::kIchVmcrVpmrAll | arch::gicv3::kIchVmcrVeng1;
 
 // One-time bring-up of the virtual CPU interface (VMCR reset + HCR.En).
 inline void init() noexcept {

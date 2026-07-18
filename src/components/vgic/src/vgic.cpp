@@ -25,7 +25,7 @@ namespace {
 // Hardware registers that carry live guest state while resident.
 struct HwBank {
   std::uint64_t vmcr = gic_virt::kVmcrReset;
-  std::uint64_t hcr  = gic_virt::kIchHcrEn;
+  std::uint64_t hcr  = gic_virt::kIchHcrBase;
 };
 
 // No VCPU owns this core's virtual CPU interface (before the core's
@@ -73,7 +73,7 @@ void flush(std::size_t index) noexcept {
     sync::Guard guard{g_dist_lock}; // refill claims `pending` bits — races sibling-frame MMIO
     overflow = refill(cpu, g_lr_count);
   }
-  const std::uint64_t hcr = gic_virt::kIchHcrEn | (overflow ? gic_virt::kIchHcrUie : 0U);
+  const std::uint64_t hcr = gic_virt::kIchHcrBase | (overflow ? gic_virt::kIchHcrUie : 0U);
 
   if (resident) {
     for (std::size_t i = 0; i < g_lr_count; ++i) {

@@ -15,14 +15,14 @@ namespace nova::arch::gicv3 {
 inline constexpr std::uint64_t kIchVmcrVeng1   = 1ULL << 1;     // virtual Group 1 enable
 inline constexpr std::uint64_t kIchVmcrVpmrAll = 0xFFULL << 24; // guest PMR: accept all
 inline constexpr std::uint64_t kIchHcrEn       = 1ULL << 0;
-
-inline constexpr std::uint64_t kIchHcrUie      = 1ULL << 1; // underflow maintenance IRQ
-inline constexpr std::uint64_t kIchVtrListMask = 0x1FULL;   // ListRegs = count - 1
+inline constexpr std::uint64_t kIchHcrUie      = 1ULL << 1;  // underflow maintenance IRQ
+inline constexpr std::uint64_t kIchHcrTc       = 1ULL << 10; // trap ICC_SGI*R/DIR (common regs)
+inline constexpr std::uint64_t kIchVtrListMask = 0x1FULL;    // ListRegs = count - 1
 
 inline void virtual_interface_init() noexcept {
   std::uint64_t v = kIchVmcrVpmrAll | kIchVmcrVeng1;
   __asm__ volatile("msr S3_4_C12_C11_7, %0" ::"r"(v)); // ICH_VMCR_EL2
-  v = kIchHcrEn;
+  v = kIchHcrEn | kIchHcrTc;
   __asm__ volatile("msr S3_4_C12_C11_0, %0" ::"r"(v)); // ICH_HCR_EL2
   __asm__ volatile("isb");
 }

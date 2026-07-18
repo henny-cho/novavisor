@@ -10,9 +10,11 @@
 #include "dispatch.hpp"
 #include "hal/console.hpp"
 #include "nova/arch/esr.hpp"
+#include "nova/arch/sysreg_trap.hpp"
 #include "nova/arch/trap_context.hpp"
 #include "nova_panic/nova_panic.hpp"
 #include "trap_handler/fp_simd.hpp"
+#include "trap_handler/sysreg.hpp"
 #include "trap_handler/trap_handler.hpp"
 #include "trap_handler/wfx.hpp"
 
@@ -71,6 +73,23 @@ void dispatch_fp_simd(TrapContext* ctx) noexcept {
   }
 }
 
+void dispatch_sysreg(TrapContext* ctx) noexcept {
+  // ELR points AT the trapped MSR/MRS — advance past it; subscribers
+  // emulate the register effect only.
+  ctx->elr += 4;
+
+  SysregCall call{.ctx = ctx, .sysreg = esr::parse_sysreg_trap(ctx->esr), .handled = false};
+  cib::service<SysregService>(&call);
+
+  if (!call.handled) {
+    // Sysreg traps exist only because EL2 configured them — a miss is
+    // a hypervisor bug, not guest misbehavior.
+    console::write("[NOVA PANIC] unclaimed sysreg trap\n");
+    dump_trap_context(ctx);
+    halt();
+  }
+}
+
 } // namespace
 
 // EC-class router for lower-EL synchronous exceptions. Each supported
@@ -88,6 +107,10 @@ void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
 
   case esr::ExceptionClass::FP_SIMD:
     dispatch_fp_simd(ctx);
+    return;
+
+  case esr::ExceptionClass::MSR_MRS:
+    dispatch_sysreg(ctx);
     return;
 
   case esr::ExceptionClass::DATA_ABORT_LOWER:
