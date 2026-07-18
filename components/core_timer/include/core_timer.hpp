@@ -2,15 +2,21 @@
 
 // components/core_timer/include/core_timer.hpp
 //
-// Hypervisor timer service (Phase 6).
+// Hypervisor timer service.
 //
 // RuntimeStart: programs CNTVOFF_EL2 = 0 (guests see the physical
-// counter through CNTV) and disarms the EL2 physical timer; enables its
-// PPI at the GIC.
+// counter through CNTV) and disarms the EL2 physical timer; enables the
+// CNTHP and CNTV PPIs at the GIC.
 //
-// HVC_TIMER_SET (0x1200, x1 = ticks): arms the EL2 physical timer
-// (CNTHP); on expiry the IRQ handler injects vINTID 27 — the virtual
-// timer PPI — into the guest and returns 0 (SMCCC success) in x0.
+// Native path: guests program CNTV_CTL/CVAL directly (never trapped at
+// EL1). The physical CNTV PPI lands in EL2, which masks the
+// level-triggered timer and posts vINTID 27 to the resident VCPU — the
+// only one whose CNTV registers are live. The guest unmasks by
+// re-arming.
+//
+// Legacy path (Phase 6 demos): HVC_TIMER_SET (0x1200, x1 = ticks) arms
+// the EL2 physical timer (CNTHP); its expiry is also delivered as
+// vINTID 27, to the arming VCPU.
 
 #include "components/core_gic/include/core_gic.hpp"
 #include "components/trap_handler/include/trap_handler.hpp"
@@ -29,6 +35,7 @@ struct core_timer_component {
   constexpr static auto INIT = flow::action<"core_timer_init">([]() noexcept {
     hyp_timer::init();
     gic::enable_ppi(hyp_timer::kHypTimerIntid);
+    gic::enable_ppi(hyp_timer::kGuestTimerVintid); // physical CNTV PPI (native guest timers)
   });
 
   // INIT touches the redistributor that core_gic_component::INIT wakes:

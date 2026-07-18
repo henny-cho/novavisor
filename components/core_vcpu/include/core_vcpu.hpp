@@ -28,14 +28,18 @@ namespace nova {
 // EL1 system registers that carry live guest state across a switch.
 // TrapContext only covers what the EL2 trap banked: guests own VBAR_EL1
 // (demo vectors), and ELR/SPSR_EL1 are in flight when a guest hypercalls
-// from inside its own IRQ handler. MMU-off flat guests have no further
-// EL1 state; SCTLR_EL1-class registers join the bank when such guests
-// get time-shared (backlog).
+// from inside its own IRQ handler. CNTV_CTL/CVAL bank the guest's
+// native virtual timer (CVAL, not TVAL — the absolute deadline survives
+// the time spent parked; a non-resident timer simply cannot fire).
+// MMU-off flat guests have no further EL1 state; SCTLR_EL1-class
+// registers join the bank when such guests get time-shared (backlog).
 struct El1SysregBank {
-  std::uint64_t vbar   = 0;
-  std::uint64_t elr    = 0;
-  std::uint64_t spsr   = 0;
-  std::uint64_t sp_el0 = 0;
+  std::uint64_t vbar      = 0;
+  std::uint64_t elr       = 0;
+  std::uint64_t spsr      = 0;
+  std::uint64_t sp_el0    = 0;
+  std::uint64_t cntv_ctl  = 0; // reset: timer disabled
+  std::uint64_t cntv_cval = 0;
 };
 
 // Per-VCPU runtime state, owned by core_vcpu. `ctx` and `el1` hold the

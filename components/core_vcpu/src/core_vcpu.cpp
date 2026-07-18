@@ -61,6 +61,8 @@ auto read_el1_bank() noexcept -> El1SysregBank {
   __asm__ volatile("mrs %0, elr_el1" : "=r"(b.elr));
   __asm__ volatile("mrs %0, spsr_el1" : "=r"(b.spsr));
   __asm__ volatile("mrs %0, sp_el0" : "=r"(b.sp_el0));
+  __asm__ volatile("mrs %0, cntv_ctl_el0" : "=r"(b.cntv_ctl));
+  __asm__ volatile("mrs %0, cntv_cval_el0" : "=r"(b.cntv_cval));
   return b;
 }
 
@@ -69,6 +71,10 @@ void write_el1_bank(const El1SysregBank& b) noexcept {
   __asm__ volatile("msr elr_el1, %0" ::"r"(b.elr));
   __asm__ volatile("msr spsr_el1, %0" ::"r"(b.spsr));
   __asm__ volatile("msr sp_el0, %0" ::"r"(b.sp_el0));
+  // CVAL before CTL so a still-armed timer re-evaluates its condition
+  // against the incoming guest's deadline, never the outgoing one's.
+  __asm__ volatile("msr cntv_cval_el0, %0" ::"r"(b.cntv_cval));
+  __asm__ volatile("msr cntv_ctl_el0, %0" ::"r"(b.cntv_ctl));
   // No ISB needed here: the trap-return ERET is a context synchronization
   // event that makes these writes visible to the guest.
 }

@@ -27,6 +27,9 @@ inline constexpr std::uint64_t kCnthctlEl1PhysCounterRead = 1ULL << 0;
 // CNTHP_CTL_EL2: ENABLE (bit 0) = 1, IMASK (bit 1) = 0 → IRQ on expiry.
 inline constexpr std::uint64_t kCnthpEnable = 1ULL << 0;
 
+// CNT*_CTL IMASK bit (shared layout across the generic timers).
+inline constexpr std::uint64_t kCntCtlImask = 1ULL << 1;
+
 inline void init() noexcept {
   __asm__ volatile("msr cntvoff_el2, xzr"); // guest virtual counter == physical
   __asm__ volatile("msr cnthctl_el2, %0" ::"r"(kCnthctlEl1PhysCounterRead));
@@ -44,6 +47,18 @@ inline void arm(std::uint64_t ticks) noexcept {
 
 inline void stop() noexcept {
   __asm__ volatile("msr cnthp_ctl_el2, xzr");
+  __asm__ volatile("isb");
+}
+
+// Mask the (level-triggered) virtual timer of the resident guest. CNTV
+// keeps asserting its PPI while the expiry condition holds; without
+// this it would re-fire forever after EL2 EOIs. The guest unmasks
+// itself by rewriting CNTV_CTL_EL0 when it re-arms.
+inline void mask_guest_virtual_timer() noexcept {
+  std::uint64_t ctl = 0;
+  __asm__ volatile("mrs %0, cntv_ctl_el0" : "=r"(ctl));
+  ctl |= kCntCtlImask;
+  __asm__ volatile("msr cntv_ctl_el0, %0" ::"r"(ctl));
   __asm__ volatile("isb");
 }
 

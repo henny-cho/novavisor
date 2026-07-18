@@ -41,17 +41,29 @@ void core_timer_component::handle_hvc(HvcCall* call) noexcept {
 }
 
 void core_timer_component::handle_irq(IrqCall* call) noexcept {
-  if (call->intid != hyp_timer::kHypTimerIntid) {
+  if (call->intid == hyp_timer::kHypTimerIntid) {
+    call->handled = true;
+
+    // One-shot: disarm before injecting, or CNTHP keeps its condition
+    // met and re-fires forever.
+    hyp_timer::stop();
+    g_armed = false;
+    // False only when the owner exited meanwhile — nobody to notify.
+    (void)vcpu::post_virq(g_owner, hyp_timer::kGuestTimerVintid);
     return;
   }
-  call->handled = true;
 
-  // One-shot: disarm before injecting, or CNTHP keeps its condition met
-  // and re-fires forever.
-  hyp_timer::stop();
-  g_armed = false;
-  // False only when the owner exited meanwhile — nobody to notify.
-  (void)vcpu::post_virq(g_owner, hyp_timer::kGuestTimerVintid);
+  if (call->intid == hyp_timer::kGuestTimerVintid) {
+    call->handled = true;
+
+    // Native guest CNTV expiry. The firing timer is by construction the
+    // resident VCPU's (a non-resident VCPU's CNTV state sits parked in
+    // its EL1 bank and cannot meet the condition). Mask the level
+    // assertion, then reflect the PPI as its virtual counterpart; the
+    // guest clears IMASK when it re-arms CNTV_CTL.
+    hyp_timer::mask_guest_virtual_timer();
+    (void)vcpu::post_virq(vcpu::current_index(), hyp_timer::kGuestTimerVintid);
+  }
 }
 
 } // namespace nova
