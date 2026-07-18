@@ -1,0 +1,34 @@
+name: "05_preempt"
+description: "Time-slice preemption + wfi blocking: a non-cooperative busy guest and a wfi-driven ticker share one core."
+phase: 9
+enabled: false
+timeout_seconds: 20
+
+guests:
+  - name: "busy"
+    binary: "busy.bin"
+    load_addr:   0x50000000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+  - name: "sleeper"
+    binary: "sleeper.bin"
+    load_addr:   0x50200000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+
+# Both guests schedule off the same virtual clock, so this order is
+# deterministic: sleeper tick 2 (0.8 s) precedes busy done (1.0 s) only
+# under preemption; ticks 3-5 (through 2.0 s) need wake-from-EL2-idle.
+expect:
+  - pattern: "wfi tick 2"
+    within_seconds: 10
+  - pattern: "preempt: busy done"
+    within_seconds: 12
+  - pattern: "preempt: wfi done"
+    within_seconds: 16
+  - pattern: "demo_exit code=0"
+    within_seconds: 18
