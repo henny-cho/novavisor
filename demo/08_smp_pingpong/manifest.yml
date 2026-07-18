@@ -1,7 +1,7 @@
 name: "08_smp_pingpong"
 description: "Two VMs on two physical cores exchanging 1000 SPSC-ring round-trips — true parallel RTT, cross-core VM start, and cross-core global halt."
 phase: 12
-enabled: false
+enabled: true
 timeout_seconds: 30
 
 # pong loads at slot 2 (0x50400000) — guest_table gives slots 2/3
