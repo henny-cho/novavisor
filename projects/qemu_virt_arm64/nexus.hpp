@@ -9,6 +9,7 @@
 // cib::top<nova_project> wires them all together at compile time:
 //   - EarlyRuntimeInit  ← hal_init_component  (BSS clear)
 //   - RuntimeStart      ← core_mmu_component  (Stage 2 MMU activate)
+//                         core_gic_component  (GICv3 + vIRQ interface)
 //                         boot_msg_component  (UART boot banner)
 //   - MainLoop          ← core_vcpu_component (ERET to EL1, [[noreturn]])
 //
@@ -17,6 +18,7 @@
 // as a watchdog fallback.
 
 #include "components/boot_msg/include/boot_msg.hpp"
+#include "components/core_gic/include/core_gic.hpp"
 #include "components/core_mmu/include/core_mmu.hpp"
 #include "components/core_vcpu/include/core_vcpu.hpp"
 #include "components/demo_hvc/include/demo_hvc.hpp"
@@ -28,8 +30,9 @@
 namespace nova {
 
 struct nova_project {
-  constexpr static auto config = cib::components<hal_init_component, core_mmu_component, boot_msg_component,
-                                                 trap_handler_component, demo_hvc_component, core_vcpu_component>;
+  constexpr static auto config =
+      cib::components<hal_init_component, core_mmu_component, core_gic_component, boot_msg_component,
+                      trap_handler_component, demo_hvc_component, core_vcpu_component>;
 };
 
 // nova_top is the concrete cib::top instantiation for this target.

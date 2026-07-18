@@ -114,6 +114,7 @@ if(CMAKE_CROSSCOMPILING)
         hal_init
         boot_msg
         core_mmu
+        core_gic
         core_vcpu
         demo_hvc
     )

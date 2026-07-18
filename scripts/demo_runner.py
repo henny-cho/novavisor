@@ -128,7 +128,7 @@ def resolve_guest_binary(demo_name: str, demo_build: Path, manifest: dict, spec:
 def build_qemu_cmd(elf: Path, demo_name: str, demo_build: Path, manifest: dict) -> list[str]:
     cmd = [
         QEMU,
-        "-machine", "virt,virtualization=on",
+        "-machine", "virt,virtualization=on,gic-version=3",
         "-cpu", "cortex-a57",
         "-nographic",
         "-m", "1024",

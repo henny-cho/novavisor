@@ -13,7 +13,7 @@
 // +0x300  Current EL, SP_EL2 (EL2h) — FIQ
 // +0x380  Current EL, SP_EL2 (EL2h) — SError
 // +0x400  Lower AArch64 — Synchronous  ← HVC / guest memory faults
-// +0x480  Lower AArch64 — IRQ
+// +0x480  Lower AArch64 — IRQ          ← physical IRQ routed to EL2
 // +0x500  Lower AArch64 — FIQ
 // +0x580  Lower AArch64 — SError
 // +0x600  Lower AArch32 — Synchronous
@@ -115,7 +115,7 @@ _vector_table:
 
     // --- Lower EL (AArch64) — primary guest trap path ---
     TRAP_ENTRY _handle_lower_sync     // +0x400 Synchronous ← HVC / data abort
-    TRAP_ENTRY _handle_unhandled      // +0x480 IRQ
+    TRAP_ENTRY _handle_lower_irq      // +0x480 IRQ ← physical IRQ while guest runs
     TRAP_ENTRY _handle_unhandled      // +0x500 FIQ
     TRAP_ENTRY _handle_unhandled      // +0x580 SError
 
@@ -135,6 +135,17 @@ _vector_table:
 _handle_lower_sync:
     TRAP_SAVE_CONTEXT               // x0 = TrapContext*
     bl el2_trap_lower_sync          // C++ handler (may advance ELR for HVC)
+    b  _trap_restore_and_eret
+
+// ---------------------------------------------------------------------------
+// _handle_lower_irq — physical IRQ taken from the guest (HCR_EL2.IMO=1)
+//
+// Acks the GIC, dispatches IrqService, EOIs, and returns to the guest.
+// ---------------------------------------------------------------------------
+
+_handle_lower_irq:
+    TRAP_SAVE_CONTEXT               // x0 = TrapContext*
+    bl el2_trap_irq                 // C++ handler (components/core_gic)
     b  _trap_restore_and_eret
 
 // ---------------------------------------------------------------------------

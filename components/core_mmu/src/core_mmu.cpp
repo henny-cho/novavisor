@@ -47,11 +47,15 @@ alignas(mmu::k4KiB) mmu::Table stage2_l3;
 inline constexpr std::uint64_t kVtcrEl2 = (25ULL) | (0b01ULL << 6U) | (0b11ULL << 8U) | (0b11ULL << 10U) |
                                           (0b11ULL << 12U) | (0b010ULL << 16U) | (1ULL << 31U);
 
-// HCR_EL2:  VM=1 (Stage 2 translation enable, bit 0)
-//           RW=1 (EL1 is AArch64, bit 31)
-// All other EL1 trap/routing bits stay 0 in Phase 5; Phase 6 will set
-// IMO/FMO for vIRQ routing.
-inline constexpr std::uint64_t kHcrEl2 = (1ULL << 0U) | (1ULL << 31U);
+// HCR_EL2:  VM=1  (Stage 2 translation enable, bit 0)
+//           FMO=1 (route physical FIQ to EL2, bit 3)
+//           IMO=1 (route physical IRQ to EL2, bit 4)
+//           RW=1  (EL1 is AArch64, bit 31)
+// IMO/FMO make the hypervisor the sole owner of physical interrupts —
+// guests see only vINTIDs injected via ICH_LR (components/core_gic) —
+// and additionally expose the virtual interrupt registers (ICV_*) to
+// EL1 in place of the physical ICC_* ones.
+inline constexpr std::uint64_t kHcrEl2 = (1ULL << 0U) | (1ULL << 3U) | (1ULL << 4U) | (1ULL << 31U);
 
 } // namespace
 

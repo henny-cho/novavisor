@@ -180,7 +180,7 @@ cmd_run() {
     echo "==> Running NovaVisor in QEMU: ${ELF}"
     echo "==> Press Ctrl-A then x to exit QEMU."
     qemu-system-aarch64 \
-        -machine virt,virtualization=on \
+        -machine virt,virtualization=on,gic-version=3 \
         -cpu cortex-a57 \
         -nographic \
         -m 1024 \
@@ -226,7 +226,7 @@ cmd_debug() {
     echo "==> In another shell:  aarch64-none-elf-gdb ${ELF} -ex 'target remote :1234'"
     echo "==> Press Ctrl-A then x in QEMU to exit."
     qemu-system-aarch64 \
-        -machine virt,virtualization=on \
+        -machine virt,virtualization=on,gic-version=3 \
         -cpu cortex-a57 \
         -nographic \
         -m 1024 \
