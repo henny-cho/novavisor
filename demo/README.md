@@ -66,6 +66,14 @@ SMCCC range (`0x8400_xxxx`, HVC conduit) — `SYSTEM_OFF` stops the VM,
 page survives a reset; the guest window does not). IDs in
 `nova/abi/psci.h`, stubs in `common/include/guest_psci.h`.
 
+SMP (Phase 12): guest_table slots carry a static physical-core
+affinity — slots 0/1 run on core 0, slots 2/3 on core 1 — so a
+manifest places a guest on the other core purely by `load_addr`.
+Guests on different cores run truly in parallel and can talk through
+the lock-free SPSC rings in the IVC shared page (layout in
+`nova/abi/ivc_ring.h`, helpers in `common/include/guest_ring.h`,
+acquire/release only — no exclusives, safe with the EL1 MMU off).
+
 Multi-VM notes (Phase 7): every guest links against the same IPA window
 and is loaded at its own PA slot (`load_addr` = `NOVA_GUEST_IPA_BASE +
 index * NOVA_GUEST_PA_STRIDE`). Scheduling is cooperative — a waiting

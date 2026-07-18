@@ -1,0 +1,47 @@
+name: "08_smp_pingpong"
+description: "Two VMs on two physical cores exchanging 1000 SPSC-ring round-trips — true parallel RTT, cross-core VM start, and cross-core global halt."
+phase: 12
+enabled: false
+timeout_seconds: 30
+
+# pong loads at slot 2 (0x50400000) — guest_table gives slots 2/3
+# core 1 affinity, so the load address alone places it on the other
+# physical core (started via ping's HVC_VM_START -> cross-call).
+guests:
+  - name: "ping"
+    binary: "smp_ping.bin"
+    load_addr:   0x50000000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+  - name: "pong"
+    binary: "smp_pong.bin"
+    load_addr:   0x50400000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+
+# Order is deterministic: the core-1 banner precedes all guest output
+# (secondaries come online during RuntimeStart); ping waits for pong's
+# READY marker before the timed rounds, so "pong: ready" precedes the
+# statistics line; ping pushes DONE only after printing it; pong prints
+# its farewell, echoes DONE, and powers off, while ping holds its exit
+# for 50 ms of wall time — so pong's retirement lines land first and
+# the halt line (both VMs gone) is last.
+expect:
+  - pattern: "core 1 online"
+    within_seconds: 10
+  - pattern: "pong: ready"
+    within_seconds: 15
+  - pattern: "smp pingpong: 1000 rounds, avg RTT="
+    within_seconds: 25
+  - pattern: "pong: done"
+    within_seconds: 27
+  - pattern: "system_off"
+    within_seconds: 28
+  - pattern: "demo_exit code=0"
+    within_seconds: 29
+  - pattern: "all VCPUs off"
+    within_seconds: 30
