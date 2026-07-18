@@ -25,6 +25,13 @@ _start:
     str     xzr, [x9], #8
     b       1b
 2:
+    // Enable EL0/EL1 FP/SIMD access (CPACR_EL1.FPEN = 0b11) so compiled
+    // C may use FP freely. CPACR is banked per guest by the hypervisor;
+    // the FP register state itself arrives lazily on first use.
+    mov     x9, #(0x3 << 20)
+    msr     cpacr_el1, x9
+    isb
+
     // Call main. Demos use the standard `int main(void)` signature.
     bl      main
 

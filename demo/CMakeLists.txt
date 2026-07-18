@@ -25,15 +25,11 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # EL1 bare-metal: no libc startup, no stack protector (no runtime).
 # -fno-builtin prevents gcc from lowering memcpy/memset into libc calls
 # we don't link.
-# -mgeneral-regs-only: the hypervisor's VCPU switch does not save
-# FP/SIMD state, so guests must never touch it (GCC would otherwise
-# vectorize memory ops at -O2).
 add_compile_options(
     -ffreestanding
     -nostdlib
     -fno-builtin
     -fno-stack-protector
-    -mgeneral-regs-only
     -Wall -Wextra
     -O2
     -g
@@ -65,12 +61,19 @@ add_custom_command(
 )
 add_custom_target(demo_linker_script DEPENDS ${DEMO_LINKER_SCRIPT})
 
-# add_demo_guest(<name> <sources...>)
+# add_demo_guest(<name> [FPSIMD] <sources...>)
 #   Produces <name> (ELF) and <name>.bin (raw binary for QEMU -device loader).
 #   The binary is what the hypervisor actually consumes at the manifest's
 #   load_addr.
+#   The hypervisor switches FP/SIMD state lazily, so guests MAY use it —
+#   but GP-only stays the default so a demo's use of FP is a deliberate,
+#   visible choice (FPSIMD keyword), not an artifact of -O2 vectorization.
 function(add_demo_guest name)
-    add_executable(${name} ${ARGN} $<TARGET_OBJECTS:demo_common>)
+    cmake_parse_arguments(ARG "FPSIMD" "" "" ${ARGN})
+    add_executable(${name} ${ARG_UNPARSED_ARGUMENTS} $<TARGET_OBJECTS:demo_common>)
+    if(NOT ARG_FPSIMD)
+        target_compile_options(${name} PRIVATE -mgeneral-regs-only)
+    endif()
     target_include_directories(${name} PRIVATE ${DEMO_COMMON_DIR}/include ${NOVA_ROOT})
     add_dependencies(${name} demo_linker_script)
     target_link_options(${name} PRIVATE
@@ -97,5 +100,6 @@ add_subdirectory(02_timer)            # Phase 6
 add_subdirectory(03_ivc_pingpong)     # Phase 7
 add_subdirectory(04_native_gic)       # Phase 8
 add_subdirectory(05_preempt)          # Phase 9
-# 05_zephyr+ are real-OS demos: they reference external images and need
-# no cmake subdir.
+add_subdirectory(06_el1_mmu_fp)       # Phase 10
+# Real-OS demos (Zephyr/Linux, Phase 16+) reference external images and
+# need no cmake subdir.
