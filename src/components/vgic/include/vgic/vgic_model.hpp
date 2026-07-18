@@ -64,9 +64,24 @@ inline constexpr std::uint64_t kGicrIcfgr1       = NOVA_GICR_ICFGR1;
 
 // Read-only identification values (emulation policy, not architecture).
 inline constexpr std::uint32_t kGicdTyperValue = 0;          // ITLinesNumber=0: no SPIs
-inline constexpr std::uint32_t kGicrTyperLast  = 1U << 4U;   // sole redistributor
+inline constexpr std::uint32_t kGicrTyperLast  = 1U << 4U;   // highest frame of the VM
 inline constexpr std::uint32_t kGicIidrValue   = 0x43B;      // implementer: Arm
 inline constexpr std::uint32_t kPidr2GicV3     = 0x3U << 4U; // ArchRev = GICv3
+
+// Which redistributor frame is being emulated: `number` is the vCPU
+// index within the VM (GICR_TYPER.Processor_Number AND the Aff0 of the
+// affinity word — it must equal the vCPU's VMPIDR so the guest's
+// TYPER-affinity walk finds its own frame); `last` terminates that
+// walk on the VM's highest frame.
+struct RedistId {
+  std::uint32_t number = 0;
+  bool          last   = true;
+};
+
+[[nodiscard]] constexpr auto redist_typer(RedistId id) noexcept -> std::uint64_t {
+  return (static_cast<std::uint64_t>(id.number) << 32U) | (static_cast<std::uint64_t>(id.number) << 8U) |
+         (id.last ? kGicrTyperLast : 0U);
+}
 
 // GICR_WAKER bits.
 inline constexpr std::uint32_t kWakerProcessorSleep = NOVA_GICR_WAKER_PROCESSOR_SLEEP;
@@ -147,8 +162,8 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
   return false;
 }
 
-[[nodiscard]] inline auto redist_read(const RedistState& r, std::uint64_t off, std::uint32_t size) noexcept
-    -> MmioRead {
+[[nodiscard]] inline auto redist_read(const RedistState& r, std::uint64_t off, std::uint32_t size,
+                                      RedistId id = {}) noexcept -> MmioRead {
   if (off >= kGicrIpriorityr && off + size <= kGicrIpriorityEnd) {
     return {.known = true, .value = detail::prio_read(r.prio, off - kGicrIpriorityr, size)};
   }
@@ -158,9 +173,9 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
   case kGicrIidr:
     return {.known = true, .value = kGicIidrValue};
   case kGicrTyper:
-    return {.known = true, .value = kGicrTyperLast}; // upper word 0 for size 8 too
+    return {.known = true, .value = redist_typer(id)}; // trap layer truncates 4-byte reads
   case kGicrTyperHi:
-    return {.known = true, .value = 0};
+    return {.known = true, .value = redist_typer(id) >> 32U};
   case kGicrWaker:
     // ChildrenAsleep mirrors ProcessorSleep — the wake handshake
     // completes immediately (there is no physical child to wait for).

@@ -42,7 +42,10 @@ std::size_t                            g_lr_count = 0;
 
 // One distributor view shared by all VMs. Its state still gates
 // nothing (per-INTID enables live in the per-VCPU redistributor), but
-// two cores' guests can MMIO it concurrently — serialize the RMW.
+// two cores' guests can MMIO it concurrently — serialize the RMW. The
+// same lock guards the redistributor register file: a guest may MMIO
+// a sibling vCPU's frame from another core, so every `pending` RMW
+// (MMIO write, post, refill) takes it.
 DistState      g_dist;
 sync::SpinLock g_dist_lock;
 
@@ -65,8 +68,12 @@ void flush(std::size_t index) noexcept {
     }
   }
 
-  const bool          overflow = refill(cpu, g_lr_count);
-  const std::uint64_t hcr      = gic_virt::kIchHcrEn | (overflow ? gic_virt::kIchHcrUie : 0U);
+  bool overflow = false;
+  {
+    sync::Guard guard{g_dist_lock}; // refill claims `pending` bits — races sibling-frame MMIO
+    overflow = refill(cpu, g_lr_count);
+  }
+  const std::uint64_t hcr = gic_virt::kIchHcrEn | (overflow ? gic_virt::kIchHcrUie : 0U);
 
   if (resident) {
     for (std::size_t i = 0; i < g_lr_count; ++i) {
@@ -101,17 +108,46 @@ void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
   call->value = r.value;
 }
 
+// A GICR access selects a frame by stride; the frame is the vCPU index
+// within the ACCESSING guest's VM. Frames past the VM's vcpu count are
+// RAZ/WI (the guest's TYPER walk stops at Last and never gets there).
 void redist_mmio(MmioCall* call, std::uint64_t off) noexcept {
-  CpuState& cpu = g_cpu[resident_here()];
+  const std::size_t      frame = off / kGicrFrameSize;
+  const std::size_t      vm    = vm_of(resident_here());
+  const GuestDescriptor& guest = guest_table()[vm];
+  if (frame >= guest.vcpus) {
+    if (!call->write) {
+      call->value = 0;
+    }
+    log_raz_wi("GICR", off);
+    return;
+  }
+  const std::size_t slot = slot_of(vm, frame);
+  const RedistId    id{.number = static_cast<std::uint32_t>(frame), .last = frame == guest.vcpus - 1U};
+  CpuState&         cpu    = g_cpu[slot];
+  const std::size_t in_off = off % kGicrFrameSize;
+
   if (call->write) {
-    if (redist_write(cpu.redist, off, call->size, call->value)) {
-      flush(resident_here()); // enable/pending changes may unlock queued vIRQs
-    } else {
+    bool known = false;
+    {
+      sync::Guard guard{g_dist_lock}; // sibling frames are cross-core writable
+      known = redist_write(cpu.redist, in_off, call->size, call->value);
+    }
+    if (!known) {
       log_raz_wi("GICR", off);
+      return;
+    }
+    // Enable/pending changes may unlock queued vIRQs — but only the
+    // owning core may touch the target's LR/HCR state. A sibling frame
+    // written from another core is picked up by the owner's next flush
+    // (post, maintenance, switch-in); guests program their own frame
+    // on their own core, so the deferred case is theoretical.
+    if (guest.cpu[frame] == cpu::id()) {
+      flush(slot);
     }
     return;
   }
-  const MmioRead r = redist_read(cpu.redist, off, call->size);
+  const MmioRead r = redist_read(cpu.redist, in_off, call->size, id);
   if (!r.known) {
     log_raz_wi("GICR", off);
   }
@@ -168,7 +204,10 @@ auto post(std::size_t index, std::uint32_t vintid) noexcept -> bool {
   if (vintid >= kNumPrivate) {
     return false; // SPIs are not modeled (GICD_TYPER advertises none)
   }
-  g_cpu[index].redist.pending |= 1U << vintid;
+  {
+    sync::Guard guard{g_dist_lock}; // pending RMW races sibling-frame MMIO
+    g_cpu[index].redist.pending |= 1U << vintid;
+  }
   flush(index);
   return true;
 }
@@ -205,7 +244,8 @@ void vgic_component::handle_mmio(MmioCall* call) noexcept {
     vgic::dist_mmio(call, call->ipa - gic_virt::kGicdIpaBase);
     return;
   }
-  if (call->ipa >= gic_virt::kGicrIpaBase && call->ipa < gic_virt::kGicrIpaBase + vgic::kGicrFrameSize) {
+  if (call->ipa >= gic_virt::kGicrIpaBase &&
+      call->ipa < gic_virt::kGicrIpaBase + kMaxVcpusPerVm * vgic::kGicrFrameSize) {
     call->handled = true;
     vgic::redist_mmio(call, call->ipa - gic_virt::kGicrIpaBase);
   }

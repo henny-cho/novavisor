@@ -66,8 +66,25 @@ TEST(VgicRedist, WakerHandshake) {
 
 TEST(VgicRedist, TyperReportsLast) {
   const RedistState c{};
+  // Default identity: frame 0 of a single-vCPU VM — Last set, number 0.
   EXPECT_EQ(redist_read(c, kGicrTyper, 8).value, static_cast<std::uint64_t>(kGicrTyperLast));
   EXPECT_EQ(redist_read(c, kGicrTyperHi, 4).value, 0U);
+}
+
+TEST(VgicRedist, TyperEncodesFrameIdentity) {
+  const RedistState          c{};
+  const nova::vgic::RedistId frame0{.number = 0, .last = false};
+  const nova::vgic::RedistId frame1{.number = 1, .last = true};
+
+  // Frame 0 of a 2-vCPU VM: Processor_Number 0, affinity 0, not Last.
+  EXPECT_EQ(redist_read(c, kGicrTyper, 8, frame0).value, 0U);
+  // Frame 1: Processor_Number in [23:8], Aff0 in [39:32], Last set —
+  // the guest's affinity walk (TYPER_HI == its MPIDR) must terminate here.
+  const std::uint64_t t1 = redist_read(c, kGicrTyper, 8, frame1).value;
+  EXPECT_EQ((t1 >> 8U) & 0xFFFFU, 1U);
+  EXPECT_EQ(t1 >> 32U, 1U);
+  EXPECT_NE(t1 & kGicrTyperLast, 0U);
+  EXPECT_EQ(redist_read(c, kGicrTyperHi, 4, frame1).value, 1U);
 }
 
 TEST(VgicRedist, EnableSetAndClearAreOneSided) {
