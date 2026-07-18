@@ -151,6 +151,10 @@ if(CMAKE_CROSSCOMPILING)
         -nostdlib
         -Wl,--gc-sections
     )
+    # The script is generated (linker.ld.S template + board_layout.h);
+    # make sure it exists before linking and relink when it changes.
+    add_dependencies(novavisor.elf hal_armv8_linker_script)
+    set_target_properties(novavisor.elf PROPERTIES LINK_DEPENDS ${HAL_ARMV8_LINKER_SCRIPT})
 
     # Raw flat binary required by some QEMU boot modes.
     add_custom_command(TARGET novavisor.elf POST_BUILD

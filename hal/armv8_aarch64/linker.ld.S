@@ -1,13 +1,16 @@
 /*
- * bare-metal linker script for QEMU virt board
- * AArch64 Cortex-A57
+ * Bare-metal linker script template for the EL2 hypervisor image.
+ * Preprocessed with `cc -E -P -x c` (see hal/armv8_aarch64/CMakeLists);
+ * the RAM window comes from the active board's board_layout.h so this
+ * file stays board-agnostic.
  */
+#include "hal/board_qemu_virt/include/board_layout.h"
+
 ENTRY(_start)
 
 MEMORY
 {
-    /* QEMU virt board memory usually starts at 0x40000000 */
-    RAM (rwx) : ORIGIN = 0x40000000, LENGTH = 128M
+    RAM (rwx) : ORIGIN = NOVA_BOARD_RAM_BASE, LENGTH = NOVA_BOARD_RAM_SIZE
 }
 
 SECTIONS
