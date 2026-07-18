@@ -31,11 +31,11 @@ SECTIONS
 
     .bss (NOLOAD) : {
         . = ALIGN(8);
-        bss_start = .;
+        __bss_start = .;
         *(.bss*)
         *(COMMON)
-        . = ALIGN(8);   /* keep bss_end 8-byte aligned for boot.S's word loop */
-        bss_end = .;
+        . = ALIGN(8);   /* keep __bss_end 8-byte aligned for boot.S's word loop */
+        __bss_end = .;
     } > RAM
 
     /* Allocate 16KB for stack */
