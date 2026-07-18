@@ -30,9 +30,13 @@ jobs:
           restore-keys: cpm-
 
       - name: Install dependencies
+        # The distro clang-format (v18 on noble) disagrees with the pinned
+        # v20 on wrapping rules; install the pinned version via pipx.
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y cmake ninja-build clang-format
+          sudo apt-get install -y cmake ninja-build
+          source scripts/versions.sh
+          pipx install "clang-format==${CLANG_FORMAT_VERSION}"
 
       - name: Check formatting
         run: scripts/task.sh format --check

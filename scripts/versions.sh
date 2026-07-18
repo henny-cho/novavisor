@@ -28,3 +28,9 @@ export TOOLCHAIN_TAR_NAME="arm-gnu-toolchain-${TOOLCHAIN_VERSION}-${OS_PREFIX}${
 export TOOLCHAIN_EXTRACT_NAME="arm-gnu-toolchain-${TOOLCHAIN_VERSION,,}-${OS_PREFIX}${ARCH_SUFFIX}-aarch64-none-elf"
 export TOOLCHAIN_TAR="${TOOLCHAIN_TAR_NAME}.tar.xz"
 export TOOLCHAIN_URL="https://developer.arm.com/-/media/Files/downloads/gnu/${TOOLCHAIN_VERSION}/binrel/${TOOLCHAIN_TAR}"
+
+# clang-format pin — single source for task.sh's version guard, setup_env.sh,
+# and CI. Must match the mirrors-clang-format rev in .pre-commit-config.yaml.
+# Majors disagree on wrapping (v18 vs v20 trailing-return), so an unpinned
+# distro binary produces false violations against CI-canonical formatting.
+export CLANG_FORMAT_VERSION="20.1.7"

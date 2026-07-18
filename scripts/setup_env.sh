@@ -38,8 +38,8 @@ CORE_PACKAGES=(
     cmake
     ninja-build
     ccache
-    clang-format
     clang-tidy
+    pipx
     qemu-system-aarch64
     python3
     python3-yaml
@@ -70,6 +70,14 @@ install_packages() {
     fi
     sudo apt-get update -q
     sudo apt-get install -y "${packages[@]}"
+}
+
+# The distro clang-format drifts across releases (v18 on noble) and majors
+# disagree on wrapping rules, so install the pinned version instead of the
+# apt package. task.sh format enforces the pinned major at runtime.
+install_clang_format() {
+    echo "==> Installing clang-format ${CLANG_FORMAT_VERSION}..."
+    pipx install --force "clang-format==${CLANG_FORMAT_VERSION}"
 }
 
 install_toolchain() {
@@ -119,6 +127,7 @@ install_hooks() {
 
 echo "=== NovaVisor Environment Setup ==="
 install_packages
+install_clang_format
 install_toolchain
 ensure_env_script
 if [[ ${CI_MODE} -eq 0 ]]; then

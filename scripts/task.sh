@@ -9,6 +9,10 @@ set -euo pipefail
 WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_ROOT="${WORK_DIR}/build"
 
+# Pinned tool versions (CLANG_FORMAT_VERSION, toolchain).
+# shellcheck source=versions.sh disable=SC1091
+source "${WORK_DIR}/scripts/versions.sh"
+
 # Resolve a CMake preset's binaryDir. Presets use ${sourceDir}/build/<name>,
 # so this is a simple mapping — kept as a function so callers never hardcode
 # the layout.
@@ -57,6 +61,24 @@ _find_sources() {
     find . \
         -type d \( -name "external" -o -name ".toolchain" -o -name "build" \) -prune \
         -o -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.c' -o -name '*.h' \) -print0
+}
+
+# Resolve a clang-format binary matching the pinned major version. Majors
+# disagree on wrapping rules, so a mismatched binary reports false
+# violations against (or silently rewrites) CI-canonical formatting.
+_clang_format() {
+    local major="${CLANG_FORMAT_VERSION%%.*}"
+    local bin
+    for bin in "clang-format-${major}" clang-format; do
+        command -v "${bin}" >/dev/null 2>&1 || continue
+        if "${bin}" --version | grep -q " ${major}\."; then
+            echo "${bin}"
+            return 0
+        fi
+    done
+    echo "Error: clang-format ${major}.x not found (pinned: ${CLANG_FORMAT_VERSION})." >&2
+    echo "Install it with: pipx install clang-format==${CLANG_FORMAT_VERSION}" >&2
+    return 1
 }
 
 # Route CPM/FetchContent source checkouts to a project-local cache shared by
@@ -121,10 +143,13 @@ cmd_format() {
         [[ "${arg}" == "--check" ]] && CHECK_ONLY=1
     done
 
+    local fmt
+    fmt="$(_clang_format)"
+
     if [[ ${CHECK_ONLY} -eq 1 ]]; then
-        echo "==> Checking clang-format compliance..."
+        echo "==> Checking clang-format compliance (${fmt})..."
         local violations
-        violations=$(_find_sources | xargs -0 -r clang-format --dry-run --Werror 2>&1 || true)
+        violations=$(_find_sources | xargs -0 -r "${fmt}" --dry-run --Werror 2>&1 || true)
         if [[ -n "${violations}" ]]; then
             echo "Error: formatting violations found:"
             echo "${violations}"
@@ -133,8 +158,8 @@ cmd_format() {
         fi
         echo "Format check passed."
     else
-        echo "==> Running clang-format..."
-        _find_sources | xargs -0 -r clang-format -i
+        echo "==> Running clang-format (${fmt})..."
+        _find_sources | xargs -0 -r "${fmt}" -i
         echo "Formatting complete."
     fi
 }
