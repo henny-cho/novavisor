@@ -11,7 +11,9 @@ demo/
 ├── common/
 │   ├── startup.S                # EL1 entry: stack, BSS, call main(), HVC_EXIT
 │   ├── linker.ld.S              # linker script template (window from nova/guest_layout.h)
-│   └── include/demo_hvc.h       # HVC ABI helpers (IDs from nova/hvc_abi.h)
+│   └── include/
+│       ├── demo_hvc.h           # HVC ABI helpers (IDs from nova/hvc_abi.h)
+│       └── ivc_shm.h            # guest-owned mailbox protocol on the IVC shared page
 ├── 01_hello/                    # Phase 5 demo
 │   ├── CMakeLists.txt
 │   ├── main.c
@@ -21,13 +23,20 @@ demo/
 │   ├── main.c
 │   ├── vectors.S                # guest EL1 vector table (vIRQ handler)
 │   └── manifest.yml
-├── 03_ivc_pingpong/             # Phase 7
-├── 04_zephyr/                   # Phase 8 (references external Zephyr image)
-├── 05_linux/                    # Phase 9 (references external Linux kernel)
-├── 06_mixed_workload/           # Phase 10
-├── 07_fault_recovery/           # Phase 11
-├── 08_configurable/             # Phase 12
-└── 09_passthrough/              # Phase 13
+├── 03_ivc_pingpong/             # Phase 7 demo — two VMs, shared page + doorbell
+│   ├── CMakeLists.txt
+│   ├── ping.c                   # initiator (VM 0): VM_START, publish, doorbell, poll
+│   ├── pong.c                   # responder (VM 1): echo until last-round flag
+│   ├── vectors.S
+│   └── manifest.yml
+├── 04_native_gic/               # Phase 8
+├── 05_zephyr/                   # Phase 9 (references external Zephyr image)
+├── 06_smp_pingpong/             # Phase 10
+├── 07_linux/                    # Phase 11 (references external Linux kernel)
+├── 08_mixed_workload/           # Phase 12
+├── 09_fault_recovery/           # Phase 13
+├── 10_configurable/             # Phase 14
+└── 11_passthrough/              # Phase 15
 ```
 
 ## Hypercall ABI (demo ↔ hypervisor contract)
@@ -40,10 +49,18 @@ stubs and the hypervisor dispatcher. This table documents them:
 | `0x1000` | `PUTS`  | x1=ptr, x2=len | Write string to UART via hypervisor |
 | `0x1001` | `PUTC`  | x1=char        | Write one character |
 | `0x1002` | `EXIT`  | x1=code        | Guest termination. Hypervisor logs `demo_exit code=<n>` |
-| `0x1003` | `YIELD` | —              | Yield the VCPU (Phase 7+) |
-| `0x1004` | `HEARTBEAT` | x1=vm_id   | Liveness tick (Phase 11) |
-| `0x1100..0x11FF` | IVC range    | see Phase 7 | Inter-VM communication |
+| `0x1003` | `YIELD` | —              | Yield the VCPU (cooperative round-robin) |
+| `0x1004` | `HEARTBEAT` | x1=vm_id   | Liveness tick (Phase 13) |
+| `0x1005` | `VM_START` | x1=vm index | Start a not-yet-running VM; 0 or -1 in x0 |
+| `0x1100` | `IVC_DOORBELL` | x1=vm index | Inject doorbell vIRQ (SGI 0) into the target VM; 0 or -1 in x0 |
 | `0x1200` | `TIMER_SET` | x1=ticks | One-shot: injects vINTID 27 after `ticks` counter cycles; returns 0 in x0 |
+
+Multi-VM notes (Phase 7): every guest links against the same IPA window
+and is loaded at its own PA slot (`load_addr` = `NOVA_GUEST_IPA_BASE +
+index * NOVA_GUEST_PA_STRIDE`). Scheduling is cooperative — a waiting
+guest must poll + `hvc_yield()`; a bare `wfi` stalls the whole core.
+The 4 KiB IVC shared page appears in every VM at `NOVA_IVC_SHM_IPA`
+(protocol helpers in `common/include/ivc_shm.h`).
 
 The hypervisor's HVC dispatcher recognizes these IDs. Guest programs use the inline helpers in `common/include/demo_hvc.h`.
 

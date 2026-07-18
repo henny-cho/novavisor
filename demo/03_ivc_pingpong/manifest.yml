@@ -1,7 +1,7 @@
 name: "03_ivc_pingpong"
 description: "Two VMs ping-pong 1000 rounds over the IVC shared page with doorbell vIRQs."
 phase: 7
-enabled: false
+enabled: true
 timeout_seconds: 15
 
 guests:

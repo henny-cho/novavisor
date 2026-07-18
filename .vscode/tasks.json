@@ -82,7 +82,8 @@
             "description": "Select demo to debug",
             "options": [
                 "01_hello",
-                "02_timer"
+                "02_timer",
+                "03_ivc_pingpong"
             ],
             "default": "01_hello"
         }
