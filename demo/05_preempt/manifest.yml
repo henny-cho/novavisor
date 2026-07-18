@@ -1,7 +1,7 @@
 name: "05_preempt"
 description: "Time-slice preemption + wfi blocking: a non-cooperative busy guest and a wfi-driven ticker share one core."
 phase: 9
-enabled: false
+enabled: true
 timeout_seconds: 20
 
 guests:
