@@ -5,11 +5,12 @@
 // Pure Stage 2 page table population logic — no bare-metal runtime
 // dependency, fully host-testable.
 //
-// Maps arbitrary 4 KiB-aligned identity ranges within one 1 GiB region:
-// 2 MiB-aligned chunks become L2 Block descriptors (no L3 needed);
-// unaligned head/tail pages go through L3 tables drawn from a
-// caller-provided pool. Multiple disjoint ranges may be mapped into the
-// same table set (Phase 7 multi-window, Phase 8 guest RAM + MMIO).
+// Maps arbitrary 4 KiB-aligned IPA→PA ranges (identity or translated by
+// a constant offset) within one 1 GiB IPA region: chunks whose IPA slot
+// and PA are both 2 MiB-aligned become L2 Block descriptors (no L3
+// needed); the rest goes through L3 tables drawn from a caller-provided
+// pool. Multiple disjoint ranges may be mapped into the same table set
+// (per-VM guest window + shared pages, Phase 8 guest RAM + MMIO).
 //
 // Reference: ARM ARM DDI0487 §D5.2 (VMSAv8-64 multi-level translation).
 //
@@ -100,22 +101,26 @@ inline auto find_l3(Stage2Tables& t, std::uint64_t table_pa) noexcept -> Table* 
 
 } // namespace detail
 
-// Install a 1:1 identity mapping of [ipa_base, ipa_base + size) with the
-// given leaf attributes. 2 MiB-aligned chunks become L2 Blocks; the rest
+// Install a mapping of IPA [ipa_base, ipa_base + size) onto PA
+// [pa_base, pa_base + size) with the given leaf attributes. Chunks whose
+// IPA slot and PA are both 2 MiB-aligned become L2 Blocks; the rest
 // becomes L3 Pages from the pool. May be called repeatedly for disjoint
-// ranges (call init_tables() once first).
+// IPA ranges (call init_tables() once first).
 //
 // Returns false — with the tables in a partially-written state that must
 // not be activated — when:
-//   - ipa_base/size are not 4 KiB-aligned, or size == 0
-//   - the range crosses (or lands outside) the single mapped 1 GiB region
+//   - ipa_base/pa_base/size are not 4 KiB-aligned, or size == 0
+//   - the IPA range crosses (or lands outside) the single mapped 1 GiB region
 //   - the L3 pool is exhausted
 //   - a page range overlaps an already-installed Block
-[[nodiscard]] inline auto map_identity_range(Stage2Tables& t, std::uint64_t ipa_base, std::uint64_t size,
-                                             std::uint64_t leaf_attrs) noexcept -> bool {
-  if (size == 0 || (ipa_base % k4KiB) != 0 || (size % k4KiB) != 0) {
+[[nodiscard]] inline auto map_range(Stage2Tables& t, std::uint64_t ipa_base, std::uint64_t pa_base, std::uint64_t size,
+                                    std::uint64_t leaf_attrs) noexcept -> bool {
+  if (size == 0 || (ipa_base % k4KiB) != 0 || (pa_base % k4KiB) != 0 || (size % k4KiB) != 0) {
     return false;
   }
+  // Constant IPA→PA displacement; well-defined under unsigned wraparound
+  // even when pa_base < ipa_base.
+  const std::uint64_t pa_off = pa_base - ipa_base;
 
   Table&            l1  = *t.l1;
   Table&            l2  = *t.l2;
@@ -139,9 +144,10 @@ inline auto find_l3(Stage2Tables& t, std::uint64_t table_pa) noexcept -> Table* 
   while (addr < end) {
     const std::size_t i2 = l2_index(addr);
 
-    // Whole free 2 MiB slot → Block descriptor, no L3 spent.
-    if ((addr % k2MiB) == 0 && end - addr >= k2MiB && !is_valid(l2[i2])) {
-      l2[i2] = make_block(addr, leaf_attrs);
+    // Whole free 2 MiB slot with a Block-alignable PA → Block
+    // descriptor, no L3 spent.
+    if ((addr % k2MiB) == 0 && ((addr + pa_off) % k2MiB) == 0 && end - addr >= k2MiB && !is_valid(l2[i2])) {
+      l2[i2] = make_block(addr + pa_off, leaf_attrs);
       addr += k2MiB;
       continue;
     }
@@ -168,13 +174,19 @@ inline auto find_l3(Stage2Tables& t, std::uint64_t table_pa) noexcept -> Table* 
     const std::uint64_t slot_end  = (addr & ~(k2MiB - 1)) + k2MiB;
     const std::uint64_t chunk_end = (end < slot_end) ? end : slot_end;
     for (; addr < chunk_end; addr += k4KiB) {
-      (*l3)[l3_index(addr)] = make_page(addr, leaf_attrs);
+      (*l3)[l3_index(addr)] = make_page(addr + pa_off, leaf_attrs);
     }
   }
   return true;
 }
 
-// Convenience: reset + map a single range.
+// Convenience: 1:1 identity mapping.
+[[nodiscard]] inline auto map_identity_range(Stage2Tables& t, std::uint64_t ipa_base, std::uint64_t size,
+                                             std::uint64_t leaf_attrs) noexcept -> bool {
+  return map_range(t, ipa_base, ipa_base, size, leaf_attrs);
+}
+
+// Convenience: reset + identity-map a single range.
 [[nodiscard]] inline auto build_identity_map(Stage2Tables& t, std::uint64_t ipa_base, std::uint64_t size,
                                              std::uint64_t leaf_attrs) noexcept -> bool {
   init_tables(t);

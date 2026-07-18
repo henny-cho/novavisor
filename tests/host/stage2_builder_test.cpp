@@ -243,6 +243,56 @@ TEST_F(IdentityMapFixture, SecondRangeInSameSlotReusesL3Table) {
 }
 
 // ---------------------------------------------------------------------------
+// map_range — translated (non-identity) mappings
+// ---------------------------------------------------------------------------
+
+TEST_F(IdentityMapFixture, TranslatedPagesCarryPaOffset) {
+  // Guest slot 1 layout: same IPA window, PA displaced by one 2 MiB stride.
+  const std::uint64_t pa_base = kIpaBase + (2 * k2MiB);
+  init_tables(tables);
+  ASSERT_TRUE(map_range(tables, kIpaBase, pa_base, kIpaSize, desc::kAttrNormalRwx));
+
+  EXPECT_EQ(descriptor_type(l2[128]), desc::kTypeTable);
+  for (std::size_t i = 0; i < 256; i += 51) { // spot-check across the window
+    SCOPED_TRACE("L3 page " + std::to_string(i));
+    EXPECT_EQ(output_addr(pool[0][i]), pa_base + (static_cast<std::uint64_t>(i) * k4KiB));
+  }
+  EXPECT_EQ(pool[0][256], kInvalid);
+}
+
+TEST_F(IdentityMapFixture, TranslatedBlockKeepsPaAlignment) {
+  const std::uint64_t pa_base = kIpaBase + (4 * k2MiB);
+  init_tables(tables);
+  ASSERT_TRUE(map_range(tables, kIpaBase, pa_base, k2MiB, desc::kAttrNormalRwx));
+
+  EXPECT_EQ(descriptor_type(l2[128]), desc::kTypeBlock);
+  EXPECT_EQ(output_addr(l2[128]), pa_base);
+  EXPECT_EQ(tables.l3_used, 0U);
+}
+
+TEST_F(IdentityMapFixture, MisalignedPaOffsetFallsBackToPages) {
+  // IPA slot is 2 MiB-aligned but the PA is displaced by 4 KiB — a Block
+  // cannot encode that, so the whole 2 MiB goes through one L3 table.
+  const std::uint64_t pa_base = kIpaBase + (2 * k2MiB) + k4KiB;
+  init_tables(tables);
+  ASSERT_TRUE(map_range(tables, kIpaBase, pa_base, k2MiB, desc::kAttrNormalRwx));
+
+  EXPECT_EQ(descriptor_type(l2[128]), desc::kTypeTable);
+  EXPECT_EQ(tables.l3_used, 1U);
+  EXPECT_EQ(output_addr(pool[0][0]), pa_base);
+  EXPECT_EQ(output_addr(pool[0][511]), pa_base + (511U * k4KiB));
+}
+
+TEST_F(IdentityMapFixture, PaBelowIpaTranslatesDownward) {
+  // Negative displacement (pa < ipa) must work via modular arithmetic.
+  const std::uint64_t pa_base = kIpaBase - (2 * k2MiB);
+  init_tables(tables);
+  ASSERT_TRUE(map_range(tables, kIpaBase, pa_base, k4KiB, desc::kAttrNormalRwx));
+
+  EXPECT_EQ(output_addr(pool[0][0]), pa_base);
+}
+
+// ---------------------------------------------------------------------------
 // Failure modes — builder must refuse, not corrupt
 // ---------------------------------------------------------------------------
 
@@ -250,6 +300,11 @@ TEST_F(IdentityMapFixture, RejectsUnalignedBaseAndSizeAndZero) {
   EXPECT_FALSE(build(kIpaBase + 1, kIpaSize));
   EXPECT_FALSE(build(kIpaBase, kIpaSize + 1));
   EXPECT_FALSE(build(kIpaBase, 0));
+}
+
+TEST_F(IdentityMapFixture, RejectsUnalignedPa) {
+  init_tables(tables);
+  EXPECT_FALSE(map_range(tables, kIpaBase, kIpaBase + 1, kIpaSize, desc::kAttrNormalRwx));
 }
 
 TEST_F(IdentityMapFixture, RejectsRangeCrossing1GiB) {
