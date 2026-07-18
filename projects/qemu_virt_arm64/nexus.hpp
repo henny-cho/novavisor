@@ -6,8 +6,9 @@
 // It declares which components are active for this target by listing them
 // in cib::components<...> inside the project config struct.
 //
-// cib::top<nova_project> wires them all together at compile time:
-//   - EarlyRuntimeInit  ← hal_init_component  (BSS clear)
+// cib::top<nova_project> wires them all together at compile time
+// (BSS is already cleared by hal/armv8_aarch64/boot.S before any C++
+// runs; EarlyRuntimeInit currently has no actions):
 //   - RuntimeStart      ← core_mmu_component  (Stage 2 MMU activate)
 //                         core_gic_component  (GICv3 + vIRQ interface)
 //                         core_timer_component (CNTVOFF/CNTHP setup)
@@ -24,7 +25,6 @@
 #include "components/core_timer/include/core_timer.hpp"
 #include "components/core_vcpu/include/core_vcpu.hpp"
 #include "components/demo_hvc/include/demo_hvc.hpp"
-#include "components/hal_init/include/hal_init.hpp"
 #include "components/trap_handler/include/trap_handler.hpp"
 
 #include <cib/top.hpp>
@@ -33,8 +33,8 @@ namespace nova {
 
 struct nova_project {
   constexpr static auto config =
-      cib::components<hal_init_component, core_mmu_component, core_gic_component, core_timer_component,
-                      boot_msg_component, trap_handler_component, demo_hvc_component, core_vcpu_component>;
+      cib::components<core_mmu_component, core_gic_component, core_timer_component, boot_msg_component,
+                      trap_handler_component, demo_hvc_component, core_vcpu_component>;
 };
 
 // nova_top is the concrete cib::top instantiation for this target.

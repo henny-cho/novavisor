@@ -21,6 +21,18 @@ _start:
     msr vbar_el2, x0
     isb
 
+    // Zero BSS: [bss_start, bss_end). Must complete before the first
+    // C++ statement runs — static state (Stage 2 tables, Vcpu, cib
+    // internals) lives there. Both markers are 8-byte aligned by the
+    // linker script, so a word-at-a-time loop is safe.
+    ldr x0, =bss_start
+    ldr x1, =bss_end
+1:
+    cmp x0, x1
+    b.ge 2f
+    str xzr, [x0], #8
+    b 1b
+2:
     // Branch to C++ main entry
     bl novavisor_main
 

@@ -34,6 +34,7 @@ SECTIONS
         bss_start = .;
         *(.bss*)
         *(COMMON)
+        . = ALIGN(8);   /* keep bss_end 8-byte aligned for boot.S's word loop */
         bss_end = .;
     } > RAM
 

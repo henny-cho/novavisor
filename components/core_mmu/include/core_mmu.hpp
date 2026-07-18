@@ -4,9 +4,9 @@
 //
 // Stage 2 MMU CIB component.
 //
-// Extends cib::RuntimeStart — runs after EarlyRuntimeInit has cleared
-// BSS (where our static L1/L2/L3 tables live), so the build step can
-// write valid descriptors without being zeroed afterwards.
+// Extends cib::RuntimeStart. BSS (where our static L1/L2/L3 tables
+// live) is cleared by boot.S before any C++ runs, so the build step
+// can write valid descriptors without being zeroed afterwards.
 //
 // Effect: on boot, identity-maps the Phase 5 guest window into Stage 2
 // and writes VTCR_EL2 / VTTBR_EL2 / HCR_EL2. After this component's

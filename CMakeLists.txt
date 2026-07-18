@@ -111,7 +111,6 @@ if(CMAKE_CROSSCOMPILING)
     set(NOVA_COMPONENTS
         nova_panic
         trap_handler
-        hal_init
         boot_msg
         core_mmu
         core_gic
