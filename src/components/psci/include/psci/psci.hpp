@@ -6,9 +6,10 @@
 //
 // Guests control their own power through the standard SMCCC range
 // (0x8400_xxxx) instead of NOVA-private HVCs: SYSTEM_OFF stops the
-// calling VM, SYSTEM_RESET warm-reboots it (pristine image reload,
-// core_vcpu::reset_vm). The pure dispatch table lives in
-// psci_model.hpp; this component binds its actions to the scheduler.
+// calling VM (every vCPU, affinity-routed), SYSTEM_RESET warm-reboots
+// it (pristine image reload, vcpu 0 reseed via smp::reset_vm). The
+// pure dispatch table lives in psci_model.hpp; this component binds
+// its actions to the scheduler.
 
 #include "trap_handler/hvc.hpp"
 

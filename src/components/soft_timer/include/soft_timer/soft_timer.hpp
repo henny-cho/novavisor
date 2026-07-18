@@ -27,8 +27,8 @@ namespace nova::soft_timer {
 
 inline constexpr std::size_t kSlotSlice       = 0;
 inline constexpr std::size_t kSlotLegacyTimer = 1;
-inline constexpr std::size_t kSlotCntvWake    = 2;                          // + VCPU index, kMaxGuests wide
-inline constexpr std::size_t kSlotWatchdog    = kSlotCntvWake + kMaxGuests; // + VM index, kMaxGuests wide
+inline constexpr std::size_t kSlotCntvWake    = 2;                         // + vCPU slot, kMaxVcpus wide
+inline constexpr std::size_t kSlotWatchdog    = kSlotCntvWake + kMaxVcpus; // + VM index, kMaxGuests wide
 inline constexpr std::size_t kSlotCount       = kSlotWatchdog + kMaxGuests;
 
 // Enable the CNTHP PPI at the GIC (RuntimeStart).

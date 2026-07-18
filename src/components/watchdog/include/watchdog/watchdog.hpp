@@ -5,10 +5,11 @@
 // Per-VM heartbeat watchdog.
 //
 // A guest opts in with HVC_HEARTBEAT (x1 = window in ms): each call
-// re-arms its deadline slot to now + window, so a healthy guest never
-// sees an expiry. Missing the window means the guest hung — the expiry
-// callback warm-resets it (core_vcpu::reset_vm), which also disarms
-// the slot; the rebooted guest re-opts in with its next heartbeat.
+// re-arms its VM's deadline slot to now + window, so a healthy guest
+// never sees an expiry. Missing the window means the guest hung — the
+// expiry callback warm-resets the VM (smp::reset_vm, affinity-routed),
+// which also disarms the slot; the rebooted guest re-opts in with its
+// next heartbeat. One heartbeating vCPU per VM (its boot vCPU).
 // x1 = 0 disarms explicitly. Stateless: the window is carried by every
 // call, the deadline lives in the soft_timer slot.
 

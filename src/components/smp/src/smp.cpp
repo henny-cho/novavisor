@@ -32,12 +32,15 @@ namespace {
 // Guests never see physical SGIs (they get vINTIDs via ICH_LR).
 inline constexpr std::uint32_t kCrossCallSgi = 0;
 
-enum class Op : std::uint8_t { kStartVm, kPostVirq };
+enum class Op : std::uint8_t { kStartVm, kPostVirq, kCpuOn, kStopVcpu, kResetVm };
 
+// `idx` is a VM for kStartVm/kResetVm, a vCPU slot otherwise. a/b are
+// wide enough for CPU_ON's entry point and context id.
 struct Request {
-  Op            op = Op::kStartVm;
-  std::uint32_t a  = 0;
-  std::uint32_t b  = 0;
+  Op            op  = Op::kStartVm;
+  std::uint32_t idx = 0;
+  std::uint64_t a   = 0;
+  std::uint64_t b   = 0;
 };
 
 // One mailbox per core, written by any core under its lock, drained by
@@ -58,6 +61,15 @@ std::array<std::atomic<bool>, cpu::kMaxCpus> g_online{};
 
 // Bounded wait for one core to report online.
 inline constexpr std::uint64_t kOnlineWaitMs = 100;
+
+// A vCPU slot's owning core (per-vCPU affinity — not the VM's).
+[[nodiscard]] auto slot_cpu(std::size_t slot) noexcept -> std::size_t {
+  return guest_table()[vm_of(slot)].cpu[vcpu_of(slot)];
+}
+
+[[nodiscard]] auto valid_slot(std::size_t slot) noexcept -> bool {
+  return vm_of(slot) < guest_table().size() && vcpu_of(slot) < guest_table()[vm_of(slot)].vcpus;
+}
 
 [[nodiscard]] auto enqueue(std::size_t target_cpu, Request r) noexcept -> bool {
   Mailbox& box = g_mail[target_cpu];
@@ -100,26 +112,84 @@ void start_secondaries() noexcept {
   }
 }
 
-auto start_vm(std::size_t index) noexcept -> bool {
-  const auto guests = guest_table();
-  if (index >= guests.size()) {
+auto start_vm(std::size_t vm) noexcept -> bool {
+  if (vm >= guest_table().size()) {
     return false;
   }
-  if (guests[index].cpu == cpu::id()) {
-    return vcpu::start_vm(index);
+  const std::size_t boot = slot_of(vm);
+  if (slot_cpu(boot) == cpu::id()) {
+    return vcpu::start_vm(vm);
   }
-  return enqueue(guests[index].cpu, {.op = Op::kStartVm, .a = static_cast<std::uint32_t>(index), .b = 0});
+  return enqueue(slot_cpu(boot), {.op = Op::kStartVm, .idx = static_cast<std::uint32_t>(vm), .a = 0, .b = 0});
 }
 
-auto post_virq(std::size_t index, std::uint32_t vintid) noexcept -> bool {
-  const auto guests = guest_table();
-  if (index >= guests.size()) {
+auto post_virq(std::size_t slot, std::uint32_t vintid) noexcept -> bool {
+  if (!valid_slot(slot)) {
     return false;
   }
-  if (guests[index].cpu == cpu::id()) {
-    return vcpu::post_virq(index, vintid);
+  if (slot_cpu(slot) == cpu::id()) {
+    return vcpu::post_virq(slot, vintid);
   }
-  return enqueue(guests[index].cpu, {.op = Op::kPostVirq, .a = static_cast<std::uint32_t>(index), .b = vintid});
+  return enqueue(slot_cpu(slot), {.op = Op::kPostVirq, .idx = static_cast<std::uint32_t>(slot), .a = vintid, .b = 0});
+}
+
+auto cpu_on(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noexcept -> bool {
+  if (!valid_slot(slot)) {
+    return false;
+  }
+  if (slot_cpu(slot) == cpu::id()) {
+    return vcpu::start_vcpu(slot, entry, context_id);
+  }
+  return enqueue(slot_cpu(slot),
+                 {.op = Op::kCpuOn, .idx = static_cast<std::uint32_t>(slot), .a = entry, .b = context_id});
+}
+
+void stop_vm(std::size_t vm, TrapContext* live) noexcept {
+  // Stop every live vCPU except the caller's own, then the local one
+  // last — stopping a resident vCPU schedules away through `live`, so
+  // nothing may follow it on this path.
+  const std::size_t self = vcpu::current_index();
+  for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
+    const std::size_t slot = slot_of(vm, v);
+    if (slot == self || !vcpu::vcpu_on(slot)) {
+      continue;
+    }
+    if (slot_cpu(slot) == cpu::id()) {
+      vcpu::stop_vcpu(slot, live);
+    } else {
+      (void)enqueue(slot_cpu(slot), {.op = Op::kStopVcpu, .idx = static_cast<std::uint32_t>(slot), .a = 0, .b = 0});
+    }
+  }
+  if (vm_of(self) == vm) {
+    vcpu::stop_vcpu(self, live);
+  }
+}
+
+void reset_vm(std::size_t vm, TrapContext* live) noexcept {
+  if (vm >= guest_table().size()) {
+    return;
+  }
+  // Secondaries go down first (PSCI: only the boot CPU survives a
+  // reset); the stop is asynchronous for foreign cores — see ADR risk
+  // on the reload window. Then the reset itself runs where vcpu 0's
+  // state lives.
+  const std::size_t boot = slot_of(vm);
+  for (std::size_t v = 1; v < guest_table()[vm].vcpus; ++v) {
+    const std::size_t slot = slot_of(vm, v);
+    if (!vcpu::vcpu_on(slot)) {
+      continue;
+    }
+    if (slot_cpu(slot) == cpu::id()) {
+      vcpu::stop_vcpu(slot, live);
+    } else {
+      (void)enqueue(slot_cpu(slot), {.op = Op::kStopVcpu, .idx = static_cast<std::uint32_t>(slot), .a = 0, .b = 0});
+    }
+  }
+  if (slot_cpu(boot) == cpu::id()) {
+    vcpu::reset_vm(vm, live);
+  } else {
+    (void)enqueue(slot_cpu(boot), {.op = Op::kResetVm, .idx = static_cast<std::uint32_t>(vm), .a = 0, .b = 0});
+  }
 }
 
 } // namespace nova::smp
@@ -155,10 +225,19 @@ void smp_component::handle_irq(IrqCall* call) noexcept {
     const smp::Request& r = batch[i];
     switch (r.op) {
     case smp::Op::kStartVm:
-      (void)vcpu::start_vm(r.a); // owner's verdict; the requester was told "accepted"
+      (void)vcpu::start_vm(r.idx); // owner's verdict; the requester was told "accepted"
       break;
     case smp::Op::kPostVirq:
-      (void)vcpu::post_virq(r.a, r.b);
+      (void)vcpu::post_virq(r.idx, static_cast<std::uint32_t>(r.a));
+      break;
+    case smp::Op::kCpuOn:
+      (void)vcpu::start_vcpu(r.idx, r.a, r.b);
+      break;
+    case smp::Op::kStopVcpu:
+      vcpu::stop_vcpu(r.idx, call->ctx);
+      break;
+    case smp::Op::kResetVm:
+      vcpu::reset_vm(r.idx, call->ctx);
       break;
     }
   }

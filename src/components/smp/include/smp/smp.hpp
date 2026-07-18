@@ -42,11 +42,20 @@ namespace nova::smp {
 void start_secondaries() noexcept;
 
 // Affinity-routed variants of the core_vcpu operations: executed
-// directly when the target VM belongs to this core, delegated through
+// directly when the target belongs to this core, delegated through
 // the owning core's mailbox otherwise. A delegated result means
 // "accepted", not "completed" — the owner may still reject it.
-[[nodiscard]] auto start_vm(std::size_t index) noexcept -> bool;
-[[nodiscard]] auto post_virq(std::size_t index, std::uint32_t vintid) noexcept -> bool;
+// start_vm/reset_vm take a VM; the rest take a vCPU slot.
+[[nodiscard]] auto start_vm(std::size_t vm) noexcept -> bool;
+[[nodiscard]] auto post_virq(std::size_t slot, std::uint32_t vintid) noexcept -> bool;
+[[nodiscard]] auto cpu_on(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noexcept -> bool;
+
+// VM-wide power operations, fanned out per vCPU. stop_vm retires every
+// live vCPU (the caller's own last — that one schedules away through
+// `live` and the call does not return to guest code). reset_vm stops
+// the secondaries and reseeds vcpu 0 on its owning core.
+void stop_vm(std::size_t vm, TrapContext* live) noexcept;
+void reset_vm(std::size_t vm, TrapContext* live) noexcept;
 
 } // namespace nova::smp
 

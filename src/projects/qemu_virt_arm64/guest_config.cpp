@@ -17,12 +17,15 @@ namespace nova {
 namespace {
 
 // Entry [0] boots automatically; the rest stay off until a guest
-// issues HVC_VM_START. Every slot sees the same IPA window and differs
-// only in PA slot, VMID (0 is reserved), and affinity core. A demo
-// selects slots — and thereby cores — through its manifest load_addr:
-// slots 0/1 stay on core 0 (single-core demos unchanged), slots 2/3
-// put a guest on core 1.
-constexpr auto make_guest(std::size_t index, std::uint8_t cpu) noexcept -> GuestDescriptor {
+// issues HVC_VM_START. Every VM sees the same IPA window and differs
+// only in PA slot, VMID (0 is reserved), and affinity. A demo selects
+// VMs — and thereby cores — through its manifest load_addr: VMs 0/1
+// boot on core 0 (single-core demos unchanged), VMs 2/3 on core 1.
+// VM 0 carries a second vCPU on the other core, so one guest image at
+// the boot slot can run SMP via PSCI CPU_ON; the extra vCPU stays off
+// for guests that never ask for it.
+constexpr auto make_guest(std::size_t index, std::uint8_t vcpus, std::array<std::uint8_t, kMaxVcpusPerVm> cpu) noexcept
+    -> GuestDescriptor {
   return GuestDescriptor{
       .ipa_base  = qemu_virt::kGuestIpaBase,
       .ipa_size  = qemu_virt::kGuestIpaSize,
@@ -30,14 +33,17 @@ constexpr auto make_guest(std::size_t index, std::uint8_t cpu) noexcept -> Guest
       .entry_pc  = qemu_virt::kGuestEntry,
       .stack_top = qemu_virt::kGuestStackTop,
       .vmid      = static_cast<std::uint16_t>(index + 1),
+      .vcpus     = vcpus,
       .cpu       = cpu,
   };
 }
 
-constexpr std::array kGuestTable{make_guest(0, 0), make_guest(1, 0), make_guest(2, 1), make_guest(3, 1)};
+constexpr std::array kGuestTable{make_guest(0, 2, {0, 1}), make_guest(1, 1, {0, 0}), make_guest(2, 1, {1, 0}),
+                                 make_guest(3, 1, {1, 1})};
 
 static_assert(kGuestTable.size() <= kMaxGuests);
-static_assert(kGuestTable[0].cpu == 0, "the boot guest belongs to the primary core");
+static_assert(kGuestTable[0].cpu[0] == 0, "the boot guest belongs to the primary core");
+static_assert(kGuestTable[0].vcpus <= kMaxVcpusPerVm);
 
 } // namespace
 

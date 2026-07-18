@@ -8,15 +8,21 @@
 // (pure, host-tested); this file is the hardware glue.
 //
 // SMP ownership rule: a VCPU runs on its static affinity core and ALL
-// of its state (ctx/EL1/FP banks, run state, budget, timer slots) is
-// read and written only there. Cross-core requests arrive as local
-// calls through the smp component's cross-call path, so nothing here
-// needs a lock; the only cross-core data is the atomic alive counter.
+// of its state (ctx/EL1/FP banks, run state, timer slots) is read and
+// written only there. Cross-core requests arrive as local calls
+// through the smp component's cross-call path, so nothing here needs
+// a lock; the only cross-core data is the atomic alive counter.
+//
+// Index model: every entry point takes a flat vCPU slot
+// (nova/abi/guest.hpp slot math). Per-VM state — Stage 2, the restart
+// budget, the watchdog deadline — keys on vm_of(slot) and is owned by
+// vcpu 0's affinity core.
 
 #include "core_vcpu/core_vcpu.hpp"
 
 #include "core_gic/core_gic.hpp"
 #include "core_mmu/core_mmu.hpp"
+#include "hal/arch/aarch64/cpu.hpp"
 #include "hal/console.hpp"
 #include "hal/cpu.hpp"
 #include "hal/timer.hpp"
@@ -68,15 +74,16 @@ struct CpuSched {
   fp::Ownership fp;
 };
 
-std::array<Vcpu, kMaxGuests>         g_vcpus;
-std::size_t                          g_count       = 0; // boot-immutable after init()
+std::array<Vcpu, kMaxVcpus>          g_vcpus;
+std::size_t                          g_count       = 0; // vCPU slots; boot-immutable after init()
 std::uint64_t                        g_slice_ticks = 0; // boot-immutable after init()
 std::array<CpuSched, cpu::kMaxCpus>  g_sched;
-lifecycle::RestartBudget<kMaxGuests> g_budget;
+lifecycle::RestartBudget<kMaxGuests> g_budget; // per-VM — micro-reboot is a VM-level policy
 
-// VMs not yet retired, machine-wide — the only scheduler state shared
-// across cores. Each core idles on its own empty ready-set; the halt
-// line is printed exactly once, by whichever core retires the last VM.
+// vCPUs not yet retired, machine-wide — the only scheduler state
+// shared across cores. Each core idles on its own empty ready-set; the
+// halt line is printed exactly once, by whichever core retires the
+// last vCPU.
 std::atomic<std::size_t> g_alive{0};
 std::atomic<bool>        g_halt_announced{false};
 
@@ -84,15 +91,22 @@ std::atomic<bool>        g_halt_announced{false};
   return g_sched[cpu::id()];
 }
 
-[[nodiscard]] auto affinity(std::size_t index) noexcept -> std::size_t {
-  return guest_table()[index].cpu;
+[[nodiscard]] auto affinity(std::size_t slot) noexcept -> std::size_t {
+  return guest_table()[vm_of(slot)].cpu[vcpu_of(slot)];
 }
 
-// This core's view of the VM table: VCPUs with a foreign affinity are
-// masked as kOff, so the pure scheduler model needs no affinity notion.
-auto states() noexcept -> std::array<sched::State, kMaxGuests> {
-  const std::size_t                    self = cpu::id();
-  std::array<sched::State, kMaxGuests> s{};
+// Slots past a VM's vcpu count exist in the arrays but are never
+// seeded, started, or picked — they stay kOff for the machine's life.
+[[nodiscard]] auto valid_slot(std::size_t slot) noexcept -> bool {
+  return slot < g_count && vcpu_of(slot) < guest_table()[vm_of(slot)].vcpus;
+}
+
+// This core's view of the slot table: vCPUs with a foreign affinity
+// are masked as kOff, so the pure scheduler model needs no affinity
+// notion.
+auto states() noexcept -> std::array<sched::State, kMaxVcpus> {
+  const std::size_t                   self = cpu::id();
+  std::array<sched::State, kMaxVcpus> s{};
   for (std::size_t i = 0; i < g_count; ++i) {
     s[i] = affinity(i) == self ? g_vcpus[i].state : sched::State::kOff;
   }
@@ -107,26 +121,44 @@ auto pick_next() noexcept -> std::size_t {
 
 void reschedule_slice() noexcept;
 
-// Reset a VCPU to its descriptor's boot state. GP registers are zeroed
-// so no EL2 (or previous-guest) values leak into a fresh guest.
-void seed(std::size_t index, const GuestDescriptor& guest) noexcept {
-  Vcpu& v    = g_vcpus[index];
-  v.guest    = &guest;
+// Reset a vCPU to a fresh execution context at `entry`. GP registers
+// are zeroed so no EL2 (or previous-guest) values leak into it; x0
+// carries `arg` (PSCI CPU_ON context_id — zero for a descriptor boot).
+void seed(std::size_t slot, std::uint64_t entry, std::uint64_t sp, std::uint64_t arg) noexcept {
+  Vcpu& v    = g_vcpus[slot];
+  v.guest    = &guest_table()[vm_of(slot)];
   v.ctx      = TrapContext{};
-  v.ctx.elr  = guest.entry_pc;
-  v.ctx.sp   = guest.stack_top;
+  v.ctx.elr  = entry;
+  v.ctx.sp   = sp;
+  v.ctx.x[0] = arg;
   v.ctx.spsr = kSpsrEl1h;
   v.el1      = arch::El1SysregBank{};
   v.fp       = arch::FpBank{};
-  // Whatever this VCPU owned in the hardware FP file is garbage now —
+  // Whatever this vCPU owned in the hardware FP file is garbage now —
   // drop ownership so no one ever saves it over a fresh bank.
-  g_sched[affinity(index)].fp.invalidate(index);
-  vgic::cpu_reset(index);
-  // A reseeded guest owes nothing to its past life: drop the parked-CNTV
-  // wake-up mirror (a fresh bank has CNTV disabled) and the heartbeat
-  // deadline (the rebooted guest re-opts in with its next heartbeat).
-  soft_timer::cancel(soft_timer::kSlotCntvWake + index);
-  soft_timer::cancel(soft_timer::kSlotWatchdog + index);
+  g_sched[affinity(slot)].fp.invalidate(slot);
+  vgic::cpu_reset(slot);
+  // A reseeded vCPU owes nothing to its past life: drop the parked-CNTV
+  // wake-up mirror (a fresh bank has CNTV disabled).
+  soft_timer::cancel(soft_timer::kSlotCntvWake + slot);
+}
+
+// Descriptor boot state: vcpu 0's cold/warm entry. Secondary vCPUs are
+// seeded by CPU_ON with a caller-supplied entry instead (SP is the
+// guest's own business there — PSCI leaves it undefined).
+void seed_boot(std::size_t slot) noexcept {
+  const GuestDescriptor& guest = guest_table()[vm_of(slot)];
+  seed(slot, guest.entry_pc, guest.stack_top, 0);
+}
+
+// True while any vCPU of `vm` has not retired.
+[[nodiscard]] auto vm_has_live(std::size_t vm) noexcept -> bool {
+  for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
+    if (g_vcpus[slot_of(vm, v)].state != sched::State::kOff) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Swap the resident VCPU: park the outgoing guest's state (trap frame,
@@ -151,7 +183,8 @@ void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
   *live = next.ctx;
   arch::write_el1_bank(next.el1);
   vgic::cpu_restore(next_idx);
-  mmu::switch_vm(next_idx);
+  mmu::switch_vm(vm_of(next_idx));
+  arch::write_vmpidr(vcpu_of(next_idx));
 
   // Lazy FP: the register file stays put — only the trap follows the
   // resident. A non-owner claims it through the EC 0x07 path on first
@@ -235,13 +268,16 @@ auto current_index() noexcept -> std::size_t {
 }
 
 void init() noexcept {
-  const auto guests = guest_table();
-  g_count           = guests.size() <= kMaxGuests ? guests.size() : kMaxGuests; // core_mmu already panicked if over
+  const auto        guests = guest_table();
+  const std::size_t vms    = guests.size() <= kMaxGuests ? guests.size() : kMaxGuests; // core_mmu panicked if over
+  g_count                  = vms * kMaxVcpusPerVm;
   for (std::size_t i = 0; i < g_count; ++i) {
-    seed(i, guests[i]);
+    if (valid_slot(i)) {
+      seed_boot(i);
+    }
   }
-  g_vcpus[0].state = sched::State::kReady;
-  g_alive.store(1, std::memory_order_relaxed); // the boot guest
+  g_vcpus[slot_of(0)].state = sched::State::kReady;
+  g_alive.store(1, std::memory_order_relaxed); // the boot guest's vcpu 0
   g_slice_ticks = hyp_timer::freq() * kSliceMs / 1000U;
   arch::set_fp_trap(true); // no owner yet — first FP use claims the file
 }
@@ -257,7 +293,8 @@ void init() noexcept {
     if (next < g_count) {
       CpuSched& cs = me();
       Vcpu&     v  = g_vcpus[next];
-      mmu::switch_vm(next);
+      mmu::switch_vm(vm_of(next));
+      arch::write_vmpidr(vcpu_of(next));
       arch::write_el1_bank(v.el1);
       vgic::cpu_restore(next);
       arch::set_fp_trap(cs.fp.trap_needed(next));
@@ -307,48 +344,81 @@ void wake(std::size_t index) noexcept {
   reschedule_slice(); // the resident VCPU just gained a competitor
 }
 
-auto start_vm(std::size_t index) noexcept -> bool {
-  if (index >= g_count || affinity(index) != cpu::id() || g_vcpus[index].state != sched::State::kOff) {
+auto start_vm(std::size_t vm) noexcept -> bool {
+  const std::size_t slot = slot_of(vm);
+  if (vm >= vm_of(g_count) || affinity(slot) != cpu::id() || g_vcpus[slot].state != sched::State::kOff) {
     return false; // foreign-affinity starts arrive through the smp cross-call
   }
-  seed(index, guest_table()[index]);
-  g_budget.refill(index); // cold start — fresh warm-reset budget
-  g_vcpus[index].state = sched::State::kReady;
+  seed_boot(slot);
+  g_budget.refill(vm); // cold start — fresh warm-reset budget
+  g_vcpus[slot].state = sched::State::kReady;
   g_alive.fetch_add(1, std::memory_order_acq_rel);
   reschedule_slice(); // the resident VCPU just gained a competitor
   return true;
 }
 
-void reset_vm(std::size_t index, TrapContext* live) noexcept {
-  if (index >= g_count || g_vcpus[index].state == sched::State::kOff) {
+auto start_vcpu(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noexcept -> bool {
+  if (!valid_slot(slot) || affinity(slot) != cpu::id() || g_vcpus[slot].state != sched::State::kOff) {
+    return false; // foreign-affinity CPU_ON arrives through the smp cross-call
+  }
+  if (!vm_has_live(vm_of(slot))) {
+    return false; // the VM itself has retired — nothing to join
+  }
+  seed(slot, entry, /*sp=*/0, context_id);
+  g_vcpus[slot].state = sched::State::kReady;
+  g_alive.fetch_add(1, std::memory_order_acq_rel);
+  reschedule_slice();
+  return true;
+}
+
+// Retire one vCPU (CPU_OFF, VM-wide stop fan-out). The VM's watchdog
+// dies with its last vCPU — but only the deadline armed on THIS core's
+// queue; a stale one elsewhere expires into a no-op (reset_vm ignores
+// an all-off VM).
+void stop_vcpu(std::size_t slot, TrapContext* live) noexcept {
+  if (!valid_slot(slot) || affinity(slot) != cpu::id() || g_vcpus[slot].state == sched::State::kOff) {
+    return;
+  }
+  g_vcpus[slot].state = sched::State::kOff;
+  soft_timer::cancel(soft_timer::kSlotCntvWake + slot);
+  if (!vm_has_live(vm_of(slot))) {
+    soft_timer::cancel(soft_timer::kSlotWatchdog + vm_of(slot));
+  }
+  g_alive.fetch_sub(1, std::memory_order_acq_rel);
+  if (slot == me().current) {
+    schedule_out(live);
+  }
+}
+
+void reset_vm(std::size_t vm, TrapContext* live) noexcept {
+  const std::size_t slot = slot_of(vm);
+  if (vm >= vm_of(g_count) || !vm_has_live(vm)) {
     return; // stopped VMs are revived by start_vm only
   }
 
-  if (!g_budget.take(index)) {
+  if (!g_budget.take(vm)) {
     console::write("[core_vcpu] VM ");
-    console::write_dec64(index);
+    console::write_dec64(vm);
     console::write(" restart budget exhausted — stopping\n");
-    g_vcpus[index].state = sched::State::kOff;
-    soft_timer::cancel(soft_timer::kSlotWatchdog + index); // no reset from beyond the grave
-    g_alive.fetch_sub(1, std::memory_order_acq_rel);
-    if (index == me().current) {
-      schedule_out(live);
-    }
+    soft_timer::cancel(soft_timer::kSlotWatchdog + vm); // no reset from beyond the grave
+    stop_vcpu(slot, live);                              // secondaries were stopped by the smp fan-out
     return;
   }
 
-  mmu::reload_guest_image(index);
-  seed(index, guest_table()[index]);
+  mmu::reload_guest_image(vm);
+  seed_boot(slot);
+  soft_timer::cancel(soft_timer::kSlotWatchdog + vm); // the reboot re-opts in with its next heartbeat
 
-  Vcpu& v = g_vcpus[index];
-  if (index == me().current) {
+  Vcpu& v = g_vcpus[slot];
+  if (slot == me().current) {
     // Reset in place: load the fresh context straight into the live
     // frame and keep running — switch_to would save the live frame
     // over the seed. Stage 2 already targets this VM.
     *live = v.ctx;
     arch::write_el1_bank(v.el1);
-    vgic::cpu_restore(index);
-    arch::set_fp_trap(me().fp.trap_needed(index));
+    vgic::cpu_restore(slot);
+    arch::write_vmpidr(vcpu_of(slot));
+    arch::set_fp_trap(me().fp.trap_needed(slot));
     v.state = sched::State::kRunning;
   } else {
     v.state = sched::State::kReady;
@@ -357,27 +427,28 @@ void reset_vm(std::size_t index, TrapContext* live) noexcept {
 }
 
 void exit_current(TrapContext* live) noexcept {
-  const std::size_t self = me().current;
-  g_vcpus[self].state    = sched::State::kOff;
-  // A stopped VM must never be watchdog-reset back to life.
-  soft_timer::cancel(soft_timer::kSlotWatchdog + self);
-  g_alive.fetch_sub(1, std::memory_order_acq_rel);
-  schedule_out(live);
+  stop_vcpu(me().current, live);
 }
 
-auto post_virq(std::size_t index, std::uint32_t vintid) noexcept -> bool {
-  if (index >= g_count || affinity(index) != cpu::id() || g_vcpus[index].state == sched::State::kOff) {
+auto post_virq(std::size_t slot, std::uint32_t vintid) noexcept -> bool {
+  if (slot >= g_count || affinity(slot) != cpu::id() || g_vcpus[slot].state == sched::State::kOff) {
     return false; // foreign-affinity posts arrive through the smp cross-call
   }
-  if (!vgic::post(index, vintid)) {
+  if (!vgic::post(slot, vintid)) {
     return false;
   }
   // Wake a blocked target only when the vGIC would actually signal it
   // — a pended-but-disabled INTID is not a wfi wake-up event.
-  if (g_vcpus[index].state == sched::State::kBlocked && vgic::has_deliverable(index)) {
-    wake(index);
+  if (g_vcpus[slot].state == sched::State::kBlocked && vgic::has_deliverable(slot)) {
+    wake(slot);
   }
   return true;
+}
+
+auto vcpu_on(std::size_t slot) noexcept -> bool {
+  // Cross-core read of a one-byte state — benign by construction (PSCI
+  // AFFINITY_INFO is allowed a stale answer; the caller polls).
+  return valid_slot(slot) && g_vcpus[slot].state != sched::State::kOff;
 }
 
 } // namespace vcpu

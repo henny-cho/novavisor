@@ -17,6 +17,15 @@ namespace nova::arch {
   return static_cast<std::size_t>(mpidr & 0xFFU);
 }
 
+// The MPIDR value the guest reads at EL1. Per-vCPU: written on every
+// switch-in so a guest identifies its vCPU by Aff0, independent of the
+// physical core underneath. Bit 31 is RES1; U (bit 30) stays 0 — the
+// guest sees an SMP-capable topology. The following ERET synchronizes.
+inline void write_vmpidr(std::uint64_t vcpu) noexcept {
+  const std::uint64_t v = (1ULL << 31) | (vcpu & 0xFFU);
+  __asm__ volatile("msr vmpidr_el2, %0" ::"r"(v));
+}
+
 // SMCCC call toward firmware (SMC conduit). The guest-facing PSCI
 // emulation uses HVC; this is the hypervisor's own outbound side —
 // on QEMU virt with EL2 enabled the machine intercepts SMC as PSCI.

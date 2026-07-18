@@ -32,10 +32,11 @@ struct HwBank {
 // first switch-in).
 inline constexpr std::size_t kNoResident = ~std::size_t{0};
 
-// Per-vCPU state, touched only by the owning core (core_vcpu routes);
-// the residency scalar is per-core — ICH_* is banked per PE.
-std::array<CpuState, kMaxGuests>       g_cpu;
-std::array<HwBank, kMaxGuests>         g_hw;
+// Per-vCPU state (flat slot-indexed), touched only by the owning core
+// (core_vcpu routes); the residency scalar is per-core — ICH_* is
+// banked per PE.
+std::array<CpuState, kMaxVcpus>        g_cpu;
+std::array<HwBank, kMaxVcpus>          g_hw;
 std::array<std::size_t, cpu::kMaxCpus> g_resident{}; // init() presets kNoResident
 std::size_t                            g_lr_count = 0;
 
