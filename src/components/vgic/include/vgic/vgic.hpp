@@ -20,6 +20,7 @@
 
 #include "core_gic/core_gic.hpp"
 #include "trap_handler/mmio.hpp"
+#include "trap_handler/sysreg.hpp"
 
 #include <cib/top.hpp>
 #include <cstddef>
@@ -66,11 +67,17 @@ struct vgic_component {
   // Claims the maintenance PPI: refills the resident VCPU's LRs.
   static void handle_irq(IrqCall* call) noexcept;
 
+  // Claims the trapped ICC "common" registers (ICH_HCR.TC catches
+  // more than the SGI generators): PMR is virtualized through the
+  // live ICH_VMCR.VPMR; CTLR/RPR read fixed idle values; DIR and the
+  // Group 0 generators are WI. ICC_SGI1R itself belongs to smp.
+  static void handle_sysreg(SysregCall* call) noexcept;
+
   constexpr static auto INIT = flow::action<"vgic_init">([]() noexcept { vgic::init(); });
 
-  constexpr static auto config =
-      cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<MmioService>(&vgic_component::handle_mmio),
-                  cib::extend<IrqService>(&vgic_component::handle_irq));
+  constexpr static auto config = cib::config(
+      cib::extend<cib::RuntimeStart>(*INIT), cib::extend<MmioService>(&vgic_component::handle_mmio),
+      cib::extend<IrqService>(&vgic_component::handle_irq), cib::extend<SysregService>(&vgic_component::handle_sysreg));
 };
 
 } // namespace nova

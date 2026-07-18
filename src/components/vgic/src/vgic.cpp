@@ -12,6 +12,7 @@
 #include "hal/gic.hpp"
 #include "hal/gic_virt.hpp"
 #include "nova/abi/guest.hpp"
+#include "nova/arch/data_abort.hpp" // esr::kSrtZeroReg
 #include "nova/sync.hpp"
 #include "vgic/vgic_delivery.hpp"
 
@@ -248,6 +249,56 @@ void vgic_component::handle_mmio(MmioCall* call) noexcept {
       call->ipa < gic_virt::kGicrIpaBase + kMaxVcpusPerVm * vgic::kGicrFrameSize) {
     call->handled = true;
     vgic::redist_mmio(call, call->ipa - gic_virt::kGicrIpaBase);
+  }
+}
+
+// ICH_HCR.TC (set for vSGI routing) traps every ICC register common to
+// Group 0 and Group 1, not just the SGI generators. The resident guest
+// took the trap on its own core, so its VMCR is live in hardware.
+void vgic_component::handle_sysreg(SysregCall* call) noexcept {
+  const esr::SysregTrap& s = call->sysreg;
+  if (s.op0 != 3 || s.op1 != 0) {
+    return;
+  }
+
+  // ICC_PMR_EL1 (S3_0_C4_C6_0): the priority mask lives in
+  // ICH_VMCR_EL2.VPMR [31:24] — emulate the ICV view the trap bypassed.
+  if (s.crn == 4 && s.crm == 6 && s.op2 == 0) {
+    call->handled                     = true;
+    constexpr std::uint64_t kVpmrMask = 0xFFULL << 24U;
+    const std::uint64_t     vmcr      = gic_virt::read_vmcr();
+    if (s.write) {
+      const std::uint64_t pmr = (s.rt == esr::kSrtZeroReg ? 0 : call->ctx->x[s.rt]) & 0xFFU;
+      gic_virt::write_vmcr((vmcr & ~kVpmrMask) | (pmr << 24U));
+    } else if (s.rt != esr::kSrtZeroReg) {
+      call->ctx->x[s.rt] = (vmcr >> 24U) & 0xFFU;
+    }
+    return;
+  }
+
+  if (s.crn != 12 || s.crm != 11) {
+    if (s.crn == 12 && s.crm == 12 && s.op2 == 4) { // ICC_CTLR_EL1: EOImode 0, nothing writable we honor
+      call->handled = true;
+      if (!s.write && s.rt != esr::kSrtZeroReg) {
+        call->ctx->x[s.rt] = 0;
+      }
+    }
+    return;
+  }
+  switch (s.op2) {
+  case 1: // ICC_DIR_EL1 — deactivation is a NOP with EOImode 0
+  case 6: // ICC_ASGI1R_EL1 — no other security state
+  case 7: // ICC_SGI0R_EL1 — no Group 0 SGIs
+    call->handled = true;
+    return;
+  case 3: // ICC_RPR_EL1 — idle priority (no active interrupt tracked)
+    call->handled = true;
+    if (!s.write && s.rt != esr::kSrtZeroReg) {
+      call->ctx->x[s.rt] = 0xFF;
+    }
+    return;
+  default:
+    return; // op2 5 (ICC_SGI1R) is claimed by smp
   }
 }
 

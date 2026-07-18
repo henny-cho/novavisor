@@ -40,9 +40,11 @@
 
 namespace nova {
 
-// Defined in hal/arch/aarch64/vcpu_enter.S.
-extern "C" [[noreturn]] void nova_vcpu_enter(std::uint64_t entry_pc, std::uint64_t sp_el1,
-                                             std::uint64_t spsr_el2) noexcept;
+// Defined in hal/arch/aarch64/vcpu_enter.S. x0_arg is the guest's boot
+// argument (PSCI CPU_ON context_id) — the only seeded GP register the
+// first entry must carry; the rest are zeroed.
+extern "C" [[noreturn]] void nova_vcpu_enter(std::uint64_t entry_pc, std::uint64_t sp_el1, std::uint64_t spsr_el2,
+                                             std::uint64_t x0_arg) noexcept;
 
 namespace vcpu {
 namespace {
@@ -301,7 +303,7 @@ void init() noexcept {
       v.state    = sched::State::kRunning;
       cs.current = next;
       reschedule_slice();
-      nova_vcpu_enter(v.ctx.elr, v.ctx.sp, v.ctx.spsr);
+      nova_vcpu_enter(v.ctx.elr, v.ctx.sp, v.ctx.spsr, v.ctx.x[0]);
     }
     __asm__ volatile("wfi");
     core_gic::drain(&idle);
