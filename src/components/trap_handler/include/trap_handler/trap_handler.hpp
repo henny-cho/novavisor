@@ -9,6 +9,7 @@
 // Default handler (registered by trap_handler_component itself) routes
 // by ESR_EL2.EC:
 //   - HVC_AA64         : dispatch HvcService (include/hvc.hpp)
+//   - WFx              : dispatch WfxService (include/wfx.hpp)
 //   - DATA_ABORT_LOWER : dispatch MmioService (include/mmio.hpp),
 //                        escalating to GuestFaultService
 //                        (include/guest_fault.hpp)
@@ -21,6 +22,7 @@
 #include "trap_handler/guest_fault.hpp"
 #include "trap_handler/hvc.hpp"
 #include "trap_handler/mmio.hpp"
+#include "trap_handler/wfx.hpp"
 
 #include <cib/top.hpp>
 #include <nexus/callback.hpp>
@@ -49,7 +51,7 @@ struct trap_handler_component {
   // default subscriber; components (demo_hvc, vgic, core_vcpu, ...)
   // extend them as needed.
   constexpr static auto config =
-      cib::config(cib::exports<EL2SyncTrapService, HvcService, MmioService, GuestFaultService>,
+      cib::config(cib::exports<EL2SyncTrapService, HvcService, WfxService, MmioService, GuestFaultService>,
                   cib::extend<EL2SyncTrapService>(&trap_handler_component::handle_lower_sync));
 };
 

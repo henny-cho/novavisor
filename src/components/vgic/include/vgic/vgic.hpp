@@ -44,6 +44,12 @@ void cpu_restore(std::size_t index) noexcept;
 // its list registers. False for a non-private INTID.
 [[nodiscard]] auto post(std::size_t index, std::uint32_t vintid) noexcept -> bool;
 
+// True when the VCPU has a virtual interrupt that would be signaled to
+// it: software-pending and enabled, or already pending in an LR shadow.
+// This is the wfi wake-up predicate — a disabled pending INTID keeps
+// the VCPU asleep, matching what the hardware GIC would (not) signal.
+[[nodiscard]] auto has_deliverable(std::size_t index) noexcept -> bool;
+
 } // namespace nova::vgic
 
 namespace nova {

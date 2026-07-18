@@ -155,5 +155,6 @@ else()
     nova_add_component_test(vgic vgic_model_test)            # GICD/GICR register model
     nova_add_component_test(vgic vgic_delivery_test)         # pending → LR multiplexing
     nova_add_component_test(soft_timer timer_queue_test)     # deadline-slot queue
+    nova_add_component_test(core_vcpu sched_model_test)      # scheduler pick/predicates
 
 endif() # CMAKE_CROSSCOMPILING

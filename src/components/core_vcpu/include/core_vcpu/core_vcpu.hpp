@@ -2,23 +2,27 @@
 
 // components/core_vcpu/include/core_vcpu/core_vcpu.hpp
 //
-// VCPU state, cooperative scheduler, and EL1 entry component.
+// VCPU state, scheduler, and EL1 entry component.
 //
 // One Vcpu per guest_table() entry, all executing on the single
-// physical core by time-sharing. Switches happen only on HVC traps
-// (cooperative): the live TrapContext frame on the EL2 stack is swapped
-// with the target VCPU's saved copy, so the common vec.S restore path
-// resumes whichever guest is now current. Guests that wait must poll +
-// HVC_YIELD — wfi is not trapped and would stall the whole core.
+// physical core by time-sharing. A switch swaps the live TrapContext
+// frame on the EL2 stack with the target VCPU's saved copy, so the
+// common vec.S restore path resumes whichever guest is now current —
+// identical from the HVC path (yield/exit) and the IRQ path
+// (preemption). Guest wfi traps (HCR_EL2.TWI) park the VCPU as
+// kBlocked until a deliverable vIRQ wakes it; with nothing runnable
+// the scheduler idles at EL2 (wfi + IRQ drain).
 //
 // Boot: RuntimeStart seeds every VCPU; MainLoop ERETs into VCPU 0.
 // Entries past [0] stay kOff until a guest issues HVC_VM_START.
 
+#include "core_vcpu/sched_model.hpp"
 #include "hal/arch/aarch64/el1_context.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/arch/trap_context.hpp"
 #include "trap_handler/guest_fault.hpp"
 #include "trap_handler/hvc.hpp"
+#include "trap_handler/wfx.hpp"
 
 #include <cib/top.hpp>
 #include <cstddef>
@@ -33,11 +37,7 @@ namespace nova {
 // virtual interrupt state (redistributor, pending, LR shadows) is owned
 // by the vgic component, keyed by the same index.
 struct Vcpu {
-  enum class State : std::uint8_t {
-    kOff,     // never started, or exited
-    kReady,   // runnable, waiting for the scheduler
-    kRunning, // resident on the core
-  };
+  using State = sched::State;
 
   const GuestDescriptor* guest = nullptr;
   TrapContext            ctx{}; // GP regs + SP_EL1 + ELR/SPSR_EL2
@@ -58,18 +58,31 @@ auto current_index() noexcept -> std::size_t;
 // yielding guest must be written into it BEFORE calling).
 void yield_current(TrapContext* live) noexcept;
 
+// Trapped wfi: park the calling VCPU as kBlocked and schedule away —
+// or idle at EL2 when nothing is runnable. An armed, unmasked CNTV is
+// mirrored into a soft-timer wake-up (parked CNTV state cannot meet
+// its hardware condition while non-resident).
+void block_current(TrapContext* live) noexcept;
+
+// kBlocked → kReady (no-op for other states). Called when a
+// deliverable vIRQ is posted and when the mirrored CNTV deadline
+// expires; cancels the soft-timer mirror either way.
+void wake(std::size_t index) noexcept;
+
 // HVC_VM_START: (re)seed and mark a kOff VCPU ready. False when the
 // index is out of range or the target is not kOff.
 [[nodiscard]] auto start_vm(std::size_t index) noexcept -> bool;
 
-// HVC_EXIT epilogue: retire the calling VCPU and switch to the next
-// runnable one; halts the machine when none remains.
+// HVC_EXIT epilogue: retire the calling VCPU and schedule away; halts
+// the machine once every VCPU is kOff (kBlocked ones keep it alive —
+// they are owed a wake-up).
 void exit_current(TrapContext* live) noexcept;
 
 // Deliver a private vIRQ to a VCPU through the vGIC: pends the INTID
 // and injects it into a free list register once the guest's enable
 // bits allow it (resident targets immediately, others on switch-in).
-// False when the target is invalid or off.
+// Wakes a kBlocked target when the result is deliverable. False when
+// the target is invalid or off.
 [[nodiscard]] auto post_virq(std::size_t index, std::uint32_t vintid) noexcept -> bool;
 
 // Seed all VCPUs from guest_table() (RuntimeStart).
@@ -87,6 +100,10 @@ struct core_vcpu_component {
   // Claims HVC_YIELD and HVC_VM_START.
   static void handle_hvc(HvcCall* call) noexcept;
 
+  // Claims every WFx trap: wfe yields, wfi blocks (unless a
+  // deliverable vIRQ is already pending — then it is a NOP).
+  static void handle_wfx(WfxCall* call) noexcept;
+
   // Unrecoverable guest fault: retire the faulting VCPU, keep the rest
   // of the machine running.
   static void handle_guest_fault(GuestFaultCall* call) noexcept;
@@ -96,6 +113,7 @@ struct core_vcpu_component {
 
   constexpr static auto config = cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<cib::MainLoop>(*ENTER),
                                              cib::extend<HvcService>(&core_vcpu_component::handle_hvc),
+                                             cib::extend<WfxService>(&core_vcpu_component::handle_wfx),
                                              cib::extend<GuestFaultService>(&core_vcpu_component::handle_guest_fault));
 };
 

@@ -13,6 +13,7 @@
 #include "nova/arch/trap_context.hpp"
 #include "nova_panic/nova_panic.hpp"
 #include "trap_handler/trap_handler.hpp"
+#include "trap_handler/wfx.hpp"
 
 #include <cib/top.hpp>
 #include <cstdint>
@@ -41,6 +42,20 @@ void dispatch_hvc(TrapContext* ctx) noexcept {
   }
 }
 
+void dispatch_wfx(TrapContext* ctx) noexcept {
+  // Unlike HVC, ELR still points AT the trapped instruction — advance
+  // past it so the guest resumes after the wfi/wfe when it returns
+  // (immediately, or on wake after being parked).
+  ctx->elr += 4;
+
+  WfxCall call{.ctx = ctx, .is_wfe = (ctx->esr & esr::kWfxTiWfe) != 0, .handled = false};
+  cib::service<WfxService>(&call);
+
+  if (!call.handled) {
+    console::write("[trap_handler] unhandled WFx — treated as NOP\n");
+  }
+}
+
 } // namespace
 
 // EC-class router for lower-EL synchronous exceptions. Each supported
@@ -50,6 +65,10 @@ void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
   switch (esr::get_ec(ctx->esr)) {
   case esr::ExceptionClass::HVC_AA64:
     dispatch_hvc(ctx);
+    return;
+
+  case esr::ExceptionClass::WFx:
+    dispatch_wfx(ctx);
     return;
 
   case esr::ExceptionClass::DATA_ABORT_LOWER:

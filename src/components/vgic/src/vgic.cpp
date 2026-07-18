@@ -149,6 +149,28 @@ auto post(std::size_t index, std::uint32_t vintid) noexcept -> bool {
   return true;
 }
 
+auto has_deliverable(std::size_t index) noexcept -> bool {
+  CpuState& cpu = g_cpu[index];
+  if (index == g_resident) {
+    // The live LRs are the truth for the resident VCPU (the guest
+    // retires entries as it runs) — refresh the shadow before judging.
+    // A pending LR here is real: HCR_EL2.TWI traps every wfi, even one
+    // that would complete immediately because of a pending wake event.
+    for (std::size_t i = 0; i < g_lr_count; ++i) {
+      cpu.lr[i] = gic_virt::read_lr(i);
+    }
+  }
+  if (deliverable(cpu.redist) != 0U) {
+    return true;
+  }
+  for (std::size_t i = 0; i < g_lr_count; ++i) {
+    if ((cpu.lr[i] & kLrStatePending) != 0U) {
+      return true;
+    }
+  }
+  return false;
+}
+
 } // namespace nova::vgic
 
 namespace nova {

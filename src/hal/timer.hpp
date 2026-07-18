@@ -30,8 +30,9 @@ inline constexpr std::uint64_t kCnthctlEl1PhysCounterRead = 1ULL << 0;
 // CNTHP_CTL_EL2: ENABLE (bit 0) = 1, IMASK (bit 1) = 0 → IRQ on expiry.
 inline constexpr std::uint64_t kCnthpEnable = 1ULL << 0;
 
-// CNT*_CTL IMASK bit (shared layout across the generic timers).
-inline constexpr std::uint64_t kCntCtlImask = 1ULL << 1;
+// CNT*_CTL ENABLE/IMASK bits (shared layout across the generic timers).
+inline constexpr std::uint64_t kCntCtlEnable = 1ULL << 0;
+inline constexpr std::uint64_t kCntCtlImask  = 1ULL << 1;
 
 inline void init() noexcept {
   __asm__ volatile("msr cntvoff_el2, xzr"); // guest virtual counter == physical
@@ -67,6 +68,20 @@ inline void arm_at(std::uint64_t cval) noexcept {
 inline void stop() noexcept {
   __asm__ volatile("msr cnthp_ctl_el2, xzr");
   __asm__ volatile("isb");
+}
+
+// The resident guest's virtual-timer registers (live in hardware only
+// while it is resident; parked VCPUs hold them in their EL1 bank).
+[[nodiscard]] inline auto guest_cntv_ctl() noexcept -> std::uint64_t {
+  std::uint64_t ctl = 0;
+  __asm__ volatile("mrs %0, cntv_ctl_el0" : "=r"(ctl));
+  return ctl;
+}
+
+[[nodiscard]] inline auto guest_cntv_cval() noexcept -> std::uint64_t {
+  std::uint64_t cval = 0;
+  __asm__ volatile("mrs %0, cntv_cval_el0" : "=r"(cval));
+  return cval;
 }
 
 // Mask the (level-triggered) virtual timer of the resident guest. CNTV

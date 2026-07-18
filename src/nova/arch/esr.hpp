@@ -49,6 +49,7 @@ inline constexpr std::uint64_t kEcMask     = 0x3FU;
 inline constexpr std::uint64_t kIlShift    = 25U;
 inline constexpr std::uint64_t kIssMask    = 0x01FF'FFFFU;
 inline constexpr std::uint64_t kHvcImmMask = 0xFFFFU;
+inline constexpr std::uint64_t kWfxTiWfe   = 1ULL << 0U; // WFx ISS.TI bit 0: 0 = WFI, 1 = WFE
 
 // Extract the Exception Class from ESR_EL2.
 [[nodiscard]] inline auto get_ec(std::uint64_t esr) noexcept -> ExceptionClass {

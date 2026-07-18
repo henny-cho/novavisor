@@ -1,23 +1,28 @@
 // components/core_vcpu/src/core_vcpu.cpp
 //
-// Cooperative VCPU scheduler. A switch swaps the live EL2 trap frame
-// with the target's saved TrapContext, moves the EL1 sysreg bank
+// VCPU scheduler. A switch swaps the live EL2 trap frame with the
+// target's saved TrapContext, moves the EL1 sysreg bank
 // (hal/arch/aarch64/el1_context.hpp) and the vGIC CPU-interface state,
 // and retargets VTTBR_EL2 — the common vec.S restore path then resumes
-// the new guest.
+// the new guest. Pick/predicate decisions live in sched_model.hpp
+// (pure, host-tested); this file is the hardware glue.
 
 #include "core_vcpu/core_vcpu.hpp"
 
+#include "core_gic/core_gic.hpp"
 #include "core_mmu/core_mmu.hpp"
 #include "hal/console.hpp"
+#include "hal/timer.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/hvc_abi.h"
 #include "nova_panic/nova_panic.hpp"
+#include "soft_timer/soft_timer.hpp"
 #include "vgic/vgic.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace nova {
 
@@ -43,6 +48,19 @@ std::array<Vcpu, kMaxGuests> g_vcpus;
 std::size_t                  g_count   = 0;
 std::size_t                  g_current = 0;
 
+auto states() noexcept -> std::array<sched::State, kMaxGuests> {
+  std::array<sched::State, kMaxGuests> s{};
+  for (std::size_t i = 0; i < g_count; ++i) {
+    s[i] = g_vcpus[i].state;
+  }
+  return s;
+}
+
+auto pick_next() noexcept -> std::size_t {
+  const auto s = states();
+  return sched::pick_next(std::span{s.data(), g_count}, g_current);
+}
+
 // Reset a VCPU to its descriptor's boot state. GP registers are zeroed
 // so no EL2 (or previous-guest) values leak into a fresh guest.
 void seed(std::size_t index, const GuestDescriptor& guest) noexcept {
@@ -56,21 +74,11 @@ void seed(std::size_t index, const GuestDescriptor& guest) noexcept {
   vgic::cpu_reset(index);
 }
 
-// Next kReady VCPU after g_current in ring order; g_count when none.
-auto pick_next() noexcept -> std::size_t {
-  for (std::size_t step = 1; step <= g_count; ++step) {
-    const std::size_t idx = (g_current + step) % g_count;
-    if (g_vcpus[idx].state == Vcpu::State::kReady) {
-      return idx;
-    }
-  }
-  return g_count;
-}
-
 // Swap the resident VCPU: park the outgoing guest's state (trap frame,
 // EL1 bank, vGIC CPU interface), load the incoming one, retarget
 // Stage 2. The caller returns through vec.S which restores *live — now
-// the new guest.
+// the new guest. The outgoing state survives as set by the caller
+// (kBlocked/kOff); a still-running one becomes kReady.
 void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
   Vcpu& cur  = g_vcpus[g_current];
   Vcpu& next = g_vcpus[next_idx];
@@ -78,8 +86,8 @@ void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
   cur.ctx = *live;
   cur.el1 = arch::read_el1_bank();
   vgic::cpu_save(g_current);
-  if (cur.state == Vcpu::State::kRunning) { // exit_current parks it as kOff
-    cur.state = Vcpu::State::kReady;
+  if (cur.state == sched::State::kRunning) {
+    cur.state = sched::State::kReady;
   }
 
   *live = next.ctx;
@@ -87,8 +95,45 @@ void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
   vgic::cpu_restore(next_idx);
   mmu::switch_vm(next_idx);
 
-  next.state = Vcpu::State::kRunning;
+  next.state = sched::State::kRunning;
   g_current  = next_idx;
+}
+
+// Soft-timer callback: the mirrored CNTV deadline of a blocked VCPU
+// passed — make it runnable. Injection happens naturally once it is
+// resident again: the restored CNTV meets its condition and fires the
+// physical PPI (single delivery path, no duplication).
+void on_cntv_wake(TrapContext* /*ctx*/, std::uint64_t index) noexcept {
+  wake(static_cast<std::size_t>(index));
+}
+
+// Leave the current VCPU as its caller marked it (kBlocked/kOff) and
+// run the next runnable one. With nothing runnable, idle at EL2: wfi
+// falls through on any pending physical IRQ even with PSTATE.I masked,
+// and drain dispatches it (soft-timer wake, doorbell) without taking
+// an exception. Halts once every VCPU has retired.
+void schedule_out(TrapContext* live) noexcept {
+  for (;;) {
+    const std::size_t next = pick_next();
+    if (next < g_count) {
+      if (next == g_current) {
+        // Woke itself while idling — resume without a frame swap.
+        g_vcpus[g_current].state = sched::State::kRunning;
+      } else {
+        switch_to(live, next);
+      }
+      return;
+    }
+
+    const auto s = states();
+    if (sched::all_off(std::span{s.data(), g_count})) {
+      console::write("[core_vcpu] all VCPUs off — halting\n");
+      halt();
+    }
+
+    __asm__ volatile("wfi");
+    core_gic::drain(live);
+  }
 }
 
 } // namespace
@@ -107,48 +152,74 @@ void init() noexcept {
   for (std::size_t i = 0; i < g_count; ++i) {
     seed(i, guests[i]);
   }
-  g_vcpus[0].state = Vcpu::State::kReady;
+  g_vcpus[0].state = sched::State::kReady;
 }
 
 [[noreturn]] void enter_guest() noexcept {
   Vcpu& boot = g_vcpus[0];
-  boot.state = Vcpu::State::kRunning;
+  boot.state = sched::State::kRunning;
   g_current  = 0;
   nova_vcpu_enter(boot.ctx.elr, boot.ctx.sp, boot.ctx.spsr);
 }
 
 void yield_current(TrapContext* live) noexcept {
   const std::size_t next = pick_next();
-  if (next < g_count) {
+  if (next < g_count && next != g_current) {
     switch_to(live, next);
   }
 }
 
+void block_current(TrapContext* live) noexcept {
+  g_vcpus[g_current].state = sched::State::kBlocked;
+
+  // The resident CNTV is live in hardware, but once parked in the EL1
+  // bank it can never meet its condition — mirror an armed, unmasked
+  // timer into a soft-timer wake-up at the same absolute deadline
+  // (CNTVOFF = 0, so CVAL and the CNTHP comparator share a domain).
+  const std::uint64_t ctl = hyp_timer::guest_cntv_ctl();
+  if ((ctl & hyp_timer::kCntCtlEnable) != 0 && (ctl & hyp_timer::kCntCtlImask) == 0) {
+    soft_timer::arm(soft_timer::kSlotCntvWake + g_current, hyp_timer::guest_cntv_cval(), &on_cntv_wake,
+                    static_cast<std::uint64_t>(g_current));
+  }
+
+  schedule_out(live);
+}
+
+void wake(std::size_t index) noexcept {
+  if (g_vcpus[index].state != sched::State::kBlocked) {
+    return;
+  }
+  g_vcpus[index].state = sched::State::kReady;
+  soft_timer::cancel(soft_timer::kSlotCntvWake + index);
+}
+
 auto start_vm(std::size_t index) noexcept -> bool {
-  if (index >= g_count || g_vcpus[index].state != Vcpu::State::kOff) {
+  if (index >= g_count || g_vcpus[index].state != sched::State::kOff) {
     return false;
   }
   seed(index, guest_table()[index]);
-  g_vcpus[index].state = Vcpu::State::kReady;
+  g_vcpus[index].state = sched::State::kReady;
   return true;
 }
 
 void exit_current(TrapContext* live) noexcept {
-  g_vcpus[g_current].state = Vcpu::State::kOff;
-
-  const std::size_t next = pick_next();
-  if (next >= g_count) {
-    console::write("[core_vcpu] all VCPUs off — halting\n");
-    halt();
-  }
-  switch_to(live, next);
+  g_vcpus[g_current].state = sched::State::kOff;
+  schedule_out(live);
 }
 
 auto post_virq(std::size_t index, std::uint32_t vintid) noexcept -> bool {
-  if (index >= g_count || g_vcpus[index].state == Vcpu::State::kOff) {
+  if (index >= g_count || g_vcpus[index].state == sched::State::kOff) {
     return false;
   }
-  return vgic::post(index, vintid);
+  if (!vgic::post(index, vintid)) {
+    return false;
+  }
+  // Wake a blocked target only when the vGIC would actually signal it
+  // — a pended-but-disabled INTID is not a wfi wake-up event.
+  if (g_vcpus[index].state == sched::State::kBlocked && vgic::has_deliverable(index)) {
+    wake(index);
+  }
+  return true;
 }
 
 } // namespace vcpu
@@ -159,6 +230,18 @@ void core_vcpu_component::handle_guest_fault(GuestFaultCall* call) noexcept {
   console::write_dec64(vcpu::current_index());
   console::write("\n");
   vcpu::exit_current(call->ctx);
+}
+
+void core_vcpu_component::handle_wfx(WfxCall* call) noexcept {
+  call->handled = true;
+  if (call->is_wfe) {
+    vcpu::yield_current(call->ctx); // spin-wait hint — give the core away once
+    return;
+  }
+  if (vgic::has_deliverable(vcpu::current_index())) {
+    return; // pending wake-up event → architecturally a NOP
+  }
+  vcpu::block_current(call->ctx);
 }
 
 void core_vcpu_component::handle_hvc(HvcCall* call) noexcept {
