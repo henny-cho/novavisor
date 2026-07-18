@@ -45,6 +45,12 @@ if(CMAKE_CROSSCOMPILING)
     target_compile_definitions(nova_warnings INTERFACE
         $<$<COMPILE_LANGUAGE:CXX>:STDX_FREESTANDING>
     )
+    # EL2 must never touch FP/SIMD registers: CPTR_EL2.TFP would self-trap
+    # the hypervisor, and any use clobbers lazily-switched guest FP state.
+    # Directory-wide (not per-target) so every cross TU is covered; .S files
+    # are exempt — the FP bank save/restore itself is hand-written asm.
+    # Enforced post-link by scripts/check_fp_free.sh on novavisor.elf.
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-mgeneral-regs-only>)
 endif()
 
 # Clang-Tidy retarget args for `scripts/task.sh lint` (cross builds only).
@@ -156,5 +162,6 @@ else()
     nova_add_component_test(vgic vgic_delivery_test)         # pending → LR multiplexing
     nova_add_component_test(soft_timer timer_queue_test)     # deadline-slot queue
     nova_add_component_test(core_vcpu sched_model_test)      # scheduler pick/predicates
+    nova_add_component_test(core_vcpu fp_model_test)         # lazy FP ownership
 
 endif() # CMAKE_CROSSCOMPILING

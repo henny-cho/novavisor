@@ -44,6 +44,15 @@ target_link_options(novavisor.elf PRIVATE
 add_dependencies(novavisor.elf hal_arch_linker_script)
 set_target_properties(novavisor.elf PROPERTIES LINK_DEPENDS ${HAL_ARCH_LINKER_SCRIPT})
 
+# EL2 must be FP/SIMD-free outside the FP bank save/restore asm
+# (CPTR_EL2.TFP + lazy guest FP switching). -mgeneral-regs-only covers
+# compiler output; this catches prebuilt libc routines the flag cannot.
+add_custom_command(TARGET novavisor.elf POST_BUILD
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/check_fp_free.sh ${CMAKE_OBJDUMP}
+            $<TARGET_FILE:novavisor.elf>
+    COMMENT "Checking novavisor.elf is FP/SIMD-free"
+)
+
 # Raw flat binary required by some QEMU boot modes.
 add_custom_command(TARGET novavisor.elf POST_BUILD
     COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:novavisor.elf> ${CMAKE_BINARY_DIR}/novavisor.bin

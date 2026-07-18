@@ -1,12 +1,14 @@
 // hal/arch/aarch64/mem.cpp
 //
-// Strict-alignment memcpy/memmove/memset overriding the newlib
+// Strict-alignment memcpy/memmove/memset/strlen overriding the newlib
 // versions. EL2 runs with its Stage 1 MMU off, so every access is
 // treated as Device memory and must be size-aligned — newlib's
 // optimized routines use unaligned wide loads (and DC ZVA in memset,
 // which requires Normal cacheable memory) and alignment-fault here.
-// Our own code is compiled -mstrict-align; these cover the libcalls
-// the compiler emits for aggregate copies and zeroing.
+// newlib's strlen additionally uses SIMD registers, which EL2 must
+// never touch (guest FP state is switched lazily). Our own code is
+// compiled -mstrict-align -mgeneral-regs-only; these cover the
+// libcalls the compiler emits for aggregate copies and zeroing.
 //
 // Word-sized chunks when co-aligned, byte loop otherwise. This TU is
 // compiled -fno-builtin so the loops cannot be pattern-matched back
@@ -89,6 +91,14 @@ auto memset(void* dst, int value, std::size_t n) noexcept -> void* { // NOLINT(r
     --n;
   }
   return dst;
+}
+
+auto strlen(const char* s) noexcept -> std::size_t { // NOLINT(readability-identifier-naming)
+  const char* p = s;
+  while (*p != '\0') {
+    ++p;
+  }
+  return static_cast<std::size_t>(p - s);
 }
 
 } // extern "C"
