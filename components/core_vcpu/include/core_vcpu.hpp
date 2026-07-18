@@ -38,10 +38,11 @@ struct El1SysregBank {
   std::uint64_t sp_el0 = 0;
 };
 
-// Per-VCPU runtime state, owned by core_vcpu. `ctx`, `el1` and
-// `ich_lr0` hold the guest's full machine state while it is NOT
-// resident; the resident VCPU's state lives in the hardware registers
-// and the live trap frame.
+// Per-VCPU runtime state, owned by core_vcpu. `ctx` and `el1` hold the
+// guest's machine state while it is NOT resident; the resident VCPU's
+// state lives in the hardware registers and the live trap frame. The
+// virtual interrupt state (redistributor, pending, LR shadows) is owned
+// by the vgic component, keyed by the same index.
 struct Vcpu {
   enum class State : std::uint8_t {
     kOff,     // never started, or exited
@@ -50,10 +51,9 @@ struct Vcpu {
   };
 
   const GuestDescriptor* guest = nullptr;
-  TrapContext            ctx{};       // GP regs + SP_EL1 + ELR/SPSR_EL2
-  El1SysregBank          el1{};       // VBAR/ELR/SPSR_EL1 + SP_EL0
-  std::uint64_t          ich_lr0 = 0; // vGIC LR0 shadow (pending/active vIRQ)
-  State                  state   = State::kOff;
+  TrapContext            ctx{}; // GP regs + SP_EL1 + ELR/SPSR_EL2
+  El1SysregBank          el1{}; // VBAR/ELR/SPSR_EL1 + SP_EL0
+  State                  state = State::kOff;
 };
 
 } // namespace nova
@@ -77,10 +77,10 @@ void yield_current(TrapContext* live) noexcept;
 // runnable one; halts the machine when none remains.
 void exit_current(TrapContext* live) noexcept;
 
-// Deliver a Group 1 vIRQ to a VCPU: direct ICH_LR0 write when the
-// target is resident, LR0 shadow otherwise (restored on switch-in;
-// a still-in-flight shadow entry is overwritten with a warning — LR
-// multiplexing is Phase 8). False when the target is invalid or off.
+// Deliver a private vIRQ to a VCPU through the vGIC: pends the INTID
+// and injects it into a free list register once the guest's enable
+// bits allow it (resident targets immediately, others on switch-in).
+// False when the target is invalid or off.
 [[nodiscard]] auto post_virq(std::size_t index, std::uint32_t vintid) noexcept -> bool;
 
 // Seed all VCPUs from guest_table() (RuntimeStart).

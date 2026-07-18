@@ -11,6 +11,7 @@
 // runs; EarlyRuntimeInit currently has no actions):
 //   - RuntimeStart      ← core_mmu_component  (Stage 2 MMU activate)
 //                         core_gic_component  (GICv3 + vIRQ interface)
+//                         vgic_component      (GICD/GICR emulation, LRs)
 //                         core_timer_component (CNTVOFF/CNTHP setup)
 //                         boot_msg_component  (UART boot banner)
 //   - MainLoop          ← core_vcpu_component (ERET to EL1, [[noreturn]])
@@ -27,6 +28,7 @@
 #include "components/demo_hvc/include/demo_hvc.hpp"
 #include "components/ivc/include/ivc.hpp"
 #include "components/trap_handler/include/trap_handler.hpp"
+#include "components/vgic/include/vgic.hpp"
 
 #include <cib/top.hpp>
 
@@ -34,7 +36,7 @@ namespace nova {
 
 struct nova_project {
   constexpr static auto config =
-      cib::components<core_mmu_component, core_gic_component, core_timer_component, boot_msg_component,
+      cib::components<core_mmu_component, core_gic_component, vgic_component, core_timer_component, boot_msg_component,
                       trap_handler_component, demo_hvc_component, ivc_component, core_vcpu_component>;
 };
 

@@ -9,8 +9,8 @@
 
 #include "components/core_mmu/include/core_mmu.hpp"
 #include "components/nova_panic/include/nova_panic.hpp"
+#include "components/vgic/include/vgic.hpp"
 #include "hal/console.hpp"
-#include "hal/gic.hpp"
 #include "nova/guest.hpp"
 #include "nova/hvc_abi.h"
 
@@ -44,14 +44,15 @@ std::size_t                  g_current = 0;
 
 // Reset a VCPU to its descriptor's boot state. GP registers are zeroed
 // so no EL2 (or previous-guest) values leak into a fresh guest.
-void seed(Vcpu& v, const GuestDescriptor& guest) noexcept {
+void seed(std::size_t index, const GuestDescriptor& guest) noexcept {
+  Vcpu& v    = g_vcpus[index];
   v.guest    = &guest;
   v.ctx      = TrapContext{};
   v.ctx.elr  = guest.entry_pc;
   v.ctx.sp   = guest.stack_top;
   v.ctx.spsr = kSpsrEl1h;
   v.el1      = El1SysregBank{};
-  v.ich_lr0  = 0;
+  vgic::cpu_reset(index);
 }
 
 auto read_el1_bank() noexcept -> El1SysregBank {
@@ -84,22 +85,23 @@ auto pick_next() noexcept -> std::size_t {
 }
 
 // Swap the resident VCPU: park the outgoing guest's state (trap frame,
-// EL1 bank, LR0), load the incoming one, retarget Stage 2. The caller
-// returns through vec.S which restores *live — now the new guest.
+// EL1 bank, vGIC CPU interface), load the incoming one, retarget
+// Stage 2. The caller returns through vec.S which restores *live — now
+// the new guest.
 void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
   Vcpu& cur  = g_vcpus[g_current];
   Vcpu& next = g_vcpus[next_idx];
 
-  cur.ctx     = *live;
-  cur.el1     = read_el1_bank();
-  cur.ich_lr0 = gic::read_lr0();
+  cur.ctx = *live;
+  cur.el1 = read_el1_bank();
+  vgic::cpu_save(g_current);
   if (cur.state == Vcpu::State::kRunning) { // exit_current parks it as kOff
     cur.state = Vcpu::State::kReady;
   }
 
   *live = next.ctx;
   write_el1_bank(next.el1);
-  gic::write_lr0(next.ich_lr0);
+  vgic::cpu_restore(next_idx);
   mmu::switch_vm(next_idx);
 
   next.state = Vcpu::State::kRunning;
@@ -120,7 +122,7 @@ void init() noexcept {
   const auto guests = guest_table();
   g_count           = guests.size() <= kMaxGuests ? guests.size() : kMaxGuests; // core_mmu already panicked if over
   for (std::size_t i = 0; i < g_count; ++i) {
-    seed(g_vcpus[i], guests[i]);
+    seed(i, guests[i]);
   }
   g_vcpus[0].state = Vcpu::State::kReady;
 }
@@ -143,7 +145,7 @@ auto start_vm(std::size_t index) noexcept -> bool {
   if (index >= g_count || g_vcpus[index].state != Vcpu::State::kOff) {
     return false;
   }
-  seed(g_vcpus[index], guest_table()[index]);
+  seed(index, guest_table()[index]);
   g_vcpus[index].state = Vcpu::State::kReady;
   return true;
 }
@@ -163,19 +165,7 @@ auto post_virq(std::size_t index, std::uint32_t vintid) noexcept -> bool {
   if (index >= g_count || g_vcpus[index].state == Vcpu::State::kOff) {
     return false;
   }
-  if (index == g_current) {
-    gic::inject_virq(vintid);
-    return true;
-  }
-
-  Vcpu& target = g_vcpus[index];
-  if (gic::lr_in_flight(target.ich_lr0)) {
-    console::write("[core_vcpu] LR0 shadow overwrite on VCPU ");
-    console::write_dec64(index);
-    console::write(" (single-LR limit)\n");
-  }
-  target.ich_lr0 = gic::make_virq_lr(vintid);
-  return true;
+  return vgic::post(index, vintid);
 }
 
 } // namespace vcpu

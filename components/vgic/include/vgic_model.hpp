@@ -131,12 +131,14 @@ struct MmioRead {
 
 namespace detail {
 
+inline constexpr std::uint32_t kBitsPerByte = 8;
+
 // Byte-lane read/write helpers for the byte-indexed IPRIORITYR block.
 inline auto prio_read(const std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_t first,
                       std::uint32_t size) noexcept -> std::uint64_t {
   std::uint64_t v = 0;
   for (std::uint32_t i = 0; i < size; ++i) {
-    v |= static_cast<std::uint64_t>(prio[first + i]) << (8U * i);
+    v |= static_cast<std::uint64_t>(prio[first + i]) << (kBitsPerByte * i);
   }
   return v;
 }
@@ -144,7 +146,7 @@ inline auto prio_read(const std::array<std::uint8_t, kNumPrivate>& prio, std::ui
 inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_t first, std::uint32_t size,
                        std::uint64_t value) noexcept {
   for (std::uint32_t i = 0; i < size; ++i) {
-    prio[first + i] = static_cast<std::uint8_t>(value >> (8U * i));
+    prio[first + i] = static_cast<std::uint8_t>(value >> (kBitsPerByte * i));
   }
 }
 
@@ -270,9 +272,10 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
 // guest consumes the current one. Returns true when deliverable work
 // remains undelivered (the caller arms the underflow maintenance IRQ).
 inline auto refill(CpuState& c, std::size_t lr_count) noexcept -> bool {
+  constexpr std::uint32_t kPriorityLimit = 0x100; // above every 8-bit priority
   for (;;) {
     std::uint32_t       best      = kNumPrivate;
-    std::uint32_t       best_prio = 0x100;
+    std::uint32_t       best_prio = kPriorityLimit;
     const std::uint32_t cand      = deliverable(c);
     for (std::uint32_t id = 0; id < kNumPrivate; ++id) {
       if (((cand >> id) & 1U) == 0U || lr_holds(c, lr_count, id)) {
