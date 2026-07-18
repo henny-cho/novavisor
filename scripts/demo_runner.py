@@ -155,6 +155,7 @@ def build_qemu_cmd(elf: Path, demo_name: str, demo_build: Path, manifest: dict) 
         QEMU,
         "-machine", "virt,virtualization=on,gic-version=3",
         "-cpu", "cortex-a57",
+        "-smp", "2",  # must match NOVA_BOARD_SMP_CPUS (board_layout.h)
         "-nographic",
         "-m", "1024",
         "-kernel", str(elf),

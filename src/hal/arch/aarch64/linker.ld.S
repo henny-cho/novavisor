@@ -41,8 +41,9 @@ SECTIONS
         __bss_end = .;
     } > RAM
 
-    /* Allocate 16KB for stack */
+    /* One EL2 stack per physical core, stacked downward from
+     * __stack_top: core i runs on [top - (i+1)*SIZE, top - i*SIZE). */
     . = ALIGN(16);
-    . = . + 0x4000;
+    . = . + NOVA_BOARD_EL2_STACK_SIZE * NOVA_BOARD_SMP_CPUS;
     __stack_top = .;
 }

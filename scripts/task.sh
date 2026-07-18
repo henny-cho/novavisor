@@ -207,6 +207,7 @@ cmd_run() {
     qemu-system-aarch64 \
         -machine virt,virtualization=on,gic-version=3 \
         -cpu cortex-a57 \
+        -smp 2 \
         -nographic \
         -m 1024 \
         -kernel "${ELF}"
@@ -253,6 +254,7 @@ cmd_debug() {
     qemu-system-aarch64 \
         -machine virt,virtualization=on,gic-version=3 \
         -cpu cortex-a57 \
+        -smp 2 \
         -nographic \
         -m 1024 \
         -kernel "${ELF}" \

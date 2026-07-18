@@ -127,6 +127,7 @@ if(CMAKE_CROSSCOMPILING)
         ivc
         psci
         watchdog
+        smp
     )
     foreach(component IN LISTS NOVA_COMPONENTS)
         add_subdirectory(src/components/${component})
@@ -156,6 +157,7 @@ else()
     nova_add_host_test(esr_parse_test)  # nova/arch/esr.hpp + trap_context.hpp
     nova_add_host_test(data_abort_test) # nova/arch/data_abort.hpp MMIO decode
     nova_add_host_test(fmt_test)        # nova/fmt.hpp integer formatters
+    nova_add_host_test(spin_lock_test)  # nova/sync.hpp mutual exclusion
 
     # Component tests (src/components/<name>/test/).
     nova_add_component_test(core_mmu stage2_descriptor_test) # Stage 2 descriptor encoding

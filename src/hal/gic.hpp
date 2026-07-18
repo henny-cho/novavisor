@@ -11,6 +11,7 @@
 #include "hal/arch/aarch64/gic_icc.hpp"
 #include "hal/board/qemu_virt/include/gicv3.hpp"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace nova::gic {
@@ -19,17 +20,30 @@ namespace nova::gic {
 // never dispatch or EOI them.
 inline constexpr std::uint32_t kSpecialIntidBase = 1020;
 
-// One-time bring-up: distributor + redistributor + physical CPU
-// interface. The virtual CPU interface is brought up by the vgic
-// component through hal/gic_virt.hpp.
+// Per-core bring-up: this core's redistributor + physical CPU
+// interface. Every core runs it for itself (secondaries via
+// smp::secondary_main). The virtual CPU interface is brought up by
+// the vgic component through hal/gic_virt.hpp.
+inline void init_cpu() noexcept {
+  board::qemu_virt::gicv3::redistributor_init();
+  arch::gicv3::cpu_interface_init();
+}
+
+// Cold-boot bring-up on the primary: the system-wide distributor,
+// then this core's share.
 inline void init() noexcept {
   board::qemu_virt::gicv3::distributor_init();
-  arch::gicv3::cpu_interface_init();
+  init_cpu();
 }
 
 // Enable a private interrupt (SGI/PPI, INTID 0..31) for this PE.
 inline void enable_ppi(std::uint32_t intid) noexcept {
   board::qemu_virt::gicv3::enable_ppi(intid);
+}
+
+// Send an SGI to another core (EL2 cross-call IPI).
+inline void send_sgi(std::size_t target_cpu, std::uint32_t intid) noexcept {
+  arch::gicv3::send_sgi(target_cpu, intid);
 }
 
 // Physical interrupt handshake for the EL2 IRQ handler.

@@ -21,6 +21,12 @@
 #define NOVA_BOARD_RAM_BASE 0x40000000
 #define NOVA_BOARD_RAM_SIZE 0x08000000 /* 128 MiB */
 
+/* Physical CPU count (QEMU -smp must match) and the EL2 stack carved
+ * out per core by the linker script; core i's SP starts at
+ * __stack_top - i * NOVA_BOARD_EL2_STACK_SIZE (boot.S). */
+#define NOVA_BOARD_SMP_CPUS       2
+#define NOVA_BOARD_EL2_STACK_SIZE 0x4000 /* 16 KiB per core */
+
 /* Peripheral bases. */
 #define NOVA_BOARD_UART0_BASE 0x09000000
 

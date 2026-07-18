@@ -7,6 +7,7 @@
 // their S3_* encodings so the assembler needs no GIC architecture
 // extension; the architectural name is given next to each access.
 
+#include <cstddef>
 #include <cstdint>
 
 namespace nova::arch::gicv3 {
@@ -27,6 +28,16 @@ inline void cpu_interface_init() noexcept {
   __asm__ volatile("msr S3_0_C4_C6_0, %0" ::"r"(v)); // ICC_PMR_EL1
   v = kIgrpen1Enable;
   __asm__ volatile("msr S3_0_C12_C12_7, %0" ::"r"(v)); // ICC_IGRPEN1_EL1
+  __asm__ volatile("isb");
+}
+
+// Send a Group 1 SGI to one core (flat topology: Aff0 = core index,
+// Aff1..3 = 0). ICC_SGI1R_EL1: TargetList[15:0] is a bitmask of Aff0
+// values within the Aff3.Aff2.Aff1 cluster, INTID sits at [27:24].
+inline void send_sgi(std::size_t target_cpu, std::uint32_t intid) noexcept {
+  const std::uint64_t v = (1ULL << target_cpu) | (static_cast<std::uint64_t>(intid) << 24U);
+  __asm__ volatile("dsb ishst");                       // publish memory written before the IPI
+  __asm__ volatile("msr S3_0_C12_C11_5, %0" ::"r"(v)); // ICC_SGI1R_EL1
   __asm__ volatile("isb");
 }
 

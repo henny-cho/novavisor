@@ -44,6 +44,9 @@
 #define NOVA_GICR_WAKER    0x0014
 #define NOVA_GICR_PIDR2    0xFFE8
 
+/* GICR_TYPER bits (low word). */
+#define NOVA_GICR_TYPER_LAST (1U << 4) /* last redistributor frame */
+
 /* GICR_WAKER bits. */
 #define NOVA_GICR_WAKER_PROCESSOR_SLEEP (1U << 1)
 #define NOVA_GICR_WAKER_CHILDREN_ASLEEP (1U << 2)

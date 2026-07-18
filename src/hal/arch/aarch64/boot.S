@@ -1,4 +1,17 @@
 // boot.S - Hardware Initialization Assembly
+//
+// Two entry points:
+//   _start               — cold boot, primary core only. Secondaries are
+//                          held powered off by firmware (PSCI) until the
+//                          hypervisor turns them on; a stray core that
+//                          reaches _start anyway is parked.
+//   nova_secondary_entry — PSCI CPU_ON target for secondary cores.
+//                          x0 = this core's index (CPU_ON context id).
+//                          Per-core setup only: stack + vectors. BSS and
+//                          all shared state were initialized by the
+//                          primary before CPU_ON was issued.
+
+#include "hal/board/qemu_virt/include/board_layout.h"
 
 .global _start
 .section .text.boot
@@ -11,6 +24,13 @@ _start:
 
     // If not EL2 (Hypervisor mode), hang
     b.ne .Lhang
+
+    // Park any core that is not the primary — cold-boot init (BSS zero,
+    // table builds) must run exactly once. Aff0 is the core index on
+    // this board.
+    mrs x0, mpidr_el1
+    and x0, x0, #0xFF
+    cbnz x0, .Lhang
 
     // Set up stack pointer for EL2
     ldr x0, =__stack_top
@@ -39,3 +59,23 @@ _start:
 .Lhang:
     wfi
     b .Lhang
+
+.global nova_secondary_entry
+.type   nova_secondary_entry, @function
+
+nova_secondary_entry:
+    // x0 = core index. Carve this core's stack out of the shared
+    // region: SP = __stack_top - index * stack size.
+    ldr x1, =__stack_top
+    mov x2, #NOVA_BOARD_EL2_STACK_SIZE
+    mul x2, x2, x0
+    sub x1, x1, x2
+    mov sp, x1
+
+    ldr x1, =_vector_table
+    msr vbar_el2, x1
+    isb
+
+    bl novavisor_secondary
+    b .Lhang
+.size nova_secondary_entry, . - nova_secondary_entry
