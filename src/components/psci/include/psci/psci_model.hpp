@@ -19,9 +19,12 @@
 namespace nova::psci {
 
 enum class Action : std::uint8_t {
-  kNone,        // ret carries the answer
-  kSystemOff,   // stop the calling VM
-  kSystemReset, // warm-reset the calling VM
+  kNone,         // ret carries the answer
+  kSystemOff,    // stop the calling VM
+  kSystemReset,  // warm-reset the calling VM
+  kCpuOn,        // power on a sibling vCPU (x1=target mpidr, x2=entry, x3=context_id)
+  kCpuOff,       // retire the calling vCPU
+  kAffinityInfo, // report a sibling vCPU's power state (x1=target mpidr)
 };
 
 struct Verdict {
@@ -44,14 +47,26 @@ struct Verdict {
 [[nodiscard]] constexpr auto is_implemented(std::uint32_t fid) noexcept -> bool {
   switch (strip_smc64(fid)) {
   case PSCI_FN_VERSION:
+  case PSCI_FN_CPU_OFF:
+  case PSCI_FN_CPU_ON:
   case PSCI_FN_AFFINITY_INFO:
   case PSCI_FN_SYSTEM_OFF:
   case PSCI_FN_SYSTEM_RESET:
   case PSCI_FN_FEATURES:
     return true;
   default:
-    return false; // CPU_ON/CPU_OFF arrive with multi-vCPU guests
+    return false;
   }
+}
+
+// A target MPIDR names a vCPU inside the calling VM. The virtual
+// topology is flat — Aff0 is the vCPU index, every higher affinity
+// field must be zero (matches VMPIDR/GICR_TYPER).
+inline constexpr std::uint64_t kInvalidTarget = ~std::uint64_t{0};
+
+[[nodiscard]] constexpr auto target_vcpu(std::uint64_t mpidr) noexcept -> std::uint64_t {
+  constexpr std::uint64_t kAff123 = 0xFF00FFFF00ULL; // Aff3[39:32] | Aff2[23:16] | Aff1[15:8]
+  return (mpidr & kAff123) != 0 ? kInvalidTarget : (mpidr & 0xFFULL);
 }
 
 // `arg` is x1: the queried ID for FEATURES, the target affinity for
@@ -71,10 +86,14 @@ struct Verdict {
                 ? PSCI_SUCCESS
                 : static_cast<std::uint64_t>(PSCI_NOT_SUPPORTED);
     return v;
+  case PSCI_FN_CPU_ON:
+    v.action = Action::kCpuOn;
+    return v;
+  case PSCI_FN_CPU_OFF:
+    v.action = Action::kCpuOff;
+    return v;
   case PSCI_FN_AFFINITY_INFO:
-    // One vCPU per VM: only affinity 0 exists, and a caller asking is
-    // by definition running on it.
-    v.ret = (arg == 0) ? PSCI_AFFINITY_ON : static_cast<std::uint64_t>(PSCI_INVALID_PARAMETERS);
+    v.action = Action::kAffinityInfo;
     return v;
   case PSCI_FN_SYSTEM_OFF:
     v.action = Action::kSystemOff;

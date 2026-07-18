@@ -37,6 +37,7 @@
 #define PSCI_SUCCESS            0
 #define PSCI_NOT_SUPPORTED      (-1)
 #define PSCI_INVALID_PARAMETERS (-2)
+#define PSCI_ALREADY_ON         (-4)
 
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 

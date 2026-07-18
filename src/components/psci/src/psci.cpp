@@ -42,6 +42,39 @@ void psci_component::handle_hvc(HvcCall* call) noexcept {
     log_power_event(" system_reset\n");
     smp::reset_vm(vm_of(vcpu::current_index()), call->ctx);
     return;
+  case psci::Action::kCpuOn: {
+    // The target names a sibling vCPU of the calling VM; the start is
+    // affinity-routed (a remote SUCCESS means "accepted" — the caller
+    // observes the boot through its own synchronization, per SMP
+    // firmware convention).
+    const std::size_t   vm = vm_of(vcpu::current_index());
+    const std::uint64_t t  = psci::target_vcpu(call->ctx->x[1]);
+    if (t == psci::kInvalidTarget || t >= guest_table()[vm].vcpus) {
+      call->ctx->x[0] = static_cast<std::uint64_t>(PSCI_INVALID_PARAMETERS);
+    } else if (vcpu::vcpu_on(slot_of(vm, t))) {
+      call->ctx->x[0] = static_cast<std::uint64_t>(PSCI_ALREADY_ON);
+    } else {
+      call->ctx->x[0] = smp::cpu_on(slot_of(vm, t), call->ctx->x[2], call->ctx->x[3])
+                            ? PSCI_SUCCESS
+                            : static_cast<std::uint64_t>(PSCI_INVALID_PARAMETERS);
+    }
+    return;
+  }
+  case psci::Action::kCpuOff:
+    // Does not return to the caller — only this vCPU retires; its
+    // siblings keep running.
+    vcpu::stop_vcpu(vcpu::current_index(), call->ctx);
+    return;
+  case psci::Action::kAffinityInfo: {
+    const std::size_t   vm = vm_of(vcpu::current_index());
+    const std::uint64_t t  = psci::target_vcpu(call->ctx->x[1]);
+    if (t == psci::kInvalidTarget || t >= guest_table()[vm].vcpus) {
+      call->ctx->x[0] = static_cast<std::uint64_t>(PSCI_INVALID_PARAMETERS);
+    } else {
+      call->ctx->x[0] = vcpu::vcpu_on(slot_of(vm, t)) ? PSCI_AFFINITY_ON : PSCI_AFFINITY_OFF;
+    }
+    return;
+  }
   case psci::Action::kNone:
     call->ctx->x[0] = v.ret;
     return;
