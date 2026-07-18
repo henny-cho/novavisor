@@ -105,9 +105,7 @@ if(CMAKE_CROSSCOMPILING)
     add_subdirectory(src/hal/board_qemu_virt)
 
     # Components — one add_subdirectory and one link entry per name.
-    # Only components composed in projects/*/nexus.hpp belong here; idle
-    # (components/idle/) left the list when Phase 5 replaced the WFI loop
-    # with EL1 guest execution. Phase 11 may reintroduce it.
+    # Only components composed in projects/*/nexus.hpp belong here.
     set(NOVA_COMPONENTS
         nova_panic
         trap_handler
