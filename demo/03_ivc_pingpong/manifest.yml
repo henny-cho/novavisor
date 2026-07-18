@@ -1,0 +1,30 @@
+name: "03_ivc_pingpong"
+description: "Two VMs ping-pong 1000 rounds over the IVC shared page with doorbell vIRQs."
+phase: 7
+enabled: false
+timeout_seconds: 15
+
+guests:
+  - name: "ping"
+    binary: "ping.bin"
+    # load_addr = PA slot 0 (identity with NOVA_GUEST_IPA_BASE); both
+    # guests link at the same IPA — Stage 2 separates them by slot.
+    load_addr:   0x50000000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+  - name: "pong"
+    binary: "pong.bin"
+    # load_addr = PA slot 1 = NOVA_GUEST_IPA_BASE + NOVA_GUEST_PA_STRIDE.
+    load_addr:   0x50200000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+
+expect:
+  - pattern: "pingpong: 1000 rounds ok"
+    within_seconds: 10
+  - pattern: "demo_exit code=0"
+    within_seconds: 15
