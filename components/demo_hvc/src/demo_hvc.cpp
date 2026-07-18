@@ -8,7 +8,6 @@
 #include "components/demo_hvc/include/demo_hvc.hpp"
 
 #include "components/core_vcpu/include/core_vcpu.hpp"
-#include "components/nova_panic/include/nova_panic.hpp"
 #include "hal/console.hpp"
 #include "nova/guest.hpp"
 #include "nova/hvc_abi.h"
@@ -62,13 +61,13 @@ void handle_putc(TrapContext* ctx) noexcept {
 }
 
 // HVC_EXIT: x1 = exit code. Emits the manifest-expected "demo_exit
-// code=N" line and halts — Phase 5 is single-guest, so guest exit
-// terminates the whole hypervisor.
-[[noreturn]] void handle_exit(TrapContext* ctx) noexcept {
+// code=N" line, then retires the calling VCPU — the scheduler switches
+// to the next runnable guest, or halts the machine after the last one.
+void handle_exit(TrapContext* ctx) noexcept {
   console::write("demo_exit code=");
   console::write_dec64(ctx->x[1]);
   console::write("\n");
-  halt();
+  vcpu::exit_current(ctx);
 }
 
 } // namespace
@@ -84,7 +83,9 @@ void demo_hvc_component::handle_hvc(HvcCall* call) noexcept {
     handle_putc(call->ctx);
     return;
   case HVC_EXIT:
-    handle_exit(call->ctx); // [[noreturn]]
+    call->handled = true;
+    handle_exit(call->ctx);
+    return;
   default:
     // Not ours — leave unclaimed for other HvcService subscribers.
     return;

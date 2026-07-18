@@ -1,12 +1,21 @@
 // components/core_vcpu/src/core_vcpu.cpp
 //
-// Seeds vcpu 0 from the guest table injected by the project composition
-// (nova/guest.hpp) and performs the first ERET into EL1.
+// Cooperative VCPU scheduler. A switch swaps the live EL2 trap frame
+// with the target's saved TrapContext, moves the minimal EL1 sysreg
+// bank and the vGIC LR0 shadow, and retargets VTTBR_EL2 — the common
+// vec.S restore path then resumes the new guest.
 
 #include "components/core_vcpu/include/core_vcpu.hpp"
 
+#include "components/core_mmu/include/core_mmu.hpp"
+#include "components/nova_panic/include/nova_panic.hpp"
+#include "hal/console.hpp"
+#include "hal/gic.hpp"
 #include "nova/guest.hpp"
+#include "nova/hvc_abi.h"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace nova {
@@ -18,7 +27,7 @@ extern "C" [[noreturn]] void nova_vcpu_enter(std::uint64_t entry_pc, std::uint64
 namespace vcpu {
 namespace {
 
-// SPSR_EL2 value to restore on ERET into the fresh guest:
+// SPSR_EL2 value to restore on ERET into a fresh guest:
 //   M[3:0]   = 0b0101  EL1h  (EL1, using SP_EL1)
 //   M[4]     = 0       AArch64 execution state
 //   F (b6)   = 1       FIQ masked
@@ -26,31 +35,165 @@ namespace {
 //   A (b8)   = 1       SError masked
 //   D (b9)   = 1       Debug masked
 //   others   = 0
-// Phase 6 will clear I/F when vGIC injection comes online.
+// The guest unmasks I itself once its vector table is installed.
 inline constexpr std::uint64_t kSpsrEl1h = 0x3C5ULL;
 
-// Phase 5/6: single VCPU. Phase 7 sizes the backing store from the
-// guest table and adds a scheduler-owned "current" pointer.
-Vcpu g_vcpu0;
+std::array<Vcpu, kMaxGuests> g_vcpus;
+std::size_t                  g_count   = 0;
+std::size_t                  g_current = 0;
+
+// Reset a VCPU to its descriptor's boot state. GP registers are zeroed
+// so no EL2 (or previous-guest) values leak into a fresh guest.
+void seed(Vcpu& v, const GuestDescriptor& guest) noexcept {
+  v.guest    = &guest;
+  v.ctx      = TrapContext{};
+  v.ctx.elr  = guest.entry_pc;
+  v.ctx.sp   = guest.stack_top;
+  v.ctx.spsr = kSpsrEl1h;
+  v.el1      = El1SysregBank{};
+  v.ich_lr0  = 0;
+}
+
+auto read_el1_bank() noexcept -> El1SysregBank {
+  El1SysregBank b;
+  __asm__ volatile("mrs %0, vbar_el1" : "=r"(b.vbar));
+  __asm__ volatile("mrs %0, elr_el1" : "=r"(b.elr));
+  __asm__ volatile("mrs %0, spsr_el1" : "=r"(b.spsr));
+  __asm__ volatile("mrs %0, sp_el0" : "=r"(b.sp_el0));
+  return b;
+}
+
+void write_el1_bank(const El1SysregBank& b) noexcept {
+  __asm__ volatile("msr vbar_el1, %0" ::"r"(b.vbar));
+  __asm__ volatile("msr elr_el1, %0" ::"r"(b.elr));
+  __asm__ volatile("msr spsr_el1, %0" ::"r"(b.spsr));
+  __asm__ volatile("msr sp_el0, %0" ::"r"(b.sp_el0));
+  // No ISB needed here: the trap-return ERET is a context synchronization
+  // event that makes these writes visible to the guest.
+}
+
+// Next kReady VCPU after g_current in ring order; g_count when none.
+auto pick_next() noexcept -> std::size_t {
+  for (std::size_t step = 1; step <= g_count; ++step) {
+    const std::size_t idx = (g_current + step) % g_count;
+    if (g_vcpus[idx].state == Vcpu::State::kReady) {
+      return idx;
+    }
+  }
+  return g_count;
+}
+
+// Swap the resident VCPU: park the outgoing guest's state (trap frame,
+// EL1 bank, LR0), load the incoming one, retarget Stage 2. The caller
+// returns through vec.S which restores *live — now the new guest.
+void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
+  Vcpu& cur  = g_vcpus[g_current];
+  Vcpu& next = g_vcpus[next_idx];
+
+  cur.ctx     = *live;
+  cur.el1     = read_el1_bank();
+  cur.ich_lr0 = gic::read_lr0();
+  if (cur.state == Vcpu::State::kRunning) { // exit_current parks it as kOff
+    cur.state = Vcpu::State::kReady;
+  }
+
+  *live = next.ctx;
+  write_el1_bank(next.el1);
+  gic::write_lr0(next.ich_lr0);
+  mmu::switch_vm(next_idx);
+
+  next.state = Vcpu::State::kRunning;
+  g_current  = next_idx;
+}
 
 } // namespace
 
 auto current() noexcept -> Vcpu& {
-  return g_vcpu0;
+  return g_vcpus[g_current];
+}
+
+auto current_index() noexcept -> std::size_t {
+  return g_current;
+}
+
+void init() noexcept {
+  const auto guests = guest_table();
+  g_count           = guests.size() <= kMaxGuests ? guests.size() : kMaxGuests; // core_mmu already panicked if over
+  for (std::size_t i = 0; i < g_count; ++i) {
+    seed(g_vcpus[i], guests[i]);
+  }
+  g_vcpus[0].state = Vcpu::State::kReady;
 }
 
 [[noreturn]] void enter_guest() noexcept {
-  const GuestDescriptor& guest = guest_table().front();
+  Vcpu& boot = g_vcpus[0];
+  boot.state = Vcpu::State::kRunning;
+  g_current  = 0;
+  nova_vcpu_enter(boot.ctx.elr, boot.ctx.sp, boot.ctx.spsr);
+}
 
-  Vcpu& vcpu = g_vcpu0;
-  vcpu.guest = &guest;
-  vcpu.elr   = guest.entry_pc;
-  vcpu.sp    = guest.stack_top;
-  vcpu.spsr  = kSpsrEl1h;
-  vcpu.state = Vcpu::State::kRunning;
+void yield_current(TrapContext* live) noexcept {
+  const std::size_t next = pick_next();
+  if (next < g_count) {
+    switch_to(live, next);
+  }
+}
 
-  nova_vcpu_enter(vcpu.elr, vcpu.sp, vcpu.spsr);
+auto start_vm(std::size_t index) noexcept -> bool {
+  if (index >= g_count || g_vcpus[index].state != Vcpu::State::kOff) {
+    return false;
+  }
+  seed(g_vcpus[index], guest_table()[index]);
+  g_vcpus[index].state = Vcpu::State::kReady;
+  return true;
+}
+
+void exit_current(TrapContext* live) noexcept {
+  g_vcpus[g_current].state = Vcpu::State::kOff;
+
+  const std::size_t next = pick_next();
+  if (next >= g_count) {
+    console::write("[core_vcpu] all VCPUs off — halting\n");
+    halt();
+  }
+  switch_to(live, next);
+}
+
+auto post_virq(std::size_t index, std::uint32_t vintid) noexcept -> bool {
+  if (index >= g_count || g_vcpus[index].state == Vcpu::State::kOff) {
+    return false;
+  }
+  if (index == g_current) {
+    gic::inject_virq(vintid);
+    return true;
+  }
+
+  Vcpu& target = g_vcpus[index];
+  if (gic::lr_in_flight(target.ich_lr0)) {
+    console::write("[core_vcpu] LR0 shadow overwrite on VCPU ");
+    console::write_dec64(index);
+    console::write(" (single-LR limit)\n");
+  }
+  target.ich_lr0 = gic::make_virq_lr(vintid);
+  return true;
 }
 
 } // namespace vcpu
+
+void core_vcpu_component::handle_hvc(HvcCall* call) noexcept {
+  switch (call->func_id) {
+  case NOVA_HVC_FN_YIELD:
+    call->handled   = true;
+    call->ctx->x[0] = 0; // written before the frame swap parks it
+    vcpu::yield_current(call->ctx);
+    return;
+  case NOVA_HVC_FN_VM_START:
+    call->handled   = true;
+    call->ctx->x[0] = vcpu::start_vm(static_cast<std::size_t>(call->ctx->x[1])) ? 0 : kSmcccNotSupported;
+    return;
+  default:
+    return; // not ours — leave unclaimed for other subscribers
+  }
+}
+
 } // namespace nova

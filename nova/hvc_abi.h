@@ -30,8 +30,18 @@
 #define NOVA_HVC_FN_YIELD     0x1003
 #define NOVA_HVC_FN_HEARTBEAT 0x1004
 
-/* IVC range (Phase 7) */
+/* VM_START: x1 = guest_table index. Starts a not-yet-running VM
+ * (cooperative scheduling — the new VM runs when someone yields).
+ * Returns 0 in x0, or -1 when the index is invalid or the VM is
+ * already running. */
+#define NOVA_HVC_FN_VM_START 0x1005
+
+/* IVC range (Phase 7).
+ * DOORBELL: x1 = target guest_table index. Injects the doorbell vIRQ
+ * (SGI, vINTID NOVA_IVC_DOORBELL_VINTID) into the target VM. Returns 0
+ * in x0, or -1 when the target is invalid or not running. */
 #define NOVA_HVC_FN_IVC_DOORBELL 0x1100
+#define NOVA_IVC_DOORBELL_VINTID 0
 
 /* Timer range (Phase 6).
  * TIMER_SET: x1 = delay in counter ticks (CNTFRQ rate). One-shot: on

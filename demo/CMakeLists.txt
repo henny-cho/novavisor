@@ -25,11 +25,15 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # EL1 bare-metal: no libc startup, no stack protector (no runtime).
 # -fno-builtin prevents gcc from lowering memcpy/memset into libc calls
 # we don't link.
+# -mgeneral-regs-only: the hypervisor's VCPU switch does not save
+# FP/SIMD state, so guests must never touch it (GCC would otherwise
+# vectorize memory ops at -O2).
 add_compile_options(
     -ffreestanding
     -nostdlib
     -fno-builtin
     -fno-stack-protector
+    -mgeneral-regs-only
     -Wall -Wextra
     -O2
     -g

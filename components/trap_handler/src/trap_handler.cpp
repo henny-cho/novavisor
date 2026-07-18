@@ -66,9 +66,6 @@ void dump_trap_context(const TrapContext* ctx) noexcept {
 
 namespace {
 
-// SMCCC v1.x: functions not implemented by the callee return -1.
-constexpr std::uint64_t kSmcccNotSupported = ~0ULL;
-
 void dispatch_hvc(TrapContext* ctx) noexcept {
   // SMCCC: the function ID lives in x0; the `hvc #imm16` instruction's
   // own immediate (ESR_EL2.ISS) is conventionally 0 and is NOT the

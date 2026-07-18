@@ -105,11 +105,18 @@ inline void virtual_interface_init() noexcept {
   __asm__ volatile("isb");
 }
 
-// Program List Register 0. Phase 6 keeps at most one vIRQ in flight;
-// a full vGIC allocates LRs dynamically.
+// Program / read back List Register 0. At most one vIRQ is in flight
+// per VCPU (the scheduler shadows this register across VM switches);
+// a full vGIC allocates LRs dynamically (Phase 8).
 inline void write_lr0(std::uint64_t value) noexcept {
   __asm__ volatile("msr S3_4_C12_C12_0, %0" ::"r"(value)); // ICH_LR0_EL2
   __asm__ volatile("isb");
+}
+
+inline auto read_lr0() noexcept -> std::uint64_t {
+  std::uint64_t v = 0;
+  __asm__ volatile("mrs %0, S3_4_C12_C12_0" : "=r"(v)); // ICH_LR0_EL2
+  return v;
 }
 
 } // namespace nova::board::qemu_virt::gicv3

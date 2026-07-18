@@ -43,6 +43,10 @@ struct EL2SyncTrapService : public callback::service<TrapContext*> {};
 // If no subscriber claims the call, trap_handler warns and returns
 // SMCCC NOT_SUPPORTED (-1) in the guest's x0.
 // ---------------------------------------------------------------------------
+// SMCCC v1.x: unimplemented functions and invalid arguments return -1
+// in x0. Shared by the dispatcher and every HvcService subscriber.
+inline constexpr std::uint64_t kSmcccNotSupported = ~0ULL;
+
 struct HvcCall {
   TrapContext*  ctx     = nullptr;
   std::uint16_t func_id = 0;
