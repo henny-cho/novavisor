@@ -2,19 +2,20 @@
 
 // components/core_mmu/include/stage2_builder.hpp
 //
-// Pure Stage 2 page table population logic. Takes L1/L2/L3 tables by
-// pointer (plus the physical addresses that will be written into the
-// Table descriptors) and installs a 1:1 identity mapping of a single
-// contiguous IPA window.
+// Pure Stage 2 page table population logic — no bare-metal runtime
+// dependency, fully host-testable.
 //
-// This header has no dependency on the bare-metal runtime — it's
-// constexpr-safe where practical and fully host-testable.
+// Maps arbitrary 4 KiB-aligned identity ranges within one 1 GiB region:
+// 2 MiB-aligned chunks become L2 Block descriptors (no L3 needed);
+// unaligned head/tail pages go through L3 tables drawn from a
+// caller-provided pool. Multiple disjoint ranges may be mapped into the
+// same table set (Phase 7 multi-window, Phase 8 guest RAM + MMIO).
 //
 // Reference: ARM ARM DDI0487 §D5.2 (VMSAv8-64 multi-level translation).
 //
 // Level strides (4 KiB granule):
 //   L1  bits 38:30   (entry covers 1 GiB)
-//   L2  bits 29:21   (entry covers 2 MiB)
+//   L2  bits 29:21   (entry covers 2 MiB; Block or Table)
 //   L3  bits 20:12   (entry covers 4 KiB, always a Page)
 
 #include "components/core_mmu/include/stage2_descriptor.hpp"
@@ -22,6 +23,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace nova::mmu {
 
@@ -40,15 +42,22 @@ inline constexpr std::uint64_t k4KiB = 1ULL << kL3Shift;
 
 using Table = std::array<std::uint64_t, kTableEntries>;
 
-// Bundle of tables and their physical addresses. For Phase 5 the PAs are
-// the static array addresses taken at link time and written directly into
-// the Table descriptors (L1→L2, L2→L3).
+// Table set for one Stage 2 address space: the L1 root, a single L2
+// (all mappings must share one 1 GiB region — QEMU virt RAM
+// 0x4000_0000..0x8000_0000 is exactly one), and a pool of L3 tables
+// consumed on demand for sub-2 MiB mappings.
+//
+// The *_pa values are what gets written into Table descriptors; the
+// hypervisor passes link-time addresses, host tests pass opaque
+// sentinels. l3_pool_pas[i] must be the PA of l3_pool[i], each
+// 4 KiB-aligned.
 struct Stage2Tables {
-  Table*        l1;
-  Table*        l2;
-  Table*        l3;
-  std::uint64_t l2_pa;
-  std::uint64_t l3_pa;
+  Table*                         l1;
+  Table*                         l2;
+  std::uint64_t                  l2_pa;
+  std::span<Table>               l3_pool;
+  std::span<const std::uint64_t> l3_pool_pas;
+  std::size_t                    l3_used = 0; // builder-internal cursor
 };
 
 // --- Index extractors -------------------------------------------------------
@@ -65,44 +74,111 @@ struct Stage2Tables {
   return static_cast<std::size_t>((ipa >> kL3Shift) & kIndexMask);
 }
 
-// --- Identity-map builder ---------------------------------------------------
-//
-// Zero all three tables, then install a 1:1 identity mapping covering
-// [ipa_base, ipa_base + size). On return:
-//   L1[l1_index(ipa_base)]      = Table descriptor → t.l2_pa
-//   L2[l2_index(ipa_base)]      = Table descriptor → t.l3_pa
-//   L3[l3_index(ipa_base) + i]  = Page descriptor  → (ipa_base + i * 4 KiB)
-//                                 for i in [0, size / 4 KiB)
-// All other entries are kInvalid.
-//
-// Constraints (caller must satisfy; violating them corrupts the table):
-//   - ipa_base % 4 KiB == 0
-//   - size > 0 and size % 4 KiB == 0
-//   - ipa_base and (ipa_base + size - 4 KiB) share the same L1 and L2
-//     index (i.e., the range lies entirely inside one 2 MiB block)
-//   - t.l2_pa and t.l3_pa are 4 KiB-aligned
-//
-// Phase 5 uses this for a single 1 MiB guest window. Phase 8+ will add
-// multi-range and MMIO device variants.
-inline void build_identity_map(Stage2Tables& t, std::uint64_t ipa_base, std::uint64_t size,
-                               std::uint64_t leaf_attrs) noexcept {
-  Table& l1 = *t.l1;
-  Table& l2 = *t.l2;
-  Table& l3 = *t.l3;
+// --- Builder ----------------------------------------------------------------
 
-  l1.fill(kInvalid);
-  l2.fill(kInvalid);
-  l3.fill(kInvalid);
-
-  l1[l1_index(ipa_base)] = make_table(t.l2_pa);
-  l2[l2_index(ipa_base)] = make_table(t.l3_pa);
-
-  const auto        pages    = static_cast<std::size_t>(size / k4KiB);
-  const std::size_t i3_start = l3_index(ipa_base);
-  for (std::size_t i = 0; i < pages; ++i) {
-    const std::uint64_t page_pa = ipa_base + (static_cast<std::uint64_t>(i) * k4KiB);
-    l3[i3_start + i]            = make_page(page_pa, leaf_attrs);
+// Reset every table to kInvalid and rewind the L3 pool.
+inline void init_tables(Stage2Tables& t) noexcept {
+  t.l1->fill(kInvalid);
+  t.l2->fill(kInvalid);
+  for (Table& l3 : t.l3_pool) {
+    l3.fill(kInvalid);
   }
+  t.l3_used = 0;
+}
+
+namespace detail {
+
+// Locate the pool table backing an existing L2 Table descriptor.
+inline auto find_l3(Stage2Tables& t, std::uint64_t table_pa) noexcept -> Table* {
+  for (std::size_t i = 0; i < t.l3_used; ++i) {
+    if ((t.l3_pool_pas[i] & desc::kOutputAddrMask) == table_pa) {
+      return &t.l3_pool[i];
+    }
+  }
+  return nullptr;
+}
+
+} // namespace detail
+
+// Install a 1:1 identity mapping of [ipa_base, ipa_base + size) with the
+// given leaf attributes. 2 MiB-aligned chunks become L2 Blocks; the rest
+// becomes L3 Pages from the pool. May be called repeatedly for disjoint
+// ranges (call init_tables() once first).
+//
+// Returns false — with the tables in a partially-written state that must
+// not be activated — when:
+//   - ipa_base/size are not 4 KiB-aligned, or size == 0
+//   - the range crosses (or lands outside) the single mapped 1 GiB region
+//   - the L3 pool is exhausted
+//   - a page range overlaps an already-installed Block
+[[nodiscard]] inline auto map_identity_range(Stage2Tables& t, std::uint64_t ipa_base, std::uint64_t size,
+                                             std::uint64_t leaf_attrs) noexcept -> bool {
+  if (size == 0 || (ipa_base % k4KiB) != 0 || (size % k4KiB) != 0) {
+    return false;
+  }
+
+  Table&            l1  = *t.l1;
+  Table&            l2  = *t.l2;
+  const std::size_t i1  = l1_index(ipa_base);
+  const auto        end = ipa_base + size;
+
+  if (l1_index(end - k4KiB) != i1) {
+    return false; // crosses a 1 GiB boundary — only one L2 table exists
+  }
+  // The single L2 serves exactly one L1 slot: reject a second region.
+  for (std::size_t i = 0; i < kTableEntries; ++i) {
+    if (i != i1 && is_valid(l1[i])) {
+      return false;
+    }
+  }
+  if (!is_valid(l1[i1])) {
+    l1[i1] = make_table(t.l2_pa);
+  }
+
+  std::uint64_t addr = ipa_base;
+  while (addr < end) {
+    const std::size_t i2 = l2_index(addr);
+
+    // Whole free 2 MiB slot → Block descriptor, no L3 spent.
+    if ((addr % k2MiB) == 0 && end - addr >= k2MiB && !is_valid(l2[i2])) {
+      l2[i2] = make_block(addr, leaf_attrs);
+      addr += k2MiB;
+      continue;
+    }
+
+    // Partial slot (or one already backed by pages) → L3 Pages.
+    Table* l3 = nullptr;
+    if (!is_valid(l2[i2])) {
+      if (t.l3_used >= t.l3_pool.size()) {
+        return false; // pool exhausted
+      }
+      l2[i2] = make_table(t.l3_pool_pas[t.l3_used]);
+      l3     = &t.l3_pool[t.l3_used];
+      ++t.l3_used;
+    } else {
+      if (descriptor_type(l2[i2]) == desc::kTypeBlock) {
+        return false; // overlaps an existing Block mapping
+      }
+      l3 = detail::find_l3(t, output_addr(l2[i2]));
+      if (l3 == nullptr) {
+        return false;
+      }
+    }
+
+    const std::uint64_t slot_end  = (addr & ~(k2MiB - 1)) + k2MiB;
+    const std::uint64_t chunk_end = (end < slot_end) ? end : slot_end;
+    for (; addr < chunk_end; addr += k4KiB) {
+      (*l3)[l3_index(addr)] = make_page(addr, leaf_attrs);
+    }
+  }
+  return true;
+}
+
+// Convenience: reset + map a single range.
+[[nodiscard]] inline auto build_identity_map(Stage2Tables& t, std::uint64_t ipa_base, std::uint64_t size,
+                                             std::uint64_t leaf_attrs) noexcept -> bool {
+  init_tables(t);
+  return map_identity_range(t, ipa_base, size, leaf_attrs);
 }
 
 } // namespace nova::mmu

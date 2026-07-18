@@ -11,9 +11,12 @@
 
 #include "components/core_mmu/include/stage2_builder.hpp"
 #include "components/core_mmu/include/stage2_descriptor.hpp"
+#include "components/nova_panic/include/nova_panic.hpp"
 #include "hal/console.hpp"
 #include "nova/guest.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace nova {
@@ -23,9 +26,16 @@ namespace {
 // link-time addresses serve as the physical addresses written into
 // Table descriptors (VTTBR points at L1; L1→L2 and L2→L3 are populated
 // by build_identity_map).
+//
+// The L3 pool serves sub-2 MiB fragments only — 2 MiB-aligned chunks
+// map as L2 Blocks without touching it — so a small pool covers even
+// large Phase 8 guest images. Each Table is exactly 4 KiB, so array
+// elements stay 4 KiB-aligned.
+inline constexpr std::size_t kL3PoolSize = 4;
+
 alignas(mmu::k4KiB) mmu::Table stage2_l1;
 alignas(mmu::k4KiB) mmu::Table stage2_l2;
-alignas(mmu::k4KiB) mmu::Table stage2_l3;
+alignas(mmu::k4KiB) std::array<mmu::Table, kL3PoolSize> stage2_l3_pool;
 
 // VTCR_EL2 field encoding:
 //   T0SZ  = 25    → 39-bit IPA (64 - 25)              bits 5:0
@@ -73,10 +83,18 @@ void init_and_activate() noexcept {
 
   const auto l1_pa = reinterpret_cast<std::uint64_t>(&stage2_l1);
   const auto l2_pa = reinterpret_cast<std::uint64_t>(&stage2_l2);
-  const auto l3_pa = reinterpret_cast<std::uint64_t>(&stage2_l3);
 
-  Stage2Tables tables{.l1 = &stage2_l1, .l2 = &stage2_l2, .l3 = &stage2_l3, .l2_pa = l2_pa, .l3_pa = l3_pa};
-  build_identity_map(tables, guest.ipa_base, guest.ipa_size, desc::kAttrNormalRwx);
+  std::array<std::uint64_t, kL3PoolSize> l3_pas{};
+  for (std::size_t i = 0; i < kL3PoolSize; ++i) {
+    l3_pas[i] = reinterpret_cast<std::uint64_t>(&stage2_l3_pool[i]);
+  }
+
+  Stage2Tables tables{
+      .l1 = &stage2_l1, .l2 = &stage2_l2, .l2_pa = l2_pa, .l3_pool = stage2_l3_pool, .l3_pool_pas = l3_pas};
+  if (!build_identity_map(tables, guest.ipa_base, guest.ipa_size, desc::kAttrNormalRwx)) {
+    console::write("[NOVA PANIC] Stage 2 identity map failed (range/pool constraints)\n");
+    halt();
+  }
 
   // VTTBR_EL2 layout:
   //   bits 47:1  BADDR (L1 table PA; bit 0 is always 0 for 4K-aligned)
