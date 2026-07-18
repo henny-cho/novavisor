@@ -24,10 +24,14 @@
 /* Macros are the point here (assembler/linker-script consumers) — the
  * usual constexpr guidance does not apply. */
 // NOLINTBEGIN(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
-#define NOVA_HVC_FN_PUTS      0x1000
-#define NOVA_HVC_FN_PUTC      0x1001
-#define NOVA_HVC_FN_EXIT      0x1002
-#define NOVA_HVC_FN_YIELD     0x1003
+#define NOVA_HVC_FN_PUTS  0x1000
+#define NOVA_HVC_FN_PUTC  0x1001
+#define NOVA_HVC_FN_EXIT  0x1002
+#define NOVA_HVC_FN_YIELD 0x1003
+
+/* HEARTBEAT: x1 = watchdog window in ms. Each call re-arms the caller's
+ * watchdog deadline to now + window; missing the window warm-resets the
+ * VM. 0 disarms. Returns 0 in x0. */
 #define NOVA_HVC_FN_HEARTBEAT 0x1004
 
 /* VM_START: x1 = guest_table index. Starts a not-yet-running VM

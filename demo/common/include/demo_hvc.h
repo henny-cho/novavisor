@@ -55,9 +55,11 @@ static inline void hvc_yield(void) {
   __asm__ volatile("hvc #0" : "+r"(x0)::"memory");
 }
 
-static inline void hvc_heartbeat(uint64_t vm_id) {
+// Re-arm the caller's watchdog: a warm reset follows if the next
+// heartbeat does not arrive within `window_ms`. 0 disarms.
+static inline void hvc_heartbeat(uint64_t window_ms) {
   register uint64_t x0 __asm__("x0") = HVC_HEARTBEAT;
-  register uint64_t x1 __asm__("x1") = vm_id;
+  register uint64_t x1 __asm__("x1") = window_ms;
   __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
 }
 

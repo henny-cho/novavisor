@@ -87,8 +87,10 @@ void seed(std::size_t index, const GuestDescriptor& guest) noexcept {
   g_fp.invalidate(index);
   vgic::cpu_reset(index);
   // A reseeded guest owes nothing to its past life: drop the parked-CNTV
-  // wake-up mirror (a fresh bank has CNTV disabled).
+  // wake-up mirror (a fresh bank has CNTV disabled) and the heartbeat
+  // deadline (the rebooted guest re-opts in with its next heartbeat).
   soft_timer::cancel(soft_timer::kSlotCntvWake + index);
+  soft_timer::cancel(soft_timer::kSlotWatchdog + index);
 }
 
 // Swap the resident VCPU: park the outgoing guest's state (trap frame,
@@ -262,6 +264,7 @@ void reset_vm(std::size_t index, TrapContext* live) noexcept {
     console::write_dec64(index);
     console::write(" restart budget exhausted — stopping\n");
     g_vcpus[index].state = sched::State::kOff;
+    soft_timer::cancel(soft_timer::kSlotWatchdog + index); // no reset from beyond the grave
     if (index == g_current) {
       schedule_out(live);
     }
@@ -289,6 +292,8 @@ void reset_vm(std::size_t index, TrapContext* live) noexcept {
 
 void exit_current(TrapContext* live) noexcept {
   g_vcpus[g_current].state = sched::State::kOff;
+  // A stopped VM must never be watchdog-reset back to life.
+  soft_timer::cancel(soft_timer::kSlotWatchdog + g_current);
   schedule_out(live);
 }
 

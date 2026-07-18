@@ -55,10 +55,16 @@ stubs and the hypervisor dispatcher. This table documents them:
 | `0x1001` | `PUTC`  | x1=char        | Write one character |
 | `0x1002` | `EXIT`  | x1=code        | Guest termination. Hypervisor logs `demo_exit code=<n>` |
 | `0x1003` | `YIELD` | —              | Yield the VCPU (cooperative round-robin) |
-| `0x1004` | `HEARTBEAT` | x1=vm_id   | Liveness tick (Phase 13) |
+| `0x1004` | `HEARTBEAT` | x1=window ms | Re-arm the caller's watchdog; missing the window warm-resets the VM. 0 disarms |
 | `0x1005` | `VM_START` | x1=vm index | Start a not-yet-running VM; 0 or -1 in x0 |
 | `0x1100` | `IVC_DOORBELL` | x1=vm index | Inject doorbell vIRQ (SGI 0) into the target VM; 0 or -1 in x0 |
 | `0x1200` | `TIMER_SET` | x1=ticks | One-shot: injects vINTID 27 after `ticks` counter cycles; returns 0 in x0. Legacy since Phase 8 — new guests use CNTV directly |
+
+PSCI (Phase 11): guests control their own power through the standard
+SMCCC range (`0x8400_xxxx`, HVC conduit) — `SYSTEM_OFF` stops the VM,
+`SYSTEM_RESET` warm-reboots it from a pristine image (the IVC shared
+page survives a reset; the guest window does not). IDs in
+`nova/abi/psci.h`, stubs in `common/include/guest_psci.h`.
 
 Multi-VM notes (Phase 7): every guest links against the same IPA window
 and is loaded at its own PA slot (`load_addr` = `NOVA_GUEST_IPA_BASE +

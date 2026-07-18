@@ -7,6 +7,7 @@
 //   kSlotSlice        scheduler time slice (core_vcpu)
 //   kSlotLegacyTimer  HVC_TIMER_SET one-shot (core_timer)
 //   kSlotCntvWake+i   parked-CNTV wake-up for blocked VCPU i (core_vcpu)
+//   kSlotWatchdog+i   heartbeat deadline for VM i (watchdog)
 //
 // Expiry runs inside IRQ dispatch: callbacks receive the live trap
 // frame and may swap it (preemption). The hardware timer is
@@ -26,8 +27,9 @@ namespace nova::soft_timer {
 
 inline constexpr std::size_t kSlotSlice       = 0;
 inline constexpr std::size_t kSlotLegacyTimer = 1;
-inline constexpr std::size_t kSlotCntvWake    = 2; // + VCPU index, kMaxGuests wide
-inline constexpr std::size_t kSlotCount       = kSlotCntvWake + kMaxGuests;
+inline constexpr std::size_t kSlotCntvWake    = 2;                          // + VCPU index, kMaxGuests wide
+inline constexpr std::size_t kSlotWatchdog    = kSlotCntvWake + kMaxGuests; // + VM index, kMaxGuests wide
+inline constexpr std::size_t kSlotCount       = kSlotWatchdog + kMaxGuests;
 
 // Enable the CNTHP PPI at the GIC (RuntimeStart).
 void init() noexcept;

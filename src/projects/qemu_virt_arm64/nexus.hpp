@@ -32,6 +32,7 @@
 #include "soft_timer/soft_timer.hpp"
 #include "trap_handler/trap_handler.hpp"
 #include "vgic/vgic.hpp"
+#include "watchdog/watchdog.hpp"
 
 #include <cib/top.hpp>
 
@@ -41,7 +42,7 @@ struct nova_project {
   constexpr static auto config =
       cib::components<core_mmu_component, core_gic_component, vgic_component, core_timer_component,
                       soft_timer_component, boot_msg_component, trap_handler_component, demo_hvc_component,
-                      ivc_component, psci_component, core_vcpu_component>;
+                      ivc_component, psci_component, watchdog_component, core_vcpu_component>;
 };
 
 // nova_top is the concrete cib::top instantiation for this target.

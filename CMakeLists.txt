@@ -126,6 +126,7 @@ if(CMAKE_CROSSCOMPILING)
         demo_hvc
         ivc
         psci
+        watchdog
     )
     foreach(component IN LISTS NOVA_COMPONENTS)
         add_subdirectory(src/components/${component})
