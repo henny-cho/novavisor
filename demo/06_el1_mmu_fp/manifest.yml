@@ -1,7 +1,7 @@
 name: "06_el1_mmu_fp"
 description: "Guest-owned Stage 1 MMU + lazy FP/SIMD switching: a translated guest and a flat-mapped guest race FP series under the slice."
 phase: 10
-enabled: false
+enabled: true
 timeout_seconds: 30
 
 guests:
