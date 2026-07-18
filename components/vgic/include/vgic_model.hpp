@@ -152,8 +152,8 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
 
 } // namespace detail
 
-[[nodiscard]] inline auto dist_read(const DistState& d, std::uint64_t off,
-                                    std::uint32_t /*size*/) noexcept -> MmioRead {
+[[nodiscard]] inline auto dist_read(const DistState& d, std::uint64_t off, std::uint32_t /*size*/) noexcept
+    -> MmioRead {
   switch (off) {
   case kGicdCtlr:
     return {.known = true, .value = d.ctlr};
@@ -213,8 +213,8 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
   }
 }
 
-[[nodiscard]] inline auto redist_write(CpuState& c, std::uint64_t off, std::uint32_t size,
-                                       std::uint64_t value) noexcept -> bool {
+[[nodiscard]] inline auto redist_write(CpuState& c, std::uint64_t off, std::uint32_t size, std::uint64_t value) noexcept
+    -> bool {
   RedistState& r = c.redist;
   if (off >= kGicrIpriorityr && off + size <= kGicrIpriorityEnd) {
     detail::prio_write(r.prio, off - kGicrIpriorityr, size, value);
