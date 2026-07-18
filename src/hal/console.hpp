@@ -7,7 +7,7 @@
 // a hal/board_*/ one — so porting to a new board touches only this file
 // (and the new board driver).
 
-#include "hal/board_qemu_virt/include/uart.hpp"
+#include "hal/board/qemu_virt/include/uart.hpp"
 #include "nova/fmt.hpp"
 
 #include <cstdint>

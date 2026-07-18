@@ -2,19 +2,15 @@
 
 // hal/gic.hpp
 //
-// Board-agnostic interrupt-controller facade — the ONE place where
-// generic code binds to the active board's GIC (same pattern as
+// Physical interrupt-controller facade — the ONE place where generic
+// code binds to the active board's GIC (same pattern as
 // hal/console.hpp): components include this header, never a
-// hal/board_*/ one.
-//
-// LR bit encoding and injection policy live in the pure model
-// (components/vgic/include/vgic_model.hpp); this facade only moves raw
-// values between that model and the hardware.
+// hal/board/*/ one. The EL2 virtual CPU interface has its own facade
+// (hal/gic_virt.hpp) so only the vgic component sees it.
 
-#include "hal/board_qemu_virt/include/gicv3.hpp"
-#include "nova/abi/guest_layout.h"
+#include "hal/arch/aarch64/gic_icc.hpp"
+#include "hal/board/qemu_virt/include/gicv3.hpp"
 
-#include <cstddef>
 #include <cstdint>
 
 namespace nova::gic {
@@ -23,27 +19,12 @@ namespace nova::gic {
 // never dispatch or EOI them.
 inline constexpr std::uint32_t kSpecialIntidBase = 1020;
 
-// vGIC maintenance interrupt (standard SBSA PPI assignment).
-inline constexpr std::uint32_t kMaintenanceIntid = 25;
-
-// Emulated GIC frames — the guest-platform contract fixes the IPAs
-// (they equal this board's physical addresses); the IPAs are left
-// unmapped in Stage 2 on purpose (accesses trap into vgic).
-inline constexpr std::uint64_t kGicdIpaBase = NOVA_GICD_IPA_BASE;
-inline constexpr std::uint64_t kGicrIpaBase = NOVA_GICR_IPA_BASE;
-
-// ICH_HCR_EL2 / ICH_VMCR_EL2 values banked per VCPU by vgic.
-inline constexpr std::uint64_t kIchHcrEn  = board::qemu_virt::gicv3::kIchHcrEn;
-inline constexpr std::uint64_t kIchHcrUie = board::qemu_virt::gicv3::kIchHcrUie;
-inline constexpr std::uint64_t kVmcrReset =
-    board::qemu_virt::gicv3::kIchVmcrVpmrAll | board::qemu_virt::gicv3::kIchVmcrVeng1;
-
 // One-time bring-up: distributor + redistributor + physical CPU
-// interface + EL2 virtual CPU interface.
+// interface. The virtual CPU interface is brought up by the vgic
+// component through hal/gic_virt.hpp.
 inline void init() noexcept {
   board::qemu_virt::gicv3::distributor_init();
-  board::qemu_virt::gicv3::cpu_interface_init();
-  board::qemu_virt::gicv3::virtual_interface_init();
+  arch::gicv3::cpu_interface_init();
 }
 
 // Enable a private interrupt (SGI/PPI, INTID 0..31) for this PE.
@@ -53,40 +34,11 @@ inline void enable_ppi(std::uint32_t intid) noexcept {
 
 // Physical interrupt handshake for the EL2 IRQ handler.
 inline auto ack() noexcept -> std::uint32_t {
-  return board::qemu_virt::gicv3::ack();
+  return arch::gicv3::ack();
 }
 
 inline void eoi(std::uint32_t intid) noexcept {
-  board::qemu_virt::gicv3::eoi(intid);
-}
-
-// Virtual CPU interface state moved on VCPU switches and LR refills.
-inline auto lr_count() noexcept -> std::size_t {
-  return board::qemu_virt::gicv3::list_register_count();
-}
-
-inline auto read_lr(std::size_t index) noexcept -> std::uint64_t {
-  return board::qemu_virt::gicv3::read_lr(index);
-}
-
-inline void write_lr(std::size_t index, std::uint64_t value) noexcept {
-  board::qemu_virt::gicv3::write_lr(index, value);
-}
-
-inline auto read_vmcr() noexcept -> std::uint64_t {
-  return board::qemu_virt::gicv3::read_vmcr();
-}
-
-inline void write_vmcr(std::uint64_t value) noexcept {
-  board::qemu_virt::gicv3::write_vmcr(value);
-}
-
-inline auto read_hcr() noexcept -> std::uint64_t {
-  return board::qemu_virt::gicv3::read_hcr();
-}
-
-inline void write_hcr(std::uint64_t value) noexcept {
-  board::qemu_virt::gicv3::write_hcr(value);
+  arch::gicv3::eoi(intid);
 }
 
 } // namespace nova::gic

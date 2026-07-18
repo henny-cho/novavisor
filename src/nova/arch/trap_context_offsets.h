@@ -2,7 +2,7 @@
  *
  * Byte offsets and total size of the TrapContext frame — the single
  * source of truth for the C++ <-> assembly trap ABI. Included by both
- * hal/armv8_aarch64/vec.S (frame construction) and nova/arch/trap_context.hpp
+ * hal/arch/aarch64/vec.S (frame construction) and nova/arch/trap_context.hpp
  * (struct layout + static_asserts), so the two can never drift apart.
  *
  * Plain #defines only: this header must survive the assembler and the

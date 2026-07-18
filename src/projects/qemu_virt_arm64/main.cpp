@@ -1,6 +1,6 @@
 // NovaVisor bare-metal entry point for QEMU virt AArch64.
 //
-// Boot sequence (BSS cleared in hal/armv8_aarch64/boot.S; the rest
+// Boot sequence (BSS cleared in hal/arch/aarch64/boot.S; the rest
 // orchestrated by cib::top<nova_project>):
 //   1. RuntimeStart → core_mmu_component:   activates Stage 2 MMU
 //                     core_gic_component:   GICv3 + vIRQ interface

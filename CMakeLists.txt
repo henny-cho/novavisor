@@ -100,9 +100,10 @@ if(CMAKE_CROSSCOMPILING)
         GIT_TAG 3e4d41ca57de475f4b769320308e80a103c8f5d6
     )
 
-    # HAL (each owns its own CMakeLists.txt).
-    add_subdirectory(src/hal/armv8_aarch64)
-    add_subdirectory(src/hal/board_qemu_virt)
+    # HAL: architecture mechanisms + board bindings (each owns its own
+    # CMakeLists.txt).
+    add_subdirectory(src/hal/arch/aarch64)
+    add_subdirectory(src/hal/board/qemu_virt)
 
     # Components — one add_subdirectory and one link entry per name.
     # Only components composed in projects/*/nexus.hpp belong here.
@@ -132,7 +133,7 @@ if(CMAKE_CROSSCOMPILING)
     target_include_directories(novavisor.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
     target_link_libraries(novavisor.elf PRIVATE
-        hal_armv8_aarch64
+        hal_arch_aarch64
         hal_board_qemu_virt
         ${NOVA_COMPONENTS}
         # Frameworks
@@ -146,15 +147,15 @@ if(CMAKE_CROSSCOMPILING)
     )
 
     target_link_options(novavisor.elf PRIVATE
-        -T ${HAL_ARMV8_LINKER_SCRIPT}
+        -T ${HAL_ARCH_LINKER_SCRIPT}
         -nostartfiles
         -nostdlib
         -Wl,--gc-sections
     )
     # The script is generated (linker.ld.S template + board_layout.h);
     # make sure it exists before linking and relink when it changes.
-    add_dependencies(novavisor.elf hal_armv8_linker_script)
-    set_target_properties(novavisor.elf PROPERTIES LINK_DEPENDS ${HAL_ARMV8_LINKER_SCRIPT})
+    add_dependencies(novavisor.elf hal_arch_linker_script)
+    set_target_properties(novavisor.elf PROPERTIES LINK_DEPENDS ${HAL_ARCH_LINKER_SCRIPT})
 
     # Raw flat binary required by some QEMU boot modes.
     add_custom_command(TARGET novavisor.elf POST_BUILD

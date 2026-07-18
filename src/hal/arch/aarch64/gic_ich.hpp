@@ -1,98 +1,16 @@
 #pragma once
 
-// GICv3 driver for the QEMU virt board (-machine gic-version=3).
+// hal/arch/aarch64/gic_ich.hpp
 //
-// Register offsets and bit layouts come from the shared architecture
-// header (nova/arch/gicv3_regs.h); only GICD_BASE / GICR_BASE come
-// from the board memory map. Single-PE bring-up only — Phase 9 (SMP)
-// generalizes the per-CPU redistributor lookup.
-//
-// System registers are written with their S3_* encodings so the
-// assembler needs no GIC architecture extension; the architectural name
-// is given next to each access.
-
-#include "board.hpp"
-#include "nova/arch/gicv3_regs.h"
+// GICv3 EL2 virtual CPU interface (ICH_* system registers) — pure
+// architecture, no board dependency. This is the hardware half of
+// virtual interrupt injection; LR bit encoding and injection policy
+// live in the vgic component's pure model.
 
 #include <cstddef>
 #include <cstdint>
 
-namespace nova::board::qemu_virt::gicv3 {
-
-// --- Distributor (GICD_BASE + offset) ---
-inline constexpr uintptr_t kGicdCtlr           = NOVA_GICD_CTLR;
-inline constexpr uint32_t  kGicdCtlrEnableGrp1 = NOVA_GICD_CTLR_ENABLE_GRP1;
-inline constexpr uint32_t  kGicdCtlrAre        = NOVA_GICD_CTLR_ARE;
-
-// --- Redistributor, RD_base frame (GICR_BASE + offset) ---
-inline constexpr uintptr_t kGicrWaker               = NOVA_GICR_WAKER;
-inline constexpr uint32_t  kGicrWakerProcessorSleep = NOVA_GICR_WAKER_PROCESSOR_SLEEP;
-inline constexpr uint32_t  kGicrWakerChildrenAsleep = NOVA_GICR_WAKER_CHILDREN_ASLEEP;
-
-// --- Redistributor, SGI_base frame (RD_base + 64 KiB + offset) ---
-inline constexpr uintptr_t kGicrIgroupr0   = NOVA_GICR_IGROUPR0;   // SGI/PPI group select
-inline constexpr uintptr_t kGicrIsenabler0 = NOVA_GICR_ISENABLER0; // SGI/PPI enable set
-
-inline auto mmio32(uintptr_t addr) noexcept -> volatile uint32_t* {
-  return reinterpret_cast<volatile uint32_t*>(addr);
-}
-
-// Enable Group 1 forwarding at the distributor, wake the CPU 0
-// redistributor, and put every SGI/PPI in Group 1 (the group the CPU
-// interface enables below).
-inline void distributor_init() noexcept {
-  *mmio32(GICD_BASE + kGicdCtlr) = kGicdCtlrAre;
-  *mmio32(GICD_BASE + kGicdCtlr) = kGicdCtlrAre | kGicdCtlrEnableGrp1;
-
-  auto* const waker = mmio32(GICR_BASE + kGicrWaker);
-  *waker            = *waker & ~kGicrWakerProcessorSleep;
-  while ((*waker & kGicrWakerChildrenAsleep) != 0U) {
-    // wait for the redistributor to wake
-  }
-
-  *mmio32(GICR_BASE + kGicrIgroupr0) = ~0U;
-}
-
-// Enable one SGI/PPI (INTID 0..31) at the redistributor.
-inline void enable_ppi(uint32_t intid) noexcept {
-  *mmio32(GICR_BASE + kGicrIsenabler0) = 1U << intid;
-}
-
-// --- Physical CPU interface (ICC_*, system registers) ---
-
-inline constexpr std::uint64_t kIccSreSre     = 1ULL << 0; // system-register interface
-inline constexpr std::uint64_t kIccSreEnable  = 1ULL << 3; // allow lower-EL ICC_SRE access
-inline constexpr std::uint64_t kPmrAcceptAll  = 0xFF;      // lowest priority mask
-inline constexpr std::uint64_t kIgrpen1Enable = 1ULL << 0;
-
-inline void cpu_interface_init() noexcept {
-  std::uint64_t v = kIccSreSre | kIccSreEnable;
-  __asm__ volatile("msr S3_4_C12_C9_5, %0" ::"r"(v)); // ICC_SRE_EL2
-  __asm__ volatile("isb");
-  v = kIccSreSre;
-  __asm__ volatile("msr S3_0_C12_C12_5, %0" ::"r"(v)); // ICC_SRE_EL1
-  __asm__ volatile("isb");
-  v = kPmrAcceptAll;
-  __asm__ volatile("msr S3_0_C4_C6_0, %0" ::"r"(v)); // ICC_PMR_EL1
-  v = kIgrpen1Enable;
-  __asm__ volatile("msr S3_0_C12_C12_7, %0" ::"r"(v)); // ICC_IGRPEN1_EL1
-  __asm__ volatile("isb");
-}
-
-// Acknowledge the highest-priority pending Group 1 interrupt.
-inline auto ack() noexcept -> uint32_t {
-  std::uint64_t v = 0;
-  __asm__ volatile("mrs %0, S3_0_C12_C12_0" : "=r"(v)); // ICC_IAR1_EL1
-  return static_cast<uint32_t>(v);
-}
-
-// Priority-drop + deactivate (ICC_CTLR_EL1.EOImode stays 0).
-inline void eoi(uint32_t intid) noexcept {
-  const auto v = static_cast<std::uint64_t>(intid);
-  __asm__ volatile("msr S3_0_C12_C12_1, %0" ::"r"(v)); // ICC_EOIR1_EL1
-}
-
-// --- EL2 virtual CPU interface (ICH_*) ---
+namespace nova::arch::gicv3 {
 
 inline constexpr std::uint64_t kIchVmcrVeng1   = 1ULL << 1;     // virtual Group 1 enable
 inline constexpr std::uint64_t kIchVmcrVpmrAll = 0xFFULL << 24; // guest PMR: accept all
@@ -203,4 +121,4 @@ inline auto read_lr(std::size_t index) noexcept -> std::uint64_t {
 
 #undef NOVA_GICV3_LR_CASE
 
-} // namespace nova::board::qemu_virt::gicv3
+} // namespace nova::arch::gicv3

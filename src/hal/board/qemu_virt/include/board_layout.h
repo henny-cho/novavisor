@@ -1,10 +1,9 @@
-/* hal/board_qemu_virt/include/board_layout.h
+/* hal/board/qemu_virt/include/board_layout.h
  *
- * Board RAM window for the hypervisor image — the single source shared
- * by the linker-script template (hal/armv8_aarch64/linker.ld.S,
- * preprocessed with cc -E) and any future C/C++ consumer. Porting to a
- * new board changes these values (plus the peripheral bases in
- * board.hpp), nothing else.
+ * The QEMU virt memory map — the single source shared by the
+ * linker-script template (hal/arch/aarch64/linker.ld.S, preprocessed
+ * with cc -E) and the C++ view in board.hpp. Porting to a new board
+ * changes these values, nothing else.
  *
  * Plain #defines only: this header must survive the C preprocessor in
  * linker-script context.
@@ -21,6 +20,13 @@
  * in this budget; guest windows (nova/abi/guest_layout.h) live above it. */
 #define NOVA_BOARD_RAM_BASE 0x40000000
 #define NOVA_BOARD_RAM_SIZE 0x08000000 /* 128 MiB */
+
+/* Peripheral bases. */
+#define NOVA_BOARD_UART0_BASE 0x09000000
+
+/* GICv3 (requires -machine virt,gic-version=3). */
+#define NOVA_BOARD_GICD_BASE 0x08000000 /* distributor */
+#define NOVA_BOARD_GICR_BASE 0x080A0000 /* redistributor frame, CPU 0 */
 
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 

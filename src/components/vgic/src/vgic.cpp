@@ -10,6 +10,7 @@
 #include "components/vgic/include/vgic_model.hpp"
 #include "hal/console.hpp"
 #include "hal/gic.hpp"
+#include "hal/gic_virt.hpp"
 #include "nova/abi/guest.hpp"
 
 #include <array>
@@ -21,8 +22,8 @@ namespace {
 
 // Hardware registers that carry live guest state while resident.
 struct HwBank {
-  std::uint64_t vmcr = gic::kVmcrReset;
-  std::uint64_t hcr  = gic::kIchHcrEn;
+  std::uint64_t vmcr = gic_virt::kVmcrReset;
+  std::uint64_t hcr  = gic_virt::kIchHcrEn;
 };
 
 std::array<CpuState, kMaxGuests> g_cpu;
@@ -44,18 +45,18 @@ void flush(std::size_t index) noexcept {
 
   if (index == g_resident) {
     for (std::size_t i = 0; i < g_lr_count; ++i) {
-      cpu.lr[i] = gic::read_lr(i);
+      cpu.lr[i] = gic_virt::read_lr(i);
     }
   }
 
   const bool          overflow = refill(cpu, g_lr_count);
-  const std::uint64_t hcr      = gic::kIchHcrEn | (overflow ? gic::kIchHcrUie : 0U);
+  const std::uint64_t hcr      = gic_virt::kIchHcrEn | (overflow ? gic_virt::kIchHcrUie : 0U);
 
   if (index == g_resident) {
     for (std::size_t i = 0; i < g_lr_count; ++i) {
-      gic::write_lr(i, cpu.lr[i]);
+      gic_virt::write_lr(i, cpu.lr[i]);
     }
-    gic::write_hcr(hcr);
+    gic_virt::write_hcr(hcr);
   } else {
     g_hw[index].hcr = hcr;
   }
@@ -103,11 +104,12 @@ void redist_mmio(MmioCall* call, std::uint64_t off) noexcept {
 } // namespace
 
 void init() noexcept {
-  g_lr_count = gic::lr_count();
+  gic_virt::init(); // VMCR reset + HCR.En — the virtual half of GIC bring-up
+  g_lr_count = gic_virt::lr_count();
   for (std::size_t i = 0; i < g_lr_count; ++i) {
-    gic::write_lr(i, 0); // reset state is UNKNOWN
+    gic_virt::write_lr(i, 0); // reset state is UNKNOWN
   }
-  gic::enable_ppi(gic::kMaintenanceIntid);
+  gic::enable_ppi(gic_virt::kMaintenanceIntid);
 
   console::write("vGIC: ");
   console::write_dec64(g_lr_count);
@@ -122,19 +124,19 @@ void cpu_reset(std::size_t index) noexcept {
 void cpu_save(std::size_t index) noexcept {
   CpuState& cpu = g_cpu[index];
   for (std::size_t i = 0; i < g_lr_count; ++i) {
-    cpu.lr[i] = gic::read_lr(i);
+    cpu.lr[i] = gic_virt::read_lr(i);
   }
-  g_hw[index].vmcr = gic::read_vmcr();
-  g_hw[index].hcr  = gic::read_hcr();
+  g_hw[index].vmcr = gic_virt::read_vmcr();
+  g_hw[index].hcr  = gic_virt::read_hcr();
 }
 
 void cpu_restore(std::size_t index) noexcept {
   const CpuState& cpu = g_cpu[index];
   for (std::size_t i = 0; i < g_lr_count; ++i) {
-    gic::write_lr(i, cpu.lr[i]);
+    gic_virt::write_lr(i, cpu.lr[i]);
   }
-  gic::write_vmcr(g_hw[index].vmcr);
-  gic::write_hcr(g_hw[index].hcr);
+  gic_virt::write_vmcr(g_hw[index].vmcr);
+  gic_virt::write_hcr(g_hw[index].hcr);
   g_resident = index;
 }
 
@@ -152,19 +154,19 @@ auto post(std::size_t index, std::uint32_t vintid) noexcept -> bool {
 namespace nova {
 
 void vgic_component::handle_mmio(MmioCall* call) noexcept {
-  if (call->ipa >= gic::kGicdIpaBase && call->ipa < gic::kGicdIpaBase + vgic::kGicdFrameSize) {
+  if (call->ipa >= gic_virt::kGicdIpaBase && call->ipa < gic_virt::kGicdIpaBase + vgic::kGicdFrameSize) {
     call->handled = true;
-    vgic::dist_mmio(call, call->ipa - gic::kGicdIpaBase);
+    vgic::dist_mmio(call, call->ipa - gic_virt::kGicdIpaBase);
     return;
   }
-  if (call->ipa >= gic::kGicrIpaBase && call->ipa < gic::kGicrIpaBase + vgic::kGicrFrameSize) {
+  if (call->ipa >= gic_virt::kGicrIpaBase && call->ipa < gic_virt::kGicrIpaBase + vgic::kGicrFrameSize) {
     call->handled = true;
-    vgic::redist_mmio(call, call->ipa - gic::kGicrIpaBase);
+    vgic::redist_mmio(call, call->ipa - gic_virt::kGicrIpaBase);
   }
 }
 
 void vgic_component::handle_irq(IrqCall* call) noexcept {
-  if (call->intid != gic::kMaintenanceIntid) {
+  if (call->intid != gic_virt::kMaintenanceIntid) {
     return;
   }
   call->handled = true;

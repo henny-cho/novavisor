@@ -1,4 +1,4 @@
-// hal/armv8_aarch64/mmu.S
+// hal/arch/aarch64/mmu.S
 //
 // Stage 2 MMU primitives, called from components/core_mmu/src/core_mmu.cpp.
 //

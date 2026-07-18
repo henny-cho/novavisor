@@ -116,7 +116,7 @@ void build_guest_tables(std::size_t index, const GuestDescriptor& guest) noexcep
 
 } // namespace
 
-// Defined in hal/armv8_aarch64/mmu.S.
+// Defined in hal/arch/aarch64/mmu.S.
 // Writes VTTBR_EL2 / VTCR_EL2 / HCR_EL2 with barriers, invalidates the
 // Stage 1+2 TLB for all VMIDs (nova_stage2_activate) or retargets
 // VTTBR_EL2 only (nova_stage2_switch — VMID tagging isolates the TLB,

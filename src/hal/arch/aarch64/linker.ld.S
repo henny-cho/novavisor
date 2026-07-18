@@ -1,10 +1,10 @@
 /*
  * Bare-metal linker script template for the EL2 hypervisor image.
- * Preprocessed with `cc -E -P -x c` (see hal/armv8_aarch64/CMakeLists);
+ * Preprocessed with `cc -E -P -x c` (see hal/arch/aarch64/CMakeLists);
  * the RAM window comes from the active board's board_layout.h so this
  * file stays board-agnostic.
  */
-#include "hal/board_qemu_virt/include/board_layout.h"
+#include "hal/board/qemu_virt/include/board_layout.h"
 
 ENTRY(_start)
 

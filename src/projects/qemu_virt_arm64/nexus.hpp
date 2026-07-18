@@ -7,7 +7,7 @@
 // in cib::components<...> inside the project config struct.
 //
 // cib::top<nova_project> wires them all together at compile time
-// (BSS is already cleared by hal/armv8_aarch64/boot.S before any C++
+// (BSS is already cleared by hal/arch/aarch64/boot.S before any C++
 // runs; EarlyRuntimeInit currently has no actions):
 //   - RuntimeStart      ← core_mmu_component  (Stage 2 MMU activate)
 //                         core_gic_component  (GICv3 + vIRQ interface)

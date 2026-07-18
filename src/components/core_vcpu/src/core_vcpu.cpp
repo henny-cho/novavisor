@@ -1,9 +1,10 @@
 // components/core_vcpu/src/core_vcpu.cpp
 //
 // Cooperative VCPU scheduler. A switch swaps the live EL2 trap frame
-// with the target's saved TrapContext, moves the minimal EL1 sysreg
-// bank and the vGIC LR0 shadow, and retargets VTTBR_EL2 — the common
-// vec.S restore path then resumes the new guest.
+// with the target's saved TrapContext, moves the EL1 sysreg bank
+// (hal/arch/aarch64/el1_context.hpp) and the vGIC CPU-interface state,
+// and retargets VTTBR_EL2 — the common vec.S restore path then resumes
+// the new guest.
 
 #include "components/core_vcpu/include/core_vcpu.hpp"
 
@@ -20,7 +21,7 @@
 
 namespace nova {
 
-// Defined in hal/armv8_aarch64/vcpu_enter.S.
+// Defined in hal/arch/aarch64/vcpu_enter.S.
 extern "C" [[noreturn]] void nova_vcpu_enter(std::uint64_t entry_pc, std::uint64_t sp_el1,
                                              std::uint64_t spsr_el2) noexcept;
 
@@ -51,32 +52,8 @@ void seed(std::size_t index, const GuestDescriptor& guest) noexcept {
   v.ctx.elr  = guest.entry_pc;
   v.ctx.sp   = guest.stack_top;
   v.ctx.spsr = kSpsrEl1h;
-  v.el1      = El1SysregBank{};
+  v.el1      = arch::El1SysregBank{};
   vgic::cpu_reset(index);
-}
-
-auto read_el1_bank() noexcept -> El1SysregBank {
-  El1SysregBank b;
-  __asm__ volatile("mrs %0, vbar_el1" : "=r"(b.vbar));
-  __asm__ volatile("mrs %0, elr_el1" : "=r"(b.elr));
-  __asm__ volatile("mrs %0, spsr_el1" : "=r"(b.spsr));
-  __asm__ volatile("mrs %0, sp_el0" : "=r"(b.sp_el0));
-  __asm__ volatile("mrs %0, cntv_ctl_el0" : "=r"(b.cntv_ctl));
-  __asm__ volatile("mrs %0, cntv_cval_el0" : "=r"(b.cntv_cval));
-  return b;
-}
-
-void write_el1_bank(const El1SysregBank& b) noexcept {
-  __asm__ volatile("msr vbar_el1, %0" ::"r"(b.vbar));
-  __asm__ volatile("msr elr_el1, %0" ::"r"(b.elr));
-  __asm__ volatile("msr spsr_el1, %0" ::"r"(b.spsr));
-  __asm__ volatile("msr sp_el0, %0" ::"r"(b.sp_el0));
-  // CVAL before CTL so a still-armed timer re-evaluates its condition
-  // against the incoming guest's deadline, never the outgoing one's.
-  __asm__ volatile("msr cntv_cval_el0, %0" ::"r"(b.cntv_cval));
-  __asm__ volatile("msr cntv_ctl_el0, %0" ::"r"(b.cntv_ctl));
-  // No ISB needed here: the trap-return ERET is a context synchronization
-  // event that makes these writes visible to the guest.
 }
 
 // Next kReady VCPU after g_current in ring order; g_count when none.
@@ -99,14 +76,14 @@ void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
   Vcpu& next = g_vcpus[next_idx];
 
   cur.ctx = *live;
-  cur.el1 = read_el1_bank();
+  cur.el1 = arch::read_el1_bank();
   vgic::cpu_save(g_current);
   if (cur.state == Vcpu::State::kRunning) { // exit_current parks it as kOff
     cur.state = Vcpu::State::kReady;
   }
 
   *live = next.ctx;
-  write_el1_bank(next.el1);
+  arch::write_el1_bank(next.el1);
   vgic::cpu_restore(next_idx);
   mmu::switch_vm(next_idx);
 
