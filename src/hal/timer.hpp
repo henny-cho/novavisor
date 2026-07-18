@@ -64,13 +64,6 @@ inline void arm_at(std::uint64_t cval) noexcept {
   __asm__ volatile("isb");
 }
 
-// Arm the EL2 physical timer to fire in `ticks` counter cycles from now.
-inline void arm(std::uint64_t ticks) noexcept {
-  __asm__ volatile("msr cnthp_tval_el2, %0" ::"r"(ticks));
-  __asm__ volatile("msr cnthp_ctl_el2, %0" ::"r"(kCnthpEnable));
-  __asm__ volatile("isb");
-}
-
 inline void stop() noexcept {
   __asm__ volatile("msr cnthp_ctl_el2, xzr");
   __asm__ volatile("isb");

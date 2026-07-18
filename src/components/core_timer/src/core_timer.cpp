@@ -1,9 +1,9 @@
 // components/core_timer/src/core_timer.cpp
 //
-// HVC_TIMER_SET arms the EL2 physical timer; its expiry IRQ is turned
-// into a virtual timer interrupt (vINTID 27) for the guest that armed
-// it — CNTHP is a single hardware one-shot, so it has one owner at a
-// time (per-VCPU virtual timer queues are a backlog item).
+// HVC_TIMER_SET arms a soft_timer slot; its expiry is turned into a
+// virtual timer interrupt (vINTID 27) for the guest that armed it —
+// the legacy slot is single, so it has one owner at a time (per-VCPU
+// virtual timer queues are a backlog item).
 
 #include "core_timer/core_timer.hpp"
 
@@ -11,6 +11,7 @@
 #include "hal/timer.hpp"
 #include "nova/abi/hvc_abi.h"
 #include "nova/arch/trap_context.hpp"
+#include "soft_timer/soft_timer.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -20,6 +21,13 @@ namespace {
 
 std::size_t g_owner = 0;     // VCPU that armed the running one-shot
 bool        g_armed = false; // guards g_owner and rejects double-arming
+
+// Legacy-slot expiry (runs in soft_timer's IRQ drain). False from
+// post_virq only when the owner exited meanwhile — nobody to notify.
+void on_timer_set_expiry(TrapContext* /*ctx*/, std::uint64_t owner) noexcept {
+  g_armed = false;
+  (void)vcpu::post_virq(static_cast<std::size_t>(owner), hyp_timer::kGuestTimerVintid);
+}
 
 } // namespace
 
@@ -36,34 +44,24 @@ void core_timer_component::handle_hvc(HvcCall* call) noexcept {
 
   g_owner = vcpu::current_index();
   g_armed = true;
-  hyp_timer::arm(call->ctx->x[1]);
+  soft_timer::arm(soft_timer::kSlotLegacyTimer, hyp_timer::now() + call->ctx->x[1], &on_timer_set_expiry,
+                  static_cast<std::uint64_t>(g_owner));
   call->ctx->x[0] = 0; // SMCCC success
 }
 
 void core_timer_component::handle_irq(IrqCall* call) noexcept {
-  if (call->intid == hyp_timer::kHypTimerIntid) {
-    call->handled = true;
-
-    // One-shot: disarm before injecting, or CNTHP keeps its condition
-    // met and re-fires forever.
-    hyp_timer::stop();
-    g_armed = false;
-    // False only when the owner exited meanwhile — nobody to notify.
-    (void)vcpu::post_virq(g_owner, hyp_timer::kGuestTimerVintid);
-    return;
+  if (call->intid != hyp_timer::kGuestTimerVintid) {
+    return; // not ours (CNTHP belongs to soft_timer)
   }
+  call->handled = true;
 
-  if (call->intid == hyp_timer::kGuestTimerVintid) {
-    call->handled = true;
-
-    // Native guest CNTV expiry. The firing timer is by construction the
-    // resident VCPU's (a non-resident VCPU's CNTV state sits parked in
-    // its EL1 bank and cannot meet the condition). Mask the level
-    // assertion, then reflect the PPI as its virtual counterpart; the
-    // guest clears IMASK when it re-arms CNTV_CTL.
-    hyp_timer::mask_guest_virtual_timer();
-    (void)vcpu::post_virq(vcpu::current_index(), hyp_timer::kGuestTimerVintid);
-  }
+  // Native guest CNTV expiry. The firing timer is by construction the
+  // resident VCPU's (a non-resident VCPU's CNTV state sits parked in
+  // its EL1 bank and cannot meet the condition). Mask the level
+  // assertion, then reflect the PPI as its virtual counterpart; the
+  // guest clears IMASK when it re-arms CNTV_CTL.
+  hyp_timer::mask_guest_virtual_timer();
+  (void)vcpu::post_virq(vcpu::current_index(), hyp_timer::kGuestTimerVintid);
 }
 
 } // namespace nova

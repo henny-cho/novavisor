@@ -114,6 +114,7 @@ if(CMAKE_CROSSCOMPILING)
         core_mmu
         core_gic
         vgic
+        soft_timer
         core_timer
         core_vcpu
         demo_hvc
@@ -153,5 +154,6 @@ else()
     nova_add_component_test(core_mmu stage2_builder_test)    # Stage 2 identity-map builder
     nova_add_component_test(vgic vgic_model_test)            # GICD/GICR register model
     nova_add_component_test(vgic vgic_delivery_test)         # pending → LR multiplexing
+    nova_add_component_test(soft_timer timer_queue_test)     # deadline-slot queue
 
 endif() # CMAKE_CROSSCOMPILING
