@@ -1,0 +1,35 @@
+name: "06_el1_mmu_fp"
+description: "Guest-owned Stage 1 MMU + lazy FP/SIMD switching: a translated guest and a flat-mapped guest race FP series under the slice."
+phase: 10
+enabled: false
+timeout_seconds: 30
+
+guests:
+  - name: "mmu_fp"
+    binary: "mmu_fp.bin"
+    load_addr:   0x50000000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+  - name: "fp_only"
+    binary: "fp_only.bin"
+    load_addr:   0x50200000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+
+# A enables its MMU and prints before starting B; B has exactly twice
+# A's FP workload, so A finishes first under any fair slicing. Both
+# series values are IEEE-exact — a single leaked FP register between
+# the time-shared guests corrupts an accumulator and fails the compare.
+expect:
+  - pattern: "mmu: on vaddr ok"
+    within_seconds: 10
+  - pattern: "fp: A ok"
+    within_seconds: 20
+  - pattern: "fp: B ok"
+    within_seconds: 26
+  - pattern: "demo_exit code=0"
+    within_seconds: 28
