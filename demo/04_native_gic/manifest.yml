@@ -1,0 +1,20 @@
+name: "04_native_gic"
+description: "Guest drives the emulated GICD/GICR and its native CNTV timer over the architecture-standard path."
+phase: 8
+enabled: false
+timeout_seconds: 10
+
+guests:
+  - name: "native_gic"
+    binary: "native_gic.bin"
+    load_addr:   0x50000000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+
+expect:
+  - pattern: "native tick 5"
+    within_seconds: 5
+  - pattern: "demo_exit code=0"
+    within_seconds: 10

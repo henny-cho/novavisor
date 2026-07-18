@@ -95,5 +95,6 @@ endfunction()
 add_subdirectory(01_hello)
 add_subdirectory(02_timer)            # Phase 6
 add_subdirectory(03_ivc_pingpong)     # Phase 7
-# 04_native_gic+ arrive with Phase 8; real-OS demos reference external
-# images and need no cmake subdir.
+add_subdirectory(04_native_gic)       # Phase 8
+# 05_zephyr+ are real-OS demos: they reference external images and need
+# no cmake subdir.
