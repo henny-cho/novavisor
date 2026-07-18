@@ -12,6 +12,7 @@
 #include "nova/arch/esr.hpp"
 #include "nova/arch/trap_context.hpp"
 #include "nova_panic/nova_panic.hpp"
+#include "trap_handler/fp_simd.hpp"
 #include "trap_handler/trap_handler.hpp"
 #include "trap_handler/wfx.hpp"
 
@@ -56,6 +57,20 @@ void dispatch_wfx(TrapContext* ctx) noexcept {
   }
 }
 
+void dispatch_fp_simd(TrapContext* ctx) noexcept {
+  // ELR stays AT the trapped instruction: once the handler has made FP
+  // access legal, returning re-executes it successfully.
+  FpSimdCall call{.ctx = ctx, .handled = false};
+  cib::service<FpSimdService>(&call);
+
+  if (!call.handled) {
+    // Returning unhandled would re-trap forever — fault the VM instead.
+    console::write("[trap_handler] unclaimed FP/SIMD trap\n");
+    dump_trap_context(ctx);
+    trap::dispatch_guest_fault(ctx);
+  }
+}
+
 } // namespace
 
 // EC-class router for lower-EL synchronous exceptions. Each supported
@@ -69,6 +84,10 @@ void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
 
   case esr::ExceptionClass::WFx:
     dispatch_wfx(ctx);
+    return;
+
+  case esr::ExceptionClass::FP_SIMD:
+    dispatch_fp_simd(ctx);
     return;
 
   case esr::ExceptionClass::DATA_ABORT_LOWER:

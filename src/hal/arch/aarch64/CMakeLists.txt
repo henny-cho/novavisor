@@ -5,6 +5,7 @@ add_library(hal_arch_aarch64 OBJECT
     vec.S
     mmu.S
     vcpu_enter.S
+    fp.S
     mem.cpp
 )
 target_include_directories(hal_arch_aarch64 PUBLIC ${CMAKE_SOURCE_DIR}/src)

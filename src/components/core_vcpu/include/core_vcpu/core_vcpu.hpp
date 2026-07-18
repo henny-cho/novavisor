@@ -16,10 +16,13 @@
 // Boot: RuntimeStart seeds every VCPU; MainLoop ERETs into VCPU 0.
 // Entries past [0] stay kOff until a guest issues HVC_VM_START.
 
+#include "core_vcpu/fp_model.hpp"
 #include "core_vcpu/sched_model.hpp"
 #include "hal/arch/aarch64/el1_context.hpp"
+#include "hal/arch/aarch64/fp.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/arch/trap_context.hpp"
+#include "trap_handler/fp_simd.hpp"
 #include "trap_handler/guest_fault.hpp"
 #include "trap_handler/hvc.hpp"
 #include "trap_handler/wfx.hpp"
@@ -41,7 +44,8 @@ struct Vcpu {
 
   const GuestDescriptor* guest = nullptr;
   TrapContext            ctx{}; // GP regs + SP_EL1 + ELR/SPSR_EL2
-  arch::El1SysregBank    el1{}; // VBAR/ELR/SPSR_EL1 + SP_EL0 + CNTV
+  arch::El1SysregBank    el1{}; // EL1 sysregs + SP_EL0 + CNTV
+  arch::FpBank           fp{};  // Q0–Q31 + FPSR/FPCR — stale while owner (fp_model.hpp)
   State                  state = State::kOff;
 };
 
@@ -104,6 +108,10 @@ struct core_vcpu_component {
   // deliverable vIRQ is already pending — then it is a NOP).
   static void handle_wfx(WfxCall* call) noexcept;
 
+  // Claims every FP/SIMD trap: lazy bank swap — save the previous
+  // owner's live state, restore the caller's, clear the trap.
+  static void handle_fp_simd(FpSimdCall* call) noexcept;
+
   // Unrecoverable guest fault: retire the faulting VCPU, keep the rest
   // of the machine running.
   static void handle_guest_fault(GuestFaultCall* call) noexcept;
@@ -114,6 +122,7 @@ struct core_vcpu_component {
   constexpr static auto config = cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<cib::MainLoop>(*ENTER),
                                              cib::extend<HvcService>(&core_vcpu_component::handle_hvc),
                                              cib::extend<WfxService>(&core_vcpu_component::handle_wfx),
+                                             cib::extend<FpSimdService>(&core_vcpu_component::handle_fp_simd),
                                              cib::extend<GuestFaultService>(&core_vcpu_component::handle_guest_fault));
 };
 

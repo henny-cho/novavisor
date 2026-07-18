@@ -53,6 +53,7 @@ std::array<Vcpu, kMaxGuests> g_vcpus;
 std::size_t                  g_count       = 0;
 std::size_t                  g_current     = 0;
 std::uint64_t                g_slice_ticks = 0;
+fp::Ownership                g_fp;
 
 auto states() noexcept -> std::array<sched::State, kMaxGuests> {
   std::array<sched::State, kMaxGuests> s{};
@@ -79,6 +80,10 @@ void seed(std::size_t index, const GuestDescriptor& guest) noexcept {
   v.ctx.sp   = guest.stack_top;
   v.ctx.spsr = kSpsrEl1h;
   v.el1      = arch::El1SysregBank{};
+  v.fp       = arch::FpBank{};
+  // Whatever this VCPU owned in the hardware FP file is garbage now —
+  // drop ownership so no one ever saves it over a fresh bank.
+  g_fp.invalidate(index);
   vgic::cpu_reset(index);
 }
 
@@ -102,6 +107,11 @@ void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
   arch::write_el1_bank(next.el1);
   vgic::cpu_restore(next_idx);
   mmu::switch_vm(next_idx);
+
+  // Lazy FP: the register file stays put — only the trap follows the
+  // resident. A non-owner claims it through the EC 0x07 path on first
+  // use; the owner keeps running untrapped.
+  arch::set_fp_trap(g_fp.trap_needed(next_idx));
 
   next.state = sched::State::kRunning;
   g_current  = next_idx;
@@ -185,6 +195,7 @@ void init() noexcept {
   }
   g_vcpus[0].state = sched::State::kReady;
   g_slice_ticks    = hyp_timer::freq() * kSliceMs / 1000U;
+  arch::set_fp_trap(true); // no owner yet — first FP use claims the file
 }
 
 [[noreturn]] void enter_guest() noexcept {
@@ -264,6 +275,24 @@ void core_vcpu_component::handle_guest_fault(GuestFaultCall* call) noexcept {
   console::write_dec64(vcpu::current_index());
   console::write("\n");
   vcpu::exit_current(call->ctx);
+}
+
+void core_vcpu_component::handle_fp_simd(FpSimdCall* call) noexcept {
+  call->handled = true;
+
+  // Make FP access legal first (ISB inside) — the bank moves below run
+  // at EL2 and would self-trap otherwise.
+  arch::set_fp_trap(false);
+
+  const std::size_t cur  = vcpu::current_index();
+  const std::size_t prev = vcpu::g_fp.claim(cur);
+  if (prev == cur) {
+    return; // spurious — already the owner, state is already live
+  }
+  if (prev != fp::kNoOwner) {
+    nova_fp_save(&vcpu::g_vcpus[prev].fp);
+  }
+  nova_fp_restore(&vcpu::g_vcpus[cur].fp);
 }
 
 void core_vcpu_component::handle_wfx(WfxCall* call) noexcept {

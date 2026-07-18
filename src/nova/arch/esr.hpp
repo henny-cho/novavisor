@@ -24,6 +24,7 @@ namespace nova::esr {
 enum class ExceptionClass : std::uint8_t {
   UNKNOWN            = 0x00, // Unknown reason
   WFx                = 0x01, // WFI/WFE instruction trapped
+  FP_SIMD            = 0x07, // FP/SIMD access trapped (CPTR_EL2.TFP)
   SVC_AA64           = 0x15, // SVC from AArch64 EL1
   HVC_AA64           = 0x16, // HVC from AArch64 EL1  ← primary gate for guests
   SMC_AA64           = 0x17, // SMC from AArch64 EL1
