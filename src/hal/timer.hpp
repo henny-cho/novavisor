@@ -40,8 +40,31 @@ inline void init() noexcept {
   __asm__ volatile("isb");
 }
 
-// Arm the EL2 physical timer to fire (PPI kHypTimerIntid) in `ticks`
-// counter cycles from now.
+// Physical counter. The leading ISB orders the read after preceding
+// register writes so a just-reprogrammed timer never compares against
+// a stale count.
+[[nodiscard]] inline auto now() noexcept -> std::uint64_t {
+  std::uint64_t cnt = 0;
+  __asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(cnt));
+  return cnt;
+}
+
+// Counter frequency in Hz (fixed by the platform, readable at any EL).
+[[nodiscard]] inline auto freq() noexcept -> std::uint64_t {
+  std::uint64_t f = 0;
+  __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f));
+  return f;
+}
+
+// Arm the EL2 physical timer to fire (PPI kHypTimerIntid) at absolute
+// counter value `cval`. An already-passed cval fires immediately.
+inline void arm_at(std::uint64_t cval) noexcept {
+  __asm__ volatile("msr cnthp_cval_el2, %0" ::"r"(cval));
+  __asm__ volatile("msr cnthp_ctl_el2, %0" ::"r"(kCnthpEnable));
+  __asm__ volatile("isb");
+}
+
+// Arm the EL2 physical timer to fire in `ticks` counter cycles from now.
 inline void arm(std::uint64_t ticks) noexcept {
   __asm__ volatile("msr cnthp_tval_el2, %0" ::"r"(ticks));
   __asm__ volatile("msr cnthp_ctl_el2, %0" ::"r"(kCnthpEnable));
