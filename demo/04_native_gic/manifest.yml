@@ -1,7 +1,7 @@
 name: "04_native_gic"
 description: "Guest drives the emulated GICD/GICR and its native CNTV timer over the architecture-standard path."
 phase: 8
-enabled: false
+enabled: true
 timeout_seconds: 10
 
 guests:

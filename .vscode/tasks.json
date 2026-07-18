@@ -83,7 +83,8 @@
             "options": [
                 "01_hello",
                 "02_timer",
-                "03_ivc_pingpong"
+                "03_ivc_pingpong",
+                "04_native_gic"
             ],
             "default": "01_hello"
         }

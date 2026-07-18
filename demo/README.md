@@ -13,6 +13,7 @@ demo/
 │   ├── linker.ld.S              # linker script template (window from nova/guest_layout.h)
 │   └── include/
 │       ├── demo_hvc.h           # HVC ABI helpers (IDs from nova/hvc_abi.h)
+│       ├── gic_el1.h            # guest-side GICD/GICR programming (emulated MMIO)
 │       └── ivc_shm.h            # guest-owned mailbox protocol on the IVC shared page
 ├── 01_hello/                    # Phase 5 demo
 │   ├── CMakeLists.txt
@@ -29,7 +30,11 @@ demo/
 │   ├── pong.c                   # responder (VM 1): echo until last-round flag
 │   ├── vectors.S
 │   └── manifest.yml
-├── 04_native_gic/               # Phase 8
+├── 04_native_gic/               # Phase 8 demo — architecture-standard GIC + CNTV path
+│   ├── CMakeLists.txt
+│   ├── main.c                   # GICD/GICR programming + native periodic timer
+│   ├── vectors.S                # IRQ handler: ack, re-arm CNTV, EOI
+│   └── manifest.yml
 ├── 05_zephyr/                   # Phase 9 (references external Zephyr image)
 ├── 06_smp_pingpong/             # Phase 10
 ├── 07_linux/                    # Phase 11 (references external Linux kernel)
@@ -53,7 +58,7 @@ stubs and the hypervisor dispatcher. This table documents them:
 | `0x1004` | `HEARTBEAT` | x1=vm_id   | Liveness tick (Phase 13) |
 | `0x1005` | `VM_START` | x1=vm index | Start a not-yet-running VM; 0 or -1 in x0 |
 | `0x1100` | `IVC_DOORBELL` | x1=vm index | Inject doorbell vIRQ (SGI 0) into the target VM; 0 or -1 in x0 |
-| `0x1200` | `TIMER_SET` | x1=ticks | One-shot: injects vINTID 27 after `ticks` counter cycles; returns 0 in x0 |
+| `0x1200` | `TIMER_SET` | x1=ticks | One-shot: injects vINTID 27 after `ticks` counter cycles; returns 0 in x0. Legacy since Phase 8 — new guests use CNTV directly |
 
 Multi-VM notes (Phase 7): every guest links against the same IPA window
 and is loaded at its own PA slot (`load_addr` = `NOVA_GUEST_IPA_BASE +
@@ -61,6 +66,15 @@ index * NOVA_GUEST_PA_STRIDE`). Scheduling is cooperative — a waiting
 guest must poll + `hvc_yield()`; a bare `wfi` stalls the whole core.
 The 4 KiB IVC shared page appears in every VM at `NOVA_IVC_SHM_IPA`
 (protocol helpers in `common/include/ivc_shm.h`).
+
+vGIC notes (Phase 8): the GICD/GICR frames at the QEMU virt addresses
+are emulated by the hypervisor (`gic_el1.h` helpers). The vGIC is the
+delivery authority: SGIs (e.g. the IVC doorbell) are enabled at reset,
+but a guest that wants a PPI — including vINTID 27 from `TIMER_SET` —
+must enable it at its redistributor (`gicr_wake()` + `gicr_enable()`)
+first. Guests may also drive their virtual timer natively via
+CNTV_CTL/TVAL: each expiry is delivered as vINTID 27 with the timer
+masked (IMASK); re-arming CNTV_CTL unmasks it.
 
 The hypervisor's HVC dispatcher recognizes these IDs. Guest programs use the inline helpers in `common/include/demo_hvc.h`.
 
