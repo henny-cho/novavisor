@@ -8,20 +8,25 @@
 
 #include "soft_timer/soft_timer.hpp"
 
+#include "hal/cpu.hpp"
 #include "hal/gic.hpp"
 #include "hal/timer.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
 namespace nova::soft_timer {
 namespace {
 
-TimerQueue<kSlotCount> g_queue;
+// One queue per core: CNTHP and its PPI are per-core hardware, and
+// every slot's owner (slice, VM timers) lives on the arming core —
+// arm/cancel/drain never cross cores.
+std::array<TimerQueue<kSlotCount>, cpu::kMaxCpus> g_queue;
 
-// Program CNTHP to the earliest armed deadline, or park it.
+// Program this core's CNTHP to the earliest armed deadline, or park it.
 void reprogram() noexcept {
-  const std::uint64_t next = g_queue.next_deadline();
+  const std::uint64_t next = g_queue[cpu::id()].next_deadline();
   if (next == kNoDeadline) {
     hyp_timer::stop();
   } else {
@@ -31,7 +36,7 @@ void reprogram() noexcept {
 
 void drain_expired(TrapContext* ctx) noexcept {
   TimerQueue<kSlotCount>::Expired due;
-  while (g_queue.pop_expired(hyp_timer::now(), due)) {
+  while (g_queue[cpu::id()].pop_expired(hyp_timer::now(), due)) {
     due.fn(ctx, due.arg);
   }
   reprogram();
@@ -40,16 +45,16 @@ void drain_expired(TrapContext* ctx) noexcept {
 } // namespace
 
 void init() noexcept {
-  gic::enable_ppi(hyp_timer::kHypTimerIntid);
+  gic::enable_ppi(hyp_timer::kHypTimerIntid); // per-core: this core's redistributor
 }
 
 void arm(std::size_t slot, std::uint64_t deadline, Callback fn, std::uint64_t arg) noexcept {
-  g_queue.arm(slot, deadline, fn, arg);
+  g_queue[cpu::id()].arm(slot, deadline, fn, arg);
   reprogram();
 }
 
 void cancel(std::size_t slot) noexcept {
-  g_queue.cancel(slot);
+  g_queue[cpu::id()].cancel(slot);
   reprogram();
 }
 

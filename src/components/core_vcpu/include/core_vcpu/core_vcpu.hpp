@@ -4,17 +4,24 @@
 //
 // VCPU state, scheduler, and EL1 entry component.
 //
-// One Vcpu per guest_table() entry, all executing on the single
-// physical core by time-sharing. A switch swaps the live TrapContext
-// frame on the EL2 stack with the target VCPU's saved copy, so the
-// common vec.S restore path resumes whichever guest is now current —
-// identical from the HVC path (yield/exit) and the IRQ path
-// (preemption). Guest wfi traps (HCR_EL2.TWI) park the VCPU as
+// One Vcpu per guest_table() entry; each executes on its static
+// affinity core, time-shared with the other VCPUs of that core by an
+// independent per-core scheduler instance. A switch swaps the live
+// TrapContext frame on the EL2 stack with the target VCPU's saved
+// copy, so the common vec.S restore path resumes whichever guest is
+// now current — identical from the HVC path (yield/exit) and the IRQ
+// path (preemption). Guest wfi traps (HCR_EL2.TWI) park the VCPU as
 // kBlocked until a deliverable vIRQ wakes it; with nothing runnable
-// the scheduler idles at EL2 (wfi + IRQ drain).
+// locally the scheduler idles at EL2 (wfi + IRQ drain) — a cross-call
+// may still hand the core new work.
 //
-// Boot: RuntimeStart seeds every VCPU; MainLoop ERETs into VCPU 0.
-// Entries past [0] stay kOff until a guest issues HVC_VM_START.
+// Ownership rule: every function here that names a VCPU must run on
+// that VCPU's affinity core (the smp component routes foreign
+// requests). Only the machine-wide alive counter is shared.
+//
+// Boot: RuntimeStart seeds every VCPU; MainLoop enters the per-core
+// scheduler (VCPU 0 on the primary; secondaries start idle). Entries
+// past [0] stay kOff until a guest issues HVC_VM_START.
 
 #include "core_vcpu/fp_model.hpp"
 #include "core_vcpu/lifecycle_model.hpp"
@@ -74,8 +81,9 @@ void block_current(TrapContext* live) noexcept;
 // expires; cancels the soft-timer mirror either way.
 void wake(std::size_t index) noexcept;
 
-// HVC_VM_START: (re)seed and mark a kOff VCPU ready. False when the
-// index is out of range or the target is not kOff.
+// (Re)seed and mark a kOff VCPU ready. False when the index is out of
+// range, the target is not kOff, or its affinity is not this core
+// (HVC_VM_START is owned by smp, which routes foreign targets).
 [[nodiscard]] auto start_vm(std::size_t index) noexcept -> bool;
 
 // Warm reset: reload the pristine guest image and reseed the whole
@@ -95,22 +103,25 @@ void exit_current(TrapContext* live) noexcept;
 // and injects it into a free list register once the guest's enable
 // bits allow it (resident targets immediately, others on switch-in).
 // Wakes a kBlocked target when the result is deliverable. False when
-// the target is invalid or off.
+// the target is invalid, off, or owned by another core (smp routes
+// foreign posts).
 [[nodiscard]] auto post_virq(std::size_t index, std::uint32_t vintid) noexcept -> bool;
 
 // Seed all VCPUs from guest_table() (RuntimeStart).
 void init() noexcept;
 
-// Transfer to EL1 via ERET into VCPU 0. [[noreturn]] — the only way
-// back is a hardware trap.
-[[noreturn]] void enter_guest() noexcept;
+// Enter this core's scheduler: run the first local kReady VCPU (ERET
+// — the only way back is a hardware trap), or idle in wfi + IRQ drain
+// until a cross-call hands the core one. The primary enters VCPU 0
+// immediately; secondaries start idle.
+[[noreturn]] void enter_cpu() noexcept;
 
 } // namespace nova::vcpu
 
 namespace nova {
 
 struct core_vcpu_component {
-  // Claims HVC_YIELD and HVC_VM_START.
+  // Claims HVC_YIELD (HVC_VM_START belongs to smp — affinity routing).
   static void handle_hvc(HvcCall* call) noexcept;
 
   // Claims every WFx trap: wfe yields, wfi blocks (unless a
@@ -126,7 +137,7 @@ struct core_vcpu_component {
   static void handle_guest_fault(GuestFaultCall* call) noexcept;
 
   constexpr static auto INIT  = flow::action<"core_vcpu_init">([]() noexcept { vcpu::init(); });
-  constexpr static auto ENTER = flow::action<"core_vcpu_enter">([]() noexcept { vcpu::enter_guest(); });
+  constexpr static auto ENTER = flow::action<"core_vcpu_enter">([]() noexcept { vcpu::enter_cpu(); });
 
   constexpr static auto config = cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<cib::MainLoop>(*ENTER),
                                              cib::extend<HvcService>(&core_vcpu_component::handle_hvc),

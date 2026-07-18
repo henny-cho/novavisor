@@ -6,12 +6,19 @@
 // and retargets VTTBR_EL2 — the common vec.S restore path then resumes
 // the new guest. Pick/predicate decisions live in sched_model.hpp
 // (pure, host-tested); this file is the hardware glue.
+//
+// SMP ownership rule: a VCPU runs on its static affinity core and ALL
+// of its state (ctx/EL1/FP banks, run state, budget, timer slots) is
+// read and written only there. Cross-core requests arrive as local
+// calls through the smp component's cross-call path, so nothing here
+// needs a lock; the only cross-core data is the atomic alive counter.
 
 #include "core_vcpu/core_vcpu.hpp"
 
 #include "core_gic/core_gic.hpp"
 #include "core_mmu/core_mmu.hpp"
 #include "hal/console.hpp"
+#include "hal/cpu.hpp"
 #include "hal/timer.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/hvc_abi.h"
@@ -20,6 +27,7 @@
 #include "vgic/vgic.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -49,24 +57,52 @@ inline constexpr std::uint64_t kSpsrEl1h = 0x3C5ULL;
 // (single-source trigger discipline).
 inline constexpr std::uint64_t kSliceMs = 10;
 
+// "No VCPU resident on this core" — before the first guest entry and
+// after every local guest retired.
+inline constexpr std::size_t kNoVcpu = ~std::size_t{0};
+
+// Per-core scheduler state: the resident VCPU and the ownership of
+// this core's FP register file.
+struct CpuSched {
+  std::size_t   current = kNoVcpu;
+  fp::Ownership fp;
+};
+
 std::array<Vcpu, kMaxGuests>         g_vcpus;
-std::size_t                          g_count       = 0;
-std::size_t                          g_current     = 0;
-std::uint64_t                        g_slice_ticks = 0;
-fp::Ownership                        g_fp;
+std::size_t                          g_count       = 0; // boot-immutable after init()
+std::uint64_t                        g_slice_ticks = 0; // boot-immutable after init()
+std::array<CpuSched, cpu::kMaxCpus>  g_sched;
 lifecycle::RestartBudget<kMaxGuests> g_budget;
 
+// VMs not yet retired, machine-wide — the only scheduler state shared
+// across cores. Each core idles on its own empty ready-set; the halt
+// line is printed exactly once, by whichever core retires the last VM.
+std::atomic<std::size_t> g_alive{0};
+std::atomic<bool>        g_halt_announced{false};
+
+[[nodiscard]] auto me() noexcept -> CpuSched& {
+  return g_sched[cpu::id()];
+}
+
+[[nodiscard]] auto affinity(std::size_t index) noexcept -> std::size_t {
+  return guest_table()[index].cpu;
+}
+
+// This core's view of the VM table: VCPUs with a foreign affinity are
+// masked as kOff, so the pure scheduler model needs no affinity notion.
 auto states() noexcept -> std::array<sched::State, kMaxGuests> {
+  const std::size_t                    self = cpu::id();
   std::array<sched::State, kMaxGuests> s{};
   for (std::size_t i = 0; i < g_count; ++i) {
-    s[i] = g_vcpus[i].state;
+    s[i] = affinity(i) == self ? g_vcpus[i].state : sched::State::kOff;
   }
   return s;
 }
 
 auto pick_next() noexcept -> std::size_t {
   const auto s = states();
-  return sched::pick_next(std::span{s.data(), g_count}, g_current);
+  // kNoVcpu + 1 wraps to 0: an idle core scans the ring from the top.
+  return sched::pick_next(std::span{s.data(), g_count}, me().current);
 }
 
 void reschedule_slice() noexcept;
@@ -84,7 +120,7 @@ void seed(std::size_t index, const GuestDescriptor& guest) noexcept {
   v.fp       = arch::FpBank{};
   // Whatever this VCPU owned in the hardware FP file is garbage now —
   // drop ownership so no one ever saves it over a fresh bank.
-  g_fp.invalidate(index);
+  g_sched[affinity(index)].fp.invalidate(index);
   vgic::cpu_reset(index);
   // A reseeded guest owes nothing to its past life: drop the parked-CNTV
   // wake-up mirror (a fresh bank has CNTV disabled) and the heartbeat
@@ -99,14 +135,17 @@ void seed(std::size_t index, const GuestDescriptor& guest) noexcept {
 // the new guest. The outgoing state survives as set by the caller
 // (kBlocked/kOff); a still-running one becomes kReady.
 void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
-  Vcpu& cur  = g_vcpus[g_current];
-  Vcpu& next = g_vcpus[next_idx];
+  CpuSched& cs   = me();
+  Vcpu&     next = g_vcpus[next_idx];
 
-  cur.ctx = *live;
-  cur.el1 = arch::read_el1_bank();
-  vgic::cpu_save(g_current);
-  if (cur.state == sched::State::kRunning) {
-    cur.state = sched::State::kReady;
+  if (cs.current != kNoVcpu) {
+    Vcpu& cur = g_vcpus[cs.current];
+    cur.ctx   = *live;
+    cur.el1   = arch::read_el1_bank();
+    vgic::cpu_save(cs.current);
+    if (cur.state == sched::State::kRunning) {
+      cur.state = sched::State::kReady;
+    }
   }
 
   *live = next.ctx;
@@ -117,10 +156,10 @@ void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
   // Lazy FP: the register file stays put — only the trap follows the
   // resident. A non-owner claims it through the EC 0x07 path on first
   // use; the owner keeps running untrapped.
-  arch::set_fp_trap(g_fp.trap_needed(next_idx));
+  arch::set_fp_trap(cs.fp.trap_needed(next_idx));
 
   next.state = sched::State::kRunning;
-  g_current  = next_idx;
+  cs.current = next_idx;
   reschedule_slice();
 }
 
@@ -136,10 +175,11 @@ void on_slice(TrapContext* ctx, std::uint64_t arg) noexcept;
 
 // Keep the preemption slice armed exactly while the resident VCPU has
 // a runnable competitor. Re-evaluated at every ready-set change:
-// switch-in, wake, VM start, and slice expiry itself.
+// switch-in, wake, VM start, and slice expiry itself. An idle core
+// (no resident) arms nothing — its entry loop schedules directly.
 void reschedule_slice() noexcept {
   const auto s = states();
-  if (sched::slice_needed(std::span{s.data(), g_count})) {
+  if (me().current != kNoVcpu && sched::slice_needed(std::span{s.data(), g_count})) {
     soft_timer::arm(soft_timer::kSlotSlice, hyp_timer::now() + g_slice_ticks, &on_slice, 0);
   } else {
     soft_timer::cancel(soft_timer::kSlotSlice);
@@ -156,15 +196,17 @@ void on_slice(TrapContext* ctx, std::uint64_t /*arg*/) noexcept {
 // Leave the current VCPU as its caller marked it (kBlocked/kOff) and
 // run the next runnable one. With nothing runnable, idle at EL2: wfi
 // falls through on any pending physical IRQ even with PSTATE.I masked,
-// and drain dispatches it (soft-timer wake, doorbell) without taking
-// an exception. Halts once every VCPU has retired.
+// and drain dispatches it (soft-timer wake, doorbell, cross-call)
+// without taking an exception. The machine halts once every VM
+// machine-wide has retired; a core whose own set is merely empty
+// keeps idling — a cross-call may hand it new work.
 void schedule_out(TrapContext* live) noexcept {
   for (;;) {
     const std::size_t next = pick_next();
     if (next < g_count) {
-      if (next == g_current) {
+      if (next == me().current) {
         // Woke itself while idling — resume without a frame swap.
-        g_vcpus[g_current].state = sched::State::kRunning;
+        g_vcpus[next].state = sched::State::kRunning;
         reschedule_slice();
       } else {
         switch_to(live, next);
@@ -172,8 +214,7 @@ void schedule_out(TrapContext* live) noexcept {
       return;
     }
 
-    const auto s = states();
-    if (sched::all_off(std::span{s.data(), g_count})) {
+    if (g_alive.load(std::memory_order_acquire) == 0 && !g_halt_announced.exchange(true)) {
       console::write("[core_vcpu] all VCPUs off — halting\n");
       halt();
     }
@@ -186,11 +227,11 @@ void schedule_out(TrapContext* live) noexcept {
 } // namespace
 
 auto current() noexcept -> Vcpu& {
-  return g_vcpus[g_current];
+  return g_vcpus[me().current];
 }
 
 auto current_index() noexcept -> std::size_t {
-  return g_current;
+  return me().current;
 }
 
 void init() noexcept {
@@ -200,26 +241,49 @@ void init() noexcept {
     seed(i, guests[i]);
   }
   g_vcpus[0].state = sched::State::kReady;
-  g_slice_ticks    = hyp_timer::freq() * kSliceMs / 1000U;
+  g_alive.store(1, std::memory_order_relaxed); // the boot guest
+  g_slice_ticks = hyp_timer::freq() * kSliceMs / 1000U;
   arch::set_fp_trap(true); // no owner yet — first FP use claims the file
 }
 
-[[noreturn]] void enter_guest() noexcept {
-  Vcpu& boot = g_vcpus[0];
-  boot.state = sched::State::kRunning;
-  g_current  = 0;
-  nova_vcpu_enter(boot.ctx.elr, boot.ctx.sp, boot.ctx.spsr);
+[[noreturn]] void enter_cpu() noexcept {
+  // Scratch frame for IRQ drain while no guest has ever run on this
+  // core. Callbacks never frame-swap into it: with no resident VCPU
+  // the slice is parked and yield is a no-op — a cross-call start
+  // marks kReady and the pick below performs the first entry.
+  TrapContext idle{};
+  for (;;) {
+    const std::size_t next = pick_next();
+    if (next < g_count) {
+      CpuSched& cs = me();
+      Vcpu&     v  = g_vcpus[next];
+      mmu::switch_vm(next);
+      arch::write_el1_bank(v.el1);
+      vgic::cpu_restore(next);
+      arch::set_fp_trap(cs.fp.trap_needed(next));
+      v.state    = sched::State::kRunning;
+      cs.current = next;
+      reschedule_slice();
+      nova_vcpu_enter(v.ctx.elr, v.ctx.sp, v.ctx.spsr);
+    }
+    __asm__ volatile("wfi");
+    core_gic::drain(&idle);
+  }
 }
 
 void yield_current(TrapContext* live) noexcept {
+  if (me().current == kNoVcpu) {
+    return; // idle core — nothing to yield away from
+  }
   const std::size_t next = pick_next();
-  if (next < g_count && next != g_current) {
+  if (next < g_count && next != me().current) {
     switch_to(live, next);
   }
 }
 
 void block_current(TrapContext* live) noexcept {
-  g_vcpus[g_current].state = sched::State::kBlocked;
+  const std::size_t self = me().current;
+  g_vcpus[self].state    = sched::State::kBlocked;
 
   // The resident CNTV is live in hardware, but once parked in the EL1
   // bank it can never meet its condition — mirror an armed, unmasked
@@ -227,8 +291,8 @@ void block_current(TrapContext* live) noexcept {
   // (CNTVOFF = 0, so CVAL and the CNTHP comparator share a domain).
   const std::uint64_t ctl = hyp_timer::guest_cntv_ctl();
   if ((ctl & hyp_timer::kCntCtlEnable) != 0 && (ctl & hyp_timer::kCntCtlImask) == 0) {
-    soft_timer::arm(soft_timer::kSlotCntvWake + g_current, hyp_timer::guest_cntv_cval(), &on_cntv_wake,
-                    static_cast<std::uint64_t>(g_current));
+    soft_timer::arm(soft_timer::kSlotCntvWake + self, hyp_timer::guest_cntv_cval(), &on_cntv_wake,
+                    static_cast<std::uint64_t>(self));
   }
 
   schedule_out(live);
@@ -244,12 +308,13 @@ void wake(std::size_t index) noexcept {
 }
 
 auto start_vm(std::size_t index) noexcept -> bool {
-  if (index >= g_count || g_vcpus[index].state != sched::State::kOff) {
-    return false;
+  if (index >= g_count || affinity(index) != cpu::id() || g_vcpus[index].state != sched::State::kOff) {
+    return false; // foreign-affinity starts arrive through the smp cross-call
   }
   seed(index, guest_table()[index]);
   g_budget.refill(index); // cold start — fresh warm-reset budget
   g_vcpus[index].state = sched::State::kReady;
+  g_alive.fetch_add(1, std::memory_order_acq_rel);
   reschedule_slice(); // the resident VCPU just gained a competitor
   return true;
 }
@@ -265,7 +330,8 @@ void reset_vm(std::size_t index, TrapContext* live) noexcept {
     console::write(" restart budget exhausted — stopping\n");
     g_vcpus[index].state = sched::State::kOff;
     soft_timer::cancel(soft_timer::kSlotWatchdog + index); // no reset from beyond the grave
-    if (index == g_current) {
+    g_alive.fetch_sub(1, std::memory_order_acq_rel);
+    if (index == me().current) {
       schedule_out(live);
     }
     return;
@@ -275,14 +341,14 @@ void reset_vm(std::size_t index, TrapContext* live) noexcept {
   seed(index, guest_table()[index]);
 
   Vcpu& v = g_vcpus[index];
-  if (index == g_current) {
+  if (index == me().current) {
     // Reset in place: load the fresh context straight into the live
     // frame and keep running — switch_to would save the live frame
     // over the seed. Stage 2 already targets this VM.
     *live = v.ctx;
     arch::write_el1_bank(v.el1);
     vgic::cpu_restore(index);
-    arch::set_fp_trap(g_fp.trap_needed(index));
+    arch::set_fp_trap(me().fp.trap_needed(index));
     v.state = sched::State::kRunning;
   } else {
     v.state = sched::State::kReady;
@@ -291,15 +357,17 @@ void reset_vm(std::size_t index, TrapContext* live) noexcept {
 }
 
 void exit_current(TrapContext* live) noexcept {
-  g_vcpus[g_current].state = sched::State::kOff;
+  const std::size_t self = me().current;
+  g_vcpus[self].state    = sched::State::kOff;
   // A stopped VM must never be watchdog-reset back to life.
-  soft_timer::cancel(soft_timer::kSlotWatchdog + g_current);
+  soft_timer::cancel(soft_timer::kSlotWatchdog + self);
+  g_alive.fetch_sub(1, std::memory_order_acq_rel);
   schedule_out(live);
 }
 
 auto post_virq(std::size_t index, std::uint32_t vintid) noexcept -> bool {
-  if (index >= g_count || g_vcpus[index].state == sched::State::kOff) {
-    return false;
+  if (index >= g_count || affinity(index) != cpu::id() || g_vcpus[index].state == sched::State::kOff) {
+    return false; // foreign-affinity posts arrive through the smp cross-call
   }
   if (!vgic::post(index, vintid)) {
     return false;
@@ -330,7 +398,7 @@ void core_vcpu_component::handle_fp_simd(FpSimdCall* call) noexcept {
   arch::set_fp_trap(false);
 
   const std::size_t cur  = vcpu::current_index();
-  const std::size_t prev = vcpu::g_fp.claim(cur);
+  const std::size_t prev = vcpu::g_sched[cpu::id()].fp.claim(cur);
   if (prev == cur) {
     return; // spurious — already the owner, state is already live
   }
@@ -359,12 +427,8 @@ void core_vcpu_component::handle_hvc(HvcCall* call) noexcept {
     call->ctx->x[0] = 0; // written before the frame swap parks it
     vcpu::yield_current(call->ctx);
     return;
-  case NOVA_HVC_FN_VM_START:
-    call->handled   = true;
-    call->ctx->x[0] = vcpu::start_vm(static_cast<std::size_t>(call->ctx->x[1])) ? 0 : kSmcccNotSupported;
-    return;
   default:
-    return; // not ours — leave unclaimed for other subscribers
+    return; // not ours — VM_START lives in smp (affinity routing)
   }
 }
 

@@ -16,10 +16,13 @@
 namespace nova {
 namespace {
 
-// Entry [0] boots automatically; entry [1] stays off until a guest
-// issues HVC_VM_START (demo/03_ivc_pingpong). Both see the same IPA
-// window and differ only in PA slot and VMID (0 is reserved).
-constexpr auto make_guest(std::size_t index) noexcept -> GuestDescriptor {
+// Entry [0] boots automatically; the rest stay off until a guest
+// issues HVC_VM_START. Every slot sees the same IPA window and differs
+// only in PA slot, VMID (0 is reserved), and affinity core. A demo
+// selects slots — and thereby cores — through its manifest load_addr:
+// slots 0/1 stay on core 0 (single-core demos unchanged), slots 2/3
+// put a guest on core 1.
+constexpr auto make_guest(std::size_t index, std::uint8_t cpu) noexcept -> GuestDescriptor {
   return GuestDescriptor{
       .ipa_base  = qemu_virt::kGuestIpaBase,
       .ipa_size  = qemu_virt::kGuestIpaSize,
@@ -27,12 +30,14 @@ constexpr auto make_guest(std::size_t index) noexcept -> GuestDescriptor {
       .entry_pc  = qemu_virt::kGuestEntry,
       .stack_top = qemu_virt::kGuestStackTop,
       .vmid      = static_cast<std::uint16_t>(index + 1),
+      .cpu       = cpu,
   };
 }
 
-constexpr std::array kGuestTable{make_guest(0), make_guest(1)};
+constexpr std::array kGuestTable{make_guest(0, 0), make_guest(1, 0), make_guest(2, 1), make_guest(3, 1)};
 
 static_assert(kGuestTable.size() <= kMaxGuests);
+static_assert(kGuestTable[0].cpu == 0, "the boot guest belongs to the primary core");
 
 } // namespace
 

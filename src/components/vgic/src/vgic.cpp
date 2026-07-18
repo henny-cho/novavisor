@@ -8,9 +8,11 @@
 #include "vgic/vgic.hpp"
 
 #include "hal/console.hpp"
+#include "hal/cpu.hpp"
 #include "hal/gic.hpp"
 #include "hal/gic_virt.hpp"
 #include "nova/abi/guest.hpp"
+#include "nova/sync.hpp"
 #include "vgic/vgic_delivery.hpp"
 
 #include <array>
@@ -26,14 +28,26 @@ struct HwBank {
   std::uint64_t hcr  = gic_virt::kIchHcrEn;
 };
 
-std::array<CpuState, kMaxGuests> g_cpu;
-std::array<HwBank, kMaxGuests>   g_hw;
-std::size_t                      g_resident = 0;
-std::size_t                      g_lr_count = 0;
+// No VCPU owns this core's virtual CPU interface (before the core's
+// first switch-in).
+inline constexpr std::size_t kNoResident = ~std::size_t{0};
 
-// One distributor view shared by all VMs — acceptable while its state
-// gates nothing (per-INTID enables live in the per-VCPU redistributor).
-DistState g_dist;
+// Per-vCPU state, touched only by the owning core (core_vcpu routes);
+// the residency scalar is per-core — ICH_* is banked per PE.
+std::array<CpuState, kMaxGuests>       g_cpu;
+std::array<HwBank, kMaxGuests>         g_hw;
+std::array<std::size_t, cpu::kMaxCpus> g_resident{}; // init() presets kNoResident
+std::size_t                            g_lr_count = 0;
+
+// One distributor view shared by all VMs. Its state still gates
+// nothing (per-INTID enables live in the per-VCPU redistributor), but
+// two cores' guests can MMIO it concurrently — serialize the RMW.
+DistState      g_dist;
+sync::SpinLock g_dist_lock;
+
+[[nodiscard]] auto resident_here() noexcept -> std::size_t& {
+  return g_resident[cpu::id()];
+}
 
 // Push deliverable pending INTIDs of one VCPU into its list registers.
 // For the resident VCPU the hardware LRs are the live truth: sync them
@@ -41,9 +55,10 @@ DistState g_dist;
 // and write everything back. Overflow arms the underflow maintenance
 // IRQ so draining LRs pull the queue.
 void flush(std::size_t index) noexcept {
-  CpuState& cpu = g_cpu[index];
+  CpuState&  cpu      = g_cpu[index];
+  const bool resident = index == resident_here();
 
-  if (index == g_resident) {
+  if (resident) {
     for (std::size_t i = 0; i < g_lr_count; ++i) {
       cpu.lr[i] = gic_virt::read_lr(i);
     }
@@ -52,7 +67,7 @@ void flush(std::size_t index) noexcept {
   const bool          overflow = refill(cpu, g_lr_count);
   const std::uint64_t hcr      = gic_virt::kIchHcrEn | (overflow ? gic_virt::kIchHcrUie : 0U);
 
-  if (index == g_resident) {
+  if (resident) {
     for (std::size_t i = 0; i < g_lr_count; ++i) {
       gic_virt::write_lr(i, cpu.lr[i]);
     }
@@ -71,6 +86,7 @@ void log_raz_wi(const char* frame, std::uint64_t off) noexcept {
 }
 
 void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
+  sync::Guard guard{g_dist_lock}; // GICD is one shared view — RMW across cores
   if (call->write) {
     if (!dist_write(g_dist, off, call->size, call->value)) {
       log_raz_wi("GICD", off);
@@ -85,10 +101,10 @@ void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
 }
 
 void redist_mmio(MmioCall* call, std::uint64_t off) noexcept {
-  CpuState& cpu = g_cpu[g_resident];
+  CpuState& cpu = g_cpu[resident_here()];
   if (call->write) {
     if (redist_write(cpu.redist, off, call->size, call->value)) {
-      flush(g_resident); // enable/pending changes may unlock queued vIRQs
+      flush(resident_here()); // enable/pending changes may unlock queued vIRQs
     } else {
       log_raz_wi("GICR", off);
     }
@@ -103,13 +119,20 @@ void redist_mmio(MmioCall* call, std::uint64_t off) noexcept {
 
 } // namespace
 
-void init() noexcept {
-  gic_virt::init(); // VMCR reset + HCR.En — the virtual half of GIC bring-up
-  g_lr_count = gic_virt::lr_count();
-  for (std::size_t i = 0; i < g_lr_count; ++i) {
+void init_cpu() noexcept {
+  gic_virt::init(); // VMCR reset + HCR.En — ICH_* is banked per core
+  for (std::size_t i = 0; i < gic_virt::lr_count(); ++i) {
     gic_virt::write_lr(i, 0); // reset state is UNKNOWN
   }
   gic::enable_ppi(gic_virt::kMaintenanceIntid);
+}
+
+void init() noexcept {
+  init_cpu();
+  g_lr_count = gic_virt::lr_count(); // boot-immutable (homogeneous cores)
+  for (std::size_t c = 0; c < cpu::kMaxCpus; ++c) {
+    g_resident[c] = kNoResident;
+  }
 
   console::write("vGIC: ");
   console::write_dec64(g_lr_count);
@@ -137,7 +160,7 @@ void cpu_restore(std::size_t index) noexcept {
   }
   gic_virt::write_vmcr(g_hw[index].vmcr);
   gic_virt::write_hcr(g_hw[index].hcr);
-  g_resident = index;
+  resident_here() = index;
 }
 
 auto post(std::size_t index, std::uint32_t vintid) noexcept -> bool {
@@ -151,7 +174,7 @@ auto post(std::size_t index, std::uint32_t vintid) noexcept -> bool {
 
 auto has_deliverable(std::size_t index) noexcept -> bool {
   CpuState& cpu = g_cpu[index];
-  if (index == g_resident) {
+  if (index == resident_here()) {
     // The live LRs are the truth for the resident VCPU (the guest
     // retires entries as it runs) — refresh the shadow before judging.
     // A pending LR here is real: HCR_EL2.TWI traps every wfi, even one
@@ -192,10 +215,10 @@ void vgic_component::handle_irq(IrqCall* call) noexcept {
     return;
   }
   call->handled = true;
-  // Underflow: the resident guest drained its LRs while software
-  // pending remained — top them up. flush() drops UIE once the queue
-  // is empty, deasserting this (level) interrupt.
-  vgic::flush(vgic::g_resident);
+  // Underflow: the guest resident on the receiving core drained its
+  // LRs while software pending remained — top them up. flush() drops
+  // UIE once the queue is empty, deasserting this (level) interrupt.
+  vgic::flush(vgic::resident_here());
 }
 
 } // namespace nova

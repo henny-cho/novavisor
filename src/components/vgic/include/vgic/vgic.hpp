@@ -28,9 +28,14 @@
 
 namespace nova::vgic {
 
-// Discover the implemented LR count and clear the list registers
-// (their reset state is UNKNOWN); enable the maintenance PPI.
+// Cold boot (primary): per-core bring-up plus the shared LR count and
+// residency table. Discovers the implemented LR count and clears the
+// list registers (their reset state is UNKNOWN).
 void init() noexcept;
+
+// Per-core half only — ICH_* and the maintenance PPI are banked per
+// PE. Secondaries run this on themselves (smp bring-up).
+void init_cpu() noexcept;
 
 // Reset one VCPU's virtual interrupt state to boot values (seed time).
 void cpu_reset(std::size_t index) noexcept;

@@ -26,6 +26,11 @@ namespace nova::mmu {
 // transfers to EL1.
 void init_and_activate() noexcept;
 
+// Program this PE's banked Stage 2 registers (VTCR/VTTBR/HCR) from the
+// tables the primary built. Secondaries run it once during bring-up;
+// init_and_activate() already covers the primary.
+void activate_cpu() noexcept;
+
 // Retarget VTTBR_EL2 to another guest's table set (index into
 // guest_table()). VMID tagging keeps the TLB coherent — no invalidation
 // on the switch path. Called by the VCPU scheduler with a valid index.

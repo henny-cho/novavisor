@@ -28,6 +28,7 @@ struct GuestDescriptor {
   std::uint64_t entry_pc  = 0; // initial ELR_EL2 — EL1 entry point (IPA)
   std::uint64_t stack_top = 0; // initial SP_EL1 (IPA)
   std::uint16_t vmid      = 0; // VTTBR_EL2 VMID tag (0 is reserved — never valid here)
+  std::uint8_t  cpu       = 0; // static affinity: the physical core this VCPU runs on
 
   // True when [ipa, ipa + len) lies fully inside the guest window.
   // len must not exceed ipa_size (callers clamp first).
@@ -43,8 +44,10 @@ struct GuestDescriptor {
 };
 
 // Defined by the active project (projects/*/guest_config.cpp). Never
-// empty, at most kMaxGuests entries; entry [0] is the boot guest,
-// further entries start off and are launched via HVC_VM_START.
+// empty, at most kMaxGuests entries; entry [0] is the boot guest
+// (affinity core 0), further entries start off and are launched via
+// HVC_VM_START. A VCPU executes only on its affinity core; all its
+// state is owned (read and written) by that core.
 auto guest_table() noexcept -> std::span<const GuestDescriptor>;
 
 } // namespace nova

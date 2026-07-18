@@ -174,6 +174,13 @@ void init_and_activate() noexcept {
   }
 }
 
+void activate_cpu() noexcept {
+  // VTCR/VTTBR/HCR are banked per PE — a secondary programs its own
+  // from the tables the primary built (immutable since). The initial
+  // VTTBR is a placeholder; the first switch_vm retargets it.
+  nova_stage2_activate(g_vttbr[0], kVtcrEl2, kHcrEl2);
+}
+
 void switch_vm(std::size_t guest_index) noexcept {
   nova_stage2_switch(g_vttbr[guest_index]);
 }
