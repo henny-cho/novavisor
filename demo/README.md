@@ -10,9 +10,9 @@ demo/
 ├── CMakeLists.txt               # builds all custom EL1 guests
 ├── common/
 │   ├── startup.S                # EL1 entry: stack, BSS, call main(), HVC_EXIT
-│   ├── linker.ld.S              # linker script template (window from nova/guest_layout.h)
+│   ├── linker.ld.S              # linker script template (window from nova/abi/guest_layout.h)
 │   └── include/
-│       ├── demo_hvc.h           # HVC ABI helpers (IDs from nova/hvc_abi.h)
+│       ├── demo_hvc.h           # HVC ABI helpers (IDs from nova/abi/hvc_abi.h)
 │       ├── gic_el1.h            # guest-side GICD/GICR programming (emulated MMIO)
 │       └── ivc_shm.h            # guest-owned mailbox protocol on the IVC shared page
 ├── 01_hello/                    # Phase 5 demo
@@ -46,7 +46,7 @@ demo/
 
 ## Hypercall ABI (demo ↔ hypervisor contract)
 
-Function IDs are defined once in `nova/hvc_abi.h`, shared by the guest
+Function IDs are defined once in `nova/abi/hvc_abi.h`, shared by the guest
 stubs and the hypervisor dispatcher. This table documents them:
 
 | Function ID (x0) | Name | Args | Description |
