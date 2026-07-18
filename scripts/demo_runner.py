@@ -8,10 +8,14 @@ that expected output patterns appear within their per-pattern deadlines.
 
 Exits 0 on PASS, non-zero on any failure. CI gates on this exit code.
 
+Demos are addressed by the numeric ID shown in `list` (the NN_ prefix of
+the demo directory, e.g. `2` or `02` for 02_timer); the full directory
+name is also accepted for scripts that already store it.
+
 Usage:
     demo_runner.py list
-    demo_runner.py run <name>           # launch without pattern checking
-    demo_runner.py verify <name>        # launch and check manifest.expect
+    demo_runner.py run <id|name>        # launch without pattern checking
+    demo_runner.py verify <id|name>     # launch and check manifest.expect
     demo_runner.py verify-all           # run all enabled demos sequentially
 """
 
@@ -71,6 +75,27 @@ def iter_demos() -> list[tuple[str, dict]]:
             with open(mf) as f:
                 out.append((p.name, yaml.safe_load(f)))
     return out
+
+
+def demo_id(name: str) -> str:
+    # The demo's ID is its directory's numeric NN_ prefix ("02_timer" → "02").
+    prefix = name.split("_", 1)[0]
+    return prefix if prefix.isdigit() else "-"
+
+
+def resolve_demo(token: str) -> str:
+    """Map a numeric ID ("2", "02") or a full directory name to the demo name."""
+    names = [n for n, _ in iter_demos()]
+    if token in names:
+        return token
+    if token.isdigit():
+        matches = [n for n in names if demo_id(n) != "-" and int(demo_id(n)) == int(token)]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            sys.exit(f"demo_runner: ID '{token}' is ambiguous: {', '.join(matches)}")
+    available = ", ".join(f"{demo_id(n)}={n}" for n in names) or "(none)"
+    sys.exit(f"demo_runner: unknown demo '{token}'. Available: {available}")
 
 
 # ---------------------------------------------------------------------------
@@ -192,9 +217,9 @@ def cmd_list(_args) -> int:
     if not demos:
         print("(no demos)")
         return 0
-    print(f"{'NAME':30s}  {'PHASE':>5}  {'ENABLED':>7}  DESCRIPTION")
+    print(f"{'ID':>2}  {'NAME':30s}  {'PHASE':>5}  {'ENABLED':>7}  DESCRIPTION")
     for name, mf in demos:
-        print(f"{name:30s}  {mf.get('phase', '?'):>5}  "
+        print(f"{demo_id(name):>2}  {name:30s}  {mf.get('phase', '?'):>5}  "
               f"{str(mf.get('enabled', False)).lower():>7}  "
               f"{mf.get('description', '')}")
     return 0
@@ -276,14 +301,18 @@ def main() -> int:
     p = argparse.ArgumentParser(prog="demo_runner")
     sub = p.add_subparsers(dest="subcommand", required=True)
     sub.add_parser("list", help="list demos and their enabled status")
+    demo_arg = dict(metavar="id|name", help="demo ID from `list` (e.g. 2) or directory name (e.g. 02_timer)")
     p_run = sub.add_parser("run", help="launch a demo interactively")
-    p_run.add_argument("name")
+    p_run.add_argument("name", **demo_arg)
     p_ver = sub.add_parser("verify", help="run a demo and check manifest.expect")
-    p_ver.add_argument("name")
+    p_ver.add_argument("name", **demo_arg)
     sub.add_parser("verify-all", help="run all enabled demos")
     p_dbg = sub.add_parser("debug", help="launch a demo with QEMU halted and GDB stub on :1234")
-    p_dbg.add_argument("name")
+    p_dbg.add_argument("name", **demo_arg)
     args = p.parse_args()
+
+    if hasattr(args, "name"):
+        args.name = resolve_demo(args.name)
 
     dispatch = {
         "list": cmd_list,

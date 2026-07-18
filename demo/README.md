@@ -88,7 +88,7 @@ For Phases 8+ that reference real OSes (Zephyr, Linux), add a `fetch.sh` in the 
 
 ```
 # Build hypervisor + all custom guests, then verify a single demo
-./scripts/task.sh demo verify 01_hello
+./scripts/task.sh demo verify 1
 
 # List all demos with their phase and enabled status
 ./scripts/task.sh demo list
@@ -97,7 +97,7 @@ For Phases 8+ that reference real OSes (Zephyr, Linux), add a `fetch.sh` in the 
 ./scripts/task.sh demo verify-all
 
 # Launch a demo interactively (no pattern checking)
-./scripts/task.sh demo run 01_hello
+./scripts/task.sh demo run 1
 ```
 
 ## Writing a new demo

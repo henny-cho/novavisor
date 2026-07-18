@@ -110,8 +110,8 @@ Each roadmap phase is validated by a **demo** in `demo/NN_name/`. A demo consist
 
 ```bash
 ./scripts/task.sh demo list           # show all demos and their enabled status
-./scripts/task.sh demo run 01_hello   # interactive launch (no pattern check)
-./scripts/task.sh demo verify 01_hello
+./scripts/task.sh demo run 1            # interactive launch (no pattern check)
+./scripts/task.sh demo verify 1          # by ID (see `demo list`; full name also works)
 ./scripts/task.sh demo verify-all     # every enabled demo — used by CI
 ```
 

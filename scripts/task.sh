@@ -37,7 +37,7 @@ print_usage() {
     echo "  objdump     Disassemble novavisor.elf (interleaved with source)"
     echo "  ci          Run the full CI pipeline (format check + build + lint + test + demo)"
     echo "  test        Build and run host GTest suite (x86_64, no toolchain)"
-    echo "  demo        Manage demo guests (list | run | verify | verify-all | debug)"
+    echo "  demo        Manage demo guests (list | run <id> | verify <id> | verify-all | debug <id>)"
     echo ""
     echo "Options:"
     echo "  --release   Build in Release mode (default: Debug)"
@@ -262,7 +262,7 @@ cmd_demo() {
             ;;
         *)
             echo "Error: unknown demo subcommand '${sub}'" >&2
-            echo "Usage: $0 demo {list|run|verify|verify-all|debug} [name]" >&2
+            echo "Usage: $0 demo {list|run|verify|verify-all|debug} [id|name]" >&2
             exit 2
             ;;
     esac
