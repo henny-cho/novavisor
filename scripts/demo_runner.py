@@ -52,6 +52,8 @@ DEMO_BUILD_DIR = BUILD_DIR / "demo"
 HV_PRESET = "aarch64-debug"
 HV_ELF = BUILD_DIR / HV_PRESET / "novavisor.elf"
 QEMU = "qemu-system-aarch64"
+# NOVA_GUEST_IPA_BASE (nova/abi/guest_layout.h): every guest links here.
+GUEST_LINK_BASE = 0x50000000
 
 
 # ---------------------------------------------------------------------------
@@ -107,12 +109,29 @@ def run(cmd: list[str], **kw) -> None:
     subprocess.check_call(cmd, **kw)
 
 
-def build_hypervisor() -> Path:
+def build_hypervisor(config: str | None = None) -> Path:
     # Always delegate to task.sh: a no-change Ninja rebuild is nearly free,
     # while skipping on HV_ELF existence would verify against a stale binary
-    # after source edits.
-    run([str(REPO / "scripts" / "task.sh"), "build"])
+    # after source edits. `config` (repo-relative guest config YAML) flows
+    # through --config; omitting it restores configs/default.yml, so one
+    # demo's config never leaks into the next.
+    cmd = [str(REPO / "scripts" / "task.sh"), "build"]
+    if config is not None:
+        cfg = REPO / config
+        if not cfg.exists():
+            sys.exit(f"demo_runner: guest config not found: {cfg}")
+        cmd += ["--config", str(cfg)]
+    run(cmd)
     return HV_ELF
+
+
+def manifest_config(manifest: dict) -> str | None:
+    # For run/debug (no variant loop): the top-level config, or the
+    # first variant's — matching what verify() exercises first.
+    variants = manifest.get("variants")
+    if variants:
+        return variants[0].get("config", manifest.get("config"))
+    return manifest.get("config")
 
 
 def build_demos() -> Path:
@@ -185,20 +204,37 @@ def verify(name: str) -> int:
         print(f"[demo_runner] SKIP {name} (manifest.enabled=false)")
         return 0
 
+    # A manifest is either a single run (top-level config/expect) or a
+    # `variants:` list — one full run (build + QEMU + expect) each, with
+    # the shared guests list. demo/11_configurable uses this to verify
+    # the same guest under two configs.
+    variants = manifest.get("variants")
+    if variants is None:
+        variants = [{"config": manifest.get("config"),
+                     "expect": manifest.get("expect", [])}]
+    for variant in variants:
+        rc = _verify_one(name, manifest, variant)
+        if rc != 0:
+            return rc
+    return 0
+
+
+def _verify_one(name: str, manifest: dict, variant: dict) -> int:
     pexpect = _require_pexpect()
-    elf = build_hypervisor()
+    label = name if "name" not in variant else f"{name}[{variant['name']}]"
+    elf = build_hypervisor(variant.get("config"))
     demo_build = build_demos()
     cmd = build_qemu_cmd(elf, name, demo_build, manifest)
 
     timeout = int(manifest.get("timeout_seconds", 30))
-    print(f"[demo_runner] --- {name} (phase {manifest.get('phase')}) timeout={timeout}s ---")
+    print(f"[demo_runner] --- {label} (phase {manifest.get('phase')}) timeout={timeout}s ---")
     print(f"[demo_runner] $ {' '.join(shlex.quote(c) for c in cmd)}")
 
     child = pexpect.spawn(cmd[0], cmd[1:], timeout=timeout, encoding="utf-8")
     child.logfile_read = sys.stdout
 
     try:
-        for exp in manifest.get("expect", []):
+        for exp in variant.get("expect", []):
             pattern = exp["pattern"]
             within = int(exp.get("within_seconds", timeout))
             try:
@@ -216,7 +252,7 @@ def verify(name: str) -> int:
             send = exp.get("send")
             if send is not None:
                 child.send(send)
-        print(f"\n[demo_runner] PASS: {name}")
+        print(f"\n[demo_runner] PASS: {label}")
         return 0
     finally:
         child.terminate(force=True)
@@ -242,7 +278,7 @@ def cmd_list(_args) -> int:
 def cmd_run(args) -> int:
     # Non-verifying interactive launch. Useful for manual poking.
     _, manifest = load_manifest(args.name)
-    elf = build_hypervisor()
+    elf = build_hypervisor(manifest_config(manifest))
     demo_build = build_demos()
     cmd = build_qemu_cmd(elf, args.name, demo_build, manifest)
     print(f"[demo_runner] $ {' '.join(shlex.quote(c) for c in cmd)}")
@@ -258,7 +294,7 @@ def cmd_debug(args) -> int:
     # scripts/task.sh debug so .vscode/tasks.json's background problem matcher
     # works unchanged.
     _, manifest = load_manifest(args.name)
-    elf = build_hypervisor()
+    elf = build_hypervisor(manifest_config(manifest))
     demo_build = build_demos()
 
     # Shared fixed path so .vscode/launch.json can `source` it without
@@ -273,7 +309,12 @@ def cmd_debug(args) -> int:
         # (add_demo_guest(<name> ...) produces <name> and <name>.bin).
         guest_elf = demo_build / args.name / Path(guest["binary"]).stem
         if guest_elf.exists():
-            lines.append(f"add-symbol-file {guest_elf}")
+            # Every guest links at the shared IPA window base but is
+            # loaded at its PA slot — shift the symbols by the slot
+            # offset so multi-VM demos resolve at the right addresses.
+            offset = guest["load_addr"] - GUEST_LINK_BASE
+            opt = f" -o {offset:#x}" if offset else ""
+            lines.append(f"add-symbol-file {guest_elf}{opt}")
     symbols_script.write_text("\n".join(lines) + "\n")
 
     cmd = build_qemu_cmd(elf, args.name, demo_build, manifest) + ["-s", "-S"]

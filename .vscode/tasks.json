@@ -84,7 +84,13 @@
                 "01_hello",
                 "02_timer",
                 "03_ivc_pingpong",
-                "04_native_gic"
+                "04_native_gic",
+                "05_preempt",
+                "06_el1_mmu_fp",
+                "07_lifecycle",
+                "08_smp_pingpong",
+                "09_guest_smp",
+                "10_console_mux"
             ],
             "default": "01_hello"
         }

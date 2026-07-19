@@ -46,6 +46,7 @@ print_usage() {
     echo "Options:"
     echo "  --release   Build in Release mode (default: Debug)"
     echo "  --clean     (build only) Remove the build directory first"
+    echo "  --config F  (build/run) Guest config YAML (default: configs/default.yml)"
     echo "  --check     (format only) Verify formatting without modifying files"
     echo "  -h, --help  Show this help message"
 }
@@ -98,6 +99,41 @@ _parse_build_type() {
     echo "${type}"
 }
 
+# Parse a `--config <file>` option from "$@" and echo the file (empty
+# when absent). Callers: local CONFIG; CONFIG=$(_parse_config "$@")
+_parse_config() {
+    local expect=0
+    for arg in "$@"; do
+        if [[ ${expect} -eq 1 ]]; then
+            echo "${arg}"
+            return 0
+        fi
+        [[ "${arg}" == "--config" ]] && expect=1
+    done
+    if [[ ${expect} -eq 1 ]]; then
+        echo "Error: --config requires a file argument" >&2
+        exit 2
+    fi
+}
+
+# Point the build tree at a guest config (default: configs/default.yml).
+# Copies only on content change, so Ninja regenerates the guest DTBs
+# exactly when the config differs — no CMake reconfigure involved (the
+# DTB pipeline DEPENDS on active_config.yml). Omitting --config always
+# restores the default, so a config never lingers across builds.
+_sync_config() {
+    local preset_dir="$1"
+    local config="${2:-${WORK_DIR}/configs/default.yml}"
+    if [ ! -f "${config}" ]; then
+        echo "Error: guest config not found: ${config}" >&2
+        exit 1
+    fi
+    mkdir -p "${preset_dir}"
+    if ! cmp -s "${config}" "${preset_dir}/active_config.yml"; then
+        cp "${config}" "${preset_dir}/active_config.yml"
+    fi
+}
+
 # ------------------------------------------------------------------------------
 # Subcommand implementations
 # ------------------------------------------------------------------------------
@@ -119,6 +155,10 @@ cmd_build() {
 
     local PRESET="aarch64-debug"
     [[ "${BUILD_TYPE}" == "Release" ]] && PRESET="aarch64-release"
+
+    local CONFIG
+    CONFIG=$(_parse_config "$@")
+    _sync_config "$(_preset_dir "${PRESET}")" "${CONFIG}"
 
     # Configure only on the first run; afterwards Ninja re-runs CMake by
     # itself whenever a CMakeLists.txt changes, so repeat builds stay fast.
@@ -199,6 +239,9 @@ cmd_lint() {
 }
 
 cmd_run() {
+    # Build first so the image always matches --config/--release —
+    # a no-change Ninja rebuild is nearly free.
+    cmd_build "$@" >&2
     local ELF
     ELF=$(_resolve_elf "$@")
 
