@@ -7,9 +7,9 @@
 // QEMU virt uses).
 //
 // The hypervisor owns the EL2 physical timer (CNTHP). Guests keep
-// unrestricted access to the virtual counter/timer (CNTV, CNTVOFF = 0)
-// and read-only access to the physical counter; programming the EL1
-// physical timer traps to EL2.
+// unrestricted access to the virtual counter/timer (CNTV; CNTVOFF is
+// per-VM, rewritten on switch-in) and read-only access to the physical
+// counter; programming the EL1 physical timer traps to EL2.
 
 #include "nova/abi/hvc_abi.h"
 
@@ -35,10 +35,16 @@ inline constexpr std::uint64_t kCntCtlEnable = 1ULL << 0;
 inline constexpr std::uint64_t kCntCtlImask  = 1ULL << 1;
 
 inline void init() noexcept {
-  __asm__ volatile("msr cntvoff_el2, xzr"); // guest virtual counter == physical
+  __asm__ volatile("msr cntvoff_el2, xzr"); // reset default — switch-in installs the VM's offset
   __asm__ volatile("msr cnthctl_el2, %0" ::"r"(kCnthctlEl1PhysCounterRead));
   __asm__ volatile("msr cnthp_ctl_el2, xzr"); // EL2 timer disarmed until first use
   __asm__ volatile("isb");
+}
+
+// Install a VM's virtual-counter offset (CNTVCT = CNTPCT - offset).
+// Part of the switch-in register set, next to VTTBR/VMPIDR.
+inline void write_cntvoff(std::uint64_t offset) noexcept {
+  __asm__ volatile("msr cntvoff_el2, %0" ::"r"(offset));
 }
 
 // Physical counter. The leading ISB orders the read after preceding

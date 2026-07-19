@@ -82,6 +82,14 @@ std::uint64_t                        g_slice_ticks = 0; // boot-immutable after 
 std::array<CpuSched, cpu::kMaxCpus>  g_sched;
 lifecycle::RestartBudget<kMaxGuests> g_budget; // per-VM — micro-reboot is a VM-level policy
 
+// Per-VM virtual-counter offset (CNTVCT = CNTPCT - offset), written on
+// every switch-in like VTTBR. Cold start and warm reset re-base it to
+// the current physical count, so a VM's virtual counter starts near
+// zero on every (re)boot — a rebooted guest never sees time jump.
+// Written only by the VM's cores under their own start/reset calls; a
+// stale read costs one re-based tick, never a torn value on AArch64.
+std::array<std::uint64_t, kMaxGuests> g_cntvoff{};
+
 // vCPUs not yet retired, machine-wide — the only scheduler state
 // shared across cores. Each core idles on its own empty ready-set; the
 // halt line is printed exactly once, by whichever core retires the
@@ -187,6 +195,7 @@ void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
   vgic::cpu_restore(next_idx);
   mmu::switch_vm(vm_of(next_idx));
   arch::write_vmpidr(vcpu_of(next_idx));
+  hyp_timer::write_cntvoff(g_cntvoff[vm_of(next_idx)]);
 
   // Lazy FP: the register file stays put — only the trap follows the
   // resident. A non-owner claims it through the EC 0x07 path on first
@@ -297,6 +306,7 @@ void init() noexcept {
       Vcpu&     v  = g_vcpus[next];
       mmu::switch_vm(vm_of(next));
       arch::write_vmpidr(vcpu_of(next));
+      hyp_timer::write_cntvoff(g_cntvoff[vm_of(next)]);
       arch::write_el1_bank(v.el1);
       vgic::cpu_restore(next);
       arch::set_fp_trap(cs.fp.trap_needed(next));
@@ -326,12 +336,13 @@ void block_current(TrapContext* live) noexcept {
 
   // The resident CNTV is live in hardware, but once parked in the EL1
   // bank it can never meet its condition — mirror an armed, unmasked
-  // timer into a soft-timer wake-up at the same absolute deadline
-  // (CNTVOFF = 0, so CVAL and the CNTHP comparator share a domain).
+  // timer into a soft-timer wake-up at the same absolute deadline.
+  // CVAL is virtual time; the CNTHP comparator is physical — re-base
+  // through the VM's CNTVOFF.
   const std::uint64_t ctl = hyp_timer::guest_cntv_ctl();
   if ((ctl & hyp_timer::kCntCtlEnable) != 0 && (ctl & hyp_timer::kCntCtlImask) == 0) {
-    soft_timer::arm(soft_timer::kSlotCntvWake + self, hyp_timer::guest_cntv_cval(), &on_cntv_wake,
-                    static_cast<std::uint64_t>(self));
+    soft_timer::arm(soft_timer::kSlotCntvWake + self, hyp_timer::guest_cntv_cval() + g_cntvoff[vm_of(self)],
+                    &on_cntv_wake, static_cast<std::uint64_t>(self));
   }
 
   schedule_out(live);
@@ -352,6 +363,7 @@ auto start_vm(std::size_t vm) noexcept -> bool {
     return false; // foreign-affinity starts arrive through the smp cross-call
   }
   vgic::vm_reset(vm); // SPI banks are VM-global — per-vCPU cpu_reset misses them
+  g_cntvoff[vm] = hyp_timer::now();
   seed_boot(slot);
   g_budget.refill(vm); // cold start — fresh warm-reset budget
   g_vcpus[slot].state = sched::State::kReady;
@@ -410,6 +422,7 @@ void reset_vm(std::size_t vm, TrapContext* live) noexcept {
 
   mmu::reload_guest_image(vm);
   vgic::vm_reset(vm); // SPI banks are VM-global — per-vCPU cpu_reset misses them
+  g_cntvoff[vm] = hyp_timer::now();
   seed_boot(slot);
   soft_timer::cancel(soft_timer::kSlotWatchdog + vm); // the reboot re-opts in with its next heartbeat
 
@@ -422,6 +435,7 @@ void reset_vm(std::size_t vm, TrapContext* live) noexcept {
     arch::write_el1_bank(v.el1);
     vgic::cpu_restore(slot);
     arch::write_vmpidr(vcpu_of(slot));
+    hyp_timer::write_cntvoff(g_cntvoff[vm]);
     arch::set_fp_trap(me().fp.trap_needed(slot));
     v.state = sched::State::kRunning;
   } else {
