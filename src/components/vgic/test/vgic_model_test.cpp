@@ -34,9 +34,9 @@ TEST(VgicDist, CtlrRoundTrips) {
   EXPECT_EQ(r.value, 0x12U);
 }
 
-TEST(VgicDist, TyperAdvertisesNoSpis) {
+TEST(VgicDist, TyperAdvertisesOneSpiWord) {
   const DistState d{};
-  EXPECT_EQ(dist_read(d, kGicdTyper, 4).value, 0U);
+  EXPECT_EQ(dist_read(d, kGicdTyper, 4).value, 1U); // ITLinesNumber=1: INTIDs 0..63
 }
 
 TEST(VgicDist, Pidr2IsGicV3) {
@@ -47,7 +47,60 @@ TEST(VgicDist, Pidr2IsGicV3) {
 TEST(VgicDist, UnknownOffsetReported) {
   DistState d{};
   EXPECT_FALSE(dist_read(d, 0x0080, 4).known); // GICD_IGROUPR0: RES0 under ARE
-  EXPECT_FALSE(dist_write(d, 0x0100, 4, ~0U));
+  EXPECT_FALSE(dist_write(d, 0x0100, 4, ~0U)); // GICD_ISENABLER0: redistributor's job
+}
+
+TEST(VgicDist, SpiEnableSetAndClearAreOneSided) {
+  DistState d{};
+  EXPECT_TRUE(dist_write(d, kGicdIsenabler1, 4, 1U << 1U)); // INTID 33
+  EXPECT_EQ(dist_read(d, kGicdIsenabler1, 4).value, 1U << 1U);
+
+  // Writing zeros through ISENABLER must not clear anything.
+  EXPECT_TRUE(dist_write(d, kGicdIsenabler1, 4, 0));
+  EXPECT_EQ(d.spi_enabled, 1U << 1U);
+
+  EXPECT_TRUE(dist_write(d, kGicdIcenabler1, 4, 1U << 1U));
+  EXPECT_EQ(d.spi_enabled, 0U);
+}
+
+TEST(VgicDist, SpiPendingSetAndClear) {
+  DistState d{};
+  EXPECT_TRUE(dist_write(d, kGicdIspendr1, 4, 1U << 3U));
+  EXPECT_EQ(d.spi_pending, 1U << 3U);
+  EXPECT_EQ(dist_read(d, kGicdIcpendr1, 4).value, 1U << 3U);
+  EXPECT_TRUE(dist_write(d, kGicdIcpendr1, 4, 1U << 3U));
+  EXPECT_EQ(d.spi_pending, 0U);
+}
+
+TEST(VgicDist, SpiPriorityByteAndWordAccess) {
+  DistState d{};
+  // Word write covering INTIDs 32..35 (offset 0x420).
+  EXPECT_TRUE(dist_write(d, kGicdIpriorityrSpi, 4, 0xA0'80'40'20U));
+  EXPECT_EQ(d.spi_prio[0], 0x20U);
+  EXPECT_EQ(d.spi_prio[3], 0xA0U);
+
+  // Single-byte access to INTID 33.
+  EXPECT_TRUE(dist_write(d, kGicdIpriorityrSpi + 1, 1, 0x60));
+  EXPECT_EQ(dist_read(d, kGicdIpriorityrSpi + 1, 1).value, 0x60U);
+}
+
+TEST(VgicDist, IrouterKeepsAff0AndRoutesDelivery) {
+  DistState d{};
+  // IROUTER(33) = 0x6108: Aff0 stored, IRM/upper affinities dropped.
+  const std::uint64_t off = kGicdIrouterSpi + 8U * (33U - kNumPrivate);
+  EXPECT_TRUE(dist_write(d, off, 8, (1ULL << 31U) | 0x01U));
+  EXPECT_EQ(dist_read(d, off, 8).value, 1U);
+  EXPECT_EQ(dist_read(d, off + 4, 4).value, 0U); // high word RES0
+
+  EXPECT_EQ(spi_target(d, 33, /*vcpus=*/2), 1U);
+  EXPECT_EQ(spi_target(d, 33, /*vcpus=*/1), 0U); // clamp to the VM's width
+  EXPECT_EQ(spi_target(d, 32, 2), 0U);           // reset route
+}
+
+TEST(VgicDist, SpiIcfgrAcceptedAndIgnored) {
+  DistState d{};
+  EXPECT_TRUE(dist_write(d, kGicdIcfgr2, 4, ~0U));
+  EXPECT_EQ(dist_read(d, kGicdIcfgr2, 4).value, 0U);
 }
 
 // ---------------------------------------------------------------------------

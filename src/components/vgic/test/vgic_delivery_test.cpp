@@ -81,6 +81,60 @@ TEST(VgicRefill, LrExhaustionRequestsMaintenance) {
   EXPECT_EQ(c.redist.pending, 0x30U); // INTIDs 4 and 5 still queued
 }
 
+TEST(VgicSpiRefill, DeliversRoutedEnabledSpi) {
+  CpuState  c{};
+  DistState d{};
+  d.spi_enabled = 1U << 1U; // INTID 33
+  d.spi_pending = 1U << 1U;
+  d.spi_prio[1] = 0x40;
+
+  EXPECT_FALSE(refill(c, kLrs, &d, /*vcpu=*/0, /*vcpus=*/2));
+  EXPECT_EQ(d.spi_pending, 0U);
+  EXPECT_EQ(lr_vintid(c.lr[0]), 33U);
+  EXPECT_EQ((c.lr[0] >> kLrPriorityShift) & 0xFFU, 0x40U);
+}
+
+TEST(VgicSpiRefill, RouteGatesTheTakingVcpu) {
+  CpuState  c{};
+  DistState d{};
+  d.spi_enabled  = 1U << 1U;
+  d.spi_pending  = 1U << 1U;
+  d.spi_route[1] = 1; // IROUTER(33) → vCPU 1
+
+  // vCPU 0 must not take it — and must not spin maintenance on it.
+  EXPECT_FALSE(refill(c, kLrs, &d, 0, 2));
+  EXPECT_EQ(d.spi_pending, 1U << 1U);
+  EXPECT_FALSE(lr_in_flight(c.lr[0]));
+
+  EXPECT_FALSE(refill(c, kLrs, &d, 1, 2));
+  EXPECT_EQ(lr_vintid(c.lr[0]), 33U);
+}
+
+TEST(VgicSpiRefill, DisabledSpiStaysPending) {
+  CpuState  c{};
+  DistState d{};
+  d.spi_pending = 1U << 1U;
+
+  EXPECT_FALSE(refill(c, kLrs, &d, 0, 1));
+  EXPECT_EQ(d.spi_pending, 1U << 1U);
+  EXPECT_FALSE(lr_in_flight(c.lr[0]));
+}
+
+TEST(VgicSpiRefill, PrioritiesInterleaveWithPrivate) {
+  CpuState  c{};
+  DistState d{};
+  c.redist.isenabler0 = ~0U;
+  c.redist.prio[27]   = 0x80;
+  c.redist.pending    = 1U << 27U;
+  d.spi_enabled       = 1U << 1U;
+  d.spi_pending       = 1U << 1U;
+  d.spi_prio[1]       = 0x20; // SPI 33 outranks PPI 27
+
+  EXPECT_FALSE(refill(c, kLrs, &d, 0, 1));
+  EXPECT_EQ(lr_vintid(c.lr[0]), 33U);
+  EXPECT_EQ(lr_vintid(c.lr[1]), 27U);
+}
+
 TEST(VgicMakeLr, FieldEncoding) {
   const std::uint64_t lr = make_lr(27, 0x80);
   EXPECT_EQ(lr & kLrStateMask, kLrStatePending);

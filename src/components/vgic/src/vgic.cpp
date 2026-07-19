@@ -41,14 +41,13 @@ std::array<HwBank, kMaxVcpus>          g_hw;
 std::array<std::size_t, cpu::kMaxCpus> g_resident{}; // init() presets kNoResident
 std::size_t                            g_lr_count = 0;
 
-// One distributor view shared by all VMs. Its state still gates
-// nothing (per-INTID enables live in the per-VCPU redistributor), but
-// two cores' guests can MMIO it concurrently — serialize the RMW. The
-// same lock guards the redistributor register file: a guest may MMIO
-// a sibling vCPU's frame from another core, so every `pending` RMW
-// (MMIO write, post, refill) takes it.
-DistState      g_dist;
-sync::SpinLock g_dist_lock;
+// One distributor view per VM — the SPI banks are VM-global state
+// (enable/pending/route shared by the VM's vCPUs). Two cores' guests
+// can MMIO their views concurrently and an SPI post can race a sibling
+// vCPU's MMIO — one lock serializes every distributor and redistributor
+// register-file RMW (MMIO write, post, refill).
+std::array<DistState, kMaxGuests> g_dist;
+sync::SpinLock                    g_dist_lock;
 
 [[nodiscard]] auto resident_here() noexcept -> std::size_t& {
   return g_resident[cpu::id()];
@@ -71,8 +70,10 @@ void flush(std::size_t index) noexcept {
 
   bool overflow = false;
   {
-    sync::Guard guard{g_dist_lock}; // refill claims `pending` bits — races sibling-frame MMIO
-    overflow = refill(cpu, g_lr_count);
+    sync::Guard       guard{g_dist_lock}; // refill claims `pending` bits — races sibling-frame MMIO
+    const std::size_t vm = vm_of(index);
+    overflow =
+        refill(cpu, g_lr_count, &g_dist[vm], static_cast<std::uint32_t>(vcpu_of(index)), guest_table()[vm].vcpus);
   }
   const std::uint64_t hcr = gic_virt::kIchHcrBase | (overflow ? gic_virt::kIchHcrUie : 0U);
 
@@ -95,18 +96,28 @@ void log_raz_wi(const char* frame, std::uint64_t off) noexcept {
 }
 
 void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
-  sync::Guard guard{g_dist_lock}; // GICD is one shared view — RMW across cores
-  if (call->write) {
-    if (!dist_write(g_dist, off, call->size, call->value)) {
-      log_raz_wi("GICD", off);
+  const std::size_t slot = resident_here();
+  DistState&        dist = g_dist[vm_of(slot)];
+  bool              known;
+  {
+    sync::Guard guard{g_dist_lock}; // SPI banks race post/refill across cores
+    if (call->write) {
+      known = dist_write(dist, off, call->size, call->value);
+    } else {
+      const MmioRead r = dist_read(dist, off, call->size);
+      known            = r.known;
+      call->value      = r.value;
     }
+  }
+  if (!known) {
+    log_raz_wi("GICD", off);
     return;
   }
-  const MmioRead r = dist_read(g_dist, off, call->size);
-  if (!r.known) {
-    log_raz_wi("GICD", off);
+  // Enable/route/pending writes may unlock queued SPIs for this vCPU;
+  // a sibling routed elsewhere picks them up on its own next flush.
+  if (call->write) {
+    flush(slot);
   }
-  call->value = r.value;
 }
 
 // A GICR access selects a frame by stride; the frame is the vCPU index
@@ -202,15 +213,31 @@ void cpu_restore(std::size_t index) noexcept {
 }
 
 auto post(std::size_t index, std::uint32_t vintid) noexcept -> bool {
-  if (vintid >= kNumPrivate) {
-    return false; // SPIs are not modeled (GICD_TYPER advertises none)
+  if (vintid >= kMaxIntid) {
+    return false; // beyond the advertised INTID range
   }
   {
     sync::Guard guard{g_dist_lock}; // pending RMW races sibling-frame MMIO
-    g_cpu[index].redist.pending |= 1U << vintid;
+    if (vintid < kNumPrivate) {
+      g_cpu[index].redist.pending |= 1U << vintid;
+    } else {
+      g_dist[vm_of(index)].spi_pending |= 1U << (vintid - kNumPrivate);
+    }
   }
   flush(index);
   return true;
+}
+
+auto spi_target_vcpu(std::size_t vm, std::uint32_t intid) noexcept -> std::size_t {
+  // Benign lock-free read: the route byte is written under g_dist_lock,
+  // but a torn read is impossible and a stale route only delays the
+  // interrupt until the routed vCPU's next flush.
+  return spi_target(g_dist[vm], intid, guest_table()[vm].vcpus);
+}
+
+void vm_reset(std::size_t vm) noexcept {
+  sync::Guard guard{g_dist_lock};
+  g_dist[vm] = DistState{};
 }
 
 auto has_deliverable(std::size_t index) noexcept -> bool {
@@ -224,7 +251,9 @@ auto has_deliverable(std::size_t index) noexcept -> bool {
       cpu.lr[i] = gic_virt::read_lr(i);
     }
   }
-  if (deliverable(cpu.redist) != 0U) {
+  const std::size_t vm = vm_of(index);
+  if (deliverable(cpu.redist) != 0U ||
+      spi_deliverable(g_dist[vm], static_cast<std::uint32_t>(vcpu_of(index)), guest_table()[vm].vcpus) != 0U) {
     return true;
   }
   for (std::size_t i = 0; i < g_lr_count; ++i) {

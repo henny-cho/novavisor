@@ -32,6 +32,17 @@
 #define NOVA_GICD_IIDR  0x0008
 #define NOVA_GICD_PIDR2 0xFFE8
 
+/* Distributor SPI banks, word 1 (INTIDs 32..63). Word 0 is the
+ * redistributor's job under affinity routing. */
+#define NOVA_GICD_IGROUPR1   0x0084
+#define NOVA_GICD_ISENABLER1 0x0104
+#define NOVA_GICD_ICENABLER1 0x0184
+#define NOVA_GICD_ISPENDR1   0x0204
+#define NOVA_GICD_ICPENDR1   0x0284
+#define NOVA_GICD_IPRIORITYR 0x0400 /* byte-indexed by INTID */
+#define NOVA_GICD_ICFGR2     0x0C08
+#define NOVA_GICD_IROUTER    0x6000 /* 64-bit, +8 per INTID */
+
 /* GICD_CTLR bits (affinity-routing view). */
 #define NOVA_GICD_CTLR_ENABLE_GRP1 (1U << 1)
 #define NOVA_GICD_CTLR_ARE         (1U << 4)

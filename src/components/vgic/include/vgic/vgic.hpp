@@ -46,9 +46,20 @@ void cpu_reset(std::size_t index) noexcept;
 void cpu_save(std::size_t index) noexcept;
 void cpu_restore(std::size_t index) noexcept;
 
-// Mark a private INTID pending for a VCPU and deliver what fits into
-// its list registers. False for a non-private INTID.
+// Mark an INTID pending for a VCPU and deliver what fits into its
+// list registers. A private INTID lands in the slot's redistributor;
+// an SPI lands in its VM's distributor bank (route the slot with
+// spi_target_vcpu first). False beyond the advertised INTID range.
 [[nodiscard]] auto post(std::size_t index, std::uint32_t vintid) noexcept -> bool;
+
+// The vCPU index an SPI is routed to inside `vm` (GICD_IROUTER Aff0,
+// out-of-range routes fall back to vCPU 0). Injectors combine it with
+// slot_of(vm, ...) to pick the post target.
+[[nodiscard]] auto spi_target_vcpu(std::size_t vm, std::uint32_t intid) noexcept -> std::size_t;
+
+// Reset a VM's distributor bank (SPI state) to boot values — the VM
+// warm-reset path pairs this with per-vCPU cpu_reset.
+void vm_reset(std::size_t vm) noexcept;
 
 // True when the VCPU has a virtual interrupt that would be signaled to
 // it: software-pending and enabled, or already pending in an LR shadow.

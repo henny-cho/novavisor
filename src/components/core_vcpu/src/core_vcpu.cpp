@@ -351,6 +351,7 @@ auto start_vm(std::size_t vm) noexcept -> bool {
   if (vm >= vm_of(g_count) || affinity(slot) != cpu::id() || g_vcpus[slot].state != sched::State::kOff) {
     return false; // foreign-affinity starts arrive through the smp cross-call
   }
+  vgic::vm_reset(vm); // SPI banks are VM-global — per-vCPU cpu_reset misses them
   seed_boot(slot);
   g_budget.refill(vm); // cold start — fresh warm-reset budget
   g_vcpus[slot].state = sched::State::kReady;
@@ -408,6 +409,7 @@ void reset_vm(std::size_t vm, TrapContext* live) noexcept {
   }
 
   mmu::reload_guest_image(vm);
+  vgic::vm_reset(vm); // SPI banks are VM-global — per-vCPU cpu_reset misses them
   seed_boot(slot);
   soft_timer::cancel(soft_timer::kSlotWatchdog + vm); // the reboot re-opts in with its next heartbeat
 

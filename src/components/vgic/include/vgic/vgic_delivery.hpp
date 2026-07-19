@@ -59,6 +59,18 @@ struct CpuState {
   return r.pending & r.isenabler0 & r.igroupr0;
 }
 
+// Pending SPIs (bit i = INTID 32+i) this vCPU may take: gated by the
+// per-VM enable/group banks and routed here by IROUTER (spi_target's
+// clamp keeps out-of-range routes on vCPU 0).
+[[nodiscard]] inline auto spi_deliverable(const DistState& d, std::uint32_t vcpu, std::size_t vcpus) noexcept
+    -> std::uint32_t {
+  std::uint32_t routed = 0;
+  for (std::uint32_t i = 0; i < kNumSpis; ++i) {
+    routed |= (spi_target(d, kNumPrivate + i, vcpus) == vcpu ? 1U : 0U) << i;
+  }
+  return d.spi_pending & d.spi_enabled & d.spi_group & routed;
+}
+
 [[nodiscard]] inline auto lr_holds(const CpuState& c, std::size_t lr_count, std::uint32_t vintid) noexcept -> bool {
   for (std::size_t i = 0; i < lr_count; ++i) {
     if (lr_in_flight(c.lr[i]) && lr_vintid(c.lr[i]) == vintid) {
@@ -71,24 +83,31 @@ struct CpuState {
 // Move deliverable pending INTIDs into free list registers, highest
 // priority (lowest value, then lowest INTID) first. An INTID already in
 // flight in an LR stays pending — the queued edge is injected once the
-// guest consumes the current one. Returns true when deliverable work
-// remains undelivered (the caller arms the underflow maintenance IRQ).
-inline auto refill(CpuState& c, std::size_t lr_count) noexcept -> bool {
+// guest consumes the current one. With a distributor bank, the vCPU's
+// routed SPI set joins the private candidates. Returns true when
+// deliverable work remains undelivered (the caller arms the underflow
+// maintenance IRQ).
+inline auto refill(CpuState& c, std::size_t lr_count, DistState* dist = nullptr, std::uint32_t vcpu = 0,
+                   std::size_t vcpus = 1) noexcept -> bool {
   constexpr std::uint32_t kPriorityLimit = 0x100; // above every 8-bit priority
   for (;;) {
-    std::uint32_t       best      = kNumPrivate;
+    std::uint32_t       best      = kMaxIntid;
     std::uint32_t       best_prio = kPriorityLimit;
-    const std::uint32_t cand      = deliverable(c.redist);
-    for (std::uint32_t id = 0; id < kNumPrivate; ++id) {
-      if (((cand >> id) & 1U) == 0U || lr_holds(c, lr_count, id)) {
+    const std::uint32_t priv      = deliverable(c.redist);
+    const std::uint32_t spis      = dist != nullptr ? spi_deliverable(*dist, vcpu, vcpus) : 0U;
+    for (std::uint32_t id = 0; id < kMaxIntid; ++id) {
+      const bool spi  = id >= kNumPrivate;
+      const bool cand = ((spi ? spis >> (id - kNumPrivate) : priv >> id) & 1U) != 0U;
+      if (!cand || lr_holds(c, lr_count, id)) {
         continue;
       }
-      if (c.redist.prio[id] < best_prio) {
+      const std::uint8_t prio = spi ? dist->spi_prio[id - kNumPrivate] : c.redist.prio[id];
+      if (prio < best_prio) {
         best      = id;
-        best_prio = c.redist.prio[id];
+        best_prio = prio;
       }
     }
-    if (best == kNumPrivate) {
+    if (best == kMaxIntid) {
       break; // nothing left that is not already in flight
     }
 
@@ -102,10 +121,15 @@ inline auto refill(CpuState& c, std::size_t lr_count) noexcept -> bool {
     if (slot == lr_count) {
       return true; // all LRs busy — maintenance IRQ refills later
     }
-    c.lr[slot] = make_lr(best, c.redist.prio[best]);
-    c.redist.pending &= ~(1U << best);
+    c.lr[slot] = make_lr(best, static_cast<std::uint8_t>(best_prio));
+    if (best < kNumPrivate) {
+      c.redist.pending &= ~(1U << best);
+    } else {
+      dist->spi_pending &= ~(1U << (best - kNumPrivate));
+    }
   }
-  return deliverable(c.redist) != 0U; // only in-flight duplicates remain
+  // Only in-flight duplicates remain when nothing above claimed a slot.
+  return deliverable(c.redist) != 0U || (dist != nullptr && spi_deliverable(*dist, vcpu, vcpus) != 0U);
 }
 
 } // namespace nova::vgic
