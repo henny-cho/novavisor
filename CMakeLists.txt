@@ -117,6 +117,7 @@ if(CMAKE_CROSSCOMPILING)
         nova_panic
         trap_handler
         boot_msg
+        dtb_parser
         core_mmu
         core_gic
         vgic
@@ -173,5 +174,6 @@ else()
     nova_add_component_test(psci psci_model_test)            # SMCCC range dispatch
     nova_add_component_test(ivc ring_test)                   # SPSC ring protocol (threads)
     nova_add_component_test(vuart vuart_model_test)          # PL011 register model
+    nova_add_component_test(dtb_parser fdt_model_test)       # FDT walker + guest extraction
 
 endif() # CMAKE_CROSSCOMPILING
