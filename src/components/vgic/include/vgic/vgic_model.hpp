@@ -84,8 +84,11 @@ inline constexpr std::uint64_t kGicrIcfgr1       = NOVA_GICR_ICFGR1;
 inline constexpr std::uint64_t kGicrIgrpmodr0    = NOVA_GICR_IGRPMODR0;
 
 // Read-only identification values (emulation policy, not architecture).
-inline constexpr std::uint32_t kGicdCtlrDs     = NOVA_GICD_CTLR_DS;
-inline constexpr std::uint32_t kGicdTyperValue = 1;          // ITLinesNumber=1: INTIDs 0..63
+inline constexpr std::uint32_t kGicdCtlrDs = NOVA_GICD_CTLR_DS;
+// ITLinesNumber=1 (INTIDs 0..63 implemented) with IDbits advertising
+// the architectural 10-bit INTID space so drivers computing the ID
+// range (e.g. Linux gic-v3) see the 1020..1023 specials as encodable.
+inline constexpr std::uint32_t kGicdTyperValue = (9U << 19U) | 1U;
 inline constexpr std::uint32_t kGicrTyperLast  = 1U << 4U;   // highest frame of the VM
 inline constexpr std::uint32_t kGicIidrValue   = 0x43B;      // implementer: Arm
 inline constexpr std::uint32_t kPidr2GicV3     = 0x3U << 4U; // ArchRev = GICv3

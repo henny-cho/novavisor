@@ -38,9 +38,12 @@ TEST(VgicDist, CtlrRoundTripsWithDsAlwaysSet) {
   EXPECT_EQ(dist_read(d, kGicdCtlr, 4).value, kGicdCtlrDs);
 }
 
-TEST(VgicDist, TyperAdvertisesOneSpiWord) {
-  const DistState d{};
-  EXPECT_EQ(dist_read(d, kGicdTyper, 4).value, 1U); // ITLinesNumber=1: INTIDs 0..63
+TEST(VgicDist, TyperAdvertisesOneSpiWordAndTenIdBits) {
+  const DistState     d{};
+  const std::uint64_t typer = dist_read(d, kGicdTyper, 4).value;
+  EXPECT_EQ(typer & 0x1FU, 1U);          // ITLinesNumber=1: INTIDs 0..63
+  EXPECT_EQ((typer >> 19U) & 0x1FU, 9U); // IDbits: 10-bit INTID space (specials encodable)
+  EXPECT_EQ(typer & (1U << 17U), 0U);    // LPIS off: no ITS/LPI probing
 }
 
 TEST(VgicDist, Pidr2IsGicV3) {
