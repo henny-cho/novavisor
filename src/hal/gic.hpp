@@ -41,6 +41,13 @@ inline void enable_ppi(std::uint32_t intid) noexcept {
   board::qemu_virt::gicv3::enable_ppi(intid);
 }
 
+// Route a shared peripheral interrupt (SPI, INTID 32..63) to one core
+// and enable it at the distributor. Bring-up only — GICD state is
+// system-wide and the driver does not serialize.
+inline void enable_spi(std::uint32_t intid, std::size_t target_cpu) noexcept {
+  board::qemu_virt::gicv3::enable_spi(intid, static_cast<std::uint32_t>(target_cpu));
+}
+
 // Send an SGI to another core (EL2 cross-call IPI).
 inline void send_sgi(std::size_t target_cpu, std::uint32_t intid) noexcept {
   arch::gicv3::send_sgi(target_cpu, intid);
