@@ -1,7 +1,7 @@
 name: "13_linux"
 description: "Upstream Linux (trimmed arm64 defconfig, embedded BusyBox initramfs) boots to a shell — the general-purpose-OS check of the emulation surface."
 phase: 17
-enabled: false
+enabled: true
 timeout_seconds: 600
 
 config: "configs/linux.yml"
