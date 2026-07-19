@@ -11,6 +11,7 @@
 #include "hal/cpu.hpp"
 #include "hal/timer.hpp"
 #include "nova/abi/hvc_abi.h"
+#include "nova/arch/data_abort.hpp" // esr::kSrtZeroReg
 #include "nova/arch/trap_context.hpp"
 #include "soft_timer/soft_timer.hpp"
 
@@ -57,6 +58,20 @@ void core_timer_component::handle_hvc(HvcCall* call) noexcept {
   soft_timer::arm(soft_timer::kSlotLegacyTimer, hyp_timer::now() + call->ctx->x[1], &on_timer_set_expiry,
                   static_cast<std::uint64_t>(slot.owner));
   call->ctx->x[0] = 0; // SMCCC success
+}
+
+void core_timer_component::handle_sysreg(SysregCall* call) noexcept {
+  if (!esr::is_cntp_el1_timer(call->sysreg)) {
+    return; // not ours — leave unclaimed for other subscribers
+  }
+  call->handled = true;
+
+  // The EL1 physical timer bank is RAZ/WI: guests keep time through
+  // CNTV only, but OS init code commonly parks CNTP defensively (e.g.
+  // CVAL = ~0) before choosing a timer — swallow instead of halting.
+  if (!call->sysreg.write && call->sysreg.rt != esr::kSrtZeroReg) {
+    call->ctx->x[call->sysreg.rt] = 0;
+  }
 }
 
 void core_timer_component::handle_irq(IrqCall* call) noexcept {

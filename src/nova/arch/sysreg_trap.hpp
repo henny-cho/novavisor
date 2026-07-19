@@ -61,4 +61,11 @@ struct SysregTrap {
   return s.op0 == 3 && s.op1 == 0 && s.crn == 12 && s.crm == 11 && s.op2 == 5;
 }
 
+// CNTP_TVAL/CTL/CVAL_EL0 = S3_3_C14_C2_{0,1,2} — the EL1 physical
+// timer bank (trapped by CNTHCTL_EL2.EL1PCEN = 0). The whole crm
+// group is the bank: op2 3..7 are unallocated and undef at EL1.
+[[nodiscard]] constexpr auto is_cntp_el1_timer(const SysregTrap& s) noexcept -> bool {
+  return s.op0 == 3 && s.op1 == 3 && s.crn == 14 && s.crm == 2;
+}
+
 } // namespace nova::esr

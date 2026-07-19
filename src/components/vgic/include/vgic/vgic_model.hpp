@@ -57,6 +57,8 @@ inline constexpr std::uint64_t kGicdIcpendr1      = NOVA_GICD_ICPENDR1;
 inline constexpr std::uint64_t kGicdIpriorityrSpi = NOVA_GICD_IPRIORITYR + kNumPrivate;
 inline constexpr std::uint64_t kGicdIpriorityrEnd = NOVA_GICD_IPRIORITYR + kMaxIntid;
 inline constexpr std::uint64_t kGicdIcfgr2        = NOVA_GICD_ICFGR2;
+inline constexpr std::uint64_t kGicdIcfgr3        = NOVA_GICD_ICFGR3;
+inline constexpr std::uint64_t kGicdIgrpmodr1     = NOVA_GICD_IGRPMODR1;
 inline constexpr std::uint64_t kGicdIrouterSpi    = NOVA_GICD_IROUTER + 8ULL * kNumPrivate;
 inline constexpr std::uint64_t kGicdIrouterEnd    = NOVA_GICD_IROUTER + 8ULL * kMaxIntid;
 
@@ -79,8 +81,10 @@ inline constexpr std::uint64_t kGicrIpriorityr   = NOVA_GICR_IPRIORITYR; // 32 b
 inline constexpr std::uint64_t kGicrIpriorityEnd = kGicrIpriorityr + kNumPrivate;
 inline constexpr std::uint64_t kGicrIcfgr0       = NOVA_GICR_ICFGR0;
 inline constexpr std::uint64_t kGicrIcfgr1       = NOVA_GICR_ICFGR1;
+inline constexpr std::uint64_t kGicrIgrpmodr0    = NOVA_GICR_IGRPMODR0;
 
 // Read-only identification values (emulation policy, not architecture).
+inline constexpr std::uint32_t kGicdCtlrDs     = NOVA_GICD_CTLR_DS;
 inline constexpr std::uint32_t kGicdTyperValue = 1;          // ITLinesNumber=1: INTIDs 0..63
 inline constexpr std::uint32_t kGicrTyperLast  = 1U << 4U;   // highest frame of the VM
 inline constexpr std::uint32_t kGicIidrValue   = 0x43B;      // implementer: Arm
@@ -217,7 +221,9 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
   }
   switch (off) {
   case kGicdCtlr:
-    return {.known = true, .value = d.ctlr};
+    // DS is RO-set: one security state is all there is, and guest GIC
+    // drivers pick their register view (and may refuse to boot) by it.
+    return {.known = true, .value = d.ctlr | kGicdCtlrDs};
   case kGicdTyper:
     return {.known = true, .value = kGicdTyperValue};
   case kGicdIidr:
@@ -233,6 +239,8 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
   case kGicdIcpendr1:
     return {.known = true, .value = d.spi_pending};
   case kGicdIcfgr2:
+  case kGicdIcfgr3:
+  case kGicdIgrpmodr1: // RAZ/WI with DS = 1 (no group modifier)
     return {.known = true, .value = 0};
   default:
     return {};
@@ -272,7 +280,10 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
     d.spi_pending &= ~word;
     return true;
   case kGicdIcfgr2:
+  case kGicdIcfgr3:
     return true; // accepted, ignored (level assumed)
+  case kGicdIgrpmodr1:
+    return true; // RAZ/WI with DS = 1 (no group modifier)
   default:
     return false;
   }
@@ -308,6 +319,7 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
     return {.known = true, .value = r.pending};
   case kGicrIcfgr0:
   case kGicrIcfgr1:
+  case kGicrIgrpmodr0: // RAZ/WI with DS = 1 (no group modifier)
     return {.known = true, .value = 0};
   default:
     return {};
@@ -345,6 +357,8 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
   case kGicrIcfgr0:
   case kGicrIcfgr1:
     return true; // accepted, ignored
+  case kGicrIgrpmodr0:
+    return true; // RAZ/WI with DS = 1 (no group modifier)
   default:
     return false;
   }

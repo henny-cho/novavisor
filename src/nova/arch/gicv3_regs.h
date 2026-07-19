@@ -41,11 +41,14 @@
 #define NOVA_GICD_ICPENDR1   0x0284
 #define NOVA_GICD_IPRIORITYR 0x0400 /* byte-indexed by INTID */
 #define NOVA_GICD_ICFGR2     0x0C08
+#define NOVA_GICD_ICFGR3     0x0C0C
+#define NOVA_GICD_IGRPMODR1  0x0D04
 #define NOVA_GICD_IROUTER    0x6000 /* 64-bit, +8 per INTID */
 
 /* GICD_CTLR bits (affinity-routing view). */
 #define NOVA_GICD_CTLR_ENABLE_GRP1 (1U << 1)
 #define NOVA_GICD_CTLR_ARE         (1U << 4)
+#define NOVA_GICD_CTLR_DS          (1U << 6)
 
 /* Redistributor RD_base frame (GICR_BASE + offset). */
 #define NOVA_GICR_CTLR     0x0000
@@ -72,6 +75,7 @@
 #define NOVA_GICR_IPRIORITYR (NOVA_GICR_SGI_FRAME + 0x0400)
 #define NOVA_GICR_ICFGR0     (NOVA_GICR_SGI_FRAME + 0x0C00)
 #define NOVA_GICR_ICFGR1     (NOVA_GICR_SGI_FRAME + 0x0C04)
+#define NOVA_GICR_IGRPMODR0  (NOVA_GICR_SGI_FRAME + 0x0D00)
 
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 

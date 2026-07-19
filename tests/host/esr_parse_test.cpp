@@ -174,3 +174,18 @@ TEST(ParseSysregTrap, RtThirtyOneIsZeroRegister) {
   const auto s = nova::esr::parse_sysreg_trap(sysreg_iss(3, 0, 12, 11, 5, 31, false));
   EXPECT_EQ(s.rt, 31U);
 }
+
+TEST(ParseSysregTrap, MatchesCntpEl1TimerBank) {
+  // CNTP_TVAL/CTL/CVAL_EL0 = S3_3_C14_C2_{0,1,2}, reads and writes alike.
+  for (std::uint64_t op2 = 0; op2 <= 2; ++op2) {
+    EXPECT_TRUE(nova::esr::is_cntp_el1_timer(nova::esr::parse_sysreg_trap(sysreg_iss(3, 3, 14, 2, op2, 1, false))));
+    EXPECT_TRUE(nova::esr::is_cntp_el1_timer(nova::esr::parse_sysreg_trap(sysreg_iss(3, 3, 14, 2, op2, 1, true))));
+  }
+}
+
+TEST(ParseSysregTrap, CntvAndCounterRegistersAreNotCntp) {
+  // CNTV_CTL_EL0 (S3_3_C14_C3_1) is the guest's live timer — never claimed.
+  EXPECT_FALSE(nova::esr::is_cntp_el1_timer(nova::esr::parse_sysreg_trap(sysreg_iss(3, 3, 14, 3, 1, 1, false))));
+  // CNTPCT_EL0 (S3_3_C14_C0_1) is the counter, not the timer bank.
+  EXPECT_FALSE(nova::esr::is_cntp_el1_timer(nova::esr::parse_sysreg_trap(sysreg_iss(3, 3, 14, 0, 1, 1, true))));
+}

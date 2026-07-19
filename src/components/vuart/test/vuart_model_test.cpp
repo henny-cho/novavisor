@@ -74,12 +74,12 @@ TEST(VuartReg, ImscRoundTripsMasked) {
 
 TEST(VuartReg, ConfigRegistersAreQuietlyIgnored) {
   UartState u{};
-  for (const auto off : {kUartRsr, kUartIbrd, kUartFbrd, kUartLcrH, kUartCr, kUartIfls, kUartIcr}) {
+  for (const auto off : {kUartRsr, kUartIbrd, kUartFbrd, kUartLcrH, kUartCr, kUartIfls, kUartDmacr, kUartIcr}) {
     EXPECT_TRUE(reg_write(u, off, ~0ULL).known);
+    EXPECT_EQ(reg_read(u, off).value, 0U);
   }
-  EXPECT_EQ(reg_read(u, kUartCr).value, 0U);
-  EXPECT_FALSE(reg_read(u, 0x048).known); // DMACR: outside the modeled set
-  EXPECT_FALSE(reg_write(u, 0x048, 1).known);
+  EXPECT_FALSE(reg_read(u, 0x04C).known); // past DMACR: outside the modeled set
+  EXPECT_FALSE(reg_write(u, 0x04C, 1).known);
 }
 
 TEST(VuartReg, IdentificationBlockMatchesPl011) {

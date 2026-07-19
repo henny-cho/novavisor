@@ -22,6 +22,7 @@
 #include "hal/gic.hpp"
 #include "hal/timer.hpp"
 #include "trap_handler/hvc.hpp"
+#include "trap_handler/sysreg.hpp"
 
 #include <cib/top.hpp>
 #include <flow/flow.hpp>
@@ -31,6 +32,7 @@ namespace nova {
 struct core_timer_component {
   static void handle_hvc(HvcCall* call) noexcept;
   static void handle_irq(IrqCall* call) noexcept;
+  static void handle_sysreg(SysregCall* call) noexcept;
 
   constexpr static auto INIT = flow::action<"core_timer_init">([]() noexcept {
     hyp_timer::init();
@@ -44,7 +46,8 @@ struct core_timer_component {
   // as template arguments.)
   constexpr static auto config =
       cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<HvcService>(&core_timer_component::handle_hvc),
-                  cib::extend<IrqService>(&core_timer_component::handle_irq));
+                  cib::extend<IrqService>(&core_timer_component::handle_irq),
+                  cib::extend<SysregService>(&core_timer_component::handle_sysreg));
 };
 
 } // namespace nova

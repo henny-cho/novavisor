@@ -24,19 +24,20 @@ namespace nova::vuart {
 inline constexpr std::uint64_t kUartFrameSize = 0x1000;
 
 // Register offsets (DDI 0183 §3.2).
-inline constexpr std::uint64_t kUartDr   = 0x000;
-inline constexpr std::uint64_t kUartRsr  = 0x004;
-inline constexpr std::uint64_t kUartFr   = 0x018;
-inline constexpr std::uint64_t kUartIbrd = 0x024;
-inline constexpr std::uint64_t kUartFbrd = 0x028;
-inline constexpr std::uint64_t kUartLcrH = 0x02C;
-inline constexpr std::uint64_t kUartCr   = 0x030;
-inline constexpr std::uint64_t kUartIfls = 0x034;
-inline constexpr std::uint64_t kUartImsc = 0x038;
-inline constexpr std::uint64_t kUartRis  = 0x03C;
-inline constexpr std::uint64_t kUartMis  = 0x040;
-inline constexpr std::uint64_t kUartIcr  = 0x044;
-inline constexpr std::uint64_t kUartIds  = 0xFE0; // PeriphID0..CellID3, 4 bytes apart
+inline constexpr std::uint64_t kUartDr    = 0x000;
+inline constexpr std::uint64_t kUartRsr   = 0x004;
+inline constexpr std::uint64_t kUartFr    = 0x018;
+inline constexpr std::uint64_t kUartIbrd  = 0x024;
+inline constexpr std::uint64_t kUartFbrd  = 0x028;
+inline constexpr std::uint64_t kUartLcrH  = 0x02C;
+inline constexpr std::uint64_t kUartCr    = 0x030;
+inline constexpr std::uint64_t kUartIfls  = 0x034;
+inline constexpr std::uint64_t kUartImsc  = 0x038;
+inline constexpr std::uint64_t kUartRis   = 0x03C;
+inline constexpr std::uint64_t kUartMis   = 0x040;
+inline constexpr std::uint64_t kUartIcr   = 0x044;
+inline constexpr std::uint64_t kUartDmacr = 0x048;
+inline constexpr std::uint64_t kUartIds   = 0xFE0; // PeriphID0..CellID3, 4 bytes apart
 
 // FR bits.
 inline constexpr std::uint32_t kFrRxfe = 1U << 4U;
@@ -126,7 +127,8 @@ inline constexpr std::array<std::uint8_t, 8> kUartIdValues{0x11, 0x10, 0x14, 0x0
   case kUartLcrH:
   case kUartCr:
   case kUartIfls:
-    return {.known = true, .value = 0}; // line/flow config is cosmetic here
+  case kUartDmacr:
+    return {.known = true, .value = 0}; // line/flow/DMA config is cosmetic here
   default:
     return {};
   }
@@ -145,7 +147,8 @@ inline constexpr std::array<std::uint8_t, 8> kUartIdValues{0x11, 0x10, 0x14, 0x0
   case kUartLcrH:
   case kUartCr:
   case kUartIfls:
-  case kUartIcr: // RX is a level from the FIFO — draining DR is the clear
+  case kUartDmacr: // no DMA — accepted, ignored
+  case kUartIcr:   // RX is a level from the FIFO — draining DR is the clear
     return {.known = true};
   default:
     return {};

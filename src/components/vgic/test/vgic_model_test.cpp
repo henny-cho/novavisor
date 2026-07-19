@@ -26,12 +26,16 @@ TEST(VgicReset, SgisEnabledPpisDisabledAllGroup1) {
 // Distributor frame
 // ---------------------------------------------------------------------------
 
-TEST(VgicDist, CtlrRoundTrips) {
+TEST(VgicDist, CtlrRoundTripsWithDsAlwaysSet) {
   DistState d{};
   EXPECT_TRUE(dist_write(d, kGicdCtlr, 4, 0x12));
   const auto r = dist_read(d, kGicdCtlr, 4);
   EXPECT_TRUE(r.known);
-  EXPECT_EQ(r.value, 0x12U);
+  EXPECT_EQ(r.value, 0x12U | kGicdCtlrDs);
+
+  // DS is RO-set: a zero write cannot clear it.
+  EXPECT_TRUE(dist_write(d, kGicdCtlr, 4, 0));
+  EXPECT_EQ(dist_read(d, kGicdCtlr, 4).value, kGicdCtlrDs);
 }
 
 TEST(VgicDist, TyperAdvertisesOneSpiWord) {
@@ -97,10 +101,12 @@ TEST(VgicDist, IrouterKeepsAff0AndRoutesDelivery) {
   EXPECT_EQ(spi_target(d, 32, 2), 0U);           // reset route
 }
 
-TEST(VgicDist, SpiIcfgrAcceptedAndIgnored) {
+TEST(VgicDist, SpiIcfgrAndIgrpmodrAcceptedAndIgnored) {
   DistState d{};
-  EXPECT_TRUE(dist_write(d, kGicdIcfgr2, 4, ~0U));
-  EXPECT_EQ(dist_read(d, kGicdIcfgr2, 4).value, 0U);
+  for (const auto off : {kGicdIcfgr2, kGicdIcfgr3, kGicdIgrpmodr1}) {
+    EXPECT_TRUE(dist_write(d, off, 4, ~0U));
+    EXPECT_EQ(dist_read(d, off, 4).value, 0U);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -173,10 +179,12 @@ TEST(VgicRedist, PriorityByteAndWordAccess) {
   EXPECT_EQ(redist_read(c, kGicrIpriorityr + 27, 1).value, 0x60U);
 }
 
-TEST(VgicRedist, IcfgrAcceptedAndIgnored) {
+TEST(VgicRedist, IcfgrAndIgrpmodrAcceptedAndIgnored) {
   RedistState c{};
-  EXPECT_TRUE(redist_write(c, kGicrIcfgr1, 4, ~0U));
-  EXPECT_EQ(redist_read(c, kGicrIcfgr1, 4).value, 0U);
+  for (const auto off : {kGicrIcfgr1, kGicrIgrpmodr0}) {
+    EXPECT_TRUE(redist_write(c, off, 4, ~0U));
+    EXPECT_EQ(redist_read(c, off, 4).value, 0U);
+  }
 }
 
 TEST(VgicRedist, UnknownOffsetReported) {
