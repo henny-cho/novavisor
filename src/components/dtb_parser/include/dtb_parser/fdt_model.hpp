@@ -11,6 +11,7 @@
 // to build the runtime guest table; the generic node/prop primitives
 // stay available for richer trees later.
 
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <span>
@@ -220,15 +221,22 @@ template <typename Fn>
 // ---------------------------------------------------------------------------
 
 struct GuestInfo {
-  bool          ok       = false;
-  std::uint64_t mem_base = 0;
-  std::uint64_t mem_size = 0;
-  std::uint32_t cpus     = 0;
-  bool          has_uart = false;
+  bool          ok        = false;
+  std::uint64_t mem_base  = 0;
+  std::uint64_t mem_size  = 0;
+  std::uint32_t cpus      = 0;
+  bool          has_uart  = false;
+  bool          autostart = false; // root nova,autostart (presence)
+  // Per-vCPU physical-core assignment from root nova,affinity (one u32
+  // cell per vCPU). Capacity is a parser-local bound; the consumer
+  // clamps against its own vCPU limit. Valid entries: [0, cpus).
+  bool                        has_affinity = false;
+  std::array<std::uint8_t, 8> affinity{};
 };
 
 // /memory reg = <base size> (2/2 cells), vcpu count = /cpus children,
-// uart presence = a root uart@ node.
+// uart presence = a root uart@ node. nova,autostart / nova,affinity
+// are hypervisor-only placement hints (guest kernels ignore them).
 [[nodiscard]] constexpr auto parse_guest(Bytes blob) noexcept -> GuestInfo {
   const View v = make_view(blob);
   if (!v.ok) {
@@ -244,11 +252,19 @@ struct GuestInfo {
     return {};
   }
   GuestInfo info;
-  info.mem_base = prop_u64(reg, 0);
-  info.mem_size = prop_u64(reg, 1);
-  info.cpus     = count_children(v, cpus.off, "cpu");
-  info.has_uart = find_child(v, kRootNode, "uart").ok;
-  info.ok       = info.cpus > 0 && info.mem_size > 0;
+  info.mem_base     = prop_u64(reg, 0);
+  info.mem_size     = prop_u64(reg, 1);
+  info.cpus         = count_children(v, cpus.off, "cpu");
+  info.has_uart     = find_child(v, kRootNode, "uart").ok;
+  info.autostart    = find_prop(v, kRootNode, "nova,autostart").ok;
+  const PropRef aff = find_prop(v, kRootNode, "nova,affinity");
+  if (aff.ok && aff.data.size() == 4ULL * info.cpus && info.cpus <= info.affinity.size()) {
+    info.has_affinity = true;
+    for (std::uint32_t i = 0; i < info.cpus; ++i) {
+      info.affinity[i] = static_cast<std::uint8_t>(prop_u32(aff, i));
+    }
+  }
+  info.ok = info.cpus > 0 && info.mem_size > 0;
   return info;
 }
 

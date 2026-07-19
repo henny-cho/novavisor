@@ -19,6 +19,9 @@ auto large() -> Bytes {
 auto no_uart() -> Bytes {
   return {fixtures::kNoUartDtb, sizeof(fixtures::kNoUartDtb)};
 }
+auto mixed() -> Bytes {
+  return {fixtures::kMixedDtb, sizeof(fixtures::kMixedDtb)};
+}
 
 TEST(FdtView, ValidatesHeaderAndRejectsCorruption) {
   EXPECT_TRUE(make_view(large()).ok);
@@ -73,6 +76,19 @@ TEST(FdtGuest, ParsesLargeConfig) {
   EXPECT_EQ(info.mem_size, 0x00800000U);
   EXPECT_EQ(info.cpus, 2U);
   EXPECT_TRUE(info.has_uart);
+  // No placement hints in this config — index-derived defaults apply.
+  EXPECT_FALSE(info.autostart);
+  EXPECT_FALSE(info.has_affinity);
+}
+
+TEST(FdtGuest, ParsesMixedPlacementHints) {
+  const GuestInfo info = parse_guest(mixed());
+  ASSERT_TRUE(info.ok);
+  EXPECT_EQ(info.mem_size, 0x08000000U);
+  EXPECT_EQ(info.cpus, 1U);
+  EXPECT_TRUE(info.autostart);
+  ASSERT_TRUE(info.has_affinity);
+  EXPECT_EQ(info.affinity[0], 1U);
 }
 
 TEST(FdtGuest, ParsesNoUartConfig) {

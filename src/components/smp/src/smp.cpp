@@ -112,6 +112,18 @@ void start_secondaries() noexcept {
       console::write(" did not come online\n");
     }
   }
+
+  // With every core online, bring up the VMs configured to boot on
+  // their own — unmodified guest OSes never issue HVC_VM_START for
+  // their neighbors. VM 0 already boots via the scheduler init;
+  // foreign-affinity VMs go through the regular cross-call path.
+  for (std::size_t vm = 1; vm < guest_table().size(); ++vm) {
+    if (guest_table()[vm].auto_start && !start_vm(vm)) {
+      console::write("[smp] VM ");
+      console::write_dec64(vm);
+      console::write(" autostart failed\n");
+    }
+  }
 }
 
 auto start_vm(std::size_t vm) noexcept -> bool {

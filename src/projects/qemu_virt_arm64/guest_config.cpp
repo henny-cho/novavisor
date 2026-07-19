@@ -72,19 +72,27 @@ void init_guest_table() noexcept {
       panic_guest_config(i);
     }
     g_table[i] = GuestDescriptor{
-        .ipa_base  = kGuestIpaBase,
-        .ipa_size  = info.mem_size,
-        .load_pa   = load_pa,
-        .entry_pc  = kGuestEntry,
-        .stack_top = guest_dtb_ipa(info.mem_size),
-        .vmid      = static_cast<std::uint16_t>(i + 1),
-        .vcpus     = static_cast<std::uint8_t>(info.cpus),
-        .cpu       = kAffinity[i],
-        .uart      = info.has_uart ? UartKind::kVuart : UartKind::kNone,
-        .dtb       = blob.data(),
-        .dtb_size  = static_cast<std::uint32_t>(blob.size()),
-        .dtb_ipa   = guest_dtb_ipa(info.mem_size),
+        .ipa_base   = kGuestIpaBase,
+        .ipa_size   = info.mem_size,
+        .load_pa    = load_pa,
+        .entry_pc   = kGuestEntry,
+        .stack_top  = guest_dtb_ipa(info.mem_size),
+        .vmid       = static_cast<std::uint16_t>(i + 1),
+        .vcpus      = static_cast<std::uint8_t>(info.cpus),
+        .cpu        = kAffinity[i],
+        .uart       = info.has_uart ? UartKind::kVuart : UartKind::kNone,
+        .auto_start = info.autostart,
+        .dtb        = blob.data(),
+        .dtb_size   = static_cast<std::uint32_t>(blob.size()),
+        .dtb_ipa    = guest_dtb_ipa(info.mem_size),
     };
+    // Config-driven core assignment overrides the index-derived table
+    // (yml2dtb validated the core indices at build time).
+    if (info.has_affinity) {
+      for (std::size_t v = 0; v < info.cpus && v < kMaxVcpusPerVm; ++v) {
+        g_table[i].cpu[v] = info.affinity[v];
+      }
+    }
     load_pa = align_up_pa(load_pa + info.mem_size);
   }
   g_count = count;

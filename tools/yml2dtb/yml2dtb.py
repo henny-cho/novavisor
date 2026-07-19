@@ -28,6 +28,7 @@ import yaml
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_LAYOUT = REPO / "src" / "nova" / "abi" / "guest_layout.h"
 GIC_REGS = REPO / "src" / "nova" / "arch" / "gicv3_regs.h"
+BOARD_LAYOUT = REPO / "src" / "hal" / "board" / "qemu_virt" / "include" / "board_layout.h"
 
 # QEMU virt RAM ceiling (-m 1024 in task.sh run / demo_runner.py):
 # 0x4000_0000 + 1 GiB. Pristine copies must stay below it.
@@ -59,6 +60,7 @@ def read_layout(path: Path) -> dict[str, int]:
         "NOVA_GICD_IPA_BASE", "NOVA_GICR_IPA_BASE",
     ])
     values |= read_defines(GIC_REGS, ["NOVA_GICD_FRAME_SIZE", "NOVA_GICR_FRAME_SIZE"])
+    values |= read_defines(BOARD_LAYOUT, ["NOVA_BOARD_SMP_CPUS"])
     return values
 
 
@@ -149,6 +151,12 @@ def build_guest_dtb(guest: dict, layout: dict[str, int]) -> bytes:
     w.prop_u32("#address-cells", 2)
     w.prop_u32("#size-cells", 2)
     w.prop_u32("interrupt-parent", PHANDLE_GIC)
+    # Hypervisor-only placement hints (vendor-prefixed; guests ignore
+    # them): boot without a guest-issued VM_START, per-vCPU core pin.
+    if guest["autostart"]:
+        w.prop("nova,autostart")
+    if guest["cores"] is not None:
+        w.prop_u32("nova,affinity", *guest["cores"])
 
     w.begin_node(f"memory@{ipa_base:x}")
     w.prop_str("device_type", "memory")
@@ -247,12 +255,20 @@ def load_config(path: Path, layout: dict[str, int]) -> list[dict]:
         vcpus = int(g.get("vcpus", 1))
         uart = g.get("uart", "none")
         bootargs = g.get("bootargs", "")
+        cores = g.get("cores")
+        autostart = bool(g.get("autostart", False))
         if not 1 <= vcpus <= 2:  # kMaxVcpusPerVm
             sys.exit(f"yml2dtb: {name}: vcpus {vcpus} (supported: 1..2)")
         if uart not in ("none", "vuart"):
             sys.exit(f"yml2dtb: {name}: uart '{uart}' (supported: none, vuart)")
         if not isinstance(bootargs, str):
             sys.exit(f"yml2dtb: {name}: bootargs must be a string")
+        if cores is not None:
+            smp = layout["NOVA_BOARD_SMP_CPUS"]
+            if (not isinstance(cores, list) or len(cores) != vcpus or
+                    not all(isinstance(c, int) and 0 <= c < smp for c in cores)):
+                sys.exit(f"yml2dtb: {name}: cores must list one core index "
+                         f"in [0, {smp}) per vcpu ({vcpus})")
         if size < layout["NOVA_GUEST_IPA_SIZE"] or size % MIB:
             sys.exit(f"yml2dtb: {name}: memory_size {size:#x} must be a MiB "
                      f"multiple >= {layout['NOVA_GUEST_IPA_SIZE']:#x} (linker window)")
@@ -260,7 +276,8 @@ def load_config(path: Path, layout: dict[str, int]) -> list[dict]:
             sys.exit(f"yml2dtb: {name}: window {load_pa:#x}+{size:#x} overlaps "
                      f"the IVC page at {layout['NOVA_IVC_SHM_PA']:#x}")
         parsed.append({"name": name, "memory_size": size, "vcpus": vcpus,
-                       "uart": uart, "bootargs": bootargs})
+                       "uart": uart, "bootargs": bootargs,
+                       "cores": cores, "autostart": autostart})
         load_pa = (load_pa + size + align - 1) & ~(align - 1)
 
     pristine_end = layout["NOVA_GUEST_PRISTINE_PA"] + sum(g["memory_size"] for g in parsed)

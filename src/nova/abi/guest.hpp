@@ -58,6 +58,11 @@ struct GuestDescriptor {
 
   UartKind uart = UartKind::kNone; // vuart claims the PL011 frame only when set
 
+  // Boot vCPU 0 at machine start without a guest-issued HVC_VM_START.
+  // Entry [0] always boots regardless (it is the machine's reason to
+  // exist); this flag brings up the other VMs of a multi-OS config.
+  bool auto_start = false;
+
   // Configuration blob (FDT) embedded in the hypervisor image. Copied
   // to dtb_ipa before the pristine snapshot (so warm reset restores it
   // with the image) and handed to the boot vCPU in x0 — the Linux boot
