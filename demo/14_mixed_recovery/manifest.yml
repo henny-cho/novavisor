@@ -1,7 +1,7 @@
 name: "14_mixed_recovery"
 description: "Zephyr (RT, core 0) and Linux (GP, core 1) run side by side; Linux takes load, panics itself and warm-resets while Zephyr never stops — mixed criticality and autonomous recovery in one run."
 phase: 18
-enabled: false
+enabled: true
 # Two full Linux boots plus a 20 s load window, with Zephyr flooding
 # the console throughout — minutes-long under TCG on a slow host.
 timeout_seconds: 1200
