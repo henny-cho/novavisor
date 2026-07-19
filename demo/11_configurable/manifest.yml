@@ -1,0 +1,43 @@
+name: "11_configurable"
+description: "One guest binary reporting its DTB-delivered configuration — verified under two hypervisor configs (small: 2 MiB / 1 vCPU, large: 8 MiB / 2 vCPUs), including actually booting the granted second vCPU."
+phase: 15
+enabled: false
+timeout_seconds: 40
+
+# The guest parses the DTB the hypervisor passes in x0; each variant
+# rebuilds the hypervisor with its config (task.sh build --config) and
+# checks the guest's report matches the YAML's declared values. The
+# guests list is shared; memory_size/vcpus below document the LARGE
+# variant (the fields are validation/documentation only — the DTB is
+# the authority the demo exists to prove).
+guests:
+  - name: "vm0"
+    binary: "configurable.bin"
+    load_addr:   0x50000000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00800000
+    vcpus: 2
+    uart: vuart
+
+variants:
+  - name: "small"
+    config: "configs/small.yml"
+    expect:
+      - pattern: "\\[vm0\\] cfg: memory 2 MiB, cpus 1"
+        within_seconds: 15
+      - pattern: "demo_exit code=0"
+        within_seconds: 5
+      - pattern: "all VCPUs off"
+        within_seconds: 5
+  - name: "large"
+    config: "configs/large.yml"
+    expect:
+      - pattern: "\\[vm0\\] cfg: memory 8 MiB, cpus 2"
+        within_seconds: 15
+      - pattern: "\\[vm0\\] cpu1 up"
+        within_seconds: 10
+      - pattern: "demo_exit code=0"
+        within_seconds: 10
+      - pattern: "all VCPUs off"
+        within_seconds: 5
