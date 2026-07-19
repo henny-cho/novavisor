@@ -54,7 +54,11 @@ jobs:
       - name: Cache CPM packages
         uses: actions/cache@v6
         with:
-          path: external/cache
+          # Guest images live under external/cache too but have their own
+          # cache entry (different lifecycle: fetch.sh pins, not CPM pins).
+          path: |
+            external/cache
+            !external/cache/guests
           key: cpm-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake') }}
           restore-keys: cpm-
 
@@ -65,6 +69,14 @@ jobs:
         with:
           path: .toolchain
           key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/versions.sh') }}
+
+      - name: Cache external guest images
+        # Built once per fetch recipe (pinned tag / overlay); a hit lets
+        # fetch.sh exit on its version stamp with zero network access.
+        uses: actions/cache@v6
+        with:
+          path: external/cache/guests
+          key: guests-${{ hashFiles('demo/*/fetch.sh', 'demo/*/novavisor.overlay') }}
 
       - name: Cache ccache
         uses: actions/cache@v6
@@ -83,6 +95,11 @@ jobs:
         # run-clang-tidy over the debug tree's compile database; the debug
         # objects are reused by the demo step below.
         run: scripts/task.sh lint
+
+      - name: Fetch external guest images
+        # Idempotent: no-op on a guest-cache hit, west build on a miss
+        # (the workspace itself is disposable and never cached).
+        run: scripts/task.sh demo fetch 12
 
       - name: Demo verification (enabled demos only)
         # Each completed phase flips its demo's `enabled` flag to true,
