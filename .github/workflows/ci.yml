@@ -47,7 +47,8 @@ jobs:
   # Cross lane: Release build, clang-tidy, and QEMU demo verification.
   target:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The mixed-criticality demo alone boots Linux twice under TCG.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
 
@@ -102,6 +103,7 @@ jobs:
         run: |
           scripts/task.sh demo fetch 12
           scripts/task.sh demo fetch 13
+          scripts/task.sh demo fetch 14
 
       - name: Demo verification (enabled demos only)
         # Each completed phase flips its demo's `enabled` flag to true,
