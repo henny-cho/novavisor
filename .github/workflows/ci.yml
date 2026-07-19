@@ -97,9 +97,11 @@ jobs:
         run: scripts/task.sh lint
 
       - name: Fetch external guest images
-        # Idempotent: no-op on a guest-cache hit, west build on a miss
-        # (the workspace itself is disposable and never cached).
-        run: scripts/task.sh demo fetch 12
+        # Idempotent: no-op on a guest-cache hit, source build on a miss
+        # (the workspaces themselves are disposable and never cached).
+        run: |
+          scripts/task.sh demo fetch 12
+          scripts/task.sh demo fetch 13
 
       - name: Demo verification (enabled demos only)
         # Each completed phase flips its demo's `enabled` flag to true,

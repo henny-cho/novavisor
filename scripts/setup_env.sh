@@ -46,6 +46,13 @@ CORE_PACKAGES=(
     python3-pexpect
     wget
     xz-utils
+    # Linux-userspace cross toolchain + kernel-build tools for the
+    # external guest images (demo fetch): the bare-metal GCC has no
+    # libc, and the kernel's kconfig/scripts need flex/bison/bc.
+    gcc-aarch64-linux-gnu
+    flex
+    bison
+    bc
 )
 
 # Developer-workstation extras, not needed by CI (mirrors
