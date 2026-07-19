@@ -8,6 +8,7 @@
 #include "nova/arch/trap_context.hpp"
 #include "psci/psci_model.hpp"
 #include "smp/smp.hpp"
+#include "vgic/vgic.hpp"
 
 namespace nova {
 namespace {
@@ -64,6 +65,16 @@ void psci_component::handle_hvc(HvcCall* call) noexcept {
     // Does not return to the caller — only this vCPU retires; its
     // siblings keep running.
     vcpu::stop_vcpu(vcpu::current_index(), call->ctx);
+    return;
+  case psci::Action::kCpuSuspend:
+    // Standby: park the caller exactly like a trapped WFI. A pending
+    // wake-up event is architecturally an immediate return; otherwise
+    // block with the timer-mirrored wake. x0 must read PSCI_SUCCESS on
+    // wake, so seed it before the frame swap parks the caller.
+    call->ctx->x[0] = v.ret;
+    if (!vgic::has_deliverable(vcpu::current_index())) {
+      vcpu::block_current(call->ctx);
+    }
     return;
   case psci::Action::kAffinityInfo: {
     const std::size_t   vm = vm_of(vcpu::current_index());

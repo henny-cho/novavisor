@@ -10,11 +10,13 @@
 // plumbing (VBAR, in-flight ELR/SPSR when a guest hypercalls from its
 // own handler), the native virtual timer (CVAL, not TVAL — the absolute
 // deadline survives being parked; a non-resident timer simply cannot
-// fire), the full Stage 1 translation regime (SCTLR/TCR/TTBR0/TTBR1/
-// MAIR/AMAIR/CONTEXTIDR — guests turn their own MMU on and off while
-// time-shared; Stage 2 VMID tagging keeps their TLB entries apart),
-// FP/software-thread plumbing (CPACR, TPIDR*), and fault reporting in
-// flight at switch time (ESR/FAR/AFSR0/AFSR1/PAR).
+// fire) plus its EL0 access control (CNTKCTL), the full Stage 1
+// translation regime (SCTLR/TCR/TTBR0/TTBR1/MAIR/AMAIR/CONTEXTIDR —
+// guests turn their own MMU on and off while time-shared; Stage 2 VMID
+// tagging keeps their TLB entries apart), FP/software-thread plumbing
+// (CPACR, TPIDR*), fault reporting in flight at switch time (ESR/FAR/
+// AFSR0/AFSR1/PAR), and per-guest debug and cache-select state that
+// would otherwise leak across VMs (MDSCR, CSSELR).
 //
 // EL2 runs its own translation regime (SCTLR_EL2 et al.), so writing
 // the incoming guest's values here has no effect until the ERET — a
@@ -35,6 +37,7 @@ struct El1SysregBank {
   std::uint64_t sp_el0    = 0;
   std::uint64_t cntv_ctl  = 0; // reset: timer disabled
   std::uint64_t cntv_cval = 0;
+  std::uint64_t cntkctl   = 0; // EL0 access control for the virtual/physical counters
   // Stage 1 translation regime
   std::uint64_t sctlr      = kSctlrEl1Reset;
   std::uint64_t tcr        = 0;
@@ -54,6 +57,9 @@ struct El1SysregBank {
   std::uint64_t afsr0 = 0;
   std::uint64_t afsr1 = 0;
   std::uint64_t par   = 0;
+  // Debug monitor config + cache-size selection
+  std::uint64_t mdscr  = 0;
+  std::uint64_t csselr = 0;
 };
 
 inline auto read_el1_bank() noexcept -> El1SysregBank {
@@ -64,6 +70,7 @@ inline auto read_el1_bank() noexcept -> El1SysregBank {
   __asm__ volatile("mrs %0, sp_el0" : "=r"(b.sp_el0));
   __asm__ volatile("mrs %0, cntv_ctl_el0" : "=r"(b.cntv_ctl));
   __asm__ volatile("mrs %0, cntv_cval_el0" : "=r"(b.cntv_cval));
+  __asm__ volatile("mrs %0, cntkctl_el1" : "=r"(b.cntkctl));
   __asm__ volatile("mrs %0, sctlr_el1" : "=r"(b.sctlr));
   __asm__ volatile("mrs %0, tcr_el1" : "=r"(b.tcr));
   __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(b.ttbr0));
@@ -80,6 +87,8 @@ inline auto read_el1_bank() noexcept -> El1SysregBank {
   __asm__ volatile("mrs %0, afsr0_el1" : "=r"(b.afsr0));
   __asm__ volatile("mrs %0, afsr1_el1" : "=r"(b.afsr1));
   __asm__ volatile("mrs %0, par_el1" : "=r"(b.par));
+  __asm__ volatile("mrs %0, mdscr_el1" : "=r"(b.mdscr));
+  __asm__ volatile("mrs %0, csselr_el1" : "=r"(b.csselr));
   return b;
 }
 
@@ -92,6 +101,7 @@ inline void write_el1_bank(const El1SysregBank& b) noexcept {
   // against the incoming guest's deadline, never the outgoing one's.
   __asm__ volatile("msr cntv_cval_el0, %0" ::"r"(b.cntv_cval));
   __asm__ volatile("msr cntv_ctl_el0, %0" ::"r"(b.cntv_ctl));
+  __asm__ volatile("msr cntkctl_el1, %0" ::"r"(b.cntkctl));
   __asm__ volatile("msr sctlr_el1, %0" ::"r"(b.sctlr));
   __asm__ volatile("msr tcr_el1, %0" ::"r"(b.tcr));
   __asm__ volatile("msr ttbr0_el1, %0" ::"r"(b.ttbr0));
@@ -108,6 +118,8 @@ inline void write_el1_bank(const El1SysregBank& b) noexcept {
   __asm__ volatile("msr afsr0_el1, %0" ::"r"(b.afsr0));
   __asm__ volatile("msr afsr1_el1, %0" ::"r"(b.afsr1));
   __asm__ volatile("msr par_el1, %0" ::"r"(b.par));
+  __asm__ volatile("msr mdscr_el1, %0" ::"r"(b.mdscr));
+  __asm__ volatile("msr csselr_el1, %0" ::"r"(b.csselr));
   // No ISB needed here: the trap-return ERET is a context synchronization
   // event that makes these writes visible to the guest.
 }

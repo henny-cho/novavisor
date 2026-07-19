@@ -18,20 +18,25 @@
 // NOLINTBEGIN(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
 /* SMC32 function IDs; the SMC64 twin (where one exists) sets bit 30. */
-#define PSCI_FN_VERSION       0x84000000
-#define PSCI_FN_CPU_OFF       0x84000002
-#define PSCI_FN_CPU_ON        0x84000003
-#define PSCI_FN_AFFINITY_INFO 0x84000004
-#define PSCI_FN_SYSTEM_OFF    0x84000008
-#define PSCI_FN_SYSTEM_RESET  0x84000009
-#define PSCI_FN_FEATURES      0x8400000A
-#define PSCI_FN_SMC64         0x40000000 /* OR into an ID for the SMC64 form */
+#define PSCI_FN_VERSION           0x84000000
+#define PSCI_FN_CPU_SUSPEND       0x84000001
+#define PSCI_FN_CPU_OFF           0x84000002
+#define PSCI_FN_CPU_ON            0x84000003
+#define PSCI_FN_AFFINITY_INFO     0x84000004
+#define PSCI_FN_MIGRATE_INFO_TYPE 0x84000006
+#define PSCI_FN_SYSTEM_OFF        0x84000008
+#define PSCI_FN_SYSTEM_RESET      0x84000009
+#define PSCI_FN_FEATURES          0x8400000A
+#define PSCI_FN_SMC64             0x40000000 /* OR into an ID for the SMC64 form */
 
 #define PSCI_VERSION_1_1 0x00010001
 
 /* AFFINITY_INFO return states */
 #define PSCI_AFFINITY_ON  0
 #define PSCI_AFFINITY_OFF 1
+
+/* MIGRATE_INFO_TYPE: no Trusted OS present / MP (migration not needed) */
+#define PSCI_TOS_NOT_PRESENT_MP 2
 
 /* Return codes (int32, sign-extended into x0) */
 #define PSCI_SUCCESS            0

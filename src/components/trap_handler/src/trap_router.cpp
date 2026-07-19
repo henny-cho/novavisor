@@ -101,6 +101,14 @@ void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
     dispatch_hvc(ctx);
     return;
 
+  case esr::ExceptionClass::SMC_AA64:
+    // Second PSCI conduit (HCR_EL2.TSC; no EL3 on this board). Unlike
+    // HVC, ELR points AT the trapped smc — advance it before the shared
+    // fan-out so the guest resumes after the instruction on return.
+    ctx->elr += 4;
+    dispatch_hvc(ctx);
+    return;
+
   case esr::ExceptionClass::WFx:
     dispatch_wfx(ctx);
     return;

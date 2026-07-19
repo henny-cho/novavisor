@@ -42,8 +42,26 @@ TEST(PsciModel, CpuOnOffAndAffinityInfoMapToActions) {
   EXPECT_EQ(dispatch(PSCI_FN_AFFINITY_INFO, 1).action, Action::kAffinityInfo);
 }
 
+TEST(PsciModel, CpuSuspendMapsToActionWithSuccess) {
+  const auto v = dispatch(PSCI_FN_CPU_SUSPEND, 0);
+  EXPECT_TRUE(v.claimed);
+  EXPECT_EQ(v.action, Action::kCpuSuspend);
+  EXPECT_EQ(v.ret, static_cast<std::uint64_t>(PSCI_SUCCESS));
+  // The SMC64 twin parks identically (power_state fits 32 bits).
+  const auto v64 = dispatch(PSCI_FN_CPU_SUSPEND | PSCI_FN_SMC64, 0);
+  EXPECT_EQ(v64.action, Action::kCpuSuspend);
+  EXPECT_EQ(v64.ret, v.ret);
+}
+
+TEST(PsciModel, MigrateInfoTypeReportsNoTrustedOs) {
+  const auto v = dispatch(PSCI_FN_MIGRATE_INFO_TYPE, 0);
+  EXPECT_TRUE(v.claimed);
+  EXPECT_EQ(v.action, Action::kNone);
+  EXPECT_EQ(v.ret, static_cast<std::uint64_t>(PSCI_TOS_NOT_PRESENT_MP));
+}
+
 TEST(PsciModel, UnimplementedInRangeAnswersNotSupported) {
-  const auto v = dispatch(0x84000001, 0); // CPU_SUSPEND
+  const auto v = dispatch(0x84000007, 0); // reserved, in range
   EXPECT_TRUE(v.claimed);
   EXPECT_EQ(v.action, Action::kNone);
   EXPECT_EQ(v.ret, kNotSupported);
@@ -71,7 +89,10 @@ TEST(PsciModel, FeaturesReportsTheImplementedSet) {
             static_cast<std::uint64_t>(PSCI_SUCCESS));
   EXPECT_EQ(dispatch(PSCI_FN_FEATURES, PSCI_FN_CPU_ON).ret, static_cast<std::uint64_t>(PSCI_SUCCESS));
   EXPECT_EQ(dispatch(PSCI_FN_FEATURES, PSCI_FN_CPU_OFF).ret, static_cast<std::uint64_t>(PSCI_SUCCESS));
-  EXPECT_EQ(dispatch(PSCI_FN_FEATURES, 0x84000001).ret, kNotSupported); // CPU_SUSPEND
+  // CPU_SUSPEND reports 0: SUCCESS and the original power_state format.
+  EXPECT_EQ(dispatch(PSCI_FN_FEATURES, PSCI_FN_CPU_SUSPEND).ret, static_cast<std::uint64_t>(PSCI_SUCCESS));
+  EXPECT_EQ(dispatch(PSCI_FN_FEATURES, PSCI_FN_MIGRATE_INFO_TYPE).ret, static_cast<std::uint64_t>(PSCI_SUCCESS));
+  EXPECT_EQ(dispatch(PSCI_FN_FEATURES, 0x84000007).ret, kNotSupported); // reserved, in range
   EXPECT_EQ(dispatch(PSCI_FN_FEATURES, 0x12345678).ret, kNotSupported);
 }
 

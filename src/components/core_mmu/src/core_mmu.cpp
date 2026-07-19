@@ -72,14 +72,18 @@ inline constexpr std::uint64_t kVtcrEl2 = (25ULL) | (0b01ULL << 6U) | (0b11ULL <
 //           IMO=1 (route physical IRQ to EL2, bit 4)
 //           TWI=1 (trap EL1/EL0 WFI to EL2, bit 13)
 //           TWE=1 (trap EL1/EL0 WFE to EL2, bit 14)
+//           TSC=1 (trap EL1 SMC to EL2, bit 19)
 //           RW=1  (EL1 is AArch64, bit 31)
 // IMO/FMO make the hypervisor the sole owner of physical interrupts —
 // guests see only vINTIDs injected via ICH_LR (components/core_gic) —
 // and additionally expose the virtual interrupt registers (ICV_*) to
 // EL1 in place of the physical ICC_* ones. TWI/TWE hand guest waits to
 // the scheduler (WfxService) instead of stalling the physical core.
+// TSC gives us a second PSCI conduit: this board has no EL3, so an
+// untrapped guest SMC would just be an undefined instruction — we trap
+// it and serve it through the same dispatch as HVC.
 inline constexpr std::uint64_t kHcrEl2 =
-    (1ULL << 0U) | (1ULL << 3U) | (1ULL << 4U) | (1ULL << 13U) | (1ULL << 14U) | (1ULL << 31U);
+    (1ULL << 0U) | (1ULL << 3U) | (1ULL << 4U) | (1ULL << 13U) | (1ULL << 14U) | (1ULL << 19U) | (1ULL << 31U);
 
 // VTTBR_EL2 layout:
 //   bits 47:1  BADDR (L1 table PA; bit 0 is always 0 for 4K-aligned)

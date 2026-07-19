@@ -24,6 +24,7 @@ enum class Action : std::uint8_t {
   kSystemReset,  // warm-reset the calling VM
   kCpuOn,        // power on a sibling vCPU (x1=target mpidr, x2=entry, x3=context_id)
   kCpuOff,       // retire the calling vCPU
+  kCpuSuspend,   // standby: park the calling vCPU like a trapped WFI (x1=power_state, ignored)
   kAffinityInfo, // report a sibling vCPU's power state (x1=target mpidr)
 };
 
@@ -47,9 +48,11 @@ struct Verdict {
 [[nodiscard]] constexpr auto is_implemented(std::uint32_t fid) noexcept -> bool {
   switch (strip_smc64(fid)) {
   case PSCI_FN_VERSION:
+  case PSCI_FN_CPU_SUSPEND:
   case PSCI_FN_CPU_OFF:
   case PSCI_FN_CPU_ON:
   case PSCI_FN_AFFINITY_INFO:
+  case PSCI_FN_MIGRATE_INFO_TYPE:
   case PSCI_FN_SYSTEM_OFF:
   case PSCI_FN_SYSTEM_RESET:
   case PSCI_FN_FEATURES:
@@ -91,6 +94,15 @@ inline constexpr std::uint64_t kInvalidTarget = ~std::uint64_t{0};
     return v;
   case PSCI_FN_CPU_OFF:
     v.action = Action::kCpuOff;
+    return v;
+  case PSCI_FN_CPU_SUSPEND:
+    // Standby only: the glue parks the caller like WFI, then wakes with
+    // this value in x0 (power_state in x1 is accepted and ignored).
+    v.action = Action::kCpuSuspend;
+    v.ret    = PSCI_SUCCESS;
+    return v;
+  case PSCI_FN_MIGRATE_INFO_TYPE:
+    v.ret = PSCI_TOS_NOT_PRESENT_MP; // no Trusted OS — nothing to migrate
     return v;
   case PSCI_FN_AFFINITY_INFO:
     v.action = Action::kAffinityInfo;
