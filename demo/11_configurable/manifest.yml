@@ -1,7 +1,7 @@
 name: "11_configurable"
 description: "One guest binary reporting its DTB-delivered configuration — verified under two hypervisor configs (small: 2 MiB / 1 vCPU, large: 8 MiB / 2 vCPUs), including actually booting the granted second vCPU."
 phase: 15
-enabled: false
+enabled: true
 timeout_seconds: 40
 
 # The guest parses the DTB the hypervisor passes in x0; each variant
