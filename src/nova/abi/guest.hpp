@@ -58,6 +58,14 @@ struct GuestDescriptor {
 
   UartKind uart = UartKind::kNone; // vuart claims the PL011 frame only when set
 
+  // Configuration blob (FDT) embedded in the hypervisor image. Copied
+  // to dtb_ipa before the pristine snapshot (so warm reset restores it
+  // with the image) and handed to the boot vCPU in x0 — the Linux boot
+  // protocol shape. Secondary vCPUs keep the PSCI context_id contract.
+  const std::uint8_t* dtb      = nullptr;
+  std::uint32_t       dtb_size = 0;
+  std::uint64_t       dtb_ipa  = 0;
+
   // True when [ipa, ipa + len) lies fully inside the guest window.
   // len must not exceed ipa_size (callers clamp first).
   [[nodiscard]] constexpr auto contains(std::uint64_t ipa, std::uint64_t len) const noexcept -> bool {

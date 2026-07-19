@@ -87,9 +87,15 @@ inline constexpr std::uint64_t kHcrEl2 =
 inline constexpr std::uint64_t kVttbrVmidShift = 48U;
 
 // Pristine slot backing guest `index` — EL2's flat view of the PAs
-// reserved in nova/abi/guest_layout.h.
-auto pristine_slot(std::size_t index, std::uint64_t size) noexcept -> void* {
-  return reinterpret_cast<void*>(NOVA_GUEST_PRISTINE_PA + index * size);
+// reserved in nova/abi/guest_layout.h. Windows may differ in size per
+// guest, so slots pack at the running sum of the preceding windows.
+auto pristine_slot(std::size_t index) noexcept -> void* {
+  const auto    guests = guest_table();
+  std::uint64_t offset = 0;
+  for (std::size_t i = 0; i < index; ++i) {
+    offset += guests[i].ipa_size;
+  }
+  return reinterpret_cast<void*>(NOVA_GUEST_PRISTINE_PA + offset);
 }
 
 [[noreturn]] void panic_stage2(std::size_t guest_index) noexcept {
@@ -150,12 +156,21 @@ void init_and_activate() noexcept {
 
   nova_stage2_activate(g_vttbr[0], kVtcrEl2, kHcrEl2);
 
+  // Place each guest's configuration blob at its window-top slot so
+  // the pristine snapshot below captures it — a warm reset then
+  // restores DTB and image together through the same copy.
+  for (std::size_t i = 0; i < guests.size(); ++i) {
+    if (guests[i].dtb_size != 0) {
+      std::memcpy(reinterpret_cast<void*>(guests[i].to_pa(guests[i].dtb_ipa)), guests[i].dtb, guests[i].dtb_size);
+    }
+  }
+
   // Preserve every guest window for warm reset. The whole window is
   // copied (the hypervisor does not know the binary's size); at this
   // point it holds the loader's image plus zeroed RAM — exactly the
   // state a reboot must restore.
   for (std::size_t i = 0; i < guests.size(); ++i) {
-    std::memcpy(pristine_slot(i, guests[i].ipa_size), reinterpret_cast<const void*>(guests[i].load_pa),
+    std::memcpy(pristine_slot(i), reinterpret_cast<const void*>(guests[i].load_pa),
                 static_cast<std::size_t>(guests[i].ipa_size));
   }
 
@@ -187,7 +202,7 @@ void switch_vm(std::size_t guest_index) noexcept {
 
 void reload_guest_image(std::size_t guest_index) noexcept {
   const GuestDescriptor& guest = guest_table()[guest_index];
-  std::memcpy(reinterpret_cast<void*>(guest.load_pa), pristine_slot(guest_index, guest.ipa_size),
+  std::memcpy(reinterpret_cast<void*>(guest.load_pa), pristine_slot(guest_index),
               static_cast<std::size_t>(guest.ipa_size));
 }
 

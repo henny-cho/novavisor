@@ -3,11 +3,31 @@
 # links the final ELF. Adding a project/board means adding a sibling
 # directory, not touching the root build.
 
+# Guest configuration pipeline: active_config.yml (seeded from
+# configs/default.yml at configure time, switched in place by
+# `task.sh build --config` — no reconfigure) -> per-guest DTB blobs +
+# the .incbin assembly that embeds them.
+set(GUEST_CONFIG ${CMAKE_BINARY_DIR}/active_config.yml)
+if(NOT EXISTS ${GUEST_CONFIG})
+    file(COPY_FILE ${CMAKE_SOURCE_DIR}/configs/default.yml ${GUEST_CONFIG})
+endif()
+set(GUEST_DTB_DIR ${CMAKE_BINARY_DIR}/guest_dtb)
+add_custom_command(
+    OUTPUT ${GUEST_DTB_DIR}/guest_dtbs.S
+    COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/yml2dtb/yml2dtb.py ${GUEST_CONFIG} -o ${GUEST_DTB_DIR}
+    DEPENDS ${GUEST_CONFIG}
+            ${CMAKE_SOURCE_DIR}/tools/yml2dtb/yml2dtb.py
+            ${CMAKE_SOURCE_DIR}/src/nova/abi/guest_layout.h
+    COMMENT "yml2dtb: generating guest DTBs from ${GUEST_CONFIG}"
+)
+
 add_executable(novavisor.elf
     main.cpp
     # Defines nova::guest_table() — the project-side injection point
-    # consumed by core_mmu/core_vcpu via nova/abi/guest.hpp.
+    # consumed by core_mmu/core_vcpu via nova/abi/guest.hpp. Populated
+    # at boot from the embedded guest DTBs.
     guest_config.cpp
+    ${GUEST_DTB_DIR}/guest_dtbs.S
 )
 
 # Outputs stay at the build root — scripts (task.sh run/debug,

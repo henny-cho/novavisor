@@ -93,6 +93,19 @@ auto memset(void* dst, int value, std::size_t n) noexcept -> void* { // NOLINT(r
   return dst;
 }
 
+auto memcmp(const void* lhs, const void* rhs, std::size_t n) noexcept -> int { // NOLINT(readability-identifier-naming)
+  // Byte loop: newlib's memcmp uses SIMD registers. Callers here are
+  // short string_view compares, so no aligned fast lane is worth it.
+  const auto* a = static_cast<const unsigned char*>(lhs);
+  const auto* b = static_cast<const unsigned char*>(rhs);
+  for (; n != 0; --n, ++a, ++b) {
+    if (*a != *b) {
+      return *a < *b ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
 auto strlen(const char* s) noexcept -> std::size_t { // NOLINT(readability-identifier-naming)
   const char* p = s;
   while (*p != '\0') {

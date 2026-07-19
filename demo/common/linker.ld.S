@@ -39,10 +39,11 @@ SECTIONS {
     } > RAM
     __bss_end = .;
 
-    /* Stack grows down from the top of the allocated region.
-     * A demo can override __stack_top via --defsym if it needs a
-     * different location. */
-    __stack_top = ORIGIN(RAM) + LENGTH(RAM);
+    /* Stack grows down from below the guest DTB reservation at the
+     * window top (the hypervisor places the configuration blob there
+     * and passes its address in x0). A demo can override __stack_top
+     * via --defsym if it needs a different location. */
+    __stack_top = ORIGIN(RAM) + LENGTH(RAM) - NOVA_GUEST_DTB_SIZE;
 
     /DISCARD/ : {
         *(.note*)

@@ -153,12 +153,13 @@ void seed(std::size_t slot, std::uint64_t entry, std::uint64_t sp, std::uint64_t
   soft_timer::cancel(soft_timer::kSlotCntvWake + slot);
 }
 
-// Descriptor boot state: vcpu 0's cold/warm entry. Secondary vCPUs are
-// seeded by CPU_ON with a caller-supplied entry instead (SP is the
-// guest's own business there — PSCI leaves it undefined).
+// Descriptor boot state: vcpu 0's cold/warm entry, x0 = the guest's
+// DTB IPA (Linux boot protocol shape). Secondary vCPUs are seeded by
+// CPU_ON with a caller-supplied entry and x0 = context_id instead
+// (SP is the guest's own business there — PSCI leaves it undefined).
 void seed_boot(std::size_t slot) noexcept {
   const GuestDescriptor& guest = guest_table()[vm_of(slot)];
-  seed(slot, guest.entry_pc, guest.stack_top, 0);
+  seed(slot, guest.entry_pc, guest.stack_top, guest.dtb_size != 0 ? guest.dtb_ipa : 0);
 }
 
 // True while any vCPU of `vm` has not retired.

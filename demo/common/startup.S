@@ -9,7 +9,9 @@
 .section .text.start, "ax"
 .global _start
 _start:
-    // x0..x3 carry hypervisor-chosen boot args (reserved, ignored for now).
+    // x0 carries the guest DTB IPA (Linux boot protocol shape); it is
+    // preserved through this prologue, so a demo that wants it simply
+    // declares `int main(unsigned long dtb)`. x1..x3 are reserved (0).
 
     // Install stack pointer. __stack_top is defined by the linker script.
     ldr     x9, =__stack_top

@@ -8,6 +8,7 @@
 //                     boot_msg_component:   prints boot banner via UART
 //   2. MainLoop     → core_vcpu_component:  ERET into EL1 guest ([[noreturn]])
 
+#include "guest_config.hpp"
 #include "nexus.hpp"
 
 // nova_panic.cpp must be compiled as a translation unit to avoid ODR
@@ -17,6 +18,9 @@
 extern "C" void novavisor_main();
 
 void novavisor_main() {
+  // Boot core only (secondaries enter via novavisor_secondary), before
+  // RuntimeStart — every guest_table() consumer sees a populated table.
+  nova::qemu_virt::init_guest_table();
   nova::nova_top top{};
   top.main(); // [[noreturn]]
 }
