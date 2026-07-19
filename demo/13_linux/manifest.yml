@@ -1,0 +1,36 @@
+name: "13_linux"
+description: "Upstream Linux (trimmed arm64 defconfig, embedded BusyBox initramfs) boots to a shell — the general-purpose-OS check of the emulation surface."
+phase: 17
+enabled: false
+timeout_seconds: 600
+
+config: "configs/linux.yml"
+
+# External image: fetch.sh builds the pinned kernel+initramfs into
+# external/cache/guests/13_linux/ (run `task.sh demo fetch 13` once).
+# The arm64 Image header starts with a branch, so entry == load base.
+guests:
+  - name: "linux"
+    binary: "Image"
+    load_addr:   0x50000000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x08000000
+    vcpus: 1
+    uart: vuart
+
+# /init prints `uname -a` and execs an interactive shell; the demo
+# never exits — the prompt (flushed by the WFI console drain) is the
+# final pass condition. TCG plus trap-driven earlycon makes the boot
+# minutes-long in wall clock; budgets reflect that.
+# "aarch64 GNU/Linux" pins the uname output — a bare "aarch64" would
+# already match the compiler triple in the version banner.
+expect:
+  - pattern: "Booting Linux on physical CPU"
+    within_seconds: 120
+  - pattern: "Linux version 6\\.12"
+    within_seconds: 10
+  - pattern: "aarch64 GNU/Linux"
+    within_seconds: 420
+  - pattern: "~ #"
+    within_seconds: 30

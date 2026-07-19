@@ -1,0 +1,8 @@
+# Single Linux guest: 128 MiB window, one vCPU, PL011 vuart console.
+# bootargs lands in the generated DTB's /chosen node.
+guests:
+  - name: linux
+    memory_size: 0x08000000
+    vcpus: 1
+    uart: vuart
+    bootargs: "console=ttyAMA0 earlycon=pl011,0x09000000 panic=-1"
