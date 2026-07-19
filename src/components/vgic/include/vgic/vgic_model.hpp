@@ -17,6 +17,11 @@
 //     delivery gate.
 //   - ICFGR is accepted and ignored (edge/level config has no effect on
 //     the LR-injection model).
+//   - IGROUPR is stored for read-back but does not gate delivery, and
+//     every LR is injected as Group 1: with DS = 1 a secure-convention
+//     guest programs Group 0 (Zephyr writes IGROUPR0 = 0) yet enables
+//     ICC_IGRPEN1 — honoring the group bits would silently drop its
+//     entire interrupt delivery.
 //   - IROUTER keeps Aff0 only (flat virtual topology, VMPIDR Aff0 =
 //     vCPU index); IRM (1-of-N) is not honored. A pending SPI is not
 //     re-routed by a later IROUTER write — the new route applies from

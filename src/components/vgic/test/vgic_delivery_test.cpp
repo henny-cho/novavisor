@@ -35,6 +35,21 @@ TEST(VgicRefill, DisabledIntidStaysPendingWithoutMaintenance) {
   EXPECT_FALSE(lr_in_flight(c.lr[0]));
 }
 
+TEST(VgicRefill, GroupZeroConfigurationStillDelivers) {
+  // A secure-convention guest programs its interrupts as Group 0
+  // (Zephyr writes IGROUPR0 = 0). The enable bit is the single
+  // delivery gate — the injected LR is Group 1 either way.
+  CpuState c{};
+  c.redist.igroupr0 = 0;
+  c.redist.isenabler0 |= 1U << 27U;
+  c.redist.pending = 1U << 27U;
+
+  EXPECT_FALSE(refill(c, kLrs));
+  EXPECT_EQ(c.redist.pending, 0U);
+  EXPECT_EQ(lr_vintid(c.lr[0]), 27U);
+  EXPECT_NE(c.lr[0] & kLrGroup1, 0U);
+}
+
 TEST(VgicRefill, PriorityOrderThenIntidOrder) {
   CpuState c{};
   c.redist.isenabler0 = ~0U;

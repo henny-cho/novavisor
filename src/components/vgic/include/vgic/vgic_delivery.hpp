@@ -54,21 +54,27 @@ struct CpuState {
 
 // --- Delivery -----------------------------------------------------------------
 
-// Pending INTIDs the guest is currently willing to take.
+// Pending INTIDs the guest is currently willing to take. The enable
+// bit is the single delivery gate — group configuration is stored for
+// read-back only. Every LR is injected as Group 1 (make_lr) no matter
+// how IGROUPR programs the INTID: a secure-convention guest (Zephyr
+// writes IGROUPR0 = 0) would otherwise never receive anything, while
+// its ICC_IGRPEN1 enable takes the Group 1 delivery just fine under
+// DS = 1.
 [[nodiscard]] inline auto deliverable(const RedistState& r) noexcept -> std::uint32_t {
-  return r.pending & r.isenabler0 & r.igroupr0;
+  return r.pending & r.isenabler0;
 }
 
 // Pending SPIs (bit i = INTID 32+i) this vCPU may take: gated by the
-// per-VM enable/group banks and routed here by IROUTER (spi_target's
-// clamp keeps out-of-range routes on vCPU 0).
+// per-VM enable bank and routed here by IROUTER (spi_target's clamp
+// keeps out-of-range routes on vCPU 0).
 [[nodiscard]] inline auto spi_deliverable(const DistState& d, std::uint32_t vcpu, std::size_t vcpus) noexcept
     -> std::uint32_t {
   std::uint32_t routed = 0;
   for (std::uint32_t i = 0; i < kNumSpis; ++i) {
     routed |= (spi_target(d, kNumPrivate + i, vcpus) == vcpu ? 1U : 0U) << i;
   }
-  return d.spi_pending & d.spi_enabled & d.spi_group & routed;
+  return d.spi_pending & d.spi_enabled & routed;
 }
 
 [[nodiscard]] inline auto lr_holds(const CpuState& c, std::size_t lr_count, std::uint32_t vintid) noexcept -> bool {
