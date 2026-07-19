@@ -32,9 +32,11 @@
 #define NOVA_GUEST_PA_STRIDE 0x00200000 /* 2 MiB */
 
 /* IVC shared page: one 4 KiB page mapped RW (XN) into every VM at the
- * same IPA, just above the guest window. The PA sits past the last
- * guest PA slot (4 slots x 2 MiB from 0x5000_0000). */
-#define NOVA_IVC_SHM_IPA  0x50100000
+ * same IPA. The IPA sits above the largest configurable guest window
+ * (8 MiB — bounded by the PA collision checks in tools/yml2dtb), so no
+ * window can overlap it; it equals the PA — past the last guest PA
+ * slot (4 slots x 2 MiB from 0x5000_0000) — making slot 0 identity. */
+#define NOVA_IVC_SHM_IPA  0x50800000
 #define NOVA_IVC_SHM_PA   0x50800000
 #define NOVA_IVC_SHM_SIZE 0x00001000 /* 4 KiB */
 
