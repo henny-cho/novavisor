@@ -52,6 +52,13 @@
 #define NOVA_GICD_IPA_BASE 0x08000000
 #define NOVA_GICR_IPA_BASE 0x080A0000
 
+/* Emulated PL011 (vuart): same unmapped-frame technique, IPA equal to
+ * the board's physical UART so guests run an unmodified virt-map
+ * driver. RX delivery uses the same SPI number the physical UART has. */
+#define NOVA_VUART_IPA_BASE 0x09000000
+#define NOVA_VUART_IPA_SIZE 0x00001000
+#define NOVA_VUART_SPI      33
+
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
 #endif /* NOVA_GUEST_LAYOUT_H */

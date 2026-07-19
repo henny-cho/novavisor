@@ -44,4 +44,17 @@ inline void write_dec64(std::uint64_t v) noexcept {
   write(fmt::to_dec64(v, buf));
 }
 
+// Host input: one RX byte, or -1 when none is waiting. Single consumer
+// by construction (the UART interrupt is routed to one core), so the
+// write lock is not involved — RX and TX are separate FIFOs.
+[[nodiscard]] inline auto try_read() noexcept -> int {
+  return board::qemu_virt::uart_try_read();
+}
+
+// Unmask the console's RX interrupt at the device. GIC routing of the
+// UART SPI stays with the caller (hal/gic.hpp enable_spi).
+inline void rx_irq_enable() noexcept {
+  board::qemu_virt::uart_rx_irq_enable();
+}
+
 } // namespace nova::console

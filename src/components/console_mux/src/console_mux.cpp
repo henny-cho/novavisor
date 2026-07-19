@@ -7,6 +7,7 @@
 
 #include "console_mux/console_mux.hpp"
 
+#include "core_vcpu/core_vcpu.hpp"
 #include "hal/console.hpp"
 #include "nova/abi/guest.hpp"
 
@@ -74,7 +75,16 @@ auto input_route(char c) noexcept -> std::size_t {
   if (c != kFocusByte) {
     return g_focus;
   }
-  g_focus = (g_focus + 1) % guest_table().size();
+  // Cycle to the next VM that both carries a vuart and still runs its
+  // boot vCPU — input to anything else would land in a void.
+  const std::size_t count = guest_table().size();
+  for (std::size_t i = 1; i <= count; ++i) {
+    const std::size_t vm = (g_focus + i) % count;
+    if (guest_table()[vm].uart == UartKind::kVuart && vcpu::vcpu_on(slot_of(vm))) {
+      g_focus = vm;
+      break;
+    }
+  }
   console::write("[mux] focus vm");
   console::write_dec64(g_focus);
   console::write("\n");

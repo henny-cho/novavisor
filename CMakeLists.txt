@@ -129,6 +129,7 @@ if(CMAKE_CROSSCOMPILING)
         psci
         watchdog
         smp
+        vuart
     )
     foreach(component IN LISTS NOVA_COMPONENTS)
         add_subdirectory(src/components/${component})
@@ -171,5 +172,6 @@ else()
     nova_add_component_test(core_vcpu lifecycle_model_test)  # micro-reboot budget
     nova_add_component_test(psci psci_model_test)            # SMCCC range dispatch
     nova_add_component_test(ivc ring_test)                   # SPSC ring protocol (threads)
+    nova_add_component_test(vuart vuart_model_test)          # PL011 register model
 
 endif() # CMAKE_CROSSCOMPILING

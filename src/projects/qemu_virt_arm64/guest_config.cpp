@@ -35,6 +35,7 @@ constexpr auto make_guest(std::size_t index, std::uint8_t vcpus, std::array<std:
       .vmid      = static_cast<std::uint16_t>(index + 1),
       .vcpus     = vcpus,
       .cpu       = cpu,
+      .uart      = UartKind::kVuart, // every demo slot gets the emulated PL011
   };
 }
 

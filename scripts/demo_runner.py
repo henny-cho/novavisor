@@ -167,6 +167,10 @@ def build_qemu_cmd(elf: Path, demo_name: str, demo_build: Path, manifest: dict) 
         if not 1 <= vcpus <= 2:  # kMaxVcpusPerVm (nova/abi/guest.hpp)
             raise SystemExit(f"[demo_runner] {demo_name}: guest '{guest.get('name')}' asks for "
                              f"{vcpus} vcpus (supported: 1..2)")
+        uart = guest.get("uart", "none")
+        if uart not in ("none", "vuart"):  # UartKind (nova/abi/guest.hpp)
+            raise SystemExit(f"[demo_runner] {demo_name}: guest '{guest.get('name')}' asks for "
+                             f"uart '{uart}' (supported: none, vuart)")
         cmd += ["-device", f"loader,file={binary},addr={addr:#x},force-raw=on"]
     return cmd
 

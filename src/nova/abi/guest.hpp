@@ -38,6 +38,11 @@ inline constexpr std::size_t kMaxVcpus      = kMaxGuests * kMaxVcpusPerVm;
   return vm * kMaxVcpusPerVm + vcpu;
 }
 
+// Declarative per-VM device policy: which UART (if any) the VM sees.
+// Passthrough of the physical UART is a future kind — it needs a
+// second Stage 2 device region and costs EL2 its own console.
+enum class UartKind : std::uint8_t { kNone, kVuart };
+
 struct GuestDescriptor {
   std::uint64_t ipa_base  = 0; // Stage 2 IPA window base (guest view; same for every guest)
   std::uint64_t ipa_size  = 0; // IPA window length in bytes
@@ -50,6 +55,8 @@ struct GuestDescriptor {
   // Static affinity per vCPU: the physical core each one runs on. A
   // vCPU executes only there; all its state is owned by that core.
   std::array<std::uint8_t, kMaxVcpusPerVm> cpu{};
+
+  UartKind uart = UartKind::kNone; // vuart claims the PL011 frame only when set
 
   // True when [ipa, ipa + len) lies fully inside the guest window.
   // len must not exceed ipa_size (callers clamp first).
