@@ -7,7 +7,6 @@
 
 #include "console_mux/console_mux.hpp"
 
-#include "core_vcpu/core_vcpu.hpp"
 #include "hal/console.hpp"
 #include "nova/abi/guest.hpp"
 
@@ -26,7 +25,8 @@ struct LineBuf {
 };
 
 std::array<LineBuf, kMaxVcpus> g_line;
-std::size_t                    g_focus = 0; // VM receiving host input
+std::size_t                    g_focus = 0;       // VM receiving host input
+LivenessProbe                  g_live  = nullptr; // scheduler-injected
 
 void emit(std::size_t slot) noexcept {
   LineBuf& l = g_line[slot];
@@ -71,6 +71,10 @@ void flush(std::size_t slot) noexcept {
   }
 }
 
+void set_liveness_probe(LivenessProbe probe) noexcept {
+  g_live = probe;
+}
+
 auto input_route(char c) noexcept -> std::size_t {
   if (c != kFocusByte) {
     return g_focus;
@@ -80,7 +84,7 @@ auto input_route(char c) noexcept -> std::size_t {
   const std::size_t count = guest_table().size();
   for (std::size_t i = 1; i <= count; ++i) {
     const std::size_t vm = (g_focus + i) % count;
-    if (guest_table()[vm].uart == UartKind::kVuart && vcpu::vcpu_on(slot_of(vm))) {
+    if (guest_table()[vm].uart == UartKind::kVuart && (g_live == nullptr || g_live(slot_of(vm)))) {
       g_focus = vm;
       break;
     }

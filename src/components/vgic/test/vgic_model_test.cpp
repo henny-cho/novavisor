@@ -106,10 +106,16 @@ TEST(VgicDist, IrouterKeepsAff0AndRoutesDelivery) {
 
 TEST(VgicDist, SpiIcfgrAndIgrpmodrAcceptedAndIgnored) {
   DistState d{};
-  for (const auto off : {kGicdIcfgr2, kGicdIcfgr3, kGicdIgrpmodr1}) {
+  for (const auto off : {kGicdIcfgr2, kGicdIcfgr3, kGicdIgrpmodr1, kGicdIsactiver1, kGicdIcactiver1}) {
     EXPECT_TRUE(dist_write(d, off, 4, ~0U));
     EXPECT_EQ(dist_read(d, off, 4).value, 0U);
   }
+}
+
+TEST(VgicDist, Typer2ReadsAsZero) {
+  const DistState d{};
+  EXPECT_TRUE(dist_read(d, kGicdTyper2, 4).known); // no extended features
+  EXPECT_EQ(dist_read(d, kGicdTyper2, 4).value, 0U);
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +190,7 @@ TEST(VgicRedist, PriorityByteAndWordAccess) {
 
 TEST(VgicRedist, IcfgrAndIgrpmodrAcceptedAndIgnored) {
   RedistState c{};
-  for (const auto off : {kGicrIcfgr1, kGicrIgrpmodr0}) {
+  for (const auto off : {kGicrIcfgr1, kGicrIgrpmodr0, kGicrIsactiver0, kGicrIcactiver0}) {
     EXPECT_TRUE(redist_write(c, off, 4, ~0U));
     EXPECT_EQ(redist_read(c, off, 4).value, 0U);
   }

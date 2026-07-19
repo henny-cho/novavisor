@@ -20,6 +20,7 @@
 
 #include "core_vcpu/core_vcpu.hpp"
 
+#include "console_mux/console_mux.hpp"
 #include "core_gic/core_gic.hpp"
 #include "core_mmu/core_mmu.hpp"
 #include "hal/arch/aarch64/cpu.hpp"
@@ -291,7 +292,8 @@ void init() noexcept {
   g_vcpus[slot_of(0)].state = sched::State::kReady;
   g_alive.store(1, std::memory_order_relaxed); // the boot guest's vcpu 0
   g_slice_ticks = hyp_timer::freq() * kSliceMs / 1000U;
-  arch::set_fp_trap(true); // no owner yet — first FP use claims the file
+  console_mux::set_liveness_probe(&vcpu_on); // focus cycling skips off VMs
+  arch::set_fp_trap(true);                   // no owner yet — first FP use claims the file
 }
 
 [[noreturn]] void enter_cpu() noexcept {
@@ -507,6 +509,10 @@ void core_vcpu_component::handle_wfx(WfxCall* call) noexcept {
   if (vgic::has_deliverable(vcpu::current_index())) {
     return; // pending wake-up event → architecturally a NOP
   }
+  // A guest idling for input often parks with an unterminated line
+  // buffered (a shell prompt) — emit it so the console shows the
+  // prompt instead of holding it until the next newline.
+  console_mux::flush(vcpu::current_index());
   vcpu::block_current(call->ctx);
 }
 

@@ -43,10 +43,11 @@ inline constexpr std::uint64_t kGicdFrameSize = NOVA_GICD_FRAME_SIZE;
 inline constexpr std::uint64_t kGicrFrameSize = NOVA_GICR_FRAME_SIZE;
 
 // Distributor offsets.
-inline constexpr std::uint64_t kGicdCtlr  = NOVA_GICD_CTLR;
-inline constexpr std::uint64_t kGicdTyper = NOVA_GICD_TYPER;
-inline constexpr std::uint64_t kGicdIidr  = NOVA_GICD_IIDR;
-inline constexpr std::uint64_t kGicdPidr2 = NOVA_GICD_PIDR2;
+inline constexpr std::uint64_t kGicdCtlr   = NOVA_GICD_CTLR;
+inline constexpr std::uint64_t kGicdTyper  = NOVA_GICD_TYPER;
+inline constexpr std::uint64_t kGicdIidr   = NOVA_GICD_IIDR;
+inline constexpr std::uint64_t kGicdTyper2 = NOVA_GICD_TYPER2;
+inline constexpr std::uint64_t kGicdPidr2  = NOVA_GICD_PIDR2;
 
 // Distributor SPI banks (word 1 = INTIDs 32..63).
 inline constexpr std::uint64_t kGicdIgroupr1      = NOVA_GICD_IGROUPR1;
@@ -54,6 +55,8 @@ inline constexpr std::uint64_t kGicdIsenabler1    = NOVA_GICD_ISENABLER1;
 inline constexpr std::uint64_t kGicdIcenabler1    = NOVA_GICD_ICENABLER1;
 inline constexpr std::uint64_t kGicdIspendr1      = NOVA_GICD_ISPENDR1;
 inline constexpr std::uint64_t kGicdIcpendr1      = NOVA_GICD_ICPENDR1;
+inline constexpr std::uint64_t kGicdIsactiver1    = NOVA_GICD_ISACTIVER1;
+inline constexpr std::uint64_t kGicdIcactiver1    = NOVA_GICD_ICACTIVER1;
 inline constexpr std::uint64_t kGicdIpriorityrSpi = NOVA_GICD_IPRIORITYR + kNumPrivate;
 inline constexpr std::uint64_t kGicdIpriorityrEnd = NOVA_GICD_IPRIORITYR + kMaxIntid;
 inline constexpr std::uint64_t kGicdIcfgr2        = NOVA_GICD_ICFGR2;
@@ -77,6 +80,8 @@ inline constexpr std::uint64_t kGicrIsenabler0   = NOVA_GICR_ISENABLER0;
 inline constexpr std::uint64_t kGicrIcenabler0   = NOVA_GICR_ICENABLER0;
 inline constexpr std::uint64_t kGicrIspendr0     = NOVA_GICR_ISPENDR0;
 inline constexpr std::uint64_t kGicrIcpendr0     = NOVA_GICR_ICPENDR0;
+inline constexpr std::uint64_t kGicrIsactiver0   = NOVA_GICR_ISACTIVER0;
+inline constexpr std::uint64_t kGicrIcactiver0   = NOVA_GICR_ICACTIVER0;
 inline constexpr std::uint64_t kGicrIpriorityr   = NOVA_GICR_IPRIORITYR; // 32 bytes
 inline constexpr std::uint64_t kGicrIpriorityEnd = kGicrIpriorityr + kNumPrivate;
 inline constexpr std::uint64_t kGicrIcfgr0       = NOVA_GICR_ICFGR0;
@@ -229,6 +234,8 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
     return {.known = true, .value = d.ctlr | kGicdCtlrDs};
   case kGicdTyper:
     return {.known = true, .value = kGicdTyperValue};
+  case kGicdTyper2:
+    return {.known = true, .value = 0}; // no extended features (pre-GICv3.1 shape)
   case kGicdIidr:
     return {.known = true, .value = kGicIidrValue};
   case kGicdPidr2:
@@ -244,6 +251,8 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
   case kGicdIcfgr2:
   case kGicdIcfgr3:
   case kGicdIgrpmodr1: // RAZ/WI with DS = 1 (no group modifier)
+  case kGicdIsactiver1:
+  case kGicdIcactiver1: // active state lives in the LRs, not the model
     return {.known = true, .value = 0};
   default:
     return {};
@@ -287,6 +296,9 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
     return true; // accepted, ignored (level assumed)
   case kGicdIgrpmodr1:
     return true; // RAZ/WI with DS = 1 (no group modifier)
+  case kGicdIsactiver1:
+  case kGicdIcactiver1:
+    return true; // accepted, ignored (active state lives in the LRs)
   default:
     return false;
   }
@@ -323,6 +335,8 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
   case kGicrIcfgr0:
   case kGicrIcfgr1:
   case kGicrIgrpmodr0: // RAZ/WI with DS = 1 (no group modifier)
+  case kGicrIsactiver0:
+  case kGicrIcactiver0: // active state lives in the LRs, not the model
     return {.known = true, .value = 0};
   default:
     return {};
@@ -362,6 +376,9 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
     return true; // accepted, ignored
   case kGicrIgrpmodr0:
     return true; // RAZ/WI with DS = 1 (no group modifier)
+  case kGicrIsactiver0:
+  case kGicrIcactiver0:
+    return true; // accepted, ignored (active state lives in the LRs)
   default:
     return false;
   }

@@ -34,6 +34,12 @@ void guest_putc(std::size_t slot, char c) noexcept;
 // otherwise be lost when the vCPU retires).
 void flush(std::size_t slot) noexcept;
 
+// Focus cycling skips VMs whose boot vCPU is off; the scheduler owns
+// that state, so it injects the predicate here (keeps this component
+// passive with no scheduler dependency). Unset means "all live".
+using LivenessProbe = bool (*)(std::size_t slot);
+void set_liveness_probe(LivenessProbe probe) noexcept;
+
 // Route one host RX byte: returns the focused VM index, or kSwitched
 // when the byte was the focus-switch control (consumed here, announced
 // with a "[mux] focus vmN" line). Callers inject anything else into
