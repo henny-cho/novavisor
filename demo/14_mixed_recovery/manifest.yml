@@ -1,0 +1,61 @@
+name: "14_mixed_recovery"
+description: "Zephyr (RT, core 0) and Linux (GP, core 1) run side by side; Linux takes load, panics itself and warm-resets while Zephyr never stops — mixed criticality and autonomous recovery in one run."
+phase: 18
+enabled: false
+# Two full Linux boots plus a 20 s load window, with Zephyr flooding
+# the console throughout — minutes-long under TCG on a slow host.
+timeout_seconds: 1200
+
+config: "configs/mixed.yml"
+
+# External images assembled by fetch.sh from the 12/13 pipelines
+# (run `task.sh demo fetch 14` once). Linux sits at the packed PA
+# slot after Zephyr's 8 MiB window.
+guests:
+  - name: "zephyr"
+    binary: "zephyr.bin"
+    load_addr:   0x50000000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00800000
+    vcpus: 1
+    uart: vuart
+  - name: "linux"
+    binary: "Image"
+    load_addr:   0x50800000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x08000000
+    vcpus: 1
+    uart: vuart
+
+# Scenario A (mixed criticality): philosophers lines must keep flowing
+# between the Linux load-start and load-done markers. Scenario B
+# (autonomous recovery): the self-triggered panic warm-resets Linux
+# from pristine while Zephyr keeps running; the second boot lands on
+# the shell prompt.
+expect:
+  - pattern: "Booting Zephyr OS build"
+    within_seconds: 60
+  - pattern: "Booting Linux on physical CPU"
+    within_seconds: 120
+  - pattern: "NOVA MIXED BOOT 1"
+    within_seconds: 420
+  - pattern: "NOVA LOAD START"
+    within_seconds: 30
+  - pattern: "Philosopher \\d+.*(THINKING|EATING|HOLDING|STARVING|DROPPED)"
+    within_seconds: 30
+  - pattern: "Philosopher \\d+.*(THINKING|EATING|HOLDING|STARVING|DROPPED)"
+    within_seconds: 30
+  - pattern: "NOVA LOAD DONE"
+    within_seconds: 60
+  - pattern: "sysrq: Trigger a crash"
+    within_seconds: 30
+  - pattern: "Booting Linux on physical CPU"
+    within_seconds: 120
+  - pattern: "NOVA MIXED BOOT 2"
+    within_seconds: 420
+  - pattern: "~ #"
+    within_seconds: 30
+  - pattern: "Philosopher \\d+.*(THINKING|EATING|HOLDING|STARVING|DROPPED)"
+    within_seconds: 30
