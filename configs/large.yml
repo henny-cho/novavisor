@@ -1,0 +1,5 @@
+# Large single-guest configuration: 8 MiB of RAM, two vCPUs (cores 0
+# and 1). demo/11_configurable verifies the guest sees exactly this
+# and can actually bring the second vCPU up.
+guests:
+  - { name: vm0, memory_size: 0x00800000, vcpus: 2, uart: vuart }

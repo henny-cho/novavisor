@@ -1,0 +1,13 @@
+# Default guest configuration — mirrors the static table the demos
+# 1..10 were built against: four 1 MiB slots, VM0 with a second vCPU
+# on the other core, every slot with the emulated PL011.
+#
+# Per-guest keys: name, memory_size (MiB multiple, >= 1 MiB linker
+# window), vcpus (1..2), uart (none | vuart). Placement (PA slot,
+# entry, affinity, VMID) derives from the list index, same rules as
+# before: slots 0/1 boot on core 0, slots 2/3 on core 1.
+guests:
+  - { name: vm0, memory_size: 0x00100000, vcpus: 2, uart: vuart }
+  - { name: vm1, memory_size: 0x00100000, vcpus: 1, uart: vuart }
+  - { name: vm2, memory_size: 0x00100000, vcpus: 1, uart: vuart }
+  - { name: vm3, memory_size: 0x00100000, vcpus: 1, uart: vuart }

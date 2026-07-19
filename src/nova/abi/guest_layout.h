@@ -59,6 +59,15 @@
 #define NOVA_VUART_IPA_SIZE 0x00001000
 #define NOVA_VUART_SPI      33
 
+/* Guest DTB: each guest's configuration blob (built by tools/yml2dtb)
+ * is copied into the top of the linker window before the pristine
+ * snapshot, and its IPA is handed to the boot vCPU in x0 (Linux boot
+ * protocol shape). The reservation sits at the fixed 1 MiB window top
+ * regardless of the configured memory size, so every valid config
+ * contains it; the stack top moves down below it. */
+#define NOVA_GUEST_DTB_SIZE 0x00002000 /* 8 KiB */
+#define NOVA_GUEST_DTB_IPA  (NOVA_GUEST_IPA_BASE + NOVA_GUEST_IPA_SIZE - NOVA_GUEST_DTB_SIZE)
+
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
 #endif /* NOVA_GUEST_LAYOUT_H */

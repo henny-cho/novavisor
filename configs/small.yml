@@ -1,0 +1,4 @@
+# Minimal single-guest configuration: 2 MiB of RAM, one vCPU.
+# demo/11_configurable verifies the guest sees exactly this.
+guests:
+  - { name: vm0, memory_size: 0x00200000, vcpus: 1, uart: vuart }
