@@ -61,6 +61,7 @@ void init_guest_table() noexcept {
   if (count == 0 || count > kMaxGuests) {
     panic_guest_config(count);
   }
+  std::uint64_t load_pa = kGuestIpaBase; // packed PA cursor
   for (std::size_t i = 0; i < count; ++i) {
     const std::span<const std::uint8_t> blob{g_guest_dtbs[i].start,
                                              static_cast<std::size_t>(g_guest_dtbs[i].end - g_guest_dtbs[i].start)};
@@ -73,17 +74,18 @@ void init_guest_table() noexcept {
     g_table[i] = GuestDescriptor{
         .ipa_base  = kGuestIpaBase,
         .ipa_size  = info.mem_size,
-        .load_pa   = guest_slot_pa(i),
+        .load_pa   = load_pa,
         .entry_pc  = kGuestEntry,
-        .stack_top = kGuestStackTop,
+        .stack_top = guest_dtb_ipa(info.mem_size),
         .vmid      = static_cast<std::uint16_t>(i + 1),
         .vcpus     = static_cast<std::uint8_t>(info.cpus),
         .cpu       = kAffinity[i],
         .uart      = info.has_uart ? UartKind::kVuart : UartKind::kNone,
         .dtb       = blob.data(),
         .dtb_size  = static_cast<std::uint32_t>(blob.size()),
-        .dtb_ipa   = NOVA_GUEST_DTB_IPA,
+        .dtb_ipa   = guest_dtb_ipa(info.mem_size),
     };
+    load_pa = align_up_pa(load_pa + info.mem_size);
   }
   g_count = count;
 }

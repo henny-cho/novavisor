@@ -39,7 +39,7 @@ MIB = 0x10_0000
 def read_layout(path: Path) -> dict[str, int]:
     """Pull the #define constants the validator needs from guest_layout.h."""
     wanted = [
-        "NOVA_GUEST_IPA_BASE", "NOVA_GUEST_IPA_SIZE", "NOVA_GUEST_PA_STRIDE",
+        "NOVA_GUEST_IPA_BASE", "NOVA_GUEST_IPA_SIZE", "NOVA_GUEST_PA_ALIGN",
         "NOVA_IVC_SHM_PA", "NOVA_GUEST_PRISTINE_PA",
         "NOVA_GUEST_DTB_SIZE", "NOVA_VUART_IPA_BASE", "NOVA_VUART_SPI",
     ]
@@ -179,8 +179,11 @@ def load_config(path: Path, layout: dict[str, int]) -> list[dict]:
     if not isinstance(guests, list) or not 1 <= len(guests) <= 4:  # kMaxGuests
         sys.exit(f"yml2dtb: {path}: 'guests' must list 1..4 entries")
 
-    ipa_base = layout["NOVA_GUEST_IPA_BASE"]
-    stride = layout["NOVA_GUEST_PA_STRIDE"]
+    # PA windows pack from the IPA base with Block-aligned starts —
+    # the same cursor rule guest_config.cpp applies at boot. The whole
+    # packed region must stay below the IVC page.
+    align = layout["NOVA_GUEST_PA_ALIGN"]
+    load_pa = layout["NOVA_GUEST_IPA_BASE"]
     parsed = []
     for i, g in enumerate(guests):
         name = g.get("name", f"vm{i}")
@@ -194,12 +197,11 @@ def load_config(path: Path, layout: dict[str, int]) -> list[dict]:
         if size < layout["NOVA_GUEST_IPA_SIZE"] or size % MIB:
             sys.exit(f"yml2dtb: {name}: memory_size {size:#x} must be a MiB "
                      f"multiple >= {layout['NOVA_GUEST_IPA_SIZE']:#x} (linker window)")
-        load_pa = ipa_base + i * stride
-        limit = ipa_base + (i + 1) * stride if i + 1 < len(guests) else layout["NOVA_IVC_SHM_PA"]
-        if load_pa + size > limit:
+        if load_pa + size > layout["NOVA_IVC_SHM_PA"]:
             sys.exit(f"yml2dtb: {name}: window {load_pa:#x}+{size:#x} overlaps "
-                     f"{'next PA slot' if i + 1 < len(guests) else 'IVC page'} at {limit:#x}")
+                     f"the IVC page at {layout['NOVA_IVC_SHM_PA']:#x}")
         parsed.append({"name": name, "memory_size": size, "vcpus": vcpus, "uart": uart})
+        load_pa = (load_pa + size + align - 1) & ~(align - 1)
 
     pristine_end = layout["NOVA_GUEST_PRISTINE_PA"] + sum(g["memory_size"] for g in parsed)
     if pristine_end > RAM_END:

@@ -25,27 +25,27 @@
 #define NOVA_GUEST_IPA_BASE 0x50000000
 #define NOVA_GUEST_IPA_SIZE 0x00100000 /* 1 MiB */
 
-/* PA slot for guest i: NOVA_GUEST_IPA_BASE + i * NOVA_GUEST_PA_STRIDE.
- * Slot 0 is identity (Phase 5/6 single-guest demos stay unchanged).
- * The 2 MiB stride keeps slot bases Block-alignable for future window
- * growth. A demo manifest's guests[].load_addr must equal the slot PA. */
-#define NOVA_GUEST_PA_STRIDE 0x00200000 /* 2 MiB */
+/* Guest PA windows are packed: guest i starts where guest i-1 ended,
+ * rounded up to this alignment (keeps every window Block-mappable and
+ * slot 0 identity with the IPA window). A demo manifest's
+ * guests[].load_addr must equal the packed PA tools/yml2dtb computes. */
+#define NOVA_GUEST_PA_ALIGN 0x00200000 /* 2 MiB */
 
 /* IVC shared page: one 4 KiB page mapped RW (XN) into every VM at the
- * same IPA. The IPA sits above the largest configurable guest window
- * (8 MiB — bounded by the PA collision checks in tools/yml2dtb), so no
- * window can overlap it; it equals the PA — past the last guest PA
- * slot (4 slots x 2 MiB from 0x5000_0000) — making slot 0 identity. */
-#define NOVA_IVC_SHM_IPA  0x50800000
-#define NOVA_IVC_SHM_PA   0x50800000
+ * same IPA. It caps the packed guest-window region (0x5000_0000..here,
+ * 256 MiB — enforced by tools/yml2dtb), so no window can overlap it;
+ * IPA equals PA, keeping slot 0 identity. */
+#define NOVA_IVC_SHM_IPA  0x60000000
+#define NOVA_IVC_SHM_PA   0x60000000
 #define NOVA_IVC_SHM_SIZE 0x00001000 /* 4 KiB */
 
 /* Pristine image area: at boot the hypervisor copies each guest window
- * here (one NOVA_GUEST_IPA_SIZE slot per guest), and a warm reset
- * copies it back — guests dirty their .data/BSS/stack, so reseeding
- * the CPU context alone cannot reboot them. EL2-only: never mapped
- * into Stage 2, so no guest can corrupt its own reset image. */
-#define NOVA_GUEST_PRISTINE_PA 0x50A00000
+ * here (slots packed at the running sum of window sizes), and a warm
+ * reset copies it back — guests dirty their .data/BSS/stack, so
+ * reseeding the CPU context alone cannot reboot them. EL2-only: never
+ * mapped into Stage 2, so no guest can corrupt its own reset image.
+ * Sits above the IVC page; tools/yml2dtb bounds the copies to RAM end. */
+#define NOVA_GUEST_PRISTINE_PA 0x60100000
 
 /* Emulated GICv3 frames: left unmapped in Stage 2 so every access traps
  * into the vGIC. The IPAs equal the board's physical GIC addresses so
@@ -62,13 +62,13 @@
 #define NOVA_VUART_SPI      33
 
 /* Guest DTB: each guest's configuration blob (built by tools/yml2dtb)
- * is copied into the top of the linker window before the pristine
- * snapshot, and its IPA is handed to the boot vCPU in x0 (Linux boot
- * protocol shape). The reservation sits at the fixed 1 MiB window top
- * regardless of the configured memory size, so every valid config
- * contains it; the stack top moves down below it. */
+ * is copied to the top of that guest's configured window before the
+ * pristine snapshot, and its IPA is handed to the boot vCPU in x0
+ * (Linux boot protocol shape). The runtime guest table computes the
+ * per-guest IPA (window end - this reservation); the demo linker
+ * script derives its link-time __stack_top from the same reservation
+ * at the minimum (NOVA_GUEST_IPA_SIZE) window top. */
 #define NOVA_GUEST_DTB_SIZE 0x00002000 /* 8 KiB */
-#define NOVA_GUEST_DTB_IPA  (NOVA_GUEST_IPA_BASE + NOVA_GUEST_IPA_SIZE - NOVA_GUEST_DTB_SIZE)
 
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
