@@ -123,6 +123,7 @@ if(CMAKE_CROSSCOMPILING)
         soft_timer
         core_timer
         core_vcpu
+        console_mux
         demo_hvc
         ivc
         psci

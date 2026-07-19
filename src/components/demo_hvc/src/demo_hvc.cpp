@@ -7,6 +7,7 @@
 
 #include "demo_hvc/demo_hvc.hpp"
 
+#include "console_mux/console_mux.hpp"
 #include "core_vcpu/core_vcpu.hpp"
 #include "hal/console.hpp"
 #include "nova/abi/guest.hpp"
@@ -52,18 +53,20 @@ void handle_puts(TrapContext* ctx) noexcept {
   }
 
   const auto* data = reinterpret_cast<const char*>(guest.to_pa(ipa));
-  console::write(std::string_view{data, len});
+  console_mux::guest_write(vcpu::current_index(), std::string_view{data, len});
 }
 
 void handle_putc(TrapContext* ctx) noexcept {
-  const char c = static_cast<char>(ctx->x[1] & 0xFFU);
-  console::write(std::string_view{&c, 1});
+  console_mux::guest_putc(vcpu::current_index(), static_cast<char>(ctx->x[1] & 0xFFU));
 }
 
 // HVC_EXIT: x1 = exit code. Emits the manifest-expected "demo_exit
 // code=N" line, then retires the calling VCPU — the scheduler switches
 // to the next runnable guest, or halts the machine after the last one.
+// The line stays untagged (harness contract); a buffered partial line
+// is flushed first so nothing the guest printed is lost.
 void handle_exit(TrapContext* ctx) noexcept {
+  console_mux::flush(vcpu::current_index());
   console::write("demo_exit code=");
   console::write_dec64(ctx->x[1]);
   console::write("\n");
