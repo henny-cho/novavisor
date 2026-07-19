@@ -1,7 +1,7 @@
 name: "10_console_mux"
 description: "Two VMs on two physical cores printing through their own vuarts — per-VM tagged, line-atomic output — while host input is focus-routed and echoed back over the UART SPI interrupt path."
 phase: 14
-enabled: false
+enabled: true
 timeout_seconds: 40
 
 # vm2 loads at slot 2 (0x50400000): guest_table gives slots 2/3 core-1
