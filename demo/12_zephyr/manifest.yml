@@ -1,7 +1,7 @@
 name: "12_zephyr"
 description: "Upstream Zephyr philosophers (qemu_cortex_a53 build, unmodified source) boots as a guest — the first real-OS check of the emulation surface."
 phase: 16
-enabled: false
+enabled: true
 timeout_seconds: 60
 
 config: "configs/zephyr.yml"
