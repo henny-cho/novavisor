@@ -39,7 +39,8 @@ demo/
 ├── 06_el1_mmu_fp/               # Phase 10 demo — EL1 MMU + lazy FP/SIMD
 ├── 07_lifecycle/                # Phase 11 demo — PSCI reset + watchdog recovery
 ├── 08_smp_pingpong/             # Phase 12 demo — two VMs on two physical cores
-└── 09_guest_smp/                # Phase 13 demo — one VM, two vCPUs (PSCI CPU_ON + vSGI)
+├── 09_guest_smp/                # Phase 13 demo — one VM, two vCPUs (PSCI CPU_ON + vSGI)
+└── 10_console_mux/              # Phase 14 demo — vuart TX tagging + focus-routed RX echo
 ```
 
 ## Hypercall ABI (demo ↔ hypervisor contract)
@@ -71,6 +72,18 @@ Guests on different cores run truly in parallel and can talk through
 the lock-free SPSC rings in the IVC shared page (layout in
 `nova/abi/ivc_ring.h`, helpers in `common/include/guest_ring.h`,
 acquire/release only — no exclusives, safe with the EL1 MMU off).
+
+Console mux + vuart (Phase 14): every guest line printed through the
+demo HVC or a guest's own PL011 arrives `[vmN]`-tagged and line-atomic
+(the hypervisor multiplexes per-VM line buffers onto the single
+physical UART). VMs declaring `uart: vuart` see an emulated PL011 at
+the standard virt address (`pl011_el1.h` driver helpers) — TX by DR
+polling, RX by the UART SPI (33): enable it at the distributor
+(`gicd_enable_spi()`) and unmask IMSC. Host input goes to the focused
+VM; Ctrl-T (0x14) cycles focus across live vuart VMs. A manifest
+`expect` entry may carry `send:` — bytes written to the guest console
+after that pattern matches. Guests also each get a private virtual
+counter (per-VM CNTVOFF): CNTVCT restarts near zero on every (re)boot.
 
 Guest SMP (Phase 13): the boot slot's VM carries two vCPUs (cores 0
 and 1) and the manifest `vcpus:` field is validated against the
@@ -120,6 +133,7 @@ guests:
     entry:     0x50000000            # EL1 entry PC
     memory_size: 0x00100000          # IPA window size
     vcpus: 1
+    uart: vuart                      # optional: none (default) | vuart
 
 # Ordered list of output patterns the harness must observe.
 expect:

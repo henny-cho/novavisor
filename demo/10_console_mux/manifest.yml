@@ -1,0 +1,57 @@
+name: "10_console_mux"
+description: "Two VMs on two physical cores printing through their own vuarts — per-VM tagged, line-atomic output — while host input is focus-routed and echoed back over the UART SPI interrupt path."
+phase: 14
+enabled: false
+timeout_seconds: 40
+
+# vm2 loads at slot 2 (0x50400000): guest_table gives slots 2/3 core-1
+# affinity, so the two guests print truly in parallel. Both carry the
+# emulated PL011 ('uart: vuart', validated like 'vcpus').
+guests:
+  - name: "vm0"
+    binary: "mux_vm0.bin"
+    load_addr:   0x50000000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+    uart: vuart
+  - name: "vm2"
+    binary: "mux_vm2.bin"
+    load_addr:   0x50400000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+    uart: vuart
+
+# Deterministic order: vm0 prints its banner before starting vm2, so
+# the banners cannot race; only vm2's ticks are asserted (vm0's
+# interleave freely across the cores). Input is sent only after the
+# pattern before it matched: "ping" goes to the initial focus (vm0),
+# whose echo+exit precedes the focus switch (Ctrl-T = \x14) — the
+# cycle skips retired VMs, landing on vm2 — and "pong" echoes there.
+expect:
+  - pattern: "core 1 online"
+    within_seconds: 10
+  - pattern: "\\[vm0\\] vuart up"
+    within_seconds: 10
+  - pattern: "\\[vm2\\] vuart up"
+    within_seconds: 10
+  - pattern: "\\[vm2\\] tick 4"
+    within_seconds: 15
+    send: "ping\n"
+  - pattern: "\\[vm0\\] echo: ping"
+    within_seconds: 10
+  - pattern: "demo_exit code=0"
+    within_seconds: 5
+    send: "\x14"
+  - pattern: "\\[mux\\] focus vm2"
+    within_seconds: 5
+    send: "pong\n"
+  - pattern: "\\[vm2\\] echo: pong"
+    within_seconds: 10
+  - pattern: "demo_exit code=0"
+    within_seconds: 5
+  - pattern: "all VCPUs off"
+    within_seconds: 5

@@ -211,6 +211,11 @@ def verify(name: str) -> int:
                 print(f"\n[demo_runner] FAIL: EOF before /{pattern}/",
                       file=sys.stderr)
                 return 1
+            # Optional host input, sent only after the pattern above
+            # matched — keeps stdin-driven demos deterministic.
+            send = exp.get("send")
+            if send is not None:
+                child.send(send)
         print(f"\n[demo_runner] PASS: {name}")
         return 0
     finally:

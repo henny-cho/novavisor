@@ -72,6 +72,14 @@ static inline void gicr_enable(unsigned intid) {
   gicr_enable_at(0, intid);
 }
 
+// Enable one SPI (INTID 32..63) at the distributor. Group and route
+// keep their reset values (Group 1, vCPU 0); a mid priority is set so
+// the ICV priority mask never filters it.
+static inline void gicd_enable_spi(unsigned intid) {
+  *gic_reg32(GICD_BASE + NOVA_GICD_IPRIORITYR + (intid & ~3U)) = 0x80808080U;
+  *gic_reg32(GICD_BASE + NOVA_GICD_ISENABLER1)                 = 1U << (intid % 32U); // write-1-to-set
+}
+
 // Generate a Group 1 SGI toward sibling vCPUs (one TargetList bit per
 // vCPU index). The write is trapped (ICH_HCR.TC) and routed by the
 // hypervisor — this is the guest's cross-vCPU IPI.
