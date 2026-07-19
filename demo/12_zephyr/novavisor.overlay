@@ -1,0 +1,9 @@
+/*
+ * Relocate guest RAM into NovaVisor's slot-0 IPA window (8 MiB at
+ * 0x50000000). The board's chosen zephyr,sram points at &sram0, so
+ * CONFIG_SRAM_BASE_ADDRESS, the link base and the entry point all
+ * follow this reg value — no hypervisor or Zephyr source change.
+ */
+&sram0 {
+	reg = <0x0 0x50000000 0x0 0x800000>;
+};

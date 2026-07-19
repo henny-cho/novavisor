@@ -1,0 +1,5 @@
+# Zephyr guest configuration: one 8 MiB slot (the full single-guest
+# window — matches the DTS overlay that relocates Zephyr's RAM here),
+# a single vCPU, and the emulated PL011 for console TX + RX interrupt.
+guests:
+  - { name: zephyr, memory_size: 0x00800000, vcpus: 1, uart: vuart }

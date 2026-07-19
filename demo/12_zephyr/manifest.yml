@@ -1,0 +1,32 @@
+name: "12_zephyr"
+description: "Upstream Zephyr philosophers (qemu_cortex_a53 build, unmodified source) boots as a guest — the first real-OS check of the emulation surface."
+phase: 16
+enabled: false
+timeout_seconds: 60
+
+config: "configs/zephyr.yml"
+
+# External image: fetch.sh builds the pinned Zephyr release into
+# external/cache/guests/12_zephyr/ (run `task.sh demo fetch 12` once).
+# RAM placement comes from novavisor.overlay, so link base == slot 0.
+guests:
+  - name: "zephyr"
+    binary: "zephyr.bin"
+    load_addr:   0x50000000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00800000
+    vcpus: 1
+    uart: vuart
+
+# philosophers never exits: the boot banner plus a few state lines are
+# the pass condition — the runner kills QEMU after the last match.
+expect:
+  - pattern: "Booting Zephyr OS build"
+    within_seconds: 30
+  - pattern: "Philosopher \\d+.*(THINKING|EATING|HOLDING|STARVING|DROPPED)"
+    within_seconds: 10
+  - pattern: "Philosopher \\d+.*(THINKING|EATING|HOLDING|STARVING|DROPPED)"
+    within_seconds: 10
+  - pattern: "Philosopher \\d+.*(THINKING|EATING|HOLDING|STARVING|DROPPED)"
+    within_seconds: 10
