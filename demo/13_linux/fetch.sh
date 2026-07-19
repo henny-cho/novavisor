@@ -15,7 +15,7 @@ LINUX_VER="6.12.30"
 LINUX_URL="https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${LINUX_VER}.tar.xz"
 BUSYBOX_VER="1.36.1"
 BUSYBOX_URL="https://busybox.net/downloads/busybox-${BUSYBOX_VER}.tar.bz2"
-RECIPE_REV="r2" # bump when the recipe below changes without a version bump
+RECIPE_REV="r3" # bump when the recipe below changes without a version bump
 
 WORKSPACE="${REPO}/external/linux"
 CACHE="${REPO}/external/cache/guests/13_linux"
@@ -54,19 +54,41 @@ if [[ ! -x "busybox-${BUSYBOX_VER}/busybox" ]]; then
     )
 fi
 
-# --- initramfs: /init mounts proc/sys, proves userspace, drops to sh --
+# --- initramfs: /init mounts proc/sys, proves userspace, drops to sh.
+# A `nova_mixed` kernel command line switches it into the
+# mixed-criticality scenario driver: the IVC page (0x60000000, mapped
+# into every VM and untouched by a warm reset) holds a boot counter,
+# so the first boot generates CPU load and panics itself (panic=-1
+# warm-resets the VM from pristine) while the second boot lands on
+# the shell. One image serves both the plain and the mixed demo.
 cat > init.sh <<'EOF'
 #!/bin/sh
 /bin/busybox mount -t proc proc /proc
 /bin/busybox mount -t sysfs sysfs /sys
 /bin/busybox --install -s /bin
 uname -a
+if grep -q nova_mixed /proc/cmdline; then
+    boot=$(($(devmem 0x60000F00 32) + 1))
+    devmem 0x60000F00 32 $boot
+    echo "NOVA MIXED BOOT $boot"
+    if [ "$boot" = 1 ]; then
+        echo "NOVA LOAD START"
+        md5sum /dev/zero &
+        md5sum /dev/zero &
+        sleep 20
+        echo "NOVA LOAD DONE"
+        echo c > /proc/sysrq-trigger
+    fi
+fi
 exec /bin/sh
 EOF
 
 cat > initramfs.list <<EOF
 dir /dev 0755 0 0
 nod /dev/console 0600 0 0 c 5 1
+nod /dev/mem 0600 0 0 c 1 1
+nod /dev/zero 0666 0 0 c 1 5
+nod /dev/null 0666 0 0 c 1 3
 dir /proc 0755 0 0
 dir /sys 0755 0 0
 dir /bin 0755 0 0
