@@ -32,12 +32,23 @@ namespace {
 
 // Physical SGI announcing "your mailbox has work" — EL2's own IPI.
 // Guests never see physical SGIs (they get vINTIDs via ICH_LR).
-inline constexpr std::uint32_t kCrossCallSgi = 0;
+inline constexpr std::uint32_t kCrossCallSgi     = 0;
+inline constexpr std::size_t   kMailboxCapacity  = 16;
+inline constexpr std::size_t   kLifecycleReserve = 2 * kMaxGuests * (kMaxVcpusPerVm - 1);
+static_assert(kLifecycleReserve < kMailboxCapacity);
 
-enum class Op : std::uint8_t { kStartVm, kPostVirq, kCpuOn, kStopVcpu, kResetVm };
+enum class Op : std::uint8_t {
+  kStartVm,
+  kPostVirq,
+  kCpuOn,
+  kStopVcpu,
+  kBeginReset,
+  kQuiesceVcpu,
+  kQuiesceAck,
+};
 
-// `idx` is a VM for kStartVm/kResetVm, a vCPU slot otherwise. a/b are
-// wide enough for CPU_ON's entry point and context id.
+// `idx` is a VM for start/begin-reset, a vCPU slot otherwise. a/b are
+// wide enough for CPU_ON arguments and the reset epoch.
 struct Request {
   Op            op  = Op::kStartVm;
   std::uint32_t idx = 0;
@@ -49,12 +60,18 @@ struct Request {
 // the owner in IRQ context. Capacity covers the realistic burst (a
 // couple of VMs' worth of doorbells); a full box rejects the request.
 struct Mailbox {
-  sync::SpinLock         lock;
-  std::array<Request, 8> req{};
-  std::size_t            count = 0;
+  sync::SpinLock                        lock;
+  std::array<Request, kMailboxCapacity> req{};
+  std::size_t                           count = 0;
 };
 
 std::array<Mailbox, cpu::kMaxCpus> g_mail;
+
+// Reset state is modified only on each VM boot VCPU's owner core. The
+// atomic flag reserves a reset before its begin request crosses cores
+// and prevents a concurrent cold start from reviving a quiescing VM.
+std::array<lifecycle::QuiesceTracker<kMaxVcpusPerVm>, kMaxGuests> g_reset;
+std::array<std::atomic<bool>, kMaxGuests>                         g_reset_active{};
 
 // Set by each secondary as its last bring-up step; the primary's
 // bounded wait reads it. acquire/release pairs the secondary's init
@@ -73,11 +90,17 @@ inline constexpr std::uint64_t kOnlineWaitMs = 100;
   return vm_of(slot) < guest_table().size() && vcpu_of(slot) < guest_table()[vm_of(slot)].vcpus;
 }
 
-[[nodiscard]] auto enqueue(std::size_t target_cpu, Request r) noexcept -> bool {
+[[nodiscard]] auto enqueue(std::size_t target_cpu, Request r, bool lifecycle = false) noexcept -> bool {
+  if (target_cpu >= g_online.size() || !g_online[target_cpu].load(std::memory_order_acquire)) {
+    return false;
+  }
   Mailbox& box = g_mail[target_cpu];
   {
     sync::Guard guard{box.lock};
-    if (box.count == box.req.size()) {
+    // Reserve room for one quiesce command and ACK per VM. A reset must
+    // never deadlock because ordinary notifications filled the box.
+    const std::size_t limit = lifecycle ? box.req.size() : box.req.size() - kLifecycleReserve;
+    if (box.count >= limit) {
       return false; // burst beyond capacity — caller sees a rejected call
     }
     box.req[box.count++] = r;
@@ -86,15 +109,133 @@ inline constexpr std::uint64_t kOnlineWaitMs = 100;
   return true;
 }
 
+void release_reset(std::size_t vm) noexcept {
+  if (vm < g_reset_active.size()) {
+    g_reset_active[vm].store(false, std::memory_order_release);
+  }
+  vcpu::end_lifecycle_transition();
+}
+
+void finish_reset(std::size_t vm) noexcept {
+  auto& tracker = g_reset[vm];
+  if (!tracker.ready()) {
+    return;
+  }
+
+  console::write("[smp] VM ");
+  console::write_dec64(vm);
+  console::write(" quiesced — restoring\n");
+  const bool restarted = vcpu::reset_quiesced_vm(vm);
+  (void)tracker.finish();
+  release_reset(vm);
+  if (!restarted) {
+    console::write("[smp] VM ");
+    console::write_dec64(vm);
+    console::write(" reset left stopped\n");
+  }
+}
+
+void acknowledge_quiesce(std::size_t slot, std::uint64_t epoch) noexcept {
+  const std::size_t vm = vm_of(slot);
+  if (vm >= guest_table().size()) {
+    return;
+  }
+  const lifecycle::AckResult result = g_reset[vm].acknowledge(vcpu_of(slot), epoch);
+  if (result == lifecycle::AckResult::kReady) {
+    finish_reset(vm);
+  }
+}
+
+// Runs only on the VM boot VCPU's owner. Returns true when the caller's
+// live frame belonged to a VCPU retired here and must be scheduled away
+// after all mailbox requests in the current batch have been handled.
+[[nodiscard]] auto begin_reset_local(std::size_t vm) noexcept -> bool {
+  if (vm >= guest_table().size() || slot_cpu(slot_of(vm)) != cpu::id()) {
+    release_reset(vm);
+    return false;
+  }
+
+  std::uint32_t live_mask = 0;
+  for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
+    if (vcpu::vcpu_on(slot_of(vm, v))) {
+      live_mask |= std::uint32_t{1} << v;
+    }
+  }
+
+  auto&      tracker = g_reset[vm];
+  const auto plan    = tracker.begin(live_mask);
+  if (!plan.accepted) {
+    tracker.cancel();
+    release_reset(vm);
+    return false;
+  }
+  console::write("[smp] VM ");
+  console::write_dec64(vm);
+  console::write(" reset epoch ");
+  console::write_dec64(plan.epoch);
+  console::write(" pending mask 0x");
+  console::write_hex64(plan.pending_mask);
+  console::write("\n");
+
+  // Validate every foreign owner before sending anything. Once one
+  // quiesce command is visible, cancellation may stop only part of a VM.
+  for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
+    if ((live_mask & (std::uint32_t{1} << v)) == 0U) {
+      continue;
+    }
+    const std::size_t owner = slot_cpu(slot_of(vm, v));
+    if (owner != cpu::id() && (owner >= g_online.size() || !g_online[owner].load(std::memory_order_acquire))) {
+      tracker.cancel();
+      release_reset(vm);
+      console::write("[smp] reset rejected: target core offline\n");
+      return false;
+    }
+  }
+
+  for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
+    if ((live_mask & (std::uint32_t{1} << v)) == 0U) {
+      continue;
+    }
+    const std::size_t slot  = slot_of(vm, v);
+    const std::size_t owner = slot_cpu(slot);
+    if (owner != cpu::id() &&
+        !enqueue(owner, {.op = Op::kQuiesceVcpu, .idx = static_cast<std::uint32_t>(slot), .a = plan.epoch, .b = 0},
+                 true)) {
+      tracker.cancel();
+      release_reset(vm);
+      console::write("[smp] reset rejected: quiesce mailbox full\n");
+      return false;
+    }
+  }
+
+  bool schedule_required = false;
+  for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
+    if ((live_mask & (std::uint32_t{1} << v)) == 0U) {
+      continue;
+    }
+    const std::size_t slot = slot_of(vm, v);
+    if (slot_cpu(slot) == cpu::id()) {
+      schedule_required = vcpu::retire_vcpu(slot) || schedule_required;
+      acknowledge_quiesce(slot, plan.epoch);
+    }
+  }
+
+  if (tracker.ready()) {
+    finish_reset(vm);
+  }
+  return schedule_required;
+}
+
 } // namespace
 
 void start_secondaries() noexcept {
   const auto entry = reinterpret_cast<std::uint64_t>(&nova_secondary_entry);
 
+  g_online[0].store(true, std::memory_order_release);
   gic::enable_ppi(kCrossCallSgi); // the primary receives cross-calls too
 
   for (std::size_t i = 1; i < cpu::kMaxCpus; ++i) {
-    const std::uint64_t ret = arch::smc_call(PSCI_FN_CPU_ON | PSCI_FN_SMC64, /*target mpidr=*/i, entry, /*context=*/i);
+    const std::uint64_t ret = arch::smc_call(PSCI_FN_CPU_ON | PSCI_FN_SMC64, i, entry, i);
     if (ret != PSCI_SUCCESS) {
       console::write("[smp] core ");
       console::write_dec64(i);
@@ -127,7 +268,7 @@ void start_secondaries() noexcept {
 }
 
 auto start_vm(std::size_t vm) noexcept -> bool {
-  if (vm >= guest_table().size()) {
+  if (vm >= guest_table().size() || g_reset_active[vm].load(std::memory_order_acquire)) {
     return false;
   }
   const std::size_t boot = slot_of(vm);
@@ -148,7 +289,7 @@ auto post_virq(std::size_t slot, std::uint32_t vintid) noexcept -> bool {
 }
 
 auto cpu_on(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noexcept -> bool {
-  if (!valid_slot(slot)) {
+  if (!valid_slot(slot) || g_reset_active[vm_of(slot)].load(std::memory_order_acquire)) {
     return false;
   }
   if (slot_cpu(slot) == cpu::id()) {
@@ -179,30 +320,45 @@ void stop_vm(std::size_t vm, TrapContext* live) noexcept {
   }
 }
 
-void reset_vm(std::size_t vm, TrapContext* live) noexcept {
-  if (vm >= guest_table().size()) {
+void reset_vm(std::size_t vm, TrapContext* live, bool from_irq) noexcept {
+  if (vm >= guest_table().size() || !vcpu::vm_on(vm)) {
     return;
   }
-  // Secondaries go down first (PSCI: only the boot CPU survives a
-  // reset); the stop is asynchronous for foreign cores — see ADR risk
-  // on the reload window. Then the reset itself runs where vcpu 0's
-  // state lives.
-  const std::size_t boot = slot_of(vm);
-  for (std::size_t v = 1; v < guest_table()[vm].vcpus; ++v) {
-    const std::size_t slot = slot_of(vm, v);
-    if (!vcpu::vcpu_on(slot)) {
-      continue;
-    }
-    if (slot_cpu(slot) == cpu::id()) {
-      vcpu::stop_vcpu(slot, live);
-    } else {
-      (void)enqueue(slot_cpu(slot), {.op = Op::kStopVcpu, .idx = static_cast<std::uint32_t>(slot), .a = 0, .b = 0});
-    }
+
+  bool expected = false;
+  if (!g_reset_active[vm].compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+    return; // a reset for this VM is already in flight
   }
+  vcpu::begin_lifecycle_transition();
+
+  const std::size_t boot = slot_of(vm);
   if (slot_cpu(boot) == cpu::id()) {
-    vcpu::reset_vm(vm, live);
-  } else {
-    (void)enqueue(slot_cpu(boot), {.op = Op::kResetVm, .idx = static_cast<std::uint32_t>(vm), .a = 0, .b = 0});
+    if (begin_reset_local(vm)) {
+      if (from_irq) {
+        core_gic::defer_epilogue(&vcpu::schedule_after_retire);
+      } else {
+        vcpu::schedule_after_retire(live);
+      }
+    }
+    return;
+  }
+
+  if (!enqueue(slot_cpu(boot), {.op = Op::kBeginReset, .idx = static_cast<std::uint32_t>(vm), .a = 0, .b = 0}, true)) {
+    release_reset(vm);
+    console::write("[smp] reset rejected: coordinator mailbox unavailable\n");
+    return;
+  }
+
+  // SYSTEM_RESET must not return to a secondary caller while the boot
+  // owner coordinates the VM. Publish it off after the begin request is
+  // visible; the coordinator's live mask will then exclude it.
+  const std::size_t self = vcpu::current_index();
+  if (self < kMaxVcpus && vm_of(self) == vm && vcpu::retire_vcpu(self)) {
+    if (from_irq) {
+      core_gic::defer_epilogue(&vcpu::schedule_after_retire);
+    } else {
+      vcpu::schedule_after_retire(live);
+    }
   }
 }
 
@@ -245,15 +401,16 @@ void smp_component::handle_irq(IrqCall* call) noexcept {
 
   // Copy the batch out first — executing under the lock would deadlock
   // against a sender targeting this core from another IRQ path.
-  smp::Mailbox&               box = smp::g_mail[cpu::id()];
-  std::array<smp::Request, 8> batch{};
-  std::size_t                 n = 0;
+  smp::Mailbox&                                   box = smp::g_mail[cpu::id()];
+  std::array<smp::Request, smp::kMailboxCapacity> batch{};
+  std::size_t                                     n = 0;
   {
     sync::Guard guard{box.lock};
     n         = box.count;
     box.count = 0;
     batch     = box.req;
   }
+  bool schedule_required = false;
   for (std::size_t i = 0; i < n; ++i) {
     const smp::Request& r = batch[i];
     switch (r.op) {
@@ -267,12 +424,26 @@ void smp_component::handle_irq(IrqCall* call) noexcept {
       (void)vcpu::start_vcpu(r.idx, r.a, r.b);
       break;
     case smp::Op::kStopVcpu:
-      vcpu::stop_vcpu(r.idx, call->ctx);
+      schedule_required = vcpu::retire_vcpu(r.idx) || schedule_required;
       break;
-    case smp::Op::kResetVm:
-      vcpu::reset_vm(r.idx, call->ctx);
+    case smp::Op::kBeginReset:
+      schedule_required = smp::begin_reset_local(r.idx) || schedule_required;
+      break;
+    case smp::Op::kQuiesceVcpu: {
+      schedule_required       = vcpu::retire_vcpu(r.idx) || schedule_required;
+      const std::size_t owner = smp::slot_cpu(slot_of(vm_of(r.idx)));
+      if (!smp::enqueue(owner, {.op = smp::Op::kQuiesceAck, .idx = r.idx, .a = r.a, .b = 0}, true)) {
+        console::write("[smp] failed to return quiesce ACK\n");
+      }
       break;
     }
+    case smp::Op::kQuiesceAck:
+      smp::acknowledge_quiesce(r.idx, r.a);
+      break;
+    }
+  }
+  if (schedule_required) {
+    core_gic::defer_epilogue(&vcpu::schedule_after_retire);
   }
 }
 

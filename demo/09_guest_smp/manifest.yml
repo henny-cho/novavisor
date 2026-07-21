@@ -1,5 +1,5 @@
 name: "09_guest_smp"
-description: "One VM as an SMP guest: PSCI CPU_ON brings vCPU 1 up on the other physical core, per-vCPU GICR frames, and 100 trapped-SGI IPI round-trips."
+description: "One VM as an SMP guest: reset while vCPU 1 is active, then restart it and complete 100 trapped-SGI IPI round-trips."
 phase: 13
 enabled: true
 timeout_seconds: 30
@@ -19,14 +19,18 @@ guests:
 # Order is deterministic: the core-1 banner precedes all guest output
 # (secondaries come online during RuntimeStart); "vcpu1 online" gates
 # the round-trip loop (the boot vCPU waits for the READY flag); the
-# stats line prints only after AFFINITY_INFO confirmed the sibling
-# retired via CPU_OFF; the boot vCPU exits last, and the machine-wide
-# halt line requires every vCPU gone.
+# first reset marker is followed by a second vCPU1-online line only
+# after the quiesce ACK and pristine restore. The stats line prints
+# after AFFINITY_INFO confirms CPU_OFF; the boot vCPU exits last.
 expect:
   - pattern: "core 1 online"
     within_seconds: 10
   - pattern: "vcpu1 online"
     within_seconds: 15
+  - pattern: "guest smp: reset with vcpu1 active"
+    within_seconds: 18
+  - pattern: "vcpu1 online"
+    within_seconds: 20
   - pattern: "guest smp: 100 ipi rounds ok"
     within_seconds: 25
   - pattern: "demo_exit code=0"

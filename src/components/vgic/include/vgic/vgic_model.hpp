@@ -298,12 +298,10 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
     return true;
   case kGicdIcfgr2:
   case kGicdIcfgr3:
-    return true; // accepted, ignored (level assumed)
   case kGicdIgrpmodr1:
-    return true; // RAZ/WI with DS = 1 (no group modifier)
   case kGicdIsactiver1:
   case kGicdIcactiver1:
-    return true; // accepted, ignored (active state lives in the LRs)
+    return true; // accepted, ignored (fixed level/group, active state in LRs)
   default:
     return false;
   }
@@ -378,12 +376,10 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
     return true;
   case kGicrIcfgr0:
   case kGicrIcfgr1:
-    return true; // accepted, ignored
   case kGicrIgrpmodr0:
-    return true; // RAZ/WI with DS = 1 (no group modifier)
   case kGicrIsactiver0:
   case kGicrIcactiver0:
-    return true; // accepted, ignored (active state lives in the LRs)
+    return true; // accepted, ignored (fixed config/group, active state in LRs)
   default:
     return false;
   }

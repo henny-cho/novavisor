@@ -70,10 +70,12 @@ inline void enable_ppi(uint32_t intid) noexcept {
 // Distributor state is system-wide — call from single-threaded
 // bring-up or serialize externally.
 inline void enable_spi(uint32_t intid, uint32_t core) noexcept {
-  const uint32_t bit = 1U << (intid % 32U);
+  constexpr uintptr_t kIrouterStride = sizeof(uint64_t);
+  const uint32_t      bit            = 1U << (intid % 32U);
   *mmio32(GICD_BASE + NOVA_GICD_IGROUPR1) |= bit;
-  *reinterpret_cast<volatile uint64_t*>(GICD_BASE + NOVA_GICD_IROUTER + 8U * intid) = core;
-  *mmio32(GICD_BASE + NOVA_GICD_ISENABLER1)                                         = bit; // write-1-to-set
+  *reinterpret_cast<volatile uint64_t*>(GICD_BASE + NOVA_GICD_IROUTER +
+                                        kIrouterStride * static_cast<uintptr_t>(intid)) = core;
+  *mmio32(GICD_BASE + NOVA_GICD_ISENABLER1)                                             = bit; // write-1-to-set
 }
 
 } // namespace nova::board::qemu_virt::gicv3

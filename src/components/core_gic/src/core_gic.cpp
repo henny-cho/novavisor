@@ -9,13 +9,24 @@
 #include "core_gic/core_gic.hpp"
 
 #include "hal/console.hpp"
+#include "hal/cpu.hpp"
 #include "hal/gic.hpp"
 #include "nova/arch/trap_context.hpp"
 
+#include <array>
 #include <cib/top.hpp>
 #include <cstdint>
 
 namespace nova::core_gic {
+namespace {
+
+std::array<IrqEpilogue, cpu::kMaxCpus> g_epilogue{};
+
+} // namespace
+
+void defer_epilogue(IrqEpilogue epilogue) noexcept {
+  g_epilogue[cpu::id()] = epilogue;
+}
 
 void drain(TrapContext* ctx) noexcept {
   for (;;) {
@@ -34,6 +45,12 @@ void drain(TrapContext* ctx) noexcept {
     }
 
     gic::eoi(intid);
+
+    IrqEpilogue epilogue  = g_epilogue[cpu::id()];
+    g_epilogue[cpu::id()] = nullptr;
+    if (epilogue != nullptr) {
+      epilogue(ctx);
+    }
   }
 }
 

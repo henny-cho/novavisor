@@ -25,6 +25,7 @@
 namespace nova {
 
 struct TrapContext; // nova/arch/trap_context.hpp — carried by pointer only
+using IrqEpilogue = void (*)(TrapContext*) noexcept;
 
 struct IrqCall {
   TrapContext*  ctx     = nullptr; // live trap frame (handlers may swap it)
@@ -35,6 +36,12 @@ struct IrqCall {
 struct IrqService : public callback::service<IrqCall*> {};
 
 namespace core_gic {
+
+// Request work that must run only after the current physical interrupt
+// has been EOI'd. Used when an IRQ retires the resident vCPU: entering
+// an idle scheduler from the callback itself would leave the INTID
+// active and prevent another interrupt with the same ID from arriving.
+void defer_epilogue(IrqEpilogue epilogue) noexcept;
 
 // Ack → IrqService → EOI until no INTID is pending. `ctx` is the live
 // trap frame handed to every subscriber.

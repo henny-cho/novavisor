@@ -227,14 +227,33 @@ cmd_lint() {
     # to aarch64-none-elf and injects GCC's implicit include dirs.
     local EXTRA_ARGS=()
     mapfile -t EXTRA_ARGS < "${BUILD_DIR}/clang_tidy_extra_args.txt"
+    local TIDY_SOURCE_RE="^${WORK_DIR}/src/(components|hal|nova|projects)/.*\\.cpp\$"
+    local TIDY_COUNT
+    TIDY_COUNT=$(python3 - "${BUILD_DIR}/compile_commands.json" "${TIDY_SOURCE_RE}" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+database = json.loads(pathlib.Path(sys.argv[1]).read_text())
+source_pattern = re.compile(sys.argv[2])
+files = {entry["file"] for entry in database if source_pattern.match(entry["file"])}
+print(len(files))
+PY
+    )
+    if [ "${TIDY_COUNT}" -eq 0 ]; then
+        echo "Error: clang-tidy selected 0 source files" >&2
+        exit 1
+    fi
+    echo "==> clang-tidy selected ${TIDY_COUNT} translation units"
     # .cpp only: the compile database also lists .S assembly TUs, which
     # clang-tidy cannot parse.
     # -header-filter is passed explicitly because clang-tidy 19+ no longer
     # honors HeaderFilterRegex from .clang-tidy — relying on the config file
     # silently skips all header diagnostics on newer versions.
     run-clang-tidy -quiet -p "${BUILD_DIR}" "${EXTRA_ARGS[@]}" \
-        '-header-filter=/(components|hal|nova|projects)/' \
-        "^${WORK_DIR}/(components|hal|nova|projects)/.*\.cpp\$"
+        '-header-filter=/src/(components|hal|nova|projects)/' \
+        "${TIDY_SOURCE_RE}"
     echo "Linting complete."
 }
 

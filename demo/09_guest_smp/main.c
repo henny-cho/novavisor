@@ -4,9 +4,9 @@
 // common/secondary.S, context_id = a private stack top), each vCPU
 // wakes its own redistributor frame, and the two exchange 100 IPI
 // round-trips through trapped ICC_SGI1R writes — vCPU 0 on physical
-// core 0, vCPU 1 on core 1, truly in parallel. The finale exercises
-// CPU_OFF + AFFINITY_INFO: the secondary retires itself and the boot
-// vCPU confirms it before exiting.
+// core 0, vCPU 1 on core 1, truly in parallel. The first run resets
+// while vCPU 1 is active, proving EL2 waits for its quiesce ACK before
+// restoring RAM. The second run exercises CPU_OFF + AFFINITY_INFO.
 //
 // Distinct INTIDs per direction (PING to vCPU 1, PONG to vCPU 0) keep
 // each side acking only its own SGIs. One-shot SGI wake-ups use the
@@ -16,12 +16,17 @@
 #include "demo_hvc.h"
 #include "gic_el1.h"
 #include "guest_psci.h"
+#include "nova/abi/guest_layout.h"
 
 #include <stdint.h>
 
 #define SGI_PING 1 /* vCPU 0 -> vCPU 1 */
 #define SGI_PONG 2 /* vCPU 1 -> vCPU 0 */
 #define ROUNDS   100
+
+// Outside the reset guest window, so it survives the pristine-image
+// restore while g_ready/g_done/g_pongs below return to zero.
+#define RUN_COUNT ((volatile uint64_t*)(NOVA_IVC_SHM_IPA + 0xF80))
 
 extern char _demo_vectors[];    // vectors.S
 extern char _secondary_start[]; // common/secondary.S
@@ -88,6 +93,8 @@ void secondary_main(void) {
 }
 
 int main(void) {
+  const uint64_t run = ++RUN_COUNT[0];
+
   __asm__ volatile("msr vbar_el1, %0" ::"r"(_demo_vectors));
   gicd_enable_group1();
   gicr_wake_at(my_vcpu());
@@ -101,6 +108,11 @@ int main(void) {
   }
   while (!g_ready) {
     // the sibling boots in parallel on the other physical core
+  }
+
+  if (run == 1) {
+    hvc_puts_lit("guest smp: reset with vcpu1 active\n");
+    psci_system_reset();
   }
 
   for (uint64_t i = 1; i <= ROUNDS; ++i) {

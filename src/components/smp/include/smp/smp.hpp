@@ -53,10 +53,11 @@ void start_secondaries() noexcept;
 
 // VM-wide power operations, fanned out per vCPU. stop_vm retires every
 // live vCPU (the caller's own last — that one schedules away through
-// `live` and the call does not return to guest code). reset_vm stops
-// the secondaries and reseeds vcpu 0 on its owning core.
+// `live` and the call does not return to guest code). reset_vm routes
+// through the boot owner, waits for current-epoch quiesce ACKs, then
+// restores memory and reseeds vcpu 0.
 void stop_vm(std::size_t vm, TrapContext* live) noexcept;
-void reset_vm(std::size_t vm, TrapContext* live) noexcept;
+void reset_vm(std::size_t vm, TrapContext* live, bool from_irq = false) noexcept;
 
 } // namespace nova::smp
 

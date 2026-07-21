@@ -96,9 +96,9 @@ void log_raz_wi(const char* frame, std::uint64_t off) noexcept {
 }
 
 void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
-  const std::size_t slot = resident_here();
-  DistState&        dist = g_dist[vm_of(slot)];
-  bool              known;
+  const std::size_t slot  = resident_here();
+  DistState&        dist  = g_dist[vm_of(slot)];
+  bool              known = false;
   {
     sync::Guard guard{g_dist_lock}; // SPI banks race post/refill across cores
     if (call->write) {
@@ -159,7 +159,11 @@ void redist_mmio(MmioCall* call, std::uint64_t off) noexcept {
     }
     return;
   }
-  const MmioRead r = redist_read(cpu.redist, in_off, call->size, id);
+  MmioRead r;
+  {
+    sync::Guard guard{g_dist_lock}; // sibling frames are cross-core writable
+    r = redist_read(cpu.redist, in_off, call->size, id);
+  }
   if (!r.known) {
     log_raz_wi("GICR", off);
   }
@@ -189,8 +193,11 @@ void init() noexcept {
 }
 
 void cpu_reset(std::size_t index) noexcept {
-  g_cpu[index] = CpuState{};
-  g_hw[index]  = HwBank{};
+  {
+    sync::Guard guard{g_dist_lock}; // a sibling can MMIO this redistributor frame
+    g_cpu[index] = CpuState{};
+  }
+  g_hw[index] = HwBank{};
 }
 
 void cpu_save(std::size_t index) noexcept {
@@ -229,9 +236,7 @@ auto post(std::size_t index, std::uint32_t vintid) noexcept -> bool {
 }
 
 auto spi_target_vcpu(std::size_t vm, std::uint32_t intid) noexcept -> std::size_t {
-  // Benign lock-free read: the route byte is written under g_dist_lock,
-  // but a torn read is impossible and a stale route only delays the
-  // interrupt until the routed vCPU's next flush.
+  sync::Guard guard{g_dist_lock};
   return spi_target(g_dist[vm], intid, guest_table()[vm].vcpus);
 }
 
@@ -252,9 +257,12 @@ auto has_deliverable(std::size_t index) noexcept -> bool {
     }
   }
   const std::size_t vm = vm_of(index);
-  if (deliverable(cpu.redist) != 0U ||
-      spi_deliverable(g_dist[vm], static_cast<std::uint32_t>(vcpu_of(index)), guest_table()[vm].vcpus) != 0U) {
-    return true;
+  {
+    sync::Guard guard{g_dist_lock};
+    if (deliverable(cpu.redist) != 0U ||
+        spi_deliverable(g_dist[vm], static_cast<std::uint32_t>(vcpu_of(index)), guest_table()[vm].vcpus) != 0U) {
+      return true;
+    }
   }
   for (std::size_t i = 0; i < g_lr_count; ++i) {
     if ((cpu.lr[i] & kLrStatePending) != 0U) {

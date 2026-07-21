@@ -163,9 +163,9 @@ void init_and_activate() noexcept {
   // Place each guest's configuration blob at its window-top slot so
   // the pristine snapshot below captures it — a warm reset then
   // restores DTB and image together through the same copy.
-  for (std::size_t i = 0; i < guests.size(); ++i) {
-    if (guests[i].dtb_size != 0) {
-      std::memcpy(reinterpret_cast<void*>(guests[i].to_pa(guests[i].dtb_ipa)), guests[i].dtb, guests[i].dtb_size);
+  for (const GuestDescriptor& guest : guests) {
+    if (guest.dtb_size != 0) {
+      std::memcpy(reinterpret_cast<void*>(guest.to_pa(guest.dtb_ipa)), guest.dtb, guest.dtb_size);
     }
   }
 

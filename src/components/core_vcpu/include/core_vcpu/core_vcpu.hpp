@@ -19,7 +19,8 @@
 //
 // Ownership rule: every function here that names a VCPU must run on
 // that VCPU's affinity core (the smp component routes foreign
-// requests). Only the machine-wide alive counter is shared.
+// requests). Other cores see only atomic power-state and counter-offset
+// snapshots; the detailed scheduler state remains owner-local.
 //
 // Boot: RuntimeStart seeds every VCPU; MainLoop enters the per-core
 // scheduler (VCPU 0 on the primary; secondaries start idle). Entries
@@ -99,13 +100,21 @@ void wake(std::size_t index) noexcept;
 // no-op. The VM's watchdog is cancelled with its last vCPU.
 void stop_vcpu(std::size_t slot, TrapContext* live) noexcept;
 
-// Warm reset of a VM, on vcpu 0's affinity core (smp routes and has
-// already fanned stop-requests to the secondaries): reload the
-// pristine image and reseed vcpu 0 — resident in place, otherwise
-// kReady. An all-kOff VM is ignored (start_vm is the only revival
-// path); an exhausted restart budget (lifecycle_model.hpp) stops the
-// VM instead.
-void reset_vm(std::size_t vm, TrapContext* live) noexcept;
+// Split retirement used by the SMP reset coordinator: publish kOff and
+// return whether the target was resident, allowing the caller to send
+// its ACK before entering the scheduler idle loop.
+[[nodiscard]] auto retire_vcpu(std::size_t slot) noexcept -> bool;
+void               schedule_after_retire(TrapContext* live) noexcept;
+
+// Temporarily keep empty schedulers draining cross-call IRQs while all
+// vCPUs of a VM are quiesced for reset.
+void begin_lifecycle_transition() noexcept;
+void end_lifecycle_transition() noexcept;
+
+// Restore and reseed an entirely quiesced VM. Must execute on vcpu 0's
+// owner core after every current-epoch ACK. False on ownership/liveness
+// violations or restart-budget exhaustion.
+[[nodiscard]] auto reset_quiesced_vm(std::size_t vm) noexcept -> bool;
 
 // HVC_EXIT epilogue: retire the calling vCPU and schedule away; halts
 // the machine once every vCPU machine-wide is kOff (kBlocked ones keep
@@ -120,10 +129,13 @@ void exit_current(TrapContext* live) noexcept;
 // foreign posts).
 [[nodiscard]] auto post_virq(std::size_t slot, std::uint32_t vintid) noexcept -> bool;
 
-// Is this vCPU slot powered on? Safe from any core (one-byte read,
-// possibly stale) — PSCI AFFINITY_INFO's answer is best-effort by
-// specification.
+// Is this vCPU slot powered on? Safe from any core through an atomic
+// published snapshot.
 [[nodiscard]] auto vcpu_on(std::size_t slot) noexcept -> bool;
+
+// Is any vCPU of this VM powered on? Safe from every core through the
+// same atomic snapshots as vcpu_on().
+[[nodiscard]] auto vm_on(std::size_t vm) noexcept -> bool;
 
 // Seed all VCPUs from guest_table() (RuntimeStart).
 void init() noexcept;
