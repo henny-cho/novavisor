@@ -204,10 +204,10 @@ void switch_vm(std::size_t guest_index) noexcept {
   nova_stage2_switch(g_vttbr[guest_index]);
 }
 
-void reload_guest_image(std::size_t guest_index) noexcept {
+auto reload_guest_image(std::size_t guest_index) noexcept -> memory::RestoreStats {
   const GuestDescriptor& guest = guest_table()[guest_index];
-  std::memcpy(reinterpret_cast<void*>(guest.load_pa), pristine_slot(guest_index),
-              static_cast<std::size_t>(guest.ipa_size));
+  return memory::restore_changed(reinterpret_cast<void*>(guest.load_pa), pristine_slot(guest_index),
+                                 static_cast<std::size_t>(guest.ipa_size));
 }
 
 } // namespace mmu

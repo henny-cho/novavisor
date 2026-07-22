@@ -23,9 +23,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 try:
@@ -55,6 +57,30 @@ HV_ELF = BUILD_DIR / HV_PRESET / "novavisor.elf"
 QEMU = "qemu-system-aarch64"
 # NOVA_GUEST_IPA_BASE (nova/abi/guest_layout.h): every guest links here.
 GUEST_LINK_BASE = 0x50000000
+
+
+class OutputCapture:
+    """Keep a bounded diagnostic tail and stream only outside CI."""
+
+    def __init__(self, stream, max_chars: int = 32 * 1024):
+        self.stream = stream
+        self.max_chars = max_chars
+        self.tail = ""
+
+    def write(self, data: str) -> None:
+        if self.stream is not None:
+            self.stream.write(data)
+        self.tail = (self.tail + data)[-self.max_chars:]
+
+    def flush(self) -> None:
+        if self.stream is not None:
+            self.stream.flush()
+
+
+def print_failure_tail(capture: OutputCapture) -> None:
+    if capture.stream is None and capture.tail:
+        print("[demo_runner] --- QEMU output tail ---", file=sys.stderr)
+        print(capture.tail, file=sys.stderr, end="" if capture.tail.endswith("\n") else "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -235,22 +261,30 @@ def _verify_one(name: str, manifest: dict, variant: dict) -> int:
     print(f"[demo_runner] $ {' '.join(shlex.quote(c) for c in cmd)}")
 
     child = pexpect.spawn(cmd[0], cmd[1:], timeout=timeout, encoding="utf-8")
-    child.logfile_read = sys.stdout
+    capture = OutputCapture(None if os.environ.get("GITHUB_ACTIONS") == "true" else sys.stdout)
+    child.logfile_read = capture
+    deadline = time.monotonic() + timeout
 
     try:
         for exp in variant.get("expect", []):
             pattern = exp["pattern"]
             within = int(exp.get("within_seconds", timeout))
+            remaining = deadline - time.monotonic()
+            wait = min(float(within), max(0.0, remaining))
             try:
-                child.expect(pattern, timeout=within)
+                child.expect(pattern, timeout=wait)
             except pexpect.TIMEOUT:
                 print(f"\n[demo_runner] FAIL: timeout waiting for /{pattern}/ "
-                      f"({within}s)", file=sys.stderr)
+                      f"({wait:.1f}s; scenario limit {timeout}s)", file=sys.stderr)
+                print_failure_tail(capture)
                 return 1
             except pexpect.EOF:
                 print(f"\n[demo_runner] FAIL: EOF before /{pattern}/",
                       file=sys.stderr)
+                print_failure_tail(capture)
                 return 1
+            if capture.stream is None:
+                print(f"[demo_runner] matched /{pattern}/")
             # Optional host input, sent only after the pattern above
             # matched — keeps stdin-driven demos deterministic.
             send = exp.get("send")

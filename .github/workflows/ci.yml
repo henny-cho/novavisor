@@ -77,7 +77,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: external/cache/guests
-          key: guests-${{ hashFiles('demo/*/fetch.sh', 'demo/*/novavisor.overlay') }}
+          key: guests-${{ hashFiles('demo/*/fetch.sh', 'demo/*/novavisor.overlay', 'demo/12_zephyr/app/**') }}
 
       - name: Cache ccache
         uses: actions/cache@v6

@@ -88,11 +88,12 @@ struct CpuState {
 
 // Move deliverable pending INTIDs into free list registers, highest
 // priority (lowest value, then lowest INTID) first. An INTID already in
-// flight in an LR stays pending — the queued edge is injected once the
-// guest consumes the current one. With a distributor bank, the vCPU's
-// routed SPI set joins the private candidates. Returns true when
-// deliverable work remains undelivered (the caller arms the underflow
-// maintenance IRQ).
+// flight in an LR stays pending and is reconsidered on the guest's next
+// WFI. It must not arm underflow maintenance by itself: QEMU reports an
+// immediate underflow while free LRs exist, creating an IRQ storm. With
+// a distributor bank, the vCPU's routed SPI set joins the private
+// candidates. Returns true only when a distinct deliverable INTID could
+// not fit because every LR is occupied.
 inline auto refill(CpuState& c, std::size_t lr_count, DistState* dist = nullptr, std::uint32_t vcpu = 0,
                    std::size_t vcpus = 1) noexcept -> bool {
   constexpr std::uint32_t kPriorityLimit = 0x100; // above every 8-bit priority
@@ -134,8 +135,7 @@ inline auto refill(CpuState& c, std::size_t lr_count, DistState* dist = nullptr,
       dist->spi_pending &= ~(1U << (best - kNumPrivate));
     }
   }
-  // Only in-flight duplicates remain when nothing above claimed a slot.
-  return deliverable(c.redist) != 0U || (dist != nullptr && spi_deliverable(*dist, vcpu, vcpus) != 0U);
+  return false; // no distinct candidate remains; duplicates wait for a later refill
 }
 
 } // namespace nova::vgic

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the pinned Zephyr philosophers image (unmodified upstream
-# source, RAM relocated via novavisor.overlay) and populate
+# Build the pinned Zephyr heartbeat image (RAM relocated via
+# novavisor.overlay) and populate
 # external/cache/guests/12_zephyr/. Idempotent: a cache hit with a
 # matching version stamp performs zero network access and no build.
 set -euo pipefail
@@ -9,18 +9,19 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEMO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 ZEPHYR_TAG="v4.4.1"
+IMAGE_VERSION="${ZEPHYR_TAG}-heartbeat-v1"
 ZEPHYR_URL="https://github.com/zephyrproject-rtos/zephyr.git"
 BOARD="qemu_cortex_a53"
-SAMPLE="samples/philosophers"
+APP="${DEMO_DIR}/app"
 
 WORKSPACE="${REPO}/external/zephyr"
 VENV="${WORKSPACE}/.venv"
 CACHE="${REPO}/external/cache/guests/12_zephyr"
 STAMP="${CACHE}/zephyr.version"
 
-if [[ -f "${STAMP}" && "$(cat "${STAMP}")" == "${ZEPHYR_TAG}" &&
+if [[ -f "${STAMP}" && "$(cat "${STAMP}")" == "${IMAGE_VERSION}" &&
       -f "${CACHE}/zephyr.bin" && -f "${CACHE}/zephyr.elf" ]]; then
-    echo "==> Zephyr ${ZEPHYR_TAG} already cached (${CACHE})"
+    echo "==> Zephyr ${IMAGE_VERSION} already cached (${CACHE})"
     exit 0
 fi
 
@@ -51,11 +52,11 @@ if [[ ! -d "${WORKSPACE}/.west" ]]; then
 fi
 "${VENV}/bin/pip" install --quiet -r "${WORKSPACE}/zephyr/scripts/requirements-base.txt"
 
-(cd "${WORKSPACE}" && west build --pristine -b "${BOARD}" "zephyr/${SAMPLE}" \
+(cd "${WORKSPACE}" && west build --pristine -b "${BOARD}" "${APP}" \
     --build-dir build -- "-DEXTRA_DTC_OVERLAY_FILE=${DEMO_DIR}/novavisor.overlay")
 
 mkdir -p "${CACHE}"
 cp "${WORKSPACE}/build/zephyr/zephyr.bin" "${CACHE}/zephyr.bin"
 cp "${WORKSPACE}/build/zephyr/zephyr.elf" "${CACHE}/zephyr.elf"
-echo "${ZEPHYR_TAG}" > "${STAMP}"
-echo "==> Cached Zephyr ${ZEPHYR_TAG} ${SAMPLE} (${BOARD}) -> ${CACHE}"
+echo "${IMAGE_VERSION}" > "${STAMP}"
+echo "==> Cached Zephyr ${IMAGE_VERSION} (${BOARD}) -> ${CACHE}"

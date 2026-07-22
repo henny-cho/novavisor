@@ -81,10 +81,10 @@ TEST(VgicRefill, InFlightDuplicateStaysPending) {
   EXPECT_FALSE(refill(c, kLrs));
   EXPECT_EQ(lr_vintid(c.lr[0]), 0U);
 
-  // Second edge while the first is still in flight: stays queued and
-  // requests maintenance so it is injected once the LR frees up.
+  // Second edge while the first is still in flight stays queued without
+  // underflow maintenance; the next state-derived refill picks it up.
   c.redist.pending = 1U << 0U;
-  EXPECT_TRUE(refill(c, kLrs));
+  EXPECT_FALSE(refill(c, kLrs));
   EXPECT_EQ(c.redist.pending, 1U << 0U);
   EXPECT_FALSE(lr_in_flight(c.lr[1]));
 

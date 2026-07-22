@@ -2,9 +2,9 @@ name: "14_mixed_recovery"
 description: "Zephyr (RT, core 0) and Linux (GP, core 1) run side by side; Linux takes load, panics itself and warm-resets while Zephyr never stops — mixed criticality and autonomous recovery in one run."
 phase: 18
 enabled: true
-# Two full Linux boots plus a 20 s load window, with Zephyr flooding
-# the console throughout — minutes-long under TCG on a slow host.
-timeout_seconds: 1800
+# Two Linux boots plus a 20 s load window. The low-rate Zephyr heartbeat
+# proves the RT VM remains scheduled without dominating CI output.
+timeout_seconds: 180
 
 config: "configs/mixed.yml"
 
@@ -29,35 +29,39 @@ guests:
     vcpus: 1
     uart: vuart
 
-# Scenario A (mixed criticality): philosophers lines must keep flowing
-# between the Linux load-start and load-done markers. Scenario B
-# (autonomous recovery): the self-triggered panic warm-resets Linux
-# from pristine while Zephyr keeps running; the second boot lands on
-# the shell prompt.
+# The verifier focuses Linux after its first shell prompt, starts its
+# load-and-panic helper, then observes an autonomous warm reset.
+# Zephyr heartbeats must continue during the Linux load and recovery.
 expect:
   - pattern: "Booting Zephyr OS build"
     within_seconds: 60
   - pattern: "Booting Linux on physical CPU"
-    within_seconds: 240
-  - pattern: "NOVA MIXED BOOT 1"
-    within_seconds: 420
-  - pattern: "NOVA LOAD START"
+    within_seconds: 60
+  - pattern: "aarch64 GNU/Linux"
+    within_seconds: 60
+  - pattern: "~ #"
     within_seconds: 30
-  - pattern: "Philosopher \\d+.*(THINKING|EATING|HOLDING|STARVING|DROPPED)"
+    send: "\u0014"
+  - pattern: "\\[mux\\] focus vm1"
+    within_seconds: 5
+    send: "nova-mixed\n"
+  - pattern: "\\[vm1\\] NOVA MIXED BOOT 1"
+    within_seconds: 10
+  - pattern: "\\[vm1\\] NOVA LOAD START"
+    within_seconds: 10
+  - pattern: "NOVA ZEPHYR HEARTBEAT \\d+"
     within_seconds: 30
-  - pattern: "Philosopher \\d+.*(THINKING|EATING|HOLDING|STARVING|DROPPED)"
+  - pattern: "NOVA ZEPHYR HEARTBEAT \\d+"
     within_seconds: 30
-  - pattern: "NOVA LOAD DONE"
+  - pattern: "\\[vm1\\] NOVA LOAD DONE"
     within_seconds: 60
   - pattern: "sysrq: Trigger a crash"
     within_seconds: 30
   - pattern: "Booting Linux on physical CPU"
-    # Warm reset restores the full 128 MiB guest window in emulated EL2
-    # before Linux can print its first line. Shared runners vary widely.
-    within_seconds: 1200
-  - pattern: "NOVA MIXED BOOT 2"
-    within_seconds: 420
+    within_seconds: 120
+  - pattern: "aarch64 GNU/Linux"
+    within_seconds: 60
   - pattern: "~ #"
     within_seconds: 30
-  - pattern: "Philosopher \\d+.*(THINKING|EATING|HOLDING|STARVING|DROPPED)"
+  - pattern: "NOVA ZEPHYR HEARTBEAT \\d+"
     within_seconds: 30

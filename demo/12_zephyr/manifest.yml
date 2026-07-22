@@ -1,5 +1,5 @@
 name: "12_zephyr"
-description: "Upstream Zephyr philosophers (qemu_cortex_a53 build, unmodified source) boots as a guest — the first real-OS check of the emulation surface."
+description: "Pinned Zephyr emits a low-rate heartbeat as a guest, validating sustained real-OS execution without flooding CI logs."
 phase: 16
 enabled: true
 timeout_seconds: 60
@@ -19,14 +19,13 @@ guests:
     vcpus: 1
     uart: vuart
 
-# philosophers never exits: the boot banner plus a few state lines are
-# the pass condition — the runner kills QEMU after the last match.
+# The heartbeat never exits and emits one line every five seconds.
 expect:
   - pattern: "Booting Zephyr OS build"
     within_seconds: 30
-  - pattern: "Philosopher \\d+.*(THINKING|EATING|HOLDING|STARVING|DROPPED)"
+  - pattern: "NOVA ZEPHYR HEARTBEAT 1"
     within_seconds: 10
-  - pattern: "Philosopher \\d+.*(THINKING|EATING|HOLDING|STARVING|DROPPED)"
+  - pattern: "NOVA ZEPHYR HEARTBEAT 2"
     within_seconds: 10
-  - pattern: "Philosopher \\d+.*(THINKING|EATING|HOLDING|STARVING|DROPPED)"
+  - pattern: "NOVA ZEPHYR HEARTBEAT 3"
     within_seconds: 10

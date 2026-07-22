@@ -1,8 +1,7 @@
 # Mixed-criticality pair: Zephyr (RT) pinned to core 0, Linux (GP)
 # pinned to core 1 and auto-started. Packed PA puts Linux at
-# 0x50800000 (manifest load_addr must match). nova_mixed=1 switches
-# the shared Linux /init into the scenario driver (IVC boot counter:
-# first boot = load then sysrq panic, second boot = shell).
+# 0x50800000 (manifest load_addr must match). The verifier drives the
+# first-boot load and panic through the focused virtual UART.
 guests:
   - name: zephyr
     memory_size: 0x00800000
@@ -14,4 +13,4 @@ guests:
     uart: vuart
     cores: [1]
     autostart: true
-    bootargs: "console=ttyAMA0 panic=-1 nova_mixed=1"
+    bootargs: "console=ttyAMA0 panic=-1"

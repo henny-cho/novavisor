@@ -572,7 +572,18 @@ auto reset_quiesced_vm(std::size_t vm) noexcept -> bool {
     return false;
   }
 
-  mmu::reload_guest_image(vm);
+  const std::uint64_t restore_start = hyp_timer::now();
+  const auto          restored      = mmu::reload_guest_image(vm);
+  const std::uint64_t restore_ms    = (hyp_timer::now() - restore_start) * 1000U / hyp_timer::freq();
+  console::write("[core_vcpu] VM ");
+  console::write_dec64(vm);
+  console::write(" restored ");
+  console::write_dec64(restored.written_bytes);
+  console::write("/");
+  console::write_dec64(restored.examined_bytes);
+  console::write(" bytes in ");
+  console::write_dec64(restore_ms);
+  console::write(" ms\n");
   vgic::vm_reset(vm); // SPI banks are VM-global — per-vCPU cpu_reset misses them
   publish_cntvoff(vm, hyp_timer::now());
   seed_boot(slot);
@@ -583,6 +594,9 @@ auto reset_quiesced_vm(std::size_t vm) noexcept -> bool {
   publish_power(slot, PowerState::kOn);
   g_alive.fetch_add(1, std::memory_order_acq_rel);
   reschedule_slice();
+  console::write("[core_vcpu] VM ");
+  console::write_dec64(vm);
+  console::write(" reset state ready\n");
   return true;
 }
 
@@ -652,7 +666,7 @@ void core_vcpu_component::handle_wfx(WfxCall* call) noexcept {
     vcpu::yield_current(call->ctx); // spin-wait hint — give the core away once
     return;
   }
-  if (vgic::has_deliverable(vcpu::current_index())) {
+  if (vgic::reevaluate(vcpu::current_index())) {
     return; // pending wake-up event → architecturally a NOP
   }
   // A guest idling for input often parks with an unterminated line

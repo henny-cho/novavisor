@@ -14,6 +14,8 @@
 // action completes, any subsequent ERET to EL1 sees its accesses
 // translated through Stage 2.
 
+#include "hal/mem.hpp"
+
 #include <cib/top.hpp>
 #include <cstddef>
 #include <flow/flow.hpp>
@@ -39,9 +41,10 @@ void switch_vm(std::size_t guest_index) noexcept;
 // Warm-reset support: init_and_activate() preserves every guest window
 // in the pristine area (NOVA_GUEST_PRISTINE_PA — the loader ran before
 // the CPU started, so the windows still hold unmodified images plus
-// zeroed RAM); reload_guest_image() copies one window back. The IVC
-// shared page lies outside the windows and is never touched.
-void reload_guest_image(std::size_t guest_index) noexcept;
+// zeroed RAM); reload_guest_image() restores one exact window while
+// skipping unchanged blocks. The IVC shared page lies outside the
+// windows and is never touched.
+[[nodiscard]] auto reload_guest_image(std::size_t guest_index) noexcept -> memory::RestoreStats;
 
 } // namespace nova::mmu
 
