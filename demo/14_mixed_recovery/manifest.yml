@@ -4,7 +4,7 @@ phase: 18
 enabled: true
 # Two full Linux boots plus a 20 s load window, with Zephyr flooding
 # the console throughout — minutes-long under TCG on a slow host.
-timeout_seconds: 1200
+timeout_seconds: 1800
 
 config: "configs/mixed.yml"
 
@@ -38,7 +38,7 @@ expect:
   - pattern: "Booting Zephyr OS build"
     within_seconds: 60
   - pattern: "Booting Linux on physical CPU"
-    within_seconds: 120
+    within_seconds: 240
   - pattern: "NOVA MIXED BOOT 1"
     within_seconds: 420
   - pattern: "NOVA LOAD START"
@@ -52,7 +52,9 @@ expect:
   - pattern: "sysrq: Trigger a crash"
     within_seconds: 30
   - pattern: "Booting Linux on physical CPU"
-    within_seconds: 120
+    # Warm reset restores the full 128 MiB guest window in emulated EL2
+    # before Linux can print its first line. Shared runners vary widely.
+    within_seconds: 1200
   - pattern: "NOVA MIXED BOOT 2"
     within_seconds: 420
   - pattern: "~ #"

@@ -20,6 +20,7 @@
 namespace {
 
 inline constexpr std::uintptr_t kWordMask = sizeof(std::uint64_t) - 1;
+inline constexpr std::uintptr_t kPairMask = (2 * sizeof(std::uint64_t)) - 1;
 
 auto misalign(const void* p) noexcept -> std::uintptr_t {
   return reinterpret_cast<std::uintptr_t>(p) & kWordMask;
@@ -38,11 +39,40 @@ auto memcpy(void* dst, const void* src, std::size_t n) noexcept -> void* { // NO
       *d++ = *s++;
       --n;
     }
-    while (n >= sizeof(std::uint64_t)) {
-      *reinterpret_cast<std::uint64_t*>(d) = *reinterpret_cast<const std::uint64_t*>(s);
-      d += sizeof(std::uint64_t);
-      s += sizeof(std::uint64_t);
-      n -= sizeof(std::uint64_t);
+    auto blocks = n / 64U;
+    if (blocks != 0 && ((reinterpret_cast<std::uintptr_t>(d) | reinterpret_cast<std::uintptr_t>(s)) & kPairMask) == 0) {
+      // Pair and unroll aligned accesses so large pristine-image restores
+      // remain practical under TCG without touching guest SIMD state.
+      asm volatile("1:\n"
+                   "ldp x3, x4, [%[source], #0]\n"
+                   "ldp x5, x6, [%[source], #16]\n"
+                   "ldp x7, x8, [%[source], #32]\n"
+                   "ldp x9, x10, [%[source], #48]\n"
+                   "stp x3, x4, [%[destination], #0]\n"
+                   "stp x5, x6, [%[destination], #16]\n"
+                   "stp x7, x8, [%[destination], #32]\n"
+                   "stp x9, x10, [%[destination], #48]\n"
+                   "add %[source], %[source], #64\n"
+                   "add %[destination], %[destination], #64\n"
+                   "subs %[blocks], %[blocks], #1\n"
+                   "b.ne 1b\n"
+                   : [destination] "+r"(d), [source] "+r"(s), [blocks] "+r"(blocks)
+                   :
+                   : "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "cc", "memory");
+      n &= 63U;
+    }
+
+    auto words = n / sizeof(std::uint64_t);
+    if (words != 0) {
+      asm volatile("1:\n"
+                   "ldr x3, [%[source]], #8\n"
+                   "str x3, [%[destination]], #8\n"
+                   "subs %[words], %[words], #1\n"
+                   "b.ne 1b\n"
+                   : [destination] "+r"(d), [source] "+r"(s), [words] "+r"(words)
+                   :
+                   : "x3", "cc", "memory");
+      n &= kWordMask;
     }
   }
   while (n != 0) {
