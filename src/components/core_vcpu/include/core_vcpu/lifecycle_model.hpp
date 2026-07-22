@@ -4,7 +4,8 @@
 //
 // Pure VM micro-reboot policy, host-testable. RestartBudget limits
 // crash loops; QuiesceTracker prevents memory restore until every live
-// vCPU has acknowledged the current reset epoch.
+// vCPU has acknowledged the current reset epoch and bounds recovery
+// attempts when an ACK is lost.
 
 #include <array>
 #include <cstddef>
@@ -15,9 +16,12 @@ namespace nova::lifecycle {
 
 // Warm resets allowed between cold starts. Deliberately small: a guest
 // that cannot recover in a few attempts will not recover in fifty.
-inline constexpr std::uint8_t kMaxRestarts = 3;
+inline constexpr std::uint8_t  kMaxRestarts       = 3;
+inline constexpr std::uint8_t  kMaxQuiesceRetries = 3;
+inline constexpr std::uint64_t kUnpublishedEpoch  = std::numeric_limits<std::uint64_t>::max();
 
 enum class AckResult : std::uint8_t { kIgnored, kPending, kReady };
+enum class TimeoutResult : std::uint8_t { kIgnored, kRetry, kFailed };
 
 struct QuiescePlan {
   bool          accepted     = false;
@@ -44,10 +48,11 @@ public:
       return {};
     }
     ++epoch_;
-    if (epoch_ == 0) {
-      ++epoch_; // reserve zero for an uninitialized request
+    if (epoch_ == 0 || epoch_ == kUnpublishedEpoch) {
+      epoch_ = 1; // zero is inactive; max is the unpublished reservation
     }
     pending_mask_ = live_mask & allowed_mask();
+    retries_      = 0;
     active_       = true;
     return {.accepted = true, .epoch = epoch_, .pending_mask = pending_mask_};
   }
@@ -68,6 +73,21 @@ public:
   [[nodiscard]] auto active() const noexcept -> bool { return active_; }
   [[nodiscard]] auto epoch() const noexcept -> std::uint64_t { return epoch_; }
   [[nodiscard]] auto pending_mask() const noexcept -> std::uint32_t { return pending_mask_; }
+  [[nodiscard]] auto retries() const noexcept -> std::uint8_t { return retries_; }
+
+  // A timeout for the current epoch asks the coordinator to resend
+  // quiesce only for the still-pending vCPUs. After a bounded number
+  // of retries the caller must fail closed without restoring memory.
+  [[nodiscard]] auto on_timeout(std::uint64_t epoch) noexcept -> TimeoutResult {
+    if (!active_ || epoch != epoch_ || ready()) {
+      return TimeoutResult::kIgnored;
+    }
+    if (retries_ >= kMaxQuiesceRetries) {
+      return TimeoutResult::kFailed;
+    }
+    ++retries_;
+    return TimeoutResult::kRetry;
+  }
 
   [[nodiscard]] auto finish() noexcept -> bool {
     if (!ready()) {
@@ -80,11 +100,13 @@ public:
   void cancel() noexcept {
     active_       = false;
     pending_mask_ = 0;
+    retries_      = 0;
   }
 
 private:
   std::uint64_t epoch_        = 0;
   std::uint32_t pending_mask_ = 0;
+  std::uint8_t  retries_      = 0;
   bool          active_       = false;
 };
 

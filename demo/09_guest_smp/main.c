@@ -106,6 +106,10 @@ int main(void) {
   if (psci_cpu_on(/*mpidr=*/1, (uint64_t)_secondary_start, sibling_stack) != PSCI_SUCCESS) {
     return 1;
   }
+  const int64_t duplicate = psci_cpu_on(/*mpidr=*/1, (uint64_t)_secondary_start, sibling_stack);
+  if (duplicate != PSCI_ON_PENDING && duplicate != PSCI_ALREADY_ON) {
+    return 2; // exactly one concurrent CPU_ON may report success
+  }
   while (!g_ready) {
     // the sibling boots in parallel on the other physical core
   }

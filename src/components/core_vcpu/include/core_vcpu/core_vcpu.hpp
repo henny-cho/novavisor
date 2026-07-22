@@ -64,6 +64,11 @@ struct Vcpu {
 
 namespace nova::vcpu {
 
+// Cross-core-visible PSCI power state. kOnPending is reserved by the
+// requesting core before a CPU_ON/VM_START mailbox message becomes
+// visible, so concurrent callers cannot both report success.
+enum class PowerState : std::uint8_t { kOff, kOnPending, kOn };
+
 // The VCPU currently resident on this physical core.
 auto current() noexcept -> Vcpu&;
 auto current_index() noexcept -> std::size_t;
@@ -84,15 +89,22 @@ void block_current(TrapContext* live) noexcept;
 // expires; cancels the soft-timer mirror either way.
 void wake(std::size_t index) noexcept;
 
-// Cold-start a VM: seed its vcpu 0 from the descriptor and mark it
-// ready. False when the VM is out of range, vcpu 0 is not kOff, or its
-// affinity is not this core (HVC_VM_START is owned by smp, which
-// routes foreign targets).
+// Reserve an off slot for one start request. The atomic Off→OnPending
+// transition is safe from any core. cancel_start rolls back a request
+// rejected before its owner activates it.
+[[nodiscard]] auto reserve_start(std::size_t slot) noexcept -> bool;
+void               cancel_start(std::size_t slot) noexcept;
+
+// Cold-start a VM whose boot slot was reserved by smp: seed vcpu 0
+// from the descriptor and mark it ready. False when the VM is out of
+// range, another sibling is still live, the reservation is absent, or
+// its affinity is not this core.
 [[nodiscard]] auto start_vm(std::size_t vm) noexcept -> bool;
 
-// PSCI CPU_ON: seed a secondary vCPU slot at `entry` with context_id
-// in x0 (SP stays 0 — PSCI leaves it to the guest). False when the
-// slot is invalid, not kOff, foreign-affinity, or its VM has retired.
+// Complete a reserved PSCI CPU_ON: seed a secondary vCPU slot at
+// `entry` with context_id in x0 (SP stays 0 — PSCI leaves it to the
+// guest). False when the reservation is absent, the slot is invalid,
+// foreign-affinity, or its VM has retired.
 [[nodiscard]] auto start_vcpu(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noexcept -> bool;
 
 // Retire one local vCPU (PSCI CPU_OFF, VM-stop fan-out). A resident
@@ -132,6 +144,10 @@ void exit_current(TrapContext* live) noexcept;
 // Is this vCPU slot powered on? Safe from any core through an atomic
 // published snapshot.
 [[nodiscard]] auto vcpu_on(std::size_t slot) noexcept -> bool;
+
+// Exact published state for PSCI CPU_ON/AFFINITY_INFO. Invalid slots
+// read as kOff; callers validate guest topology separately.
+[[nodiscard]] auto power_state(std::size_t slot) noexcept -> PowerState;
 
 // Is any vCPU of this VM powered on? Safe from every core through the
 // same atomic snapshots as vcpu_on().

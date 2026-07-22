@@ -32,8 +32,9 @@
 #define PSCI_VERSION_1_1 0x00010001
 
 /* AFFINITY_INFO return states */
-#define PSCI_AFFINITY_ON  0
-#define PSCI_AFFINITY_OFF 1
+#define PSCI_AFFINITY_ON         0
+#define PSCI_AFFINITY_OFF        1
+#define PSCI_AFFINITY_ON_PENDING 2
 
 /* MIGRATE_INFO_TYPE: no Trusted OS present / MP (migration not needed) */
 #define PSCI_TOS_NOT_PRESENT_MP 2
@@ -42,7 +43,10 @@
 #define PSCI_SUCCESS            0
 #define PSCI_NOT_SUPPORTED      (-1)
 #define PSCI_INVALID_PARAMETERS (-2)
+#define PSCI_DENIED             (-3)
 #define PSCI_ALREADY_ON         (-4)
+#define PSCI_ON_PENDING         (-5)
+#define PSCI_INTERNAL_FAILURE   (-6)
 
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 

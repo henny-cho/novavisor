@@ -11,7 +11,9 @@
 namespace {
 
 using nova::lifecycle::AckResult;
+using nova::lifecycle::kMaxQuiesceRetries;
 using nova::lifecycle::kMaxRestarts;
+using nova::lifecycle::TimeoutResult;
 using Budget  = nova::lifecycle::RestartBudget<2>;
 using Tracker = nova::lifecycle::QuiesceTracker<2>;
 
@@ -70,6 +72,43 @@ TEST(LifecycleModel, OutOfRangeAckIsIgnored) {
 
   EXPECT_EQ(tracker.acknowledge(2, plan.epoch), AckResult::kIgnored);
   EXPECT_EQ(tracker.pending_mask(), 0b01U);
+}
+
+TEST(LifecycleModel, TimeoutRetriesAreBounded) {
+  Tracker    tracker;
+  const auto plan = tracker.begin(0b11U);
+
+  for (std::uint8_t retry = 1; retry <= kMaxQuiesceRetries; ++retry) {
+    EXPECT_EQ(tracker.on_timeout(plan.epoch), TimeoutResult::kRetry);
+    EXPECT_EQ(tracker.retries(), retry);
+    EXPECT_EQ(tracker.pending_mask(), 0b11U);
+  }
+  EXPECT_EQ(tracker.on_timeout(plan.epoch), TimeoutResult::kFailed);
+  EXPECT_TRUE(tracker.active());
+  EXPECT_EQ(tracker.pending_mask(), 0b11U);
+}
+
+TEST(LifecycleModel, TimeoutRetriesOnlyPendingVcpus) {
+  Tracker    tracker;
+  const auto plan = tracker.begin(0b11U);
+
+  ASSERT_EQ(tracker.acknowledge(0, plan.epoch), AckResult::kPending);
+  EXPECT_EQ(tracker.on_timeout(plan.epoch), TimeoutResult::kRetry);
+  EXPECT_EQ(tracker.pending_mask(), 0b10U);
+  EXPECT_EQ(tracker.acknowledge(1, plan.epoch), AckResult::kReady);
+  EXPECT_EQ(tracker.on_timeout(plan.epoch), TimeoutResult::kIgnored);
+}
+
+TEST(LifecycleModel, StaleTimeoutIsIgnored) {
+  Tracker    tracker;
+  const auto first = tracker.begin(0b01U);
+  ASSERT_EQ(tracker.acknowledge(0, first.epoch), AckResult::kReady);
+  ASSERT_TRUE(tracker.finish());
+
+  const auto second = tracker.begin(0b01U);
+  EXPECT_EQ(tracker.on_timeout(first.epoch), TimeoutResult::kIgnored);
+  EXPECT_EQ(tracker.retries(), 0);
+  EXPECT_EQ(tracker.pending_mask(), second.pending_mask);
 }
 
 TEST(LifecycleModel, GrantsExactlyMaxRestarts) {

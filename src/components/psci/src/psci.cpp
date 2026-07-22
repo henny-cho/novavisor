@@ -19,6 +19,24 @@ void log_power_event(const char* what) noexcept {
   console::write(what);
 }
 
+[[nodiscard]] auto cpu_on_return(smp::CpuOnResult result) noexcept -> std::uint64_t {
+  switch (result) {
+  case smp::CpuOnResult::kSuccess:
+    return PSCI_SUCCESS;
+  case smp::CpuOnResult::kInvalid:
+    return static_cast<std::uint64_t>(PSCI_INVALID_PARAMETERS);
+  case smp::CpuOnResult::kDenied:
+    return static_cast<std::uint64_t>(PSCI_DENIED);
+  case smp::CpuOnResult::kAlreadyOn:
+    return static_cast<std::uint64_t>(PSCI_ALREADY_ON);
+  case smp::CpuOnResult::kOnPending:
+    return static_cast<std::uint64_t>(PSCI_ON_PENDING);
+  case smp::CpuOnResult::kInternalFailure:
+    return static_cast<std::uint64_t>(PSCI_INTERNAL_FAILURE);
+  }
+  return static_cast<std::uint64_t>(PSCI_INTERNAL_FAILURE);
+}
+
 } // namespace
 
 void psci_component::handle_hvc(HvcCall* call) noexcept {
@@ -52,12 +70,8 @@ void psci_component::handle_hvc(HvcCall* call) noexcept {
     const std::uint64_t t  = psci::target_vcpu(call->ctx->x[1]);
     if (t == psci::kInvalidTarget || t >= guest_table()[vm].vcpus) {
       call->ctx->x[0] = static_cast<std::uint64_t>(PSCI_INVALID_PARAMETERS);
-    } else if (vcpu::vcpu_on(slot_of(vm, t))) {
-      call->ctx->x[0] = static_cast<std::uint64_t>(PSCI_ALREADY_ON);
     } else {
-      call->ctx->x[0] = smp::cpu_on(slot_of(vm, t), call->ctx->x[2], call->ctx->x[3])
-                            ? PSCI_SUCCESS
-                            : static_cast<std::uint64_t>(PSCI_INVALID_PARAMETERS);
+      call->ctx->x[0] = cpu_on_return(smp::cpu_on(slot_of(vm, t), call->ctx->x[2], call->ctx->x[3]));
     }
     return;
   }
@@ -82,7 +96,17 @@ void psci_component::handle_hvc(HvcCall* call) noexcept {
     if (t == psci::kInvalidTarget || t >= guest_table()[vm].vcpus) {
       call->ctx->x[0] = static_cast<std::uint64_t>(PSCI_INVALID_PARAMETERS);
     } else {
-      call->ctx->x[0] = vcpu::vcpu_on(slot_of(vm, t)) ? PSCI_AFFINITY_ON : PSCI_AFFINITY_OFF;
+      switch (vcpu::power_state(slot_of(vm, t))) {
+      case vcpu::PowerState::kOff:
+        call->ctx->x[0] = PSCI_AFFINITY_OFF;
+        break;
+      case vcpu::PowerState::kOnPending:
+        call->ctx->x[0] = PSCI_AFFINITY_ON_PENDING;
+        break;
+      case vcpu::PowerState::kOn:
+        call->ctx->x[0] = PSCI_AFFINITY_ON;
+        break;
+      }
     }
     return;
   }

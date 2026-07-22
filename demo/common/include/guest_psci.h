@@ -37,7 +37,8 @@ static inline void psci_system_reset(void) {
 // Power on a sibling vCPU (target_mpidr Aff0 = vCPU index). The target
 // enters at `entry` with x0 = context_id and SP undefined — pass the
 // stack top as context_id and let the entry stub install it
-// (common/secondary.S). Returns PSCI_SUCCESS / ALREADY_ON / INVALID.
+// (common/secondary.S). A concurrent duplicate reports ON_PENDING;
+// once active it reports ALREADY_ON.
 static inline int64_t psci_cpu_on(uint64_t target_mpidr, uint64_t entry, uint64_t context_id) {
   register uint64_t x0 __asm__("x0") = PSCI_FN_CPU_ON;
   register uint64_t x1 __asm__("x1") = target_mpidr;
@@ -55,7 +56,7 @@ static inline void psci_cpu_off(void) {
   __builtin_unreachable();
 }
 
-// Power state of a sibling vCPU: PSCI_AFFINITY_ON / PSCI_AFFINITY_OFF.
+// Power state of a sibling vCPU: ON / OFF / ON_PENDING.
 static inline int64_t psci_affinity_info(uint64_t target_mpidr) {
   register uint64_t x0 __asm__("x0") = PSCI_FN_AFFINITY_INFO;
   register uint64_t x1 __asm__("x1") = target_mpidr;
