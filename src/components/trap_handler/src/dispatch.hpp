@@ -11,10 +11,9 @@ namespace nova::trap {
 // MmioService, escalate to GuestFaultService when not emulatable.
 void dispatch_data_abort(TrapContext* ctx) noexcept;
 
-// Escalate an unrecoverable guest fault. When a subscriber claims it,
-// it has retired the faulting VCPU and swapped the live frame to the
-// next runnable one — returning resumes that guest. Unclaimed means
-// nobody owns VM lifecycles: stop the machine.
+// Escalate an unrecoverable guest fault. A subscriber that claims it
+// owns the live frame and must recover or retire the affected guest.
+// With no subscriber, nobody owns VM lifecycles: stop the machine.
 void dispatch_guest_fault(TrapContext* ctx) noexcept;
 
 } // namespace nova::trap

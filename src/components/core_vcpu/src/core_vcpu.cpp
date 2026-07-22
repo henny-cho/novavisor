@@ -628,14 +628,6 @@ auto power_state(std::size_t slot) noexcept -> PowerState {
 
 } // namespace vcpu
 
-void core_vcpu_component::handle_guest_fault(GuestFaultCall* call) noexcept {
-  call->handled = true;
-  console::write("[core_vcpu] guest fault — stopping VCPU ");
-  console::write_dec64(vcpu::current_index());
-  console::write("\n");
-  vcpu::exit_current(call->ctx);
-}
-
 void core_vcpu_component::handle_fp_simd(FpSimdCall* call) noexcept {
   call->handled = true;
 

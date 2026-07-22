@@ -34,7 +34,6 @@
 #include "nova/abi/guest.hpp"
 #include "nova/arch/trap_context.hpp"
 #include "trap_handler/fp_simd.hpp"
-#include "trap_handler/guest_fault.hpp"
 #include "trap_handler/hvc.hpp"
 #include "trap_handler/wfx.hpp"
 
@@ -186,18 +185,13 @@ struct core_vcpu_component {
   // owner's live state, restore the caller's, clear the trap.
   static void handle_fp_simd(FpSimdCall* call) noexcept;
 
-  // Unrecoverable guest fault: retire the faulting VCPU, keep the rest
-  // of the machine running.
-  static void handle_guest_fault(GuestFaultCall* call) noexcept;
-
   constexpr static auto INIT  = flow::action<"core_vcpu_init">([]() noexcept { vcpu::init(); });
   constexpr static auto ENTER = flow::action<"core_vcpu_enter">([]() noexcept { vcpu::enter_cpu(); });
 
   constexpr static auto config = cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<cib::MainLoop>(*ENTER),
                                              cib::extend<HvcService>(&core_vcpu_component::handle_hvc),
                                              cib::extend<WfxService>(&core_vcpu_component::handle_wfx),
-                                             cib::extend<FpSimdService>(&core_vcpu_component::handle_fp_simd),
-                                             cib::extend<GuestFaultService>(&core_vcpu_component::handle_guest_fault));
+                                             cib::extend<FpSimdService>(&core_vcpu_component::handle_fp_simd));
 };
 
 } // namespace nova

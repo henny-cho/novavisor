@@ -26,6 +26,7 @@
 #include "core_timer/core_timer.hpp"
 #include "core_vcpu/core_vcpu.hpp"
 #include "soft_timer/soft_timer.hpp"
+#include "trap_handler/guest_fault.hpp"
 #include "trap_handler/hvc.hpp"
 #include "trap_handler/sysreg.hpp"
 #include "vgic/vgic.hpp"
@@ -77,8 +78,8 @@ void reevaluate_virq(std::size_t slot) noexcept;
 // `live` and the call does not return to guest code). reset_vm routes
 // through the boot owner, waits for current-epoch quiesce ACKs, then
 // restores memory and reseeds vcpu 0.
-void stop_vm(std::size_t vm, TrapContext* live) noexcept;
-void reset_vm(std::size_t vm, TrapContext* live, bool from_irq = false) noexcept;
+void               stop_vm(std::size_t vm, TrapContext* live) noexcept;
+[[nodiscard]] auto reset_vm(std::size_t vm, TrapContext* live, bool from_irq = false) noexcept -> bool;
 
 } // namespace nova::smp
 
@@ -87,6 +88,10 @@ namespace nova {
 struct smp_component {
   // Claims HVC_VM_START (affinity-routed).
   static void handle_hvc(HvcCall* call) noexcept;
+
+  // Converts an unrecoverable guest exception into a bounded VM-wide
+  // warm reset while unrelated VMs keep running.
+  static void handle_guest_fault(GuestFaultCall* call) noexcept;
 
   // Claims the cross-call SGI: executes queued foreign requests.
   static void handle_irq(IrqCall* call) noexcept;
@@ -107,8 +112,9 @@ struct smp_component {
       cib::extend<cib::RuntimeStart>(core_mmu_component::INIT >> core_gic_component::INIT >> vgic_component::INIT >>
                                      core_timer_component::INIT >> soft_timer_component::INIT >>
                                      core_vcpu_component::INIT >> boot_msg_component::PRINT_BOOT_MSG >> *INIT),
-      cib::extend<HvcService>(&smp_component::handle_hvc), cib::extend<IrqService>(&smp_component::handle_irq),
-      cib::extend<SysregService>(&smp_component::handle_sysreg));
+      cib::extend<HvcService>(&smp_component::handle_hvc),
+      cib::extend<GuestFaultService>(&smp_component::handle_guest_fault),
+      cib::extend<IrqService>(&smp_component::handle_irq), cib::extend<SysregService>(&smp_component::handle_sysreg));
 };
 
 } // namespace nova

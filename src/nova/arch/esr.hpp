@@ -40,9 +40,29 @@ enum class ExceptionClass : std::uint8_t {
   BRKPT_LOWER        = 0x30, // Breakpoint from lower EL
   BRKPT_CURRENT      = 0x31, // Breakpoint from current EL
   SOFTSTEP_LOWER     = 0x32, // Software Step from lower EL
+  SOFTSTEP_CURRENT   = 0x33, // Software Step from current EL
   WATCHPT_LOWER      = 0x34, // Watchpoint from lower EL
+  WATCHPT_CURRENT    = 0x35, // Watchpoint from current EL
   BRK                = 0x3C, // BRK instruction
 };
+
+// A synchronous exception taken through the lower-EL vector belongs to
+// the guest unless its EC claims that it originated at EL2, or reports
+// an asynchronous machine error. Routed classes are handled before
+// this policy is consulted.
+[[nodiscard]] constexpr auto is_lower_sync_guest_fault(ExceptionClass ec) noexcept -> bool {
+  switch (ec) {
+  case ExceptionClass::INST_ABORT_CURRENT:
+  case ExceptionClass::DATA_ABORT_CURRENT:
+  case ExceptionClass::BRKPT_CURRENT:
+  case ExceptionClass::SOFTSTEP_CURRENT:
+  case ExceptionClass::WATCHPT_CURRENT:
+  case ExceptionClass::SERROR:
+    return false;
+  default:
+    return true;
+  }
+}
 
 // Field positions and masks (see the layout table above).
 inline constexpr std::uint64_t kEcShift    = 26U;

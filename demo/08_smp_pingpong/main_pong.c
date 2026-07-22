@@ -4,9 +4,8 @@
 // from ring 0, push it straight back on ring 1. Announces itself with
 // MSG_READY (so the initiator's statistics exclude this VM's boot),
 // answers MSG_DONE with the same marker — ordering the farewell line
-// before the initiator's exit — and retires through PSCI SYSTEM_OFF,
-// which exercises the cross-core global halt decision (this VM is the
-// machine's last one alive, on core 1).
+// before the initiator's final fault — and retires through PSCI
+// SYSTEM_OFF after surviving the initiator's three warm resets.
 
 #include "demo_hvc.h"
 #include "guest_psci.h"
