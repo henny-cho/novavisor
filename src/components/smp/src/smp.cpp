@@ -41,19 +41,22 @@ enum class Op : std::uint8_t {
   kStartVm,
   kPostVirq,
   kCpuOn,
+  kVmOwnerCall,
   kStopVcpu,
   kBeginReset,
   kQuiesceVcpu,
   kQuiesceAck,
 };
 
-// `idx` is a VM for start/begin-reset, a vCPU slot otherwise. a/b are
-// wide enough for CPU_ON arguments and the reset epoch.
+// `idx` is a VM for start/begin-reset/owner-call, a vCPU slot
+// otherwise. a/b carry operation arguments or the reset epoch.
 struct Request {
-  Op            op  = Op::kStartVm;
-  std::uint32_t idx = 0;
-  std::uint64_t a   = 0;
-  std::uint64_t b   = 0;
+  Op            op       = Op::kStartVm;
+  std::uint32_t idx      = 0;
+  std::uint64_t a        = 0;
+  std::uint64_t b        = 0;
+  std::uint64_t c        = 0;
+  VmOwnerCall   callback = nullptr;
 };
 
 // One mailbox per core, written by any core under its lock, drained by
@@ -66,6 +69,9 @@ struct Mailbox {
 };
 
 std::array<Mailbox, cpu::kMaxCpus> g_mail;
+
+static_assert(kMaxVcpus <= 32);
+std::array<std::atomic<std::uint32_t>, cpu::kMaxCpus> g_reevaluate{};
 
 // Reset state is modified only on each VM boot VCPU's owner core. The
 // atomic token reserves a reset before its begin request crosses cores
@@ -325,6 +331,7 @@ void on_reset_timeout(TrapContext* /*ctx*/, std::uint64_t arg) noexcept {
 void start_secondaries() noexcept {
   const auto entry = reinterpret_cast<std::uint64_t>(&nova_secondary_entry);
 
+  vgic::set_reevaluate_hook(&reevaluate_virq);
   g_online[0].store(true, std::memory_order_release);
   gic::enable_ppi(kCrossCallSgi); // the primary receives cross-calls too
 
@@ -391,6 +398,38 @@ auto post_virq(std::size_t slot, std::uint32_t vintid) noexcept -> bool {
     return vcpu::post_virq(slot, vintid);
   }
   return enqueue(slot_cpu(slot), {.op = Op::kPostVirq, .idx = static_cast<std::uint32_t>(slot), .a = vintid, .b = 0});
+}
+
+auto invoke_vm_owner(std::size_t vm, VmOwnerCall fn, std::uint64_t a, std::uint64_t b, std::uint64_t c) noexcept
+    -> bool {
+  if (vm >= guest_table().size() || fn == nullptr) {
+    return false;
+  }
+  const std::size_t owner = slot_cpu(slot_of(vm));
+  if (owner == cpu::id()) {
+    fn(vm, a, b, c);
+    return true;
+  }
+  return enqueue(
+      owner, {.op = Op::kVmOwnerCall, .idx = static_cast<std::uint32_t>(vm), .a = a, .b = b, .c = c, .callback = fn});
+}
+
+void reevaluate_virq(std::size_t slot) noexcept {
+  if (!valid_slot(slot) || !vcpu::vcpu_on(slot)) {
+    return;
+  }
+  const std::size_t owner = slot_cpu(slot);
+  if (owner == cpu::id()) {
+    vcpu::reevaluate_virq(slot);
+    return;
+  }
+  if (owner >= g_online.size() || !g_online[owner].load(std::memory_order_acquire)) {
+    return;
+  }
+  const std::uint32_t bit = std::uint32_t{1} << slot;
+  if (g_reevaluate[owner].fetch_or(bit, std::memory_order_acq_rel) == 0U) {
+    gic::send_sgi(owner, kCrossCallSgi);
+  }
 }
 
 auto cpu_on(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noexcept -> CpuOnResult {
@@ -554,6 +593,11 @@ void smp_component::handle_irq(IrqCall* call) noexcept {
         vcpu::cancel_start(r.idx);
       }
       break;
+    case smp::Op::kVmOwnerCall:
+      if (r.callback != nullptr) {
+        r.callback(r.idx, r.a, r.b, r.c);
+      }
+      break;
     case smp::Op::kStopVcpu:
       schedule_required = vcpu::retire_vcpu(r.idx) || schedule_required;
       break;
@@ -575,6 +619,20 @@ void smp_component::handle_irq(IrqCall* call) noexcept {
     case smp::Op::kQuiesceAck:
       smp::acknowledge_quiesce(r.idx, r.a);
       break;
+    }
+  }
+
+  // Drain until stable: a writer racing exchange(0) either joins this
+  // loop or observes zero and sends another SGI.
+  for (;;) {
+    std::uint32_t dirty = smp::g_reevaluate[cpu::id()].exchange(0, std::memory_order_acq_rel);
+    if (dirty == 0U) {
+      break;
+    }
+    for (std::size_t slot = 0; dirty != 0U; ++slot, dirty >>= 1U) {
+      if ((dirty & 1U) != 0U) {
+        vcpu::reevaluate_virq(slot);
+      }
     }
   }
   if (schedule_required) {

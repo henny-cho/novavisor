@@ -37,6 +37,8 @@
 
 namespace nova::smp {
 
+using VmOwnerCall = void (*)(std::size_t vm, std::uint64_t a, std::uint64_t b, std::uint64_t c) noexcept;
+
 enum class CpuOnResult : std::uint8_t {
   kSuccess,
   kInvalid,
@@ -59,6 +61,16 @@ void start_secondaries() noexcept;
 [[nodiscard]] auto start_vm(std::size_t vm) noexcept -> bool;
 [[nodiscard]] auto post_virq(std::size_t slot, std::uint32_t vintid) noexcept -> bool;
 [[nodiscard]] auto cpu_on(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noexcept -> CpuOnResult;
+
+// Execute idempotent VM-level work on the boot vCPU's affinity core.
+// Remote calls are accepted into the cross-call mailbox.
+[[nodiscard]] auto invoke_vm_owner(std::size_t vm, VmOwnerCall fn, std::uint64_t a, std::uint64_t b,
+                                   std::uint64_t c) noexcept -> bool;
+
+// Coalesced owner-local vGIC refill/wake request. It uses a per-core
+// dirty bitset rather than mailbox capacity because reevaluation is
+// idempotent and state-derived.
+void reevaluate_virq(std::size_t slot) noexcept;
 
 // VM-wide power operations, fanned out per vCPU. stop_vm retires every
 // live vCPU (the caller's own last — that one schedules away through

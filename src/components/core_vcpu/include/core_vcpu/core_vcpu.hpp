@@ -136,9 +136,9 @@ void exit_current(TrapContext* live) noexcept;
 // Deliver a private vIRQ to a vCPU through the vGIC: pends the INTID
 // and injects it into a free list register once the guest's enable
 // bits allow it (resident targets immediately, others on switch-in).
-// Wakes a kBlocked target when the result is deliverable. False when
-// the target is invalid, off, or owned by another core (smp routes
-// foreign posts).
+// SPIs are VM-global and stay pending even when the route snapshot's
+// target is off; the vGIC re-reads the current route after publishing.
+// False for invalid/foreign targets and private posts to an off vCPU.
 [[nodiscard]] auto post_virq(std::size_t slot, std::uint32_t vintid) noexcept -> bool;
 
 // Is this vCPU slot powered on? Safe from any core through an atomic
@@ -152,6 +152,14 @@ void exit_current(TrapContext* live) noexcept;
 // Is any vCPU of this VM powered on? Safe from every core through the
 // same atomic snapshots as vcpu_on().
 [[nodiscard]] auto vm_on(std::size_t vm) noexcept -> bool;
+
+// Monotonic boot-instance generation. Watchdog updates carry this
+// value so delayed work from an old instance cannot alter a new one.
+[[nodiscard]] auto vm_generation(std::size_t vm) noexcept -> std::uint64_t;
+
+// Refill a local target's vGIC state after distributor or sibling
+// redistributor writes. A newly deliverable interrupt wakes kBlocked.
+void reevaluate_virq(std::size_t slot) noexcept;
 
 // Seed all VCPUs from guest_table() (RuntimeStart).
 void init() noexcept;

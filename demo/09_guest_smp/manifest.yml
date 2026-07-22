@@ -27,13 +27,17 @@ expect:
     within_seconds: 10
   - pattern: "vcpu1 online"
     within_seconds: 15
-  - pattern: "guest smp: reset with vcpu1 active"
+  - pattern: "guest smp: shared watchdog slot ok"
+    within_seconds: 17
+  - pattern: "guest smp: remote gicr wake ok"
     within_seconds: 18
-  - pattern: "vcpu1 online"
+  - pattern: "guest smp: reset with vcpu1 active"
     within_seconds: 20
+  - pattern: "vcpu1 online"
+    within_seconds: 22
   - pattern: "guest smp: 100 ipi rounds ok"
-    within_seconds: 25
+    within_seconds: 27
   - pattern: "demo_exit code=0"
-    within_seconds: 28
+    within_seconds: 29
   - pattern: "all VCPUs off"
     within_seconds: 30

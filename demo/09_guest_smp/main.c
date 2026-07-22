@@ -20,9 +20,11 @@
 
 #include <stdint.h>
 
-#define SGI_PING 1 /* vCPU 0 -> vCPU 1 */
-#define SGI_PONG 2 /* vCPU 1 -> vCPU 0 */
-#define ROUNDS   100
+#define SGI_PING        1 /* vCPU 0 -> vCPU 1 */
+#define SGI_PONG        2 /* vCPU 1 -> vCPU 0 */
+#define PPI_REMOTE_WAKE 20
+#define ROUNDS          100
+#define WATCHDOG_MS     300
 
 // Outside the reset guest window, so it survives the pristine-image
 // restore while g_ready/g_done/g_pongs below return to zero.
@@ -34,9 +36,10 @@ extern char __stack_top[];      // linker script (boot vCPU's stack)
 
 // Shared between the vCPUs — same Stage 2 window, MMU off (Device
 // attributes), so plain volatile loads/stores are the whole protocol.
-static volatile uint32_t g_ready = 0; // vCPU 1 is IRQ-ready
-static volatile uint32_t g_done  = 0; // vCPU 0 -> vCPU 1: retire
-static volatile uint64_t g_pongs = 0; // replies seen by vCPU 0's handler
+static volatile uint32_t g_ready       = 0; // vCPU 1 is IRQ-ready
+static volatile uint32_t g_done        = 0; // vCPU 0 -> vCPU 1: retire
+static volatile uint32_t g_remote_wake = 0;
+static volatile uint64_t g_pongs       = 0; // replies seen by vCPU 0's handler
 
 static inline void irq_mask(void) {
   __asm__ volatile("msr daifset, #2");
@@ -46,6 +49,24 @@ static inline void irq_unmask(void) {
   __asm__ volatile("msr daifclr, #2");
 }
 
+static inline uint64_t read_cntfrq(void) {
+  uint64_t value;
+  __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(value));
+  return value;
+}
+
+static inline uint64_t read_cntvct(void) {
+  uint64_t value;
+  __asm__ volatile("isb; mrs %0, cntvct_el0" : "=r"(value));
+  return value;
+}
+
+static void spin_ms(uint64_t ms) {
+  const uint64_t deadline = read_cntvct() + read_cntfrq() * ms / 1000U;
+  while (read_cntvct() < deadline) {
+  }
+}
+
 // Called from vectors.S with the vINTID already acked (x0). Both vCPUs
 // share the vector table; the INTID says which side is running.
 void demo_irq(uint32_t intid) {
@@ -53,6 +74,8 @@ void demo_irq(uint32_t intid) {
     icc_send_sgi(1U << 0, SGI_PONG); // echo back to the boot vCPU
   } else if (intid == SGI_PONG) {
     g_pongs = g_pongs + 1;
+  } else if (intid == PPI_REMOTE_WAKE) {
+    g_remote_wake = 1;
   }
 }
 
@@ -78,6 +101,10 @@ void secondary_main(void) {
   gicr_wake_at(my_vcpu()); // own redistributor frame (SGIs enabled at reset)
   icc_init();
 
+  // A sibling's disarm must cancel the boot owner's single VM slot,
+  // not a second per-core copy.
+  hvc_heartbeat(0);
+
   hvc_puts_lit("vcpu1 online\n");
   g_ready = 1;
 
@@ -101,6 +128,10 @@ int main(void) {
   icc_init();
   irq_unmask();
 
+  // Arm on the boot owner before the sibling starts. vCPU1 disarms it
+  // above; surviving beyond the window proves there is one owner slot.
+  hvc_heartbeat(WATCHDOG_MS);
+
   // The sibling gets its own stack, carved below the boot vCPU's.
   const uint64_t sibling_stack = (uint64_t)__stack_top - 0x10000U;
   if (psci_cpu_on(/*mpidr=*/1, (uint64_t)_secondary_start, sibling_stack) != PSCI_SUCCESS) {
@@ -113,6 +144,18 @@ int main(void) {
   while (!g_ready) {
     // the sibling boots in parallel on the other physical core
   }
+
+  spin_ms(WATCHDOG_MS + 100U);
+  hvc_puts_lit("guest smp: shared watchdog slot ok\n");
+
+  // vCPU1 is parked in WFI. Pend a disabled PPI in its redistributor,
+  // then enable it from vCPU0: the remote state change must trigger an
+  // owner-core refill and wake without another interrupt source.
+  gicr_set_pending_at(1, PPI_REMOTE_WAKE);
+  gicr_enable_at(1, PPI_REMOTE_WAKE);
+  while (!g_remote_wake) {
+  }
+  hvc_puts_lit("guest smp: remote gicr wake ok\n");
 
   if (run == 1) {
     hvc_puts_lit("guest smp: reset with vcpu1 active\n");

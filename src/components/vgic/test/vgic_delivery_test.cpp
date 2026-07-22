@@ -35,6 +35,17 @@ TEST(VgicRefill, DisabledIntidStaysPendingWithoutMaintenance) {
   EXPECT_FALSE(lr_in_flight(c.lr[0]));
 }
 
+TEST(VgicRefill, EnablingPendingPrivateIntidMakesItDeliverable) {
+  CpuState c{};
+  c.redist.pending = 1U << 20U;
+  ASSERT_FALSE(refill(c, kLrs));
+
+  c.redist.isenabler0 |= 1U << 20U;
+  EXPECT_FALSE(refill(c, kLrs));
+  EXPECT_EQ(c.redist.pending, 0U);
+  EXPECT_EQ(lr_vintid(c.lr[0]), 20U);
+}
+
 TEST(VgicRefill, GroupZeroConfigurationStillDelivers) {
   // A secure-convention guest programs its interrupts as Group 0
   // (Zephyr writes IGROUPR0 = 0). The enable bit is the single
@@ -123,6 +134,22 @@ TEST(VgicSpiRefill, RouteGatesTheTakingVcpu) {
 
   EXPECT_FALSE(refill(c, kLrs, &d, 1, 2));
   EXPECT_EQ(lr_vintid(c.lr[0]), 33U);
+}
+
+TEST(VgicSpiRefill, ReroutingPendingSpiChangesItsDeliverableTarget) {
+  CpuState  target{};
+  DistState dist{};
+  dist.spi_enabled = 1U << 8U; // INTID 40
+  dist.spi_pending = 1U << 8U;
+
+  EXPECT_NE(spi_deliverable(dist, 0, 2), 0U);
+  EXPECT_EQ(spi_deliverable(dist, 1, 2), 0U);
+
+  dist.spi_route[8] = 1;
+  EXPECT_EQ(spi_deliverable(dist, 0, 2), 0U);
+  EXPECT_NE(spi_deliverable(dist, 1, 2), 0U);
+  EXPECT_FALSE(refill(target, kLrs, &dist, 1, 2));
+  EXPECT_EQ(lr_vintid(target.lr[0]), 40U);
 }
 
 TEST(VgicSpiRefill, DisabledSpiStaysPending) {

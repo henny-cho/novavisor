@@ -9,9 +9,10 @@
 // never sees an expiry. Missing the window means the guest hung — the
 // expiry callback warm-resets the VM (smp::reset_vm, affinity-routed),
 // which also disarms the slot; the rebooted guest re-opts in with its
-// next heartbeat. One heartbeating vCPU per VM (its boot vCPU).
-// x1 = 0 disarms explicitly. Stateless: the window is carried by every
-// call, the deadline lives in the soft_timer slot.
+// next heartbeat. Calls from any sibling are routed to the boot vCPU's
+// affinity core, which owns the VM's single deadline slot. x1 = 0
+// disarms explicitly; boot generations reject delayed old-instance
+// updates.
 
 #include "trap_handler/hvc.hpp"
 

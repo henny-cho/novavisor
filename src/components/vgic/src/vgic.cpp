@@ -48,9 +48,16 @@ std::size_t                            g_lr_count = 0;
 // register-file RMW (MMIO write, post, refill).
 std::array<DistState, kMaxGuests> g_dist;
 sync::SpinLock                    g_dist_lock;
+ReevaluateHook                    g_reevaluate_hook = nullptr;
 
 [[nodiscard]] auto resident_here() noexcept -> std::size_t& {
   return g_resident[cpu::id()];
+}
+
+void request_reevaluate(std::size_t slot) noexcept {
+  if (g_reevaluate_hook != nullptr) {
+    g_reevaluate_hook(slot);
+  }
 }
 
 // Push deliverable pending INTIDs of one VCPU into its list registers.
@@ -113,10 +120,14 @@ void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
     log_raz_wi("GICD", off);
     return;
   }
-  // Enable/route/pending writes may unlock queued SPIs for this vCPU;
-  // a sibling routed elsewhere picks them up on its own next flush.
+  // Any distributor write can change deliverability or routing. Fan
+  // out after dropping the model lock; the SMP hook coalesces remote
+  // owner work and local targets refill immediately.
   if (call->write) {
-    flush(slot);
+    const std::size_t vm = vm_of(slot);
+    for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
+      request_reevaluate(slot_of(vm, v));
+    }
   }
 }
 
@@ -149,14 +160,7 @@ void redist_mmio(MmioCall* call, std::uint64_t off) noexcept {
       log_raz_wi("GICR", off);
       return;
     }
-    // Enable/pending changes may unlock queued vIRQs — but only the
-    // owning core may touch the target's LR/HCR state. A sibling frame
-    // written from another core is picked up by the owner's next flush
-    // (post, maintenance, switch-in); guests program their own frame
-    // on their own core, so the deferred case is theoretical.
-    if (guest.cpu[frame] == cpu::id()) {
-      flush(slot);
-    }
+    request_reevaluate(slot);
     return;
   }
   MmioRead r;
@@ -178,6 +182,10 @@ void init_cpu() noexcept {
     gic_virt::write_lr(i, 0); // reset state is UNKNOWN
   }
   gic::enable_ppi(gic_virt::kMaintenanceIntid);
+}
+
+void set_reevaluate_hook(ReevaluateHook hook) noexcept {
+  g_reevaluate_hook = hook;
 }
 
 void init() noexcept {
@@ -210,6 +218,7 @@ void cpu_save(std::size_t index) noexcept {
 }
 
 void cpu_restore(std::size_t index) noexcept {
+  flush(index); // self-heal a notification that raced an off/on transition
   const CpuState& cpu = g_cpu[index];
   for (std::size_t i = 0; i < g_lr_count; ++i) {
     gic_virt::write_lr(i, cpu.lr[i]);
@@ -223,16 +232,31 @@ auto post(std::size_t index, std::uint32_t vintid) noexcept -> bool {
   if (vintid >= kMaxIntid) {
     return false; // beyond the advertised INTID range
   }
+  std::size_t target = index;
   {
     sync::Guard guard{g_dist_lock}; // pending RMW races sibling-frame MMIO
     if (vintid < kNumPrivate) {
       g_cpu[index].redist.pending |= 1U << vintid;
     } else {
-      g_dist[vm_of(index)].spi_pending |= 1U << (vintid - kNumPrivate);
+      const std::size_t vm = vm_of(index);
+      g_dist[vm].spi_pending |= 1U << (vintid - kNumPrivate);
+      target = slot_of(vm, spi_target(g_dist[vm], vintid, guest_table()[vm].vcpus));
     }
   }
-  flush(index);
+  if (vintid < kNumPrivate) {
+    flush(index);
+  } else {
+    // The injector's earlier route snapshot may be stale. Re-read the
+    // route in the same critical section that publishes pending, then
+    // notify that current target after dropping the lock.
+    request_reevaluate(target);
+  }
   return true;
+}
+
+auto reevaluate(std::size_t index) noexcept -> bool {
+  flush(index);
+  return has_deliverable(index);
 }
 
 auto spi_target_vcpu(std::size_t vm, std::uint32_t intid) noexcept -> std::size_t {

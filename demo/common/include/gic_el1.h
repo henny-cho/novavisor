@@ -72,6 +72,12 @@ static inline void gicr_enable(unsigned intid) {
   gicr_enable_at(0, intid);
 }
 
+// Pend one private interrupt in a selected sibling redistributor.
+// Enabling it later is useful for testing pending→deliverable wakeups.
+static inline void gicr_set_pending_at(unsigned vcpu, unsigned intid) {
+  *gic_reg32(gicr_frame(vcpu) + NOVA_GICR_ISPENDR0) = 1U << intid;
+}
+
 // Enable one SPI (INTID 32..63) at the distributor. Group and route
 // keep their reset values (Group 1, vCPU 0); a mid priority is set so
 // the ICV priority mask never filters it.

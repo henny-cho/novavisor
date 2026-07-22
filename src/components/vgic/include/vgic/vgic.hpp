@@ -29,6 +29,8 @@
 
 namespace nova::vgic {
 
+using ReevaluateHook = void (*)(std::size_t slot) noexcept;
+
 // Cold boot (primary): per-core bring-up plus the shared LR count and
 // residency table. Discovers the implemented LR count and clears the
 // list registers (their reset state is UNKNOWN).
@@ -37,6 +39,10 @@ void init() noexcept;
 // Per-core half only — ICH_* and the maintenance PPI are banked per
 // PE. Secondaries run this on themselves (smp bring-up).
 void init_cpu() noexcept;
+
+// Install the cross-core owner routing hook after SMP is initialized.
+// The hook is boot-immutable before any guest can issue MMIO writes.
+void set_reevaluate_hook(ReevaluateHook hook) noexcept;
 
 // Reset one VCPU's virtual interrupt state to boot values (seed time).
 void cpu_reset(std::size_t index) noexcept;
@@ -48,9 +54,14 @@ void cpu_restore(std::size_t index) noexcept;
 
 // Mark an INTID pending for a VCPU and deliver what fits into its
 // list registers. A private INTID lands in the slot's redistributor;
-// an SPI lands in its VM's distributor bank (route the slot with
-// spi_target_vcpu first). False beyond the advertised INTID range.
+// an SPI lands in its VM's distributor bank. Its current route is
+// re-read atomically with the pending update, then that owner is
+// reevaluated. False beyond the advertised INTID range.
 [[nodiscard]] auto post(std::size_t index, std::uint32_t vintid) noexcept -> bool;
+
+// Refill one owner-local target after a register-state change and
+// report whether it now has a deliverable interrupt.
+[[nodiscard]] auto reevaluate(std::size_t index) noexcept -> bool;
 
 // The vCPU index an SPI is routed to inside `vm` (GICD_IROUTER Aff0,
 // out-of-range routes fall back to vCPU 0). Injectors combine it with
