@@ -41,6 +41,10 @@
 #define NOVA_BOARD_SMMU_CMD_INTID   108
 #define NOVA_BOARD_SMMU_ERROR_INTID 109
 
+/* Low PCIe windows (requires -machine virt,highmem-ecam=off). */
+#define NOVA_BOARD_PCIE_MMIO_BASE 0x10000000
+#define NOVA_BOARD_PCIE_ECAM_BASE 0x3F000000
+
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
 #endif /* NOVA_BOARD_LAYOUT_H */

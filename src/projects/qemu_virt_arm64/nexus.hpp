@@ -27,6 +27,7 @@
 #include "core_timer/core_timer.hpp"
 #include "core_vcpu/core_vcpu.hpp"
 #include "demo_hvc/demo_hvc.hpp"
+#include "dma_probe/dma_probe.hpp"
 #include "ivc/ivc.hpp"
 #include "psci/psci.hpp"
 #include "smmu/smmu.hpp"
@@ -45,8 +46,8 @@ struct nova_project {
   constexpr static auto config =
       cib::components<core_mmu_component, core_gic_component, vgic_component, core_timer_component,
                       soft_timer_component, boot_msg_component, trap_handler_component, demo_hvc_component,
-                      ivc_component, psci_component, watchdog_component, smmu_component, smp_component, vuart_component,
-                      core_vcpu_component>;
+                      ivc_component, psci_component, watchdog_component, smmu_component, dma_probe_component,
+                      smp_component, vuart_component, core_vcpu_component>;
 };
 
 // nova_top is the concrete cib::top instantiation for this target.

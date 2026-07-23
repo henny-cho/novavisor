@@ -58,6 +58,7 @@ alignas(mmu::k4KiB) std::array<DmaTableSet, kMaxGuests> g_dma_tables{};
 std::array<TranslationContext, kMaxGuests> g_contexts{};
 std::array<StreamBinding, kStreamCount>    g_bindings{};
 sync::SpinLock                             g_domain_lock;
+sync::SpinLock                             g_event_lock;
 std::size_t                                g_context_count = 0;
 bool                                       g_command_ready = false;
 bool                                       g_enabled       = false;
@@ -306,9 +307,10 @@ void log_fault(const DecodedEvent& event) noexcept {
   console::write_parts(std::array{"[smmu] fault type=0x"sv, type, " sid="sv, sid, "\n"sv});
 }
 
-void drain_event_queue() noexcept {
+[[nodiscard]] auto drain_event_queue() noexcept -> std::size_t {
   std::array<std::uint32_t, kEventCount> quarantine_sids{};
   std::size_t                            quarantine_count = 0;
+  std::size_t                            processed        = 0;
   QueueState                             queue{
                                   .log2_entries = kEventQueueLog2,
                                   .producer     = hw::read32(regs::kEvtqProd),
@@ -316,12 +318,13 @@ void drain_event_queue() noexcept {
   };
   if (!queue.consistent()) {
     console::write("[smmu] corrupt event queue pointers\n");
-    return;
+    return 0;
   }
 
   hw::acquire_memory();
   while (!queue.empty()) {
     const DecodedEvent event = decode_event(g_event_queue[queue.consumer_index()]);
+    ++processed;
     log_fault(event);
     if (requires_quarantine(event) && quarantine_count < quarantine_sids.size()) {
       quarantine_sids[quarantine_count++] = event.stream_id;
@@ -340,6 +343,7 @@ void drain_event_queue() noexcept {
   for (std::size_t i = 0; i < quarantine_count; ++i) {
     quarantine_fault_stream(quarantine_sids[i]);
   }
+  return processed;
 }
 
 void acknowledge_global_error() noexcept {
@@ -496,13 +500,22 @@ auto quarantine_vm(std::size_t vm) noexcept -> bool {
   return true;
 }
 
+auto poll_events() noexcept -> std::size_t {
+  if (!g_enabled) {
+    return 0;
+  }
+  sync::Guard guard{g_event_lock};
+  return drain_event_queue();
+}
+
 void handle_irq(IrqCall* call) noexcept {
   if (!g_enabled) {
     return;
   }
   if (call->intid == hw::kEventIntid) {
     call->handled = true;
-    drain_event_queue();
+    sync::Guard guard{g_event_lock};
+    static_cast<void>(drain_event_queue());
   } else if (call->intid == hw::kCommandIntid) {
     call->handled = true;
   } else if (call->intid == hw::kErrorIntid) {

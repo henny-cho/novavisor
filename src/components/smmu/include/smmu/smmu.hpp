@@ -14,6 +14,7 @@ void               handle_irq(IrqCall* call) noexcept;
 [[nodiscard]] auto attach_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool;
 [[nodiscard]] auto detach_vm(std::size_t vm) noexcept -> bool;
 [[nodiscard]] auto quarantine_vm(std::size_t vm) noexcept -> bool;
+[[nodiscard]] auto poll_events() noexcept -> std::size_t;
 
 } // namespace nova::smmu
 

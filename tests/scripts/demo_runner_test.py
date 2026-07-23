@@ -74,6 +74,32 @@ class DemoRunnerVerificationTest(unittest.TestCase):
             eof_error=FakeEof,
         )
 
+    def test_qemu_command_uses_stable_low_ecam_and_manifest_devices(self):
+        command = demo_runner.build_qemu_cmd(
+            Path("/tmp/novavisor.elf"),
+            "15_dma_isolation",
+            Path("/tmp/demo"),
+            {
+                "qemu_devices": [
+                    "edu,bus=pcie.0,addr=2.0,dma_mask=0xffffffffff",
+                ],
+                "guests": [],
+            },
+        )
+
+        self.assertIn("virt,virtualization=on,gic-version=3,iommu=smmuv3,highmem-ecam=off", command)
+        self.assertIn("none", command)
+        self.assertIn("edu,bus=pcie.0,addr=2.0,dma_mask=0xffffffffff", command)
+
+    def test_qemu_command_rejects_invalid_device_list(self):
+        with self.assertRaisesRegex(SystemExit, "qemu_devices"):
+            demo_runner.build_qemu_cmd(
+                Path("/tmp/novavisor.elf"),
+                "invalid",
+                Path("/tmp/demo"),
+                {"qemu_devices": "edu", "guests": []},
+            )
+
     def test_scenario_deadline_bounds_each_pattern_wait(self):
         clock = FakeClock()
         child = FakeChild(clock, actions=[8.0, 1.0])

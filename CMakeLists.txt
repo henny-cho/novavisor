@@ -130,6 +130,7 @@ if(CMAKE_CROSSCOMPILING)
         psci
         watchdog
         smmu
+        dma_probe
         smp
         vuart
     )
@@ -165,6 +166,7 @@ else()
     nova_add_host_test(restore_model_test) # sparse pristine restore
     nova_add_host_test(dma_policy_test)    # Stream ID ownership and DMA windows
     nova_add_host_test(gic_spi_test)       # arbitrary physical SPI banks
+    nova_add_host_test(pci_test)           # requester IDs and ECAM layout
 
     # Component tests (src/components/<name>/test/).
     nova_add_component_test(core_mmu stage2_descriptor_test) # Stage 2 descriptor encoding

@@ -106,7 +106,10 @@ auto guest_table() noexcept -> std::span<const GuestDescriptor> {
 }
 
 auto dma::assignment_table() noexcept -> std::span<const dma::Assignment> {
-  return {};
+  static constexpr std::array assignments{
+      dma::Assignment{.stream_id = 0x10, .vm = 0},
+  };
+  return assignments;
 }
 
 } // namespace nova

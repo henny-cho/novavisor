@@ -1,0 +1,2 @@
+guests:
+  - { name: dma_isolation, memory_size: 0x00100000, vcpus: 1, uart: none }
