@@ -1,9 +1,12 @@
 import contextlib
 import importlib.util
 import io
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 RUNNER_PATH = Path(__file__).resolve().parents[2] / "scripts" / "demo_runner.py"
@@ -157,6 +160,97 @@ class DemoRunnerVerificationTest(unittest.TestCase):
             demo_runner.print_failure_tail(capture)
         self.assertNotIn(discarded, stderr.getvalue())
         self.assertIn("recent-tail", stderr.getvalue())
+
+    def test_repeat_runs_all_attempts_and_records_elapsed_time(self):
+        clock = FakeClock()
+        outcomes = [
+            (1.5, 0),
+            (2.0, 1),
+            (0.25, RuntimeError("broken")),
+            (0.5, SystemExit("missing image")),
+        ]
+        reported = []
+
+        def verify_once(_number):
+            elapsed, outcome = outcomes.pop(0)
+            clock.advance(elapsed)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        attempts = demo_runner.run_repeated_verification(
+            4,
+            verify_once,
+            clock=clock,
+            on_attempt=reported.append,
+        )
+
+        self.assertEqual(
+            [attempt.status for attempt in attempts],
+            ["pass", "fail", "fail", "fail"],
+        )
+        self.assertEqual(
+            [attempt.elapsed_seconds for attempt in attempts],
+            [1.5, 2.0, 0.25, 0.5],
+        )
+        self.assertEqual(attempts[2].error, "RuntimeError: broken")
+        self.assertEqual(attempts[3].error, "SystemExit: missing image")
+        self.assertEqual(reported, attempts)
+
+    def test_repeat_summary_is_durable_after_each_attempt(self):
+        attempt = demo_runner.RepeatAttempt(1, "fail", 2.125, "RuntimeError: broken")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "summary.csv"
+
+            demo_runner.initialize_repeat_summary(path)
+            demo_runner.append_repeat_summary(path, attempt)
+
+            self.assertEqual(path.read_text().splitlines(), [
+                "run,status,elapsed_seconds,error",
+                "1,fail,2.125,RuntimeError: broken",
+            ])
+
+    def test_unexpected_process_error_preserves_bounded_tail(self):
+        class LoggingFailureChild(FakeChild):
+            def expect(self, pattern, timeout):
+                del pattern, timeout
+                self.logfile_read.write("discarded:" + ("한" * (40 * 1024)) + "recent")
+                raise RuntimeError("expect failed")
+
+        clock = FakeClock()
+        child = LoggingFailureChild(clock)
+
+        class FakePexpect:
+            TIMEOUT = FakeTimeout
+            EOF = FakeEof
+
+            @staticmethod
+            def spawn(*_args, **_kwargs):
+                return child
+
+        prepared = demo_runner.PreparedVerification(
+            label="fake",
+            phase=0,
+            command=("fake-qemu",),
+            timeout_seconds=10,
+            expectations=({"pattern": "ready"},),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            tail_path = Path(directory) / "attempt.qemu-tail.log"
+            with (
+                mock.patch.object(demo_runner, "_require_pexpect", return_value=FakePexpect),
+                mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "expect failed"):
+                    demo_runner.run_prepared_verification(prepared, tail_path)
+
+            tail = tail_path.read_text()
+            self.assertLessEqual(len(tail.encode("utf-8")), 32 * 1024)
+            self.assertNotIn("discarded:", tail)
+            self.assertTrue(tail.endswith("recent"))
+            self.assertEqual(child.terminate_calls, [True])
 
 
 if __name__ == "__main__":

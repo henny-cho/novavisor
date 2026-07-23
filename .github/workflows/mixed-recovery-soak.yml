@@ -1,0 +1,152 @@
+name: Mixed Recovery Soak
+
+on:
+  schedule:
+    # 03:17 KST. Offset from the hour to avoid peak shared-runner demand.
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Number of mixed recovery attempts
+        required: true
+        default: "5"
+        type: choice
+        options:
+          - "5"
+          - "10"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  repeat:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SOAK_RUNS: ${{ github.event.inputs.runs || '5' }}
+      SOAK_DIR: build/mixed-recovery-soak
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache CPM packages
+        uses: actions/cache@v6
+        with:
+          path: |
+            external/cache
+            !external/cache/guests
+          key: cpm-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake') }}
+          restore-keys: cpm-
+
+      - name: Cache ARM toolchain
+        uses: actions/cache@v6
+        with:
+          path: .toolchain
+          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/versions.sh') }}
+
+      - name: Cache external guest images
+        uses: actions/cache@v6
+        with:
+          path: external/cache/guests
+          key: guests-${{ hashFiles('demo/*/fetch.sh', 'demo/*/novavisor.overlay', 'demo/12_zephyr/app/**') }}
+
+      - name: Cache ccache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ccache
+          key: ccache-soak-${{ github.sha }}
+          restore-keys: ccache-soak-
+
+      - name: Install dependencies and ARM toolchain
+        run: ./scripts/setup_env.sh --ci
+
+      - name: Fetch mixed guest images
+        run: scripts/task.sh demo fetch 14
+
+      - name: Repeat mixed recovery
+        id: soak
+        run: |
+          mkdir -p "${SOAK_DIR}"
+          set -o pipefail
+          scripts/task.sh demo verify-repeat 14 \
+            --runs "${SOAK_RUNS}" \
+            --summary "${SOAK_DIR}/summary.csv" \
+            --artifacts "${SOAK_DIR}" \
+            2>&1 | tee "${SOAK_DIR}/runner.log"
+
+      - name: Publish repeat summary
+        if: always()
+        run: |
+          if [ -f "${SOAK_DIR}/summary.csv" ]; then
+            total=$(awk -F, 'NR > 1 { count++ } END { print count + 0 }' "${SOAK_DIR}/summary.csv")
+            passed=$(awk -F, 'NR > 1 && $2 == "pass" { count++ } END { print count + 0 }' "${SOAK_DIR}/summary.csv")
+            elapsed=$(awk -F, 'NR > 1 { total += $3 } END { printf "%.1f", total }' "${SOAK_DIR}/summary.csv")
+            if [ "${total}" -gt 0 ]; then
+              rate=$(awk -v passed="${passed}" -v total="${total}" \
+                'BEGIN { printf "%.1f", 100 * passed / total }')
+            else
+              rate="0.0"
+            fi
+            result="${passed}/${total} passed (${rate}%), total ${elapsed}s"
+          else
+            result="No attempts completed."
+          fi
+          {
+            echo "## Mixed recovery soak"
+            echo
+            echo "**Result:** ${result}"
+            echo
+            echo '```csv'
+            if [ -f "${SOAK_DIR}/summary.csv" ]; then
+              cat "${SOAK_DIR}/summary.csv"
+            else
+              echo "No attempts completed."
+            fi
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Record failure artifact metadata
+        if: always() && steps.soak.outcome == 'failure'
+        run: |
+          mkdir -p "${SOAK_DIR}"
+          {
+            git rev-parse HEAD
+            qemu-system-aarch64 --version | head -n 1
+            aarch64-none-elf-gcc --version | head -n 1
+          } > "${SOAK_DIR}/environment.txt"
+          for artifact in \
+            build/demo-repeat/14_mixed_recovery/variant-1/novavisor.elf \
+            build/aarch64-debug/active_config.yml \
+            build/aarch64-debug/guest_dtb/guest0.dtb \
+            build/aarch64-debug/guest_dtb/guest1.dtb \
+            external/cache/guests/14_mixed_recovery/Image \
+            external/cache/guests/14_mixed_recovery/Image.elf \
+            external/cache/guests/14_mixed_recovery/zephyr.bin \
+            external/cache/guests/14_mixed_recovery/zephyr.elf \
+            external/cache/guests/14_mixed_recovery/mixed.version
+          do
+            if [ -f "${artifact}" ]; then
+              sha256sum "${artifact}"
+            fi
+          done > "${SOAK_DIR}/sha256sums.txt"
+
+      - name: Upload failure evidence
+        if: always() && steps.soak.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: mixed-recovery-soak-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            build/mixed-recovery-soak/
+            build/demo-repeat/14_mixed_recovery/variant-1/novavisor.elf
+            build/aarch64-debug/active_config.yml
+            build/aarch64-debug/guest_dtb/*.dtb
+            external/cache/guests/14_mixed_recovery/Image
+            external/cache/guests/14_mixed_recovery/Image.elf
+            external/cache/guests/14_mixed_recovery/zephyr.bin
+            external/cache/guests/14_mixed_recovery/zephyr.elf
+            external/cache/guests/14_mixed_recovery/mixed.version

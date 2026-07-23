@@ -17,14 +17,17 @@ Usage:
     demo_runner.py fetch <id|name>      # populate the external image cache
     demo_runner.py run <id|name>        # launch without pattern checking
     demo_runner.py verify <id|name>     # launch and check manifest.expect
+    demo_runner.py verify-repeat <id|name> --runs N
     demo_runner.py verify-all           # run all enabled demos sequentially
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -92,6 +95,14 @@ def print_failure_tail(capture: OutputCapture) -> None:
     if capture.stream is None and capture.tail:
         print("[demo_runner] --- QEMU output tail ---", file=sys.stderr)
         print(capture.tail, file=sys.stderr, end="" if capture.tail.endswith("\n") else "\n")
+
+
+def preserve_failure_tail(capture: OutputCapture, path: Path | None) -> None:
+    print_failure_tail(capture)
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(capture.tail, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +270,27 @@ class VerificationResult:
         return self.failure is None
 
 
+@dataclass(frozen=True)
+class RepeatAttempt:
+    number: int
+    status: str
+    elapsed_seconds: float
+    error: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.status == "pass"
+
+
+@dataclass(frozen=True)
+class PreparedVerification:
+    label: str
+    phase: object
+    command: tuple[str, ...]
+    timeout_seconds: int
+    expectations: tuple[dict, ...]
+
+
 def verify_child_output(
     child,
     expectations: list[dict],
@@ -308,6 +340,141 @@ def verify_child_output(
         child.terminate(force=True)
 
 
+def run_repeated_verification(
+    runs: int,
+    verify_once: Callable[[int], int],
+    *,
+    clock: Callable[[], float],
+    on_attempt: Callable[[RepeatAttempt], None] | None = None,
+) -> list[RepeatAttempt]:
+    """Run every attempt so a soak reports a useful success rate."""
+    if runs < 1:
+        raise ValueError("runs must be positive")
+
+    attempts = []
+    for number in range(1, runs + 1):
+        started_at = clock()
+        error = ""
+        try:
+            return_code = verify_once(number)
+        except (Exception, SystemExit) as exc:
+            return_code = 1
+            error = f"{type(exc).__name__}: {exc}"
+        elapsed = max(0.0, clock() - started_at)
+        attempt = RepeatAttempt(
+            number=number,
+            status="pass" if return_code == 0 else "fail",
+            elapsed_seconds=elapsed,
+            error=error,
+        )
+        attempts.append(attempt)
+        if on_attempt is not None:
+            on_attempt(attempt)
+    return attempts
+
+
+def initialize_repeat_summary(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as summary:
+        csv.writer(summary).writerow(("run", "status", "elapsed_seconds", "error"))
+
+
+def append_repeat_summary(path: Path, attempt: RepeatAttempt) -> None:
+    with path.open("a", newline="") as summary:
+        csv.writer(summary).writerow((
+            attempt.number,
+            attempt.status,
+            f"{attempt.elapsed_seconds:.3f}",
+            attempt.error,
+        ))
+
+
+def manifest_variants(manifest: dict) -> list[dict]:
+    variants = manifest.get("variants")
+    if variants is not None:
+        return variants
+    return [{
+        "config": manifest.get("config"),
+        "expect": manifest.get("expect", []),
+    }]
+
+
+def prepare_verification(
+    name: str,
+    manifest: dict,
+    variant: dict,
+    *,
+    demo_build: Path | None = None,
+    elf_snapshot: Path | None = None,
+) -> PreparedVerification:
+    label = name if "name" not in variant else f"{name}[{variant['name']}]"
+    elf = build_hypervisor(variant.get("config"))
+    if elf_snapshot is not None:
+        elf_snapshot.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(elf, elf_snapshot)
+        elf = elf_snapshot
+    if demo_build is None:
+        demo_build = build_demos()
+    command = build_qemu_cmd(elf, name, demo_build, manifest)
+    return PreparedVerification(
+        label=label,
+        phase=manifest.get("phase"),
+        command=tuple(command),
+        timeout_seconds=int(manifest.get("timeout_seconds", 30)),
+        expectations=tuple(variant.get("expect", [])),
+    )
+
+
+def run_prepared_verification(
+    prepared: PreparedVerification,
+    failure_tail: Path | None = None,
+) -> int:
+    pexpect = _require_pexpect()
+    timeout = prepared.timeout_seconds
+    print(f"[demo_runner] --- {prepared.label} (phase {prepared.phase}) timeout={timeout}s ---")
+    print(f"[demo_runner] $ {' '.join(shlex.quote(c) for c in prepared.command)}")
+
+    child = pexpect.spawn(
+        prepared.command[0],
+        list(prepared.command[1:]),
+        timeout=timeout,
+        encoding="utf-8",
+    )
+    capture = OutputCapture(None if os.environ.get("GITHUB_ACTIONS") == "true" else sys.stdout)
+    child.logfile_read = capture
+
+    def report_match(match: PatternMatch) -> None:
+        if capture.stream is None:
+            print(f"[demo_runner] matched /{match.pattern}/")
+
+    try:
+        result = verify_child_output(
+            child,
+            list(prepared.expectations),
+            timeout,
+            clock=time.monotonic,
+            timeout_error=pexpect.TIMEOUT,
+            eof_error=pexpect.EOF,
+            on_match=report_match,
+        )
+    except BaseException:
+        preserve_failure_tail(capture, failure_tail)
+        raise
+
+    if result.failure == "timeout":
+        print(f"\n[demo_runner] FAIL: timeout waiting for /{result.pattern}/ "
+              f"({result.wait_seconds:.1f}s; scenario limit {timeout}s)", file=sys.stderr)
+        preserve_failure_tail(capture, failure_tail)
+        return 1
+    if result.failure == "eof":
+        print(f"\n[demo_runner] FAIL: EOF before /{result.pattern}/", file=sys.stderr)
+        preserve_failure_tail(capture, failure_tail)
+        return 1
+
+    print(f"\n[demo_runner] PASS: {prepared.label}")
+    return 0
+
+
 def verify(name: str) -> int:
     _, manifest = load_manifest(name)
     if not manifest.get("enabled", False):
@@ -318,11 +485,7 @@ def verify(name: str) -> int:
     # `variants:` list — one full run (build + QEMU + expect) each, with
     # the shared guests list. demo/11_configurable uses this to verify
     # the same guest under two configs.
-    variants = manifest.get("variants")
-    if variants is None:
-        variants = [{"config": manifest.get("config"),
-                     "expect": manifest.get("expect", [])}]
-    for variant in variants:
+    for variant in manifest_variants(manifest):
         rc = _verify_one(name, manifest, variant)
         if rc != 0:
             return rc
@@ -330,45 +493,7 @@ def verify(name: str) -> int:
 
 
 def _verify_one(name: str, manifest: dict, variant: dict) -> int:
-    pexpect = _require_pexpect()
-    label = name if "name" not in variant else f"{name}[{variant['name']}]"
-    elf = build_hypervisor(variant.get("config"))
-    demo_build = build_demos()
-    cmd = build_qemu_cmd(elf, name, demo_build, manifest)
-
-    timeout = int(manifest.get("timeout_seconds", 30))
-    print(f"[demo_runner] --- {label} (phase {manifest.get('phase')}) timeout={timeout}s ---")
-    print(f"[demo_runner] $ {' '.join(shlex.quote(c) for c in cmd)}")
-
-    child = pexpect.spawn(cmd[0], cmd[1:], timeout=timeout, encoding="utf-8")
-    capture = OutputCapture(None if os.environ.get("GITHUB_ACTIONS") == "true" else sys.stdout)
-    child.logfile_read = capture
-
-    def report_match(match: PatternMatch) -> None:
-        if capture.stream is None:
-            print(f"[demo_runner] matched /{match.pattern}/")
-
-    result = verify_child_output(
-        child,
-        variant.get("expect", []),
-        timeout,
-        clock=time.monotonic,
-        timeout_error=pexpect.TIMEOUT,
-        eof_error=pexpect.EOF,
-        on_match=report_match,
-    )
-    if result.failure == "timeout":
-        print(f"\n[demo_runner] FAIL: timeout waiting for /{result.pattern}/ "
-              f"({result.wait_seconds:.1f}s; scenario limit {timeout}s)", file=sys.stderr)
-        print_failure_tail(capture)
-        return 1
-    if result.failure == "eof":
-        print(f"\n[demo_runner] FAIL: EOF before /{result.pattern}/", file=sys.stderr)
-        print_failure_tail(capture)
-        return 1
-
-    print(f"\n[demo_runner] PASS: {label}")
-    return 0
+    return run_prepared_verification(prepare_verification(name, manifest, variant))
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +579,70 @@ def cmd_verify(args) -> int:
     return verify(args.name)
 
 
+def cmd_verify_repeat(args) -> int:
+    _, manifest = load_manifest(args.name)
+    if not manifest.get("enabled", False):
+        print(f"[demo_runner] SKIP {args.name} (manifest.enabled=false)")
+        return 0
+
+    summary_path = Path(args.summary) if args.summary else None
+    if summary_path is not None:
+        initialize_repeat_summary(summary_path)
+
+    artifact_dir = Path(args.artifacts) if args.artifacts else None
+    if artifact_dir is not None:
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        for stale_tail in artifact_dir.glob("attempt-*.qemu-tail.log"):
+            if stale_tail.is_file():
+                stale_tail.unlink()
+
+    demo_build = build_demos()
+    prepared_runs = []
+    for index, variant in enumerate(manifest_variants(manifest), start=1):
+        snapshot = BUILD_DIR / "demo-repeat" / args.name / f"variant-{index}" / "novavisor.elf"
+        prepared_runs.append(prepare_verification(
+            args.name,
+            manifest,
+            variant,
+            demo_build=demo_build,
+            elf_snapshot=snapshot,
+        ))
+
+    def report_attempt(attempt: RepeatAttempt) -> None:
+        print(f"[demo_runner] repeat {attempt.number}/{args.runs}: "
+              f"{attempt.status.upper()} ({attempt.elapsed_seconds:.1f}s)")
+        if attempt.error:
+            print(f"[demo_runner] repeat error: {attempt.error}", file=sys.stderr)
+        if summary_path is not None:
+            append_repeat_summary(summary_path, attempt)
+
+    def verify_once(attempt_number: int) -> int:
+        for variant_number, prepared in enumerate(prepared_runs, start=1):
+            failure_tail = None
+            if artifact_dir is not None:
+                failure_tail = (
+                    artifact_dir
+                    / f"attempt-{attempt_number:02d}-variant-{variant_number:02d}.qemu-tail.log"
+                )
+            return_code = run_prepared_verification(prepared, failure_tail)
+            if return_code != 0:
+                return return_code
+        return 0
+
+    attempts = run_repeated_verification(
+        args.runs,
+        verify_once,
+        clock=time.monotonic,
+        on_attempt=report_attempt,
+    )
+    passed = sum(attempt.ok for attempt in attempts)
+    total_seconds = sum(attempt.elapsed_seconds for attempt in attempts)
+    success_rate = 100.0 * passed / len(attempts)
+    print(f"[demo_runner] repeat summary: {passed}/{len(attempts)} passed "
+          f"({success_rate:.1f}%), total={total_seconds:.1f}s")
+    return 0 if passed == len(attempts) else 1
+
+
 def cmd_verify_all(_args) -> int:
     demos = iter_demos()
     enabled = [(n, m) for n, m in demos if m.get("enabled", False)]
@@ -489,6 +678,14 @@ def main() -> int:
     p_run.add_argument("name", **demo_arg)
     p_ver = sub.add_parser("verify", help="run a demo and check manifest.expect")
     p_ver.add_argument("name", **demo_arg)
+    p_repeat = sub.add_parser("verify-repeat", help="repeat one demo and report its success rate")
+    p_repeat.add_argument("name", **demo_arg)
+    p_repeat.add_argument("--runs", type=int, required=True, choices=range(1, 101),
+                          metavar="N", help="number of attempts (1..100)")
+    p_repeat.add_argument("--summary", metavar="CSV",
+                          help="write per-attempt status and elapsed time")
+    p_repeat.add_argument("--artifacts", metavar="DIR",
+                          help="write one bounded QEMU tail per failed attempt")
     sub.add_parser("verify-all", help="run all enabled demos")
     p_dbg = sub.add_parser("debug", help="launch a demo with QEMU halted and GDB stub on :1234")
     p_dbg.add_argument("name", **demo_arg)
@@ -502,6 +699,7 @@ def main() -> int:
         "fetch": cmd_fetch,
         "run": cmd_run,
         "verify": cmd_verify,
+        "verify-repeat": cmd_verify_repeat,
         "verify-all": cmd_verify_all,
         "debug": cmd_debug,
     }
