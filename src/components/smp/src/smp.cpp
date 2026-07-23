@@ -430,6 +430,24 @@ void on_lifecycle_timeout(TrapContext* /*ctx*/, std::uint64_t arg) noexcept {
   }
 }
 
+void recover_dma_fault(std::size_t vm, std::uint64_t stream_id, std::uint64_t generation,
+                       std::uint64_t /*unused*/) noexcept {
+  if (vm >= guest_table().size() || vcpu::vm_generation(vm) != generation || !vcpu::vm_on(vm)) {
+    return;
+  }
+
+  console::write("[smp] DMA fault in VM ");
+  console::write_dec64(vm);
+  console::write(" sid ");
+  console::write_dec64(stream_id);
+  console::write(" generation ");
+  console::write_dec64(generation);
+  console::write(" — resetting\n");
+  if (!reset_vm(vm, nullptr, true)) {
+    console::write("[smp] DMA fault recovery already covered by lifecycle\n");
+  }
+}
+
 } // namespace
 
 void start_secondaries() noexcept {
@@ -695,6 +713,30 @@ void smp_component::handle_guest_fault(GuestFaultCall* call) noexcept {
   if (!smp::reset_vm(vm, call->ctx)) {
     console::write("[smp] guest fault recovery unavailable — stopping VM\n");
     smp::stop_vm(vm, call->ctx);
+  }
+}
+
+void smp_component::handle_dma_fault(DmaFaultCall* call) noexcept {
+  call->handled                   = true;
+  const smmu::FaultNotice& notice = call->notice;
+  if (!notice.valid() || notice.owner_vm >= guest_table().size() || !smp::g_online[0].load(std::memory_order_acquire)) {
+    return;
+  }
+
+  const std::size_t owner = smp::slot_cpu(slot_of(notice.owner_vm));
+  if (owner == cpu::id()) {
+    smp::recover_dma_fault(notice.owner_vm, notice.stream_id, notice.generation, 0);
+    return;
+  }
+  if (!smp::enqueue(owner,
+                    {.op       = smp::Op::kVmOwnerCall,
+                     .idx      = static_cast<std::uint32_t>(notice.owner_vm),
+                     .a        = notice.stream_id,
+                     .b        = notice.generation,
+                     .c        = 0,
+                     .callback = &smp::recover_dma_fault},
+                    true)) {
+    console::write("[smp] DMA fault owner routing failed; stream remains quarantined\n");
   }
 }
 

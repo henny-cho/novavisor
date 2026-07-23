@@ -95,6 +95,10 @@ struct smp_component {
   // warm reset while unrelated VMs keep running.
   static void handle_guest_fault(GuestFaultCall* call) noexcept;
 
+  // Routes an isolated DMA fault to the VM owner. A generation check
+  // prevents delayed notices from resetting a newer VM instance.
+  static void handle_dma_fault(DmaFaultCall* call) noexcept;
+
   // Claims the cross-call SGI: executes queued foreign requests.
   static void handle_irq(IrqCall* call) noexcept;
 
@@ -116,6 +120,7 @@ struct smp_component {
                                      core_vcpu_component::INIT >> boot_msg_component::PRINT_BOOT_MSG >> *INIT),
       cib::extend<HvcService>(&smp_component::handle_hvc),
       cib::extend<GuestFaultService>(&smp_component::handle_guest_fault),
+      cib::extend<DmaFaultService>(&smp_component::handle_dma_fault),
       cib::extend<IrqService>(&smp_component::handle_irq), cib::extend<SysregService>(&smp_component::handle_sysreg));
 };
 

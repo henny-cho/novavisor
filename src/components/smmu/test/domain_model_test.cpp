@@ -74,13 +74,18 @@ TEST(SmmuDomain, TracksAttachDetachAndQuarantine) {
 
   EXPECT_TRUE(mark_attached(binding, 1));
   EXPECT_TRUE(attachment_matches(binding, 1));
+  EXPECT_EQ(snapshot_fault(binding, 0x10).owner_vm, 1);
+  EXPECT_EQ(snapshot_fault(binding, 0x10).stream_id, 0x10);
+  EXPECT_EQ(snapshot_fault(binding, 0x10).generation, 1);
   EXPECT_FALSE(attachment_matches(binding, 2));
   EXPECT_FALSE(mark_attached(binding, 1));
   EXPECT_TRUE(mark_detached(binding));
+  EXPECT_FALSE(snapshot_fault(binding, 0x10).valid());
   EXPECT_TRUE(mark_quarantined(binding));
   EXPECT_FALSE(mark_attached(binding, 1));
   EXPECT_TRUE(mark_attached(binding, 2));
   EXPECT_EQ(binding.generation, 2);
+  EXPECT_EQ(snapshot_fault(binding, 0x10).generation, 2);
 }
 
 TEST(SmmuDomain, RejectsInvalidOrConflictingBinding) {
