@@ -3,12 +3,17 @@
 #include "core_gic/core_gic.hpp"
 
 #include <cib/top.hpp>
+#include <cstddef>
+#include <cstdint>
 #include <flow/flow.hpp>
 
 namespace nova::smmu {
 
-void init() noexcept;
-void handle_irq(IrqCall* call) noexcept;
+void               init() noexcept;
+void               handle_irq(IrqCall* call) noexcept;
+[[nodiscard]] auto attach_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool;
+[[nodiscard]] auto detach_vm(std::size_t vm) noexcept -> bool;
+[[nodiscard]] auto quarantine_vm(std::size_t vm) noexcept -> bool;
 
 } // namespace nova::smmu
 

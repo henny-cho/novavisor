@@ -45,6 +45,14 @@ TEST(SmmuSte, RejectsMisalignedAndUnencodableRoots) {
   EXPECT_EQ(make_stage2_ste(1ULL << 40U, 1).error, SteError::kRootOutOfRange);
 }
 
+TEST(SmmuSte, EncodesAbortEntry) {
+  constexpr StreamTableEntry entry = make_abort_ste();
+
+  EXPECT_TRUE(is_abort(entry));
+  EXPECT_FALSE(is_stage2_only(entry));
+  EXPECT_FALSE(uses_context_descriptor(entry));
+}
+
 TEST(SmmuSte, DetectsStage1ContextUseSeparately) {
   StreamTableEntry stage1{};
   stage1[0] = ste::kValid | (ste::kStage1Only << ste::kConfigShift);

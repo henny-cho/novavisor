@@ -51,6 +51,8 @@ inline constexpr std::uint32_t kGbpaUpdate    = 1U << 31;
 inline constexpr std::uint32_t kIrqGerror = 1U << 0;
 inline constexpr std::uint32_t kIrqEvent  = 1U << 2;
 
+inline constexpr std::uint32_t kCmdqConsErrorMask = 0x7FU << 24U;
+
 inline constexpr std::uint64_t kStrtabBaseRa   = 1ULL << 62;
 inline constexpr std::uint64_t kStrtabAddrMask = 0x000F'FFFF'FFFF'FFC0ULL;
 inline constexpr std::uint64_t kQueueBaseRwa   = 1ULL << 62;

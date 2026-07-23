@@ -18,6 +18,9 @@ enum class EventType : std::uint8_t {
   kBadSte           = 0x04,
   kCdFetch          = 0x09,
   kTranslationFault = 0x10,
+  kAddressSizeFault = 0x11,
+  kAccessFault      = 0x12,
+  kPermissionFault  = 0x13,
 };
 
 enum class DmaAccess : std::uint8_t {
@@ -129,6 +132,9 @@ struct DecodedEvent {
     decoded.input_address     = raw[2];
     break;
   case EventType::kTranslationFault:
+  case EventType::kAddressSizeFault:
+  case EventType::kAccessFault:
+  case EventType::kPermissionFault:
     decoded.known             = true;
     decoded.has_input_address = true;
     decoded.input_address     = raw[2];
@@ -137,6 +143,23 @@ struct DecodedEvent {
     break;
   }
   return decoded;
+}
+
+[[nodiscard]] constexpr auto requires_quarantine(const DecodedEvent& event) noexcept -> bool {
+  switch (event.type) {
+  case EventType::kTranslationFault:
+  case EventType::kAddressSizeFault:
+  case EventType::kAccessFault:
+  case EventType::kPermissionFault:
+    return true;
+  case EventType::kNone:
+  case EventType::kBadStreamId:
+  case EventType::kSteFetch:
+  case EventType::kBadSte:
+  case EventType::kCdFetch:
+    return false;
+  }
+  return false;
 }
 
 struct FaultExpectation {

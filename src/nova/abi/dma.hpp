@@ -20,6 +20,10 @@ struct Assignment {
   std::size_t   vm        = kNoVm;
 };
 
+// Defined by the active project. An empty table keeps every stream
+// blocked while still initializing guest-owned translation contexts.
+auto assignment_table() noexcept -> std::span<const Assignment>;
+
 struct PhysicalRange {
   std::uint64_t base = 0;
   std::uint64_t size = 0;

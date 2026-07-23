@@ -121,4 +121,14 @@ TEST(SmmuFault, DecoderPreservesUnknownEvents) {
   EXPECT_EQ(static_cast<std::uint8_t>(decoded.type), 0x55);
 }
 
+TEST(SmmuFault, ClassifiesOwnerIsolationEvents) {
+  for (const EventType type : {EventType::kTranslationFault, EventType::kAddressSizeFault, EventType::kAccessFault,
+                               EventType::kPermissionFault}) {
+    auto raw = nova::smmu::make_event_header(type, 0x10);
+    EXPECT_TRUE(nova::smmu::requires_quarantine(nova::smmu::decode_event(raw)));
+  }
+  EXPECT_FALSE(nova::smmu::requires_quarantine(
+      nova::smmu::decode_event(nova::smmu::make_event_header(EventType::kBadSte, 0x10))));
+}
+
 } // namespace

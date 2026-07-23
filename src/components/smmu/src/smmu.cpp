@@ -1,12 +1,19 @@
 #include "smmu/smmu.hpp"
 
+#include "core_mmu/stage2_builder.hpp"
 #include "hal/console.hpp"
 #include "hal/gic.hpp"
 #include "hal/smmu.hpp"
 #include "nova/abi/dma.hpp"
+#include "nova/abi/guest.hpp"
+#include "nova/abi/guest_layout.h"
 #include "nova/arch/smmuv3_regs.hpp"
 #include "nova/fmt.hpp"
+#include "nova/sync.hpp"
 #include "nova_panic/nova_panic.hpp"
+#include "smmu/command_model.hpp"
+#include "smmu/dma_table_model.hpp"
+#include "smmu/domain_model.hpp"
 #include "smmu/fault_model.hpp"
 #include "smmu/queue_model.hpp"
 #include "smmu/runtime_model.hpp"
@@ -15,6 +22,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 namespace nova::smmu {
@@ -28,21 +36,34 @@ inline constexpr std::uint8_t  kEventQueueLog2   = 4;
 inline constexpr std::size_t   kStreamCount      = std::size_t{1} << kSidBits;
 inline constexpr std::size_t   kCommandCount     = std::size_t{1} << kCommandQueueLog2;
 inline constexpr std::size_t   kEventCount       = std::size_t{1} << kEventQueueLog2;
+inline constexpr std::size_t   kDmaL3PoolSize    = 2;
 inline constexpr std::uint32_t kPollLimit        = 1'000'000;
-
-using CommandEntry = std::array<std::uint64_t, 2>;
 
 inline constexpr std::size_t kStreamTableAlign  = kStreamCount * kStreamTableEntryBytes;
 inline constexpr std::size_t kCommandQueueAlign = kCommandCount * sizeof(CommandEntry);
 inline constexpr std::size_t kEventQueueAlign   = kEventCount * sizeof(EventRecord);
 
+struct alignas(mmu::k4KiB) DmaTableSet {
+  mmu::Table                             l1;
+  mmu::Table                             l2;
+  std::array<mmu::Table, kDmaL3PoolSize> l3_pool;
+};
+static_assert(sizeof(DmaTableSet) % mmu::k4KiB == 0);
+
 alignas(kStreamTableAlign) std::array<StreamTableEntry, kStreamCount> g_stream_table{};
 alignas(kCommandQueueAlign) std::array<CommandEntry, kCommandCount> g_command_queue{};
 alignas(kEventQueueAlign) std::array<EventRecord, kEventCount> g_event_queue{};
+alignas(mmu::k4KiB) std::array<DmaTableSet, kMaxGuests> g_dma_tables{};
 
-bool          g_enabled      = false;
-std::uint32_t g_event_cons   = 0;
-std::uint32_t g_audit_events = 0;
+std::array<TranslationContext, kMaxGuests> g_contexts{};
+std::array<StreamBinding, kStreamCount>    g_bindings{};
+sync::SpinLock                             g_domain_lock;
+std::size_t                                g_context_count = 0;
+bool                                       g_command_ready = false;
+bool                                       g_enabled       = false;
+std::uint32_t                              g_command_prod  = 0;
+std::uint32_t                              g_event_cons    = 0;
+std::uint32_t                              g_audit_events  = 0;
 
 [[nodiscard]] auto wait_for(std::uint32_t offset, std::uint32_t expected) noexcept -> bool {
   for (std::uint32_t poll = 0; poll < kPollLimit; ++poll) {
@@ -86,6 +107,168 @@ std::uint32_t g_audit_events = 0;
   halt();
 }
 
+[[noreturn]] void fail_runtime(std::string_view reason) noexcept {
+  console::write_parts(std::array{"[smmu] isolation failure: "sv, reason, "\n"sv});
+  halt();
+}
+
+[[nodiscard]] auto wait_for_commands() noexcept -> bool {
+  const std::uint32_t pointer_mask = (std::uint32_t{1} << (kCommandQueueLog2 + 1U)) - 1U;
+  for (std::uint32_t poll = 0; poll < kPollLimit; ++poll) {
+    const std::uint32_t consumer = hw::read32(regs::kCmdqCons);
+    if ((consumer & regs::kCmdqConsErrorMask) != 0U) {
+      return false;
+    }
+    if ((consumer & pointer_mask) == g_command_prod) {
+      hw::acquire_memory();
+      return true;
+    }
+  }
+  return false;
+}
+
+[[nodiscard]] auto submit_commands(std::span<const CommandEntry> commands) noexcept -> bool {
+  if (!g_command_ready || commands.size() + 1U > kCommandCount || !wait_for_commands()) {
+    return false;
+  }
+
+  const std::uint32_t pointer_mask = (std::uint32_t{1} << (kCommandQueueLog2 + 1U)) - 1U;
+  QueueState          queue{
+               .log2_entries = kCommandQueueLog2,
+               .producer     = g_command_prod,
+               .consumer     = hw::read32(regs::kCmdqCons) & pointer_mask,
+  };
+  for (const CommandEntry& command : commands) {
+    g_command_queue[queue.producer_index()] = command;
+    if (!queue.try_produce()) {
+      return false;
+    }
+  }
+  g_command_queue[queue.producer_index()] = make_command_sync();
+  if (!queue.try_produce()) {
+    return false;
+  }
+
+  hw::publish_memory();
+  g_command_prod = queue.producer;
+  hw::write32(regs::kCmdqProd, g_command_prod);
+  return wait_for_commands();
+}
+
+[[nodiscard]] auto build_dma_contexts(const Capabilities& caps) noexcept -> bool {
+  const auto guests      = guest_table();
+  const auto assignments = dma::assignment_table();
+  if (guests.empty() || guests.size() > kMaxGuests) {
+    return false;
+  }
+
+  std::uint64_t pristine_size = 0;
+  for (const GuestDescriptor& guest : guests) {
+    if (pristine_size > UINT64_MAX - guest.ipa_size) {
+      return false;
+    }
+    pristine_size += guest.ipa_size;
+  }
+  const std::array protected_pa{
+      dma::PhysicalRange{.base = 0, .size = NOVA_GUEST_IPA_BASE},
+      dma::PhysicalRange{.base = NOVA_IVC_SHM_PA, .size = NOVA_IVC_SHM_SIZE},
+      dma::PhysicalRange{.base = NOVA_GUEST_PRISTINE_PA, .size = pristine_size},
+  };
+  if (!dma::validate_policy(assignments, guests, {.sid_bits = kSidBits, .protected_pa = protected_pa}).ok()) {
+    return false;
+  }
+
+  g_contexts.fill(TranslationContext{});
+  g_bindings.fill(StreamBinding{});
+  for (std::size_t vm = 0; vm < guests.size(); ++vm) {
+    DmaTableSet& set = g_dma_tables[vm];
+
+    std::array<std::uint64_t, kDmaL3PoolSize> l3_pas{};
+    for (std::size_t i = 0; i < kDmaL3PoolSize; ++i) {
+      l3_pas[i] = reinterpret_cast<std::uint64_t>(&set.l3_pool[i]);
+    }
+    mmu::Stage2Tables tables{
+        .l1          = &set.l1,
+        .l2          = &set.l2,
+        .l2_pa       = reinterpret_cast<std::uint64_t>(&set.l2),
+        .l3_pool     = set.l3_pool,
+        .l3_pool_pas = l3_pas,
+    };
+    if (!build_dma_table(tables, guests[vm])) {
+      return false;
+    }
+    g_contexts[vm] = {
+        .owner_vm = vm,
+        .vmid     = guests[vm].vmid,
+        .root_pa  = reinterpret_cast<std::uint64_t>(&set.l1),
+    };
+  }
+  g_context_count = guests.size();
+  if (validate_contexts(std::span{g_contexts}.first(g_context_count), guests, caps.vmid16) != ContextError::kNone) {
+    return false;
+  }
+
+  for (const dma::Assignment& assignment : assignments) {
+    if (assignment.stream_id >= g_bindings.size() ||
+        !configure_binding(g_bindings[assignment.stream_id], assignment.vm, guests.size())) {
+      return false;
+    }
+    g_stream_table[assignment.stream_id] = make_abort_ste();
+  }
+  hw::publish_memory();
+  return true;
+}
+
+[[nodiscard]] auto abort_stream(std::uint32_t stream_id, std::uint16_t vmid) noexcept -> bool {
+  g_stream_table[stream_id][0] = make_abort_ste()[0];
+  hw::publish_memory();
+  const std::array commands{make_cfgi_ste(stream_id), make_tlbi_s12_vmall(vmid)};
+  return submit_commands(commands);
+}
+
+[[nodiscard]] auto install_stream(std::uint32_t stream_id, const TranslationContext& context) noexcept -> bool {
+  const SteEncoding encoding = make_stage2_ste(context.root_pa, context.vmid);
+  if (!encoding.ok()) {
+    return false;
+  }
+  for (std::size_t i = 1; i < encoding.entry.size(); ++i) {
+    g_stream_table[stream_id][i] = encoding.entry[i];
+  }
+  hw::publish_memory();
+  g_stream_table[stream_id][0] = encoding.entry[0];
+  hw::publish_memory();
+
+  const std::array commands{make_cfgi_ste(stream_id), make_tlbi_s12_vmall(context.vmid)};
+  return submit_commands(commands);
+}
+
+[[nodiscard]] auto quarantine_vm_locked(std::size_t vm) noexcept -> bool {
+  for (std::size_t sid = 0; sid < g_bindings.size(); ++sid) {
+    StreamBinding& binding = g_bindings[sid];
+    if (binding.owner_vm != vm || binding.state == DomainState::kQuarantined) {
+      continue;
+    }
+    if (binding.state == DomainState::kAttached &&
+        !abort_stream(static_cast<std::uint32_t>(sid), g_contexts[vm].vmid)) {
+      return false;
+    }
+    if (!mark_quarantined(binding)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void quarantine_fault_stream(std::uint32_t stream_id) noexcept {
+  sync::Guard guard{g_domain_lock};
+  if (stream_id >= g_bindings.size() || g_bindings[stream_id].state != DomainState::kAttached) {
+    return;
+  }
+  if (!quarantine_vm_locked(g_bindings[stream_id].owner_vm)) {
+    fail_runtime("fault quarantine");
+  }
+}
+
 void log_fault(const DecodedEvent& event) noexcept {
   if (g_audit_events >= dma::kFaultAuditBurst) {
     if (g_audit_events == dma::kFaultAuditBurst) {
@@ -124,10 +307,12 @@ void log_fault(const DecodedEvent& event) noexcept {
 }
 
 void drain_event_queue() noexcept {
-  QueueState queue{
-      .log2_entries = kEventQueueLog2,
-      .producer     = hw::read32(regs::kEvtqProd),
-      .consumer     = g_event_cons,
+  std::array<std::uint32_t, kEventCount> quarantine_sids{};
+  std::size_t                            quarantine_count = 0;
+  QueueState                             queue{
+                                  .log2_entries = kEventQueueLog2,
+                                  .producer     = hw::read32(regs::kEvtqProd),
+                                  .consumer     = g_event_cons,
   };
   if (!queue.consistent()) {
     console::write("[smmu] corrupt event queue pointers\n");
@@ -136,7 +321,11 @@ void drain_event_queue() noexcept {
 
   hw::acquire_memory();
   while (!queue.empty()) {
-    log_fault(decode_event(g_event_queue[queue.consumer_index()]));
+    const DecodedEvent event = decode_event(g_event_queue[queue.consumer_index()]);
+    log_fault(event);
+    if (requires_quarantine(event) && quarantine_count < quarantine_sids.size()) {
+      quarantine_sids[quarantine_count++] = event.stream_id;
+    }
     if (!queue.try_consume()) {
       break;
     }
@@ -148,6 +337,9 @@ void drain_event_queue() noexcept {
   }
   g_event_cons = queue.consumer;
   hw::write32(regs::kEvtqCons, g_event_cons);
+  for (std::size_t i = 0; i < quarantine_count; ++i) {
+    quarantine_fault_stream(quarantine_sids[i]);
+  }
 }
 
 void acknowledge_global_error() noexcept {
@@ -184,7 +376,8 @@ void init() noexcept {
       .command_log2     = kCommandQueueLog2,
       .event_log2       = kEventQueueLog2,
   };
-  const RuntimeError error = validate_capabilities(decode_capabilities(idr0, idr1, idr5), layout);
+  const Capabilities caps  = decode_capabilities(idr0, idr1, idr5);
+  const RuntimeError error = validate_capabilities(caps, layout);
   if (error != RuntimeError::kNone) {
     fail_init(error);
   }
@@ -192,8 +385,14 @@ void init() noexcept {
   g_stream_table.fill(StreamTableEntry{});
   g_command_queue.fill(CommandEntry{});
   g_event_queue.fill(EventRecord{});
-  g_event_cons   = 0;
-  g_audit_events = 0;
+  g_command_ready = false;
+  g_enabled       = false;
+  g_command_prod  = 0;
+  g_event_cons    = 0;
+  g_audit_events  = 0;
+  if (!build_dma_contexts(caps)) {
+    fail_init("DMA contexts");
+  }
   hw::publish_memory();
 
   hw::write32(regs::kCr1, kCr1Cacheable);
@@ -207,6 +406,17 @@ void init() noexcept {
   std::uint32_t enables = regs::kCr0CmdqEnable;
   if (!write_synced(regs::kCr0, regs::kCr0Ack, enables)) {
     fail_init("command queue timeout");
+  }
+  g_command_ready = true;
+  for (std::uint32_t sid = 0; sid < kStreamCount; ++sid) {
+    const std::array<CommandEntry, 1> invalidation{make_cfgi_ste(sid)};
+    if (!submit_commands(invalidation)) {
+      fail_init("stream cache invalidation");
+    }
+  }
+  const std::array<CommandEntry, 1> initial_tlb_invalidation{make_tlbi_nsnh_all()};
+  if (!submit_commands(initial_tlb_invalidation)) {
+    fail_init("translation cache invalidation");
   }
 
   hw::write64(regs::kEvtqBase, queue_base(layout.event_queue_pa, kEventQueueLog2));
@@ -232,6 +442,58 @@ void init() noexcept {
 
   g_enabled = true;
   console::write("[smmu] stage-2 isolation active\n");
+}
+
+auto attach_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
+  sync::Guard guard{g_domain_lock};
+  if (!g_command_ready || vm >= g_context_count || generation == 0U) {
+    return false;
+  }
+
+  for (const StreamBinding& binding : g_bindings) {
+    if (binding.owner_vm == vm && binding.state != DomainState::kAttached && !can_attach(binding, generation)) {
+      return false;
+    }
+  }
+  for (std::uint32_t sid = 0; sid < g_bindings.size(); ++sid) {
+    StreamBinding& binding = g_bindings[sid];
+    if (binding.owner_vm != vm || binding.state == DomainState::kAttached) {
+      continue;
+    }
+    if (!install_stream(sid, g_contexts[vm]) || !mark_attached(binding, generation)) {
+      fail_runtime("attach");
+    }
+  }
+  return true;
+}
+
+auto detach_vm(std::size_t vm) noexcept -> bool {
+  sync::Guard guard{g_domain_lock};
+  if (!g_command_ready || vm >= g_context_count) {
+    return false;
+  }
+
+  for (std::uint32_t sid = 0; sid < g_bindings.size(); ++sid) {
+    StreamBinding& binding = g_bindings[sid];
+    if (binding.owner_vm != vm || binding.state != DomainState::kAttached) {
+      continue;
+    }
+    if (!abort_stream(sid, g_contexts[vm].vmid) || !mark_detached(binding)) {
+      fail_runtime("detach");
+    }
+  }
+  return true;
+}
+
+auto quarantine_vm(std::size_t vm) noexcept -> bool {
+  sync::Guard guard{g_domain_lock};
+  if (!g_command_ready || vm >= g_context_count) {
+    return false;
+  }
+  if (!quarantine_vm_locked(vm)) {
+    fail_runtime("quarantine");
+  }
+  return true;
 }
 
 void handle_irq(IrqCall* call) noexcept {

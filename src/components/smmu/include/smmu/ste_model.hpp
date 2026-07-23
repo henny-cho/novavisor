@@ -58,6 +58,12 @@ struct SteEncoding {
   [[nodiscard]] constexpr auto ok() const noexcept -> bool { return error == SteError::kNone; }
 };
 
+[[nodiscard]] constexpr auto make_abort_ste() noexcept -> StreamTableEntry {
+  StreamTableEntry entry{};
+  entry[0] = ste::kValid;
+  return entry;
+}
+
 // The root must belong to a DMA-only table set, not a CPU table with shared mappings.
 [[nodiscard]] constexpr auto make_stage2_ste(std::uint64_t root_pa, std::uint16_t vmid) noexcept -> SteEncoding {
   if ((root_pa & 0xFFFU) != 0U) {
@@ -88,6 +94,10 @@ struct SteEncoding {
 
 [[nodiscard]] constexpr auto uses_context_descriptor(const StreamTableEntry& entry) noexcept -> bool {
   return (config(entry) & ste::kStage1Enable) != 0U;
+}
+
+[[nodiscard]] constexpr auto is_abort(const StreamTableEntry& entry) noexcept -> bool {
+  return (entry[0] & ste::kValid) != 0U && config(entry) == 0U;
 }
 
 } // namespace nova::smmu
