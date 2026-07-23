@@ -78,8 +78,9 @@ void psci_component::handle_hvc(HvcCall* call) noexcept {
   }
   case psci::Action::kCpuOff:
     // Does not return to the caller — only this vCPU retires; its
-    // siblings keep running.
-    vcpu::stop_vcpu(vcpu::current_index(), call->ctx);
+    // siblings keep running. The last vCPU promotes this to VM stop so
+    // assigned DMA cannot survive without an owner.
+    smp::cpu_off(vcpu::current_index(), call->ctx);
     return;
   case psci::Action::kCpuSuspend:
     // Standby: park the caller exactly like a trapped WFI. A pending

@@ -13,6 +13,7 @@
  *   0x1000..0x10FF  demo    (PUTS/PUTC/EXIT/...)
  *   0x1100..0x11FF  ivc     (Phase 7+)
  *   0x1200..0x12FF  timer   (Phase 6+)
+ *   0x1300..0x13FF  DMA test
  *
  * Plain #defines only: this header must survive the assembler and the
  * C/C++ compilers alike.
@@ -52,6 +53,11 @@
  * expiry the hypervisor injects NOVA_TIMER_VINTID into the guest.
  * Returns 0 in x0. */
 #define NOVA_HVC_FN_TIMER_SET 0x1200
+
+/* DMA_FAULT_INJECT: asks the EL2-owned test device to DMA immediately
+ * beyond the caller's assigned window. Available only to its owner VM.
+ * Returns 0 when accepted, or -1 when no active assignment exists. */
+#define NOVA_HVC_FN_DMA_FAULT_INJECT 0x1300
 
 /* Virtual timer PPI as the guest sees it — delivered on TIMER_SET
  * expiry and on native CNTV expiry alike. A guest must enable it at its

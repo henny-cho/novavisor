@@ -67,6 +67,10 @@ DEMO_BUILD_DIR = BUILD_DIR / "demo"
 HV_PRESET = "aarch64-debug"
 HV_ELF = BUILD_DIR / HV_PRESET / "novavisor.elf"
 QEMU = "qemu-system-aarch64"
+FATAL_OUTPUT_PATTERNS = (
+    r"\[smmu\] initialization failed(?::| error=)",
+    r"\[smmu\] isolation failure:",
+)
 # NOVA_GUEST_IPA_BASE (nova/abi/guest_layout.h): every guest links here.
 GUEST_LINK_BASE = 0x50000000
 
@@ -435,6 +439,7 @@ def verify_child_output(
     timeout_error: type[BaseException],
     eof_error: type[BaseException],
     on_match: Callable[[PatternMatch], None] | None = None,
+    fatal_patterns: tuple[str, ...] = (),
 ) -> VerificationResult:
     """Verify one spawned process and terminate it on every exit path."""
     started_at = 0.0
@@ -463,7 +468,8 @@ def verify_child_output(
             wait = min(within, remaining)
 
             try:
-                child.expect(pattern, timeout=wait)
+                patterns = [pattern, *fatal_patterns] if fatal_patterns else pattern
+                matched_index = child.expect(patterns, timeout=wait)
             except timeout_error:
                 failed_at = clock()
                 result = VerificationResult(
@@ -488,6 +494,18 @@ def verify_child_output(
                 break
 
             matched_at = clock()
+            if fatal_patterns and matched_index != 0:
+                fatal_pattern = fatal_patterns[matched_index - 1]
+                result = VerificationResult(
+                    failure="fatal",
+                    pattern=fatal_pattern,
+                    wait_seconds=max(0.0, matched_at - wait_started),
+                    elapsed_seconds=max(0.0, matched_at - started_at),
+                    remaining_seconds=max(0.0, deadline - matched_at),
+                    error=f"while waiting for /{pattern}/",
+                    matches=tuple(matches),
+                )
+                break
             if matched_at > wait_started + wait:
                 result = VerificationResult(
                     failure="timeout",
@@ -682,6 +700,10 @@ def report_verification_failure(result: VerificationResult) -> None:
         print(f"\n[demo_runner] FAIL: EOF before /{result.pattern}/ "
               f"(elapsed {result.elapsed_seconds:.1f}s, "
               f"remaining {result.remaining_seconds:.1f}s)", file=sys.stderr)
+    elif result.failure == "fatal":
+        print(f"\n[demo_runner] FAIL: fatal output /{result.pattern}/ {result.error} "
+              f"(elapsed {result.elapsed_seconds:.1f}s, "
+              f"remaining {result.remaining_seconds:.1f}s)", file=sys.stderr)
     elif result.failure in ("exception", "interrupted"):
         print(f"\n[demo_runner] FAIL: verifier exception: {result.error} "
               f"(elapsed {result.elapsed_seconds:.1f}s, "
@@ -741,6 +763,7 @@ def run_prepared_verification(
             timeout_error=pexpect.TIMEOUT,
             eof_error=pexpect.EOF,
             on_match=report_match,
+            fatal_patterns=FATAL_OUTPUT_PATTERNS,
         )
     except VerificationInterrupted as interrupted:
         report_verification_failure(interrupted.result)

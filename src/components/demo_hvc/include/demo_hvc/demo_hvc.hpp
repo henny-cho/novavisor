@@ -7,7 +7,7 @@
 //
 //   HVC_PUTS  (0x1000)  x1 = IPA of byte buffer, x2 = length
 //   HVC_PUTC  (0x1001)  x1 = character (low byte)
-//   HVC_EXIT  (0x1002)  x1 = exit code; prints "demo_exit code=<n>"
+//   HVC_EXIT  (0x1002)  x1 = exit code; prints the result and stops the VM
 //                               and halts the hypervisor.
 //
 // Extends HvcService. Called on every HVC — claims (sets handled on)

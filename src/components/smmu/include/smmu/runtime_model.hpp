@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <string_view>
 
 namespace nova::smmu {
 
@@ -38,6 +39,34 @@ enum class RuntimeError : std::uint8_t {
   kInvalidAddress,
   kInvalidAlignment,
 };
+
+[[nodiscard]] constexpr auto runtime_error_name(RuntimeError error) noexcept -> std::string_view {
+  switch (error) {
+  case RuntimeError::kNone:
+    return "none";
+  case RuntimeError::kMissingStage2:
+    return "missing-stage2";
+  case RuntimeError::kMissingAarch64:
+    return "missing-aarch64";
+  case RuntimeError::kNonCoherent:
+    return "non-coherent";
+  case RuntimeError::kPresetStructures:
+    return "preset-structures";
+  case RuntimeError::kMissingGranule4k:
+    return "missing-4k-granule";
+  case RuntimeError::kInsufficientOutputSize:
+    return "insufficient-output-size";
+  case RuntimeError::kInsufficientSidBits:
+    return "insufficient-sid-bits";
+  case RuntimeError::kInsufficientQueues:
+    return "insufficient-queues";
+  case RuntimeError::kInvalidAddress:
+    return "invalid-address";
+  case RuntimeError::kInvalidAlignment:
+    return "invalid-alignment";
+  }
+  return "unknown";
+}
 
 struct RuntimeLayout {
   std::uint64_t stream_table_pa  = 0;

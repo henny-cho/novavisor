@@ -50,6 +50,17 @@ struct alignas(mmu::k4KiB) DmaTableSet {
 };
 static_assert(sizeof(DmaTableSet) % mmu::k4KiB == 0);
 
+struct FaultBatch {
+  std::array<std::uint32_t, kEventCount> stream_ids{};
+  std::size_t                            count     = 0;
+  std::size_t                            processed = 0;
+};
+
+struct FaultNoticeBatch {
+  std::array<FaultNotice, kEventCount> notices{};
+  std::size_t                          count = 0;
+};
+
 alignas(kStreamTableAlign) std::array<StreamTableEntry, kStreamCount> g_stream_table{};
 alignas(kCommandQueueAlign) std::array<CommandEntry, kCommandCount> g_command_queue{};
 alignas(kEventQueueAlign) std::array<EventRecord, kEventCount> g_event_queue{};
@@ -96,10 +107,13 @@ std::uint32_t                              g_audit_events  = 0;
   return false;
 }
 
-[[noreturn]] void fail_init(RuntimeError error) noexcept {
-  console::write("[smmu] initialization failed error=");
-  console::write_dec64(static_cast<std::uint8_t>(error));
-  console::write("\n");
+[[noreturn]] void fail_init(RuntimeError error, std::uint32_t idr0, std::uint32_t idr1, std::uint32_t idr5) noexcept {
+  fmt::HexBuf idr0_text{};
+  fmt::HexBuf idr1_text{};
+  fmt::HexBuf idr5_text{};
+  console::write_parts(std::array{"[smmu] initialization failed: "sv, runtime_error_name(error), " idr0=0x"sv,
+                                  fmt::to_hex64(idr0, idr0_text), " idr1=0x"sv, fmt::to_hex64(idr1, idr1_text),
+                                  " idr5=0x"sv, fmt::to_hex64(idr5, idr5_text), "\n"sv});
   halt();
 }
 
@@ -260,14 +274,16 @@ std::uint32_t                              g_audit_events  = 0;
   return true;
 }
 
-void quarantine_fault_stream(std::uint32_t stream_id) noexcept {
+[[nodiscard]] auto quarantine_fault_stream(std::uint32_t stream_id) noexcept -> FaultNotice {
   sync::Guard guard{g_domain_lock};
   if (stream_id >= g_bindings.size() || g_bindings[stream_id].state != DomainState::kAttached) {
-    return;
+    return {};
   }
-  if (!quarantine_vm_locked(g_bindings[stream_id].owner_vm)) {
+  const FaultNotice notice = snapshot_fault(g_bindings[stream_id], stream_id);
+  if (!notice.valid() || !quarantine_vm_locked(notice.owner_vm)) {
     fail_runtime("fault quarantine");
   }
+  return notice;
 }
 
 void log_fault(const DecodedEvent& event) noexcept {
@@ -307,27 +323,25 @@ void log_fault(const DecodedEvent& event) noexcept {
   console::write_parts(std::array{"[smmu] fault type=0x"sv, type, " sid="sv, sid, "\n"sv});
 }
 
-[[nodiscard]] auto drain_event_queue() noexcept -> std::size_t {
-  std::array<std::uint32_t, kEventCount> quarantine_sids{};
-  std::size_t                            quarantine_count = 0;
-  std::size_t                            processed        = 0;
-  QueueState                             queue{
-                                  .log2_entries = kEventQueueLog2,
-                                  .producer     = hw::read32(regs::kEvtqProd),
-                                  .consumer     = g_event_cons,
+[[nodiscard]] auto drain_event_queue() noexcept -> FaultBatch {
+  FaultBatch batch{};
+  QueueState queue{
+      .log2_entries = kEventQueueLog2,
+      .producer     = hw::read32(regs::kEvtqProd),
+      .consumer     = g_event_cons,
   };
   if (!queue.consistent()) {
     console::write("[smmu] corrupt event queue pointers\n");
-    return 0;
+    return batch;
   }
 
   hw::acquire_memory();
   while (!queue.empty()) {
     const DecodedEvent event = decode_event(g_event_queue[queue.consumer_index()]);
-    ++processed;
+    ++batch.processed;
     log_fault(event);
-    if (requires_quarantine(event) && quarantine_count < quarantine_sids.size()) {
-      quarantine_sids[quarantine_count++] = event.stream_id;
+    if (requires_quarantine(event) && batch.count < batch.stream_ids.size()) {
+      batch.stream_ids[batch.count++] = event.stream_id;
     }
     if (!queue.try_consume()) {
       break;
@@ -340,10 +354,32 @@ void log_fault(const DecodedEvent& event) noexcept {
   }
   g_event_cons = queue.consumer;
   hw::write32(regs::kEvtqCons, g_event_cons);
-  for (std::size_t i = 0; i < quarantine_count; ++i) {
-    quarantine_fault_stream(quarantine_sids[i]);
+  return batch;
+}
+
+[[nodiscard]] auto quarantine_faults(const FaultBatch& batch) noexcept -> FaultNoticeBatch {
+  FaultNoticeBatch notices{};
+  for (std::size_t i = 0; i < batch.count; ++i) {
+    const FaultNotice notice = quarantine_fault_stream(batch.stream_ids[i]);
+    if (!notice.valid()) {
+      continue;
+    }
+    notices.notices[notices.count++] = notice;
   }
-  return processed;
+  return notices;
+}
+
+void dispatch_faults(const FaultBatch& batch) noexcept {
+  // Snapshot and quarantine every affected domain before recovery can
+  // reattach a stream at a newer generation.
+  const FaultNoticeBatch notices = quarantine_faults(batch);
+  for (std::size_t i = 0; i < notices.count; ++i) {
+    DmaFaultCall call{.notice = notices.notices[i]};
+    cib::service<DmaFaultService>(&call);
+    if (!call.handled) {
+      console::write("[smmu] DMA fault recovery unavailable\n");
+    }
+  }
 }
 
 void acknowledge_global_error() noexcept {
@@ -383,7 +419,7 @@ void init() noexcept {
   const Capabilities caps  = decode_capabilities(idr0, idr1, idr5);
   const RuntimeError error = validate_capabilities(caps, layout);
   if (error != RuntimeError::kNone) {
-    fail_init(error);
+    fail_init(error, idr0, idr1, idr5);
   }
 
   g_stream_table.fill(StreamTableEntry{});
@@ -455,7 +491,14 @@ auto attach_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
   }
 
   for (const StreamBinding& binding : g_bindings) {
-    if (binding.owner_vm == vm && binding.state != DomainState::kAttached && !can_attach(binding, generation)) {
+    if (binding.owner_vm != vm) {
+      continue;
+    }
+    if (binding.state == DomainState::kAttached) {
+      if (!attachment_matches(binding, generation)) {
+        return false;
+      }
+    } else if (!can_attach(binding, generation)) {
       return false;
     }
   }
@@ -504,8 +547,13 @@ auto poll_events() noexcept -> std::size_t {
   if (!g_enabled) {
     return 0;
   }
-  sync::Guard guard{g_event_lock};
-  return drain_event_queue();
+  FaultBatch batch{};
+  {
+    sync::Guard guard{g_event_lock};
+    batch = drain_event_queue();
+  }
+  dispatch_faults(batch);
+  return batch.processed;
 }
 
 void handle_irq(IrqCall* call) noexcept {
@@ -514,8 +562,12 @@ void handle_irq(IrqCall* call) noexcept {
   }
   if (call->intid == hw::kEventIntid) {
     call->handled = true;
-    sync::Guard guard{g_event_lock};
-    static_cast<void>(drain_event_queue());
+    FaultBatch batch{};
+    {
+      sync::Guard guard{g_event_lock};
+      batch = drain_event_queue();
+    }
+    dispatch_faults(batch);
   } else if (call->intid == hw::kCommandIntid) {
     call->handled = true;
   } else if (call->intid == hw::kErrorIntid) {

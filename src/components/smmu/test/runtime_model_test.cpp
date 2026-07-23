@@ -60,6 +60,14 @@ TEST(SmmuRuntime, RejectsMissingTranslationFeatures) {
   EXPECT_EQ(validate_capabilities(caps, kLayout), RuntimeError::kInsufficientOutputSize);
 }
 
+TEST(SmmuRuntime, NamesCapabilityFailures) {
+  EXPECT_EQ(runtime_error_name(RuntimeError::kNone), "none");
+  EXPECT_EQ(runtime_error_name(RuntimeError::kMissingStage2), "missing-stage2");
+  EXPECT_EQ(runtime_error_name(RuntimeError::kMissingGranule4k), "missing-4k-granule");
+  EXPECT_EQ(runtime_error_name(RuntimeError::kInsufficientQueues), "insufficient-queues");
+  EXPECT_EQ(runtime_error_name(static_cast<RuntimeError>(UINT8_MAX)), "unknown");
+}
+
 TEST(SmmuRuntime, RejectsUnsupportedSoftwareStructures) {
   constexpr Capabilities qemu = decode_capabilities(kQemuIdr0, kQemuIdr1, kQemuIdr5);
 

@@ -24,7 +24,12 @@ concurrency:
 
 jobs:
   repeat:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:26.04
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 90
     env:
       SOAK_RUNS: ${{ github.event.inputs.runs || '5' }}

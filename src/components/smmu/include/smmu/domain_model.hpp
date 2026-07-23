@@ -42,6 +42,22 @@ struct StreamBinding {
   [[nodiscard]] constexpr auto configured() const noexcept -> bool { return owner_vm != dma::kNoVm; }
 };
 
+struct FaultNotice {
+  std::size_t   owner_vm   = dma::kNoVm;
+  std::uint32_t stream_id  = 0;
+  std::uint64_t generation = 0;
+
+  [[nodiscard]] constexpr auto valid() const noexcept -> bool { return owner_vm != dma::kNoVm && generation != 0U; }
+};
+
+[[nodiscard]] constexpr auto snapshot_fault(const StreamBinding& binding, std::uint32_t stream_id) noexcept
+    -> FaultNotice {
+  if (!binding.configured() || binding.state != DomainState::kAttached || binding.generation == 0U) {
+    return {};
+  }
+  return {.owner_vm = binding.owner_vm, .stream_id = stream_id, .generation = binding.generation};
+}
+
 [[nodiscard]] constexpr auto validate_contexts(std::span<const TranslationContext> contexts,
                                                std::span<const GuestDescriptor> guests, bool vmid16) noexcept
     -> ContextError {
@@ -90,6 +106,11 @@ struct StreamBinding {
 
 [[nodiscard]] constexpr auto can_attach(const StreamBinding& binding, std::uint64_t generation) noexcept -> bool {
   return binding.configured() && binding.state != DomainState::kAttached && generation > binding.generation;
+}
+
+[[nodiscard]] constexpr auto attachment_matches(const StreamBinding& binding, std::uint64_t generation) noexcept
+    -> bool {
+  return binding.configured() && binding.state == DomainState::kAttached && binding.generation == generation;
 }
 
 [[nodiscard]] constexpr auto mark_attached(StreamBinding& binding, std::uint64_t generation) noexcept -> bool {

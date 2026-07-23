@@ -480,20 +480,31 @@ void cancel_start(std::size_t slot) noexcept {
   }
 }
 
-auto start_vm(std::size_t vm) noexcept -> bool {
+auto prepare_start_vm(std::size_t vm) noexcept -> std::uint64_t {
   const std::size_t slot = slot_of(vm);
   if (vm >= vm_of(g_count) || affinity(slot) != cpu::id() || g_vcpus[slot].state != sched::State::kOff ||
       published_power(slot) != PowerState::kOnPending || vm_has_live_except(vm, slot)) {
     cancel_start(slot);
-    return false; // foreign-affinity starts arrive through the smp cross-call
+    return 0; // foreign-affinity starts arrive through the smp cross-call
   }
   vgic::vm_reset(vm); // SPI banks are VM-global — per-vCPU cpu_reset misses them
   soft_timer::cancel(soft_timer::kSlotWatchdog + vm);
   publish_cntvoff(vm, hyp_timer::now());
   seed_boot(slot);
   g_budget.refill(vm); // cold start — fresh warm-reset budget
-  g_vcpus[slot].state = sched::State::kReady;
   advance_vm_generation(vm);
+  return vm_generation(vm);
+}
+
+auto publish_start_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
+  const std::size_t slot = slot_of(vm);
+  if (vm >= vm_of(g_count) || generation == 0U || generation != vm_generation(vm) || affinity(slot) != cpu::id() ||
+      g_vcpus[slot].state != sched::State::kOff || published_power(slot) != PowerState::kOnPending ||
+      vm_has_live_except(vm, slot)) {
+    cancel_start(slot);
+    return false;
+  }
+  g_vcpus[slot].state = sched::State::kReady;
   publish_power(slot, PowerState::kOn);
   g_alive.fetch_add(1, std::memory_order_acq_rel);
   end_lifecycle_transition();
@@ -554,16 +565,10 @@ void schedule_after_retire(TrapContext* live) noexcept {
   schedule_out(live);
 }
 
-void stop_vcpu(std::size_t slot, TrapContext* live) noexcept {
-  if (retire_vcpu(slot)) {
-    schedule_out(live);
-  }
-}
-
-auto reset_quiesced_vm(std::size_t vm) noexcept -> bool {
+auto prepare_reset_quiesced_vm(std::size_t vm) noexcept -> std::uint64_t {
   const std::size_t slot = slot_of(vm);
   if (vm >= vm_of(g_count) || affinity(slot) != cpu::id() || vm_has_live(vm)) {
-    return false; // restore is legal only on the boot owner after every ACK
+    return 0; // restore is legal only on the boot owner after every ACK
   }
 
   if (!g_budget.take(vm)) {
@@ -571,7 +576,7 @@ auto reset_quiesced_vm(std::size_t vm) noexcept -> bool {
     console::write_dec64(vm);
     console::write(" restart budget exhausted — stopping\n");
     soft_timer::cancel(soft_timer::kSlotWatchdog + vm); // no reset from beyond the grave
-    return false;
+    return 0;
   }
 
   const std::uint64_t restore_start = hyp_timer::now();
@@ -591,8 +596,18 @@ auto reset_quiesced_vm(std::size_t vm) noexcept -> bool {
   seed_boot(slot);
   soft_timer::cancel(soft_timer::kSlotWatchdog + vm); // the reboot re-opts in with its next heartbeat
 
-  g_vcpus[slot].state = sched::State::kReady;
   advance_vm_generation(vm);
+  return vm_generation(vm);
+}
+
+auto publish_reset_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
+  const std::size_t slot = slot_of(vm);
+  if (vm >= vm_of(g_count) || generation == 0U || generation != vm_generation(vm) || affinity(slot) != cpu::id() ||
+      g_vcpus[slot].state != sched::State::kOff || vm_has_live(vm)) {
+    return false;
+  }
+
+  g_vcpus[slot].state = sched::State::kReady;
   publish_power(slot, PowerState::kOn);
   g_alive.fetch_add(1, std::memory_order_acq_rel);
   reschedule_slice();
@@ -600,10 +615,6 @@ auto reset_quiesced_vm(std::size_t vm) noexcept -> bool {
   console::write_dec64(vm);
   console::write(" reset state ready\n");
   return true;
-}
-
-void exit_current(TrapContext* live) noexcept {
-  stop_vcpu(me().current, live);
 }
 
 auto post_virq(std::size_t slot, std::uint32_t vintid) noexcept -> bool {

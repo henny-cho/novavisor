@@ -25,6 +25,8 @@ enum {
   HVC_IVC_DOORBELL = NOVA_HVC_FN_IVC_DOORBELL,
   // Timer range (Phase 6)
   HVC_TIMER_SET = NOVA_HVC_FN_TIMER_SET,
+  // EL2-owned DMA test device
+  HVC_DMA_FAULT_INJECT = NOVA_HVC_FN_DMA_FAULT_INJECT,
 };
 
 static inline void hvc_putc(char c) {
@@ -87,6 +89,14 @@ static inline uint64_t hvc_ivc_doorbell(uint64_t vm_index) {
   register uint64_t x0 __asm__("x0") = HVC_IVC_DOORBELL;
   register uint64_t x1 __asm__("x1") = vm_index;
   __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
+  return x0;
+}
+
+// Request one DMA beyond the caller's assigned window. Returns 0 when
+// the EL2-owned test device accepted the request.
+static inline uint64_t hvc_dma_fault_inject(void) {
+  register uint64_t x0 __asm__("x0") = HVC_DMA_FAULT_INJECT;
+  __asm__ volatile("hvc #0" : "+r"(x0)::"memory");
   return x0;
 }
 

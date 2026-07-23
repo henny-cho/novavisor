@@ -25,6 +25,7 @@
 #include "core_mmu/core_mmu.hpp"
 #include "core_timer/core_timer.hpp"
 #include "core_vcpu/core_vcpu.hpp"
+#include "dma_device/dma_device.hpp"
 #include "smmu/smmu.hpp"
 #include "soft_timer/soft_timer.hpp"
 #include "trap_handler/guest_fault.hpp"
@@ -74,12 +75,12 @@ void start_secondaries() noexcept;
 // idempotent and state-derived.
 void reevaluate_virq(std::size_t slot) noexcept;
 
-// VM-wide power operations, fanned out per vCPU. stop_vm retires every
-// live vCPU (the caller's own last — that one schedules away through
-// `live` and the call does not return to guest code). reset_vm routes
-// through the boot owner, waits for current-epoch quiesce ACKs, then
-// restores memory and reseeds vcpu 0.
+// VM-wide power operations route through the boot owner and share one
+// serialized quiesce protocol. DMA is drained and detached before a
+// reset restores memory; the new generation is attached before vcpu 0
+// becomes runnable.
 void               stop_vm(std::size_t vm, TrapContext* live) noexcept;
+void               cpu_off(std::size_t slot, TrapContext* live) noexcept;
 [[nodiscard]] auto reset_vm(std::size_t vm, TrapContext* live, bool from_irq = false) noexcept -> bool;
 
 } // namespace nova::smp
@@ -93,6 +94,10 @@ struct smp_component {
   // Converts an unrecoverable guest exception into a bounded VM-wide
   // warm reset while unrelated VMs keep running.
   static void handle_guest_fault(GuestFaultCall* call) noexcept;
+
+  // Routes an isolated DMA fault to the VM owner. A generation check
+  // prevents delayed notices from resetting a newer VM instance.
+  static void handle_dma_fault(DmaFaultCall* call) noexcept;
 
   // Claims the cross-call SGI: executes queued foreign requests.
   static void handle_irq(IrqCall* call) noexcept;
@@ -115,6 +120,7 @@ struct smp_component {
                                      core_vcpu_component::INIT >> boot_msg_component::PRINT_BOOT_MSG >> *INIT),
       cib::extend<HvcService>(&smp_component::handle_hvc),
       cib::extend<GuestFaultService>(&smp_component::handle_guest_fault),
+      cib::extend<DmaFaultService>(&smp_component::handle_dma_fault),
       cib::extend<IrqService>(&smp_component::handle_irq), cib::extend<SysregService>(&smp_component::handle_sysreg));
 };
 

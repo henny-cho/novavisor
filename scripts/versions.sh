@@ -34,3 +34,9 @@ export TOOLCHAIN_URL="https://developer.arm.com/-/media/Files/downloads/gnu/${TO
 # Majors disagree on wrapping (v18 vs v20 trailing-return), so an unpinned
 # distro binary produces false violations against CI-canonical formatting.
 export CLANG_FORMAT_VERSION="20.1.7"
+
+# Keep lint diagnostics stable across runner distribution upgrades.
+export CLANG_TIDY_VERSION="20"
+
+# QEMU 9.2 is the first virt machine that exposes a nested SMMUv3 by default.
+export QEMU_MIN_VERSION="9.2.0"

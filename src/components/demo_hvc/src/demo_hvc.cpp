@@ -13,6 +13,7 @@
 #include "nova/abi/guest.hpp"
 #include "nova/abi/hvc_abi.h"
 #include "nova/arch/trap_context.hpp"
+#include "smp/smp.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -61,8 +62,7 @@ void handle_putc(TrapContext* ctx) noexcept {
 }
 
 // HVC_EXIT: x1 = exit code. Emits the manifest-expected "demo_exit
-// code=N" line, then retires the calling VCPU — the scheduler switches
-// to the next runnable guest, or halts the machine after the last one.
+// code=N" line, then retires the whole VM through its owner lifecycle.
 // The line stays untagged (harness contract); a buffered partial line
 // is flushed first so nothing the guest printed is lost.
 void handle_exit(TrapContext* ctx) noexcept {
@@ -70,7 +70,7 @@ void handle_exit(TrapContext* ctx) noexcept {
   console::write("demo_exit code=");
   console::write_dec64(ctx->x[1]);
   console::write("\n");
-  vcpu::exit_current(ctx);
+  smp::stop_vm(vm_of(vcpu::current_index()), ctx);
 }
 
 } // namespace
