@@ -272,7 +272,7 @@ def resolve_guest_binary(demo_name: str, demo_build: Path, manifest: dict, spec:
 def build_qemu_cmd(elf: Path, demo_name: str, demo_build: Path, manifest: dict) -> list[str]:
     cmd = [
         QEMU,
-        "-machine", "virt,virtualization=on,gic-version=3",
+        "-machine", "virt,virtualization=on,gic-version=3,iommu=smmuv3",
         "-cpu", "cortex-a57",
         "-smp", "2",  # must match NOVA_BOARD_SMP_CPUS (board_layout.h)
         "-nographic",

@@ -29,6 +29,7 @@
 #include "demo_hvc/demo_hvc.hpp"
 #include "ivc/ivc.hpp"
 #include "psci/psci.hpp"
+#include "smmu/smmu.hpp"
 #include "smp/smp.hpp"
 #include "soft_timer/soft_timer.hpp"
 #include "trap_handler/trap_handler.hpp"
@@ -44,7 +45,7 @@ struct nova_project {
   constexpr static auto config =
       cib::components<core_mmu_component, core_gic_component, vgic_component, core_timer_component,
                       soft_timer_component, boot_msg_component, trap_handler_component, demo_hvc_component,
-                      ivc_component, psci_component, watchdog_component, smp_component, vuart_component,
+                      ivc_component, psci_component, watchdog_component, smmu_component, smp_component, vuart_component,
                       core_vcpu_component>;
 };
 

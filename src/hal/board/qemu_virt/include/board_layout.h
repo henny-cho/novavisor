@@ -34,6 +34,13 @@
 #define NOVA_BOARD_GICD_BASE 0x08000000 /* distributor */
 #define NOVA_BOARD_GICR_BASE 0x080A0000 /* redistributor frame, CPU 0 */
 
+/* SMMUv3 (requires -machine virt,iommu=smmuv3). */
+#define NOVA_BOARD_SMMU_BASE        0x09050000
+#define NOVA_BOARD_SMMU_SIZE        0x00020000
+#define NOVA_BOARD_SMMU_EVENT_INTID 106
+#define NOVA_BOARD_SMMU_CMD_INTID   108
+#define NOVA_BOARD_SMMU_ERROR_INTID 109
+
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
 #endif /* NOVA_BOARD_LAYOUT_H */

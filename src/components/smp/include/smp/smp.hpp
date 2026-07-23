@@ -25,6 +25,7 @@
 #include "core_mmu/core_mmu.hpp"
 #include "core_timer/core_timer.hpp"
 #include "core_vcpu/core_vcpu.hpp"
+#include "smmu/smmu.hpp"
 #include "soft_timer/soft_timer.hpp"
 #include "trap_handler/guest_fault.hpp"
 #include "trap_handler/hvc.hpp"
@@ -109,8 +110,8 @@ struct smp_component {
   // chain also pins the boot order the other inits relied on
   // implicitly (topo_sort gives no order without edges).
   constexpr static auto config = cib::config(
-      cib::extend<cib::RuntimeStart>(core_mmu_component::INIT >> core_gic_component::INIT >> vgic_component::INIT >>
-                                     core_timer_component::INIT >> soft_timer_component::INIT >>
+      cib::extend<cib::RuntimeStart>(core_mmu_component::INIT >> core_gic_component::INIT >> smmu_component::INIT >>
+                                     vgic_component::INIT >> core_timer_component::INIT >> soft_timer_component::INIT >>
                                      core_vcpu_component::INIT >> boot_msg_component::PRINT_BOOT_MSG >> *INIT),
       cib::extend<HvcService>(&smp_component::handle_hvc),
       cib::extend<GuestFaultService>(&smp_component::handle_guest_fault),

@@ -16,4 +16,7 @@ constexpr uintptr_t UART0_BASE = NOVA_BOARD_UART0_BASE;
 constexpr uintptr_t GICD_BASE = NOVA_BOARD_GICD_BASE; // distributor
 constexpr uintptr_t GICR_BASE = NOVA_BOARD_GICR_BASE; // redistributor frame, CPU 0
 
+constexpr uintptr_t SMMU_BASE = NOVA_BOARD_SMMU_BASE;
+constexpr uintptr_t SMMU_SIZE = NOVA_BOARD_SMMU_SIZE;
+
 } // namespace nova::board::qemu_virt
