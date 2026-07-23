@@ -9,6 +9,7 @@
 
 #include "board.hpp"
 #include "nova/arch/gicv3_regs.h"
+#include "nova/arch/gicv3_spi.hpp"
 
 #include <cstdint>
 
@@ -16,6 +17,11 @@ namespace nova::board::qemu_virt::gicv3 {
 
 inline auto mmio32(uintptr_t addr) noexcept -> volatile uint32_t* {
   return reinterpret_cast<volatile uint32_t*>(addr);
+}
+
+inline void wait_for_rwp() noexcept {
+  while ((*mmio32(GICD_BASE + NOVA_GICD_CTLR) & NOVA_GICD_CTLR_RWP) != 0U) {
+  }
 }
 
 // This core's redistributor frame, found by matching GICR_TYPER's
@@ -42,7 +48,9 @@ inline auto redist_frame() noexcept -> uintptr_t {
 // before any core wakes its redistributor.
 inline void distributor_init() noexcept {
   *mmio32(GICD_BASE + NOVA_GICD_CTLR) = NOVA_GICD_CTLR_ARE;
+  wait_for_rwp();
   *mmio32(GICD_BASE + NOVA_GICD_CTLR) = NOVA_GICD_CTLR_ARE | NOVA_GICD_CTLR_ENABLE_GRP1;
+  __asm__ volatile("dsb sy" ::: "memory");
 }
 
 // Wake this core's redistributor and put its SGIs/PPIs in Group 1 (the
@@ -64,18 +72,43 @@ inline void enable_ppi(uint32_t intid) noexcept {
   *mmio32(redist_frame() + NOVA_GICR_ISENABLER0) = 1U << intid;
 }
 
-// Route one SPI (INTID 32..63, the first shared word) to a core and
-// enable it at the distributor: Group 1, level-triggered reset config,
-// IROUTER = the core's Aff0 (QEMU virt cores are flat in Aff0).
+// Route one standard SPI to a core and enable it at the distributor:
+// Group 1, level-triggered reset config, IROUTER = the core's Aff0.
 // Distributor state is system-wide — call from single-threaded
 // bring-up or serialize externally.
-inline void enable_spi(uint32_t intid, uint32_t core) noexcept {
-  constexpr uintptr_t kIrouterStride = sizeof(uint64_t);
-  const uint32_t      bit            = 1U << (intid % 32U);
-  *mmio32(GICD_BASE + NOVA_GICD_IGROUPR1) |= bit;
-  *reinterpret_cast<volatile uint64_t*>(GICD_BASE + NOVA_GICD_IROUTER +
-                                        kIrouterStride * static_cast<uintptr_t>(intid)) = core;
-  *mmio32(GICD_BASE + NOVA_GICD_ISENABLER1)                                             = bit; // write-1-to-set
+inline auto enable_spi(uint32_t intid, uint32_t core, arch::gicv3::SpiTrigger trigger) noexcept -> bool {
+  const arch::gicv3::SpiRegisters regs  = arch::gicv3::spi_registers(intid);
+  const std::uint32_t             typer = *mmio32(GICD_BASE + NOVA_GICD_TYPER);
+  if (!regs.valid || !arch::gicv3::spi_implemented(intid, typer) || core >= NOVA_BOARD_SMP_CPUS) {
+    return false;
+  }
+
+  *mmio32(GICD_BASE + regs.disable_offset) = regs.bit;
+  wait_for_rwp();
+  *mmio32(GICD_BASE + regs.group_offset) |= regs.bit;
+  *reinterpret_cast<volatile uint8_t*>(GICD_BASE + NOVA_GICD_IPRIORITYR + intid) = arch::gicv3::kDefaultPriority;
+
+  auto* const         config = mmio32(GICD_BASE + regs.config_offset);
+  const std::uint32_t edge   = trigger == arch::gicv3::SpiTrigger::kEdge ? regs.edge_bit : 0U;
+  *config                    = (*config & ~regs.edge_bit) | edge;
+
+  *reinterpret_cast<volatile uint64_t*>(GICD_BASE + regs.route_offset) = core;
+  __asm__ volatile("dsb sy" ::: "memory");
+  *mmio32(GICD_BASE + regs.enable_offset) = regs.bit;
+  __asm__ volatile("dsb sy" ::: "memory");
+  return true;
+}
+
+// Disable one standard SPI without changing its group or route.
+inline auto disable_spi(uint32_t intid) noexcept -> bool {
+  const arch::gicv3::SpiRegisters regs  = arch::gicv3::spi_registers(intid);
+  const std::uint32_t             typer = *mmio32(GICD_BASE + NOVA_GICD_TYPER);
+  if (!regs.valid || !arch::gicv3::spi_implemented(intid, typer)) {
+    return false;
+  }
+  *mmio32(GICD_BASE + regs.disable_offset) = regs.bit;
+  wait_for_rwp();
+  return true;
 }
 
 } // namespace nova::board::qemu_virt::gicv3

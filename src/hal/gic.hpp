@@ -16,9 +16,11 @@
 
 namespace nova::gic {
 
+using SpiTrigger = arch::gicv3::SpiTrigger;
+
 // INTIDs 1020..1023 are architecturally special (spurious et al.) —
 // never dispatch or EOI them.
-inline constexpr std::uint32_t kSpecialIntidBase = 1020;
+inline constexpr std::uint32_t kSpecialIntidBase = arch::gicv3::kSpecialIntidBase;
 
 // Per-core bring-up: this core's redistributor + physical CPU
 // interface. Every core runs it for itself (secondaries via
@@ -41,11 +43,18 @@ inline void enable_ppi(std::uint32_t intid) noexcept {
   board::qemu_virt::gicv3::enable_ppi(intid);
 }
 
-// Route a shared peripheral interrupt (SPI, INTID 32..63) to one core
-// and enable it at the distributor. Bring-up only — GICD state is
-// system-wide and the driver does not serialize.
-inline void enable_spi(std::uint32_t intid, std::size_t target_cpu) noexcept {
-  board::qemu_virt::gicv3::enable_spi(intid, static_cast<std::uint32_t>(target_cpu));
+// Route a standard shared peripheral interrupt to one core and enable
+// it at the distributor. GICD state is system-wide and not serialized.
+inline auto enable_spi(std::uint32_t intid, std::size_t target_cpu, SpiTrigger trigger = SpiTrigger::kLevel) noexcept
+    -> bool {
+  if (target_cpu >= NOVA_BOARD_SMP_CPUS) {
+    return false;
+  }
+  return board::qemu_virt::gicv3::enable_spi(intid, static_cast<std::uint32_t>(target_cpu), trigger);
+}
+
+inline auto disable_spi(std::uint32_t intid) noexcept -> bool {
+  return board::qemu_virt::gicv3::disable_spi(intid);
 }
 
 // Send an SGI to another core (EL2 cross-call IPI).
