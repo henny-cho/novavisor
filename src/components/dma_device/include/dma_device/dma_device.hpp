@@ -26,6 +26,7 @@ void init() noexcept;
 // Install the new Stage-2 context before allowing device requests.
 [[nodiscard]] auto resume_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool;
 [[nodiscard]] auto can_start(std::size_t vm) noexcept -> bool;
+[[nodiscard]] auto is_active(std::size_t vm, std::uint64_t generation) noexcept -> bool;
 
 } // namespace nova::dma_device
 

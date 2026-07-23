@@ -192,4 +192,9 @@ auto can_start(std::size_t vm) noexcept -> bool {
   return vm != kOwnerVm || g_state != State::kFailed;
 }
 
+auto is_active(std::size_t vm, std::uint64_t generation) noexcept -> bool {
+  sync::Guard guard{g_lock};
+  return vm == kOwnerVm && g_state == State::kActive && generation != 0U && generation == g_generation;
+}
+
 } // namespace nova::dma_device

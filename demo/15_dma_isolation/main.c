@@ -13,6 +13,17 @@ int main(void) {
     psci_system_reset();
   }
 
-  hvc_puts_lit("dma lifecycle boot 2\n");
+  if (run == 2) {
+    hvc_puts_lit("dma lifecycle boot 2\n");
+    if (hvc_dma_fault_inject() != 0) {
+      hvc_puts_lit("dma runtime fault request failed\n");
+      return 1;
+    }
+    for (;;) {
+      hvc_yield();
+    }
+  }
+
+  hvc_puts_lit("dma lifecycle boot 3\n");
   return 0;
 }

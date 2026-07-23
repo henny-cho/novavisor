@@ -5,6 +5,8 @@
 #include "hal/dma_device.hpp"
 #include "hal/timer.hpp"
 #include "nova/abi/guest.hpp"
+#include "nova/abi/hvc_abi.h"
+#include "nova/arch/trap_context.hpp"
 #include "nova_panic/nova_panic.hpp"
 
 #include <array>
@@ -148,4 +150,31 @@ void run() noexcept {
   console::write("[dma] EDU isolation probe passed\n");
 }
 
+auto inject_runtime_fault(std::size_t vm, std::uint64_t generation) noexcept -> bool {
+  const auto guests = guest_table();
+  if (vm >= guests.size() || !device::present() || !dma_device::is_active(vm, generation)) {
+    return false;
+  }
+  const GuestDescriptor& guest = guests[vm];
+  if (!device::start_dma(device::kInternalBuffer, guest.ipa_base + guest.ipa_size, kTransferBytes, true)) {
+    return false;
+  }
+  console::write("[dma] runtime fault requested\n");
+  return true;
+}
+
 } // namespace nova::dma_probe
+
+namespace nova {
+
+void dma_probe_component::handle_hvc(HvcCall* call) noexcept {
+  if (call->func_id != NOVA_HVC_FN_DMA_FAULT_INJECT) {
+    return;
+  }
+  call->handled         = true;
+  const std::size_t vm  = vm_of(vcpu::current_index());
+  const auto        gen = vcpu::vm_generation(vm);
+  call->ctx->x[0]       = dma_probe::inject_runtime_fault(vm, gen) ? 0 : kSmcccNotSupported;
+}
+
+} // namespace nova
