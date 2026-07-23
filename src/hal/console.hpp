@@ -11,6 +11,8 @@
 #include "nova/fmt.hpp"
 #include "nova/sync.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -31,10 +33,12 @@ inline void write(const char* str) noexcept {
 }
 
 // Emit one logical line from preformatted fragments under one lock.
-template <typename... Parts>
-inline void write_parts(const Parts&... parts) noexcept {
+template <std::size_t N>
+inline void write_parts(const std::array<std::string_view, N>& parts) noexcept {
   sync::Guard guard{g_lock};
-  (board::qemu_virt::uart_write(std::string_view{parts}), ...);
+  for (const std::string_view part : parts) {
+    board::qemu_virt::uart_write(part);
+  }
 }
 
 // 16 zero-padded lowercase hex digits, no "0x" prefix.

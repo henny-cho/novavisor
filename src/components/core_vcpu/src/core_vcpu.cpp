@@ -40,6 +40,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 namespace nova {
 
@@ -580,10 +581,11 @@ auto reset_quiesced_vm(std::size_t vm) noexcept -> bool {
   fmt::DecBuf         written_text{};
   fmt::DecBuf         examined_text{};
   fmt::DecBuf         elapsed_text{};
-  console::write_parts("[core_vcpu] VM ", fmt::to_dec64(vm, vm_text), " restored ",
-                       fmt::to_dec64(restored.written_bytes, written_text), "/",
-                       fmt::to_dec64(restored.examined_bytes, examined_text), " bytes in ",
-                       fmt::to_dec64(restore_ms, elapsed_text), " ms\n");
+  using namespace std::string_view_literals;
+  console::write_parts(std::array{"[core_vcpu] VM "sv, fmt::to_dec64(vm, vm_text), " restored "sv,
+                                  fmt::to_dec64(restored.written_bytes, written_text), "/"sv,
+                                  fmt::to_dec64(restored.examined_bytes, examined_text), " bytes in "sv,
+                                  fmt::to_dec64(restore_ms, elapsed_text), " ms\n"sv});
   vgic::vm_reset(vm); // SPI banks are VM-global — per-vCPU cpu_reset misses them
   publish_cntvoff(vm, hyp_timer::now());
   seed_boot(slot);
