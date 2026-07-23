@@ -96,10 +96,13 @@ std::uint32_t                              g_audit_events  = 0;
   return false;
 }
 
-[[noreturn]] void fail_init(RuntimeError error) noexcept {
-  console::write("[smmu] initialization failed error=");
-  console::write_dec64(static_cast<std::uint8_t>(error));
-  console::write("\n");
+[[noreturn]] void fail_init(RuntimeError error, std::uint32_t idr0, std::uint32_t idr1, std::uint32_t idr5) noexcept {
+  fmt::HexBuf idr0_text{};
+  fmt::HexBuf idr1_text{};
+  fmt::HexBuf idr5_text{};
+  console::write_parts(std::array{"[smmu] initialization failed: "sv, runtime_error_name(error), " idr0=0x"sv,
+                                  fmt::to_hex64(idr0, idr0_text), " idr1=0x"sv, fmt::to_hex64(idr1, idr1_text),
+                                  " idr5=0x"sv, fmt::to_hex64(idr5, idr5_text), "\n"sv});
   halt();
 }
 
@@ -383,7 +386,7 @@ void init() noexcept {
   const Capabilities caps  = decode_capabilities(idr0, idr1, idr5);
   const RuntimeError error = validate_capabilities(caps, layout);
   if (error != RuntimeError::kNone) {
-    fail_init(error);
+    fail_init(error, idr0, idr1, idr5);
   }
 
   g_stream_table.fill(StreamTableEntry{});

@@ -46,7 +46,12 @@ jobs:
 
   # Cross lane: Release build, clang-tidy, and QEMU demo verification.
   target:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:26.04
+    defaults:
+      run:
+        shell: bash
     # The mixed-criticality demo alone boots Linux twice under TCG.
     timeout-minutes: 40
     steps:

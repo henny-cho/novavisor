@@ -141,6 +141,31 @@ class DemoRunnerVerificationTest(unittest.TestCase):
         self.assertEqual(result.matches, ())
         self.assertFalse(any(event[0] == "send" for event in child.events))
 
+    def test_fatal_output_stops_waiting_and_terminates_qemu(self):
+        class FatalChild(FakeChild):
+            def expect(self, patterns, timeout):
+                self.events.append(("expect", patterns, timeout))
+                self.clock.advance(0.5)
+                return 1
+
+        clock = FakeClock()
+        child = FatalChild(clock)
+        result = demo_runner.verify_child_output(
+            child,
+            [{"pattern": "guest-ready"}],
+            120,
+            clock=clock,
+            timeout_error=FakeTimeout,
+            eof_error=FakeEof,
+            fatal_patterns=demo_runner.FATAL_OUTPUT_PATTERNS,
+        )
+
+        self.assertEqual(result.failure, "fatal")
+        self.assertEqual(result.pattern, demo_runner.FATAL_OUTPUT_PATTERNS[0])
+        self.assertEqual(result.error, "while waiting for /guest-ready/")
+        self.assertEqual(result.elapsed_seconds, 0.5)
+        self.assertEqual(child.terminate_calls, [True])
+
     def test_send_occurs_only_after_its_pattern_matches(self):
         clock = FakeClock()
         child = FakeChild(clock)

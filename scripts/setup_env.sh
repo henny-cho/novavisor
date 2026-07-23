@@ -38,10 +38,13 @@ CORE_PACKAGES=(
     cmake
     ninja-build
     ccache
-    clang-tidy
+    "clang-tidy-${CLANG_TIDY_VERSION}"
+    curl
+    git
     pipx
-    qemu-system-aarch64
+    qemu-system-arm
     python3
+    python3-venv
     python3-yaml
     python3-pexpect
     wget
@@ -53,6 +56,7 @@ CORE_PACKAGES=(
     flex
     bison
     bc
+    libssl-dev
 )
 
 # Developer-workstation extras, not needed by CI (mirrors
@@ -75,8 +79,12 @@ install_packages() {
     if [[ ${CI_MODE} -eq 0 ]]; then
         packages+=("${DEV_PACKAGES[@]}")
     fi
-    sudo apt-get update -q
-    sudo apt-get install -y "${packages[@]}"
+    local privilege=()
+    if [[ ${EUID} -ne 0 ]]; then
+        privilege=(sudo)
+    fi
+    "${privilege[@]}" apt-get update -q
+    "${privilege[@]}" apt-get install -y "${packages[@]}"
 }
 
 # The distro clang-format drifts across releases (v18 on noble) and majors
@@ -103,17 +111,54 @@ install_toolchain() {
     ln -sfn "${EXTRACT_DIR}" "${TOOLCHAIN_DIR}/current"
 }
 
-# task.sh sources .toolchain/env.sh at startup; generate it if missing.
-ensure_env_script() {
-    local ENV_SCRIPT="${TOOLCHAIN_DIR}/env.sh"
-    if [ -f "${ENV_SCRIPT}" ]; then
-        echo "==> env.sh found at ${ENV_SCRIPT}"
+qemu_version() {
+    "$1" --version 2>/dev/null |
+        sed -nE 's/.*version ([0-9]+(\.[0-9]+)+).*/\1/p' |
+        head -n 1
+}
+
+qemu_is_compatible() {
+    local binary="$1"
+    local version
+    [ -x "${binary}" ] || return 1
+    version="$(qemu_version "${binary}")"
+    [ -n "${version}" ] || return 1
+    python3 - "${version}" "${QEMU_MIN_VERSION}" <<'PY'
+import re
+import sys
+
+def version(value):
+    return tuple(int(part) for part in re.findall(r"\d+", value))
+
+raise SystemExit(0 if version(sys.argv[1]) >= version(sys.argv[2]) else 1)
+PY
+}
+
+check_qemu() {
+    local system_qemu
+    system_qemu="$(command -v qemu-system-aarch64 || true)"
+
+    if [ -n "${system_qemu}" ] && qemu_is_compatible "${system_qemu}"; then
+        echo "==> Compatible QEMU $(qemu_version "${system_qemu}") found at ${system_qemu}"
         return
     fi
+
+    local found="not found"
+    if [ -n "${system_qemu}" ]; then
+        found="$(qemu_version "${system_qemu}")"
+    fi
+    echo "Error: QEMU ${QEMU_MIN_VERSION}+ is required for nested SMMUv3; found ${found}." >&2
+    echo "Use an OS package source that provides QEMU ${QEMU_MIN_VERSION} or newer." >&2
+    return 1
+}
+
+# task.sh sources .toolchain/env.sh at startup.
+ensure_env_script() {
+    local ENV_SCRIPT="${TOOLCHAIN_DIR}/env.sh"
     echo "==> Generating ${ENV_SCRIPT}..."
     cat > "${ENV_SCRIPT}" <<'EOF'
 #!/usr/bin/env bash
-# Source this file to add the custom ARM toolchain to your PATH
+# Source this file to add project-pinned tools to PATH.
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PATH="${PROJECT_ROOT}/.toolchain/current/bin:${PATH}"
 export CROSS_COMPILE="aarch64-none-elf-"
@@ -136,6 +181,7 @@ echo "=== NovaVisor Environment Setup ==="
 install_packages
 install_clang_format
 install_toolchain
+check_qemu
 ensure_env_script
 if [[ ${CI_MODE} -eq 0 ]]; then
     install_hooks

@@ -82,6 +82,17 @@ _clang_format() {
     return 1
 }
 
+_clang_tidy_runner() {
+    local bin="run-clang-tidy-${CLANG_TIDY_VERSION}"
+    if command -v "${bin}" >/dev/null 2>&1; then
+        echo "${bin}"
+        return 0
+    fi
+    echo "Error: ${bin} not found." >&2
+    echo "Install the clang-tidy-${CLANG_TIDY_VERSION} package." >&2
+    return 1
+}
+
 # Route CPM/FetchContent source checkouts to a project-local cache shared by
 # all build trees. cmake/get_cpm.cmake downloads CPM itself into the same
 # cache (hash-verified). Must be called before any cmake invocation.
@@ -210,6 +221,8 @@ cmd_lint() {
     local PRESET="aarch64-debug"
     local BUILD_DIR
     BUILD_DIR="$(_preset_dir "${PRESET}")"
+    local tidy_runner
+    tidy_runner="$(_clang_tidy_runner)"
 
     _setup_cpm_cache
 
@@ -251,7 +264,7 @@ PY
     # -header-filter is passed explicitly because clang-tidy 19+ no longer
     # honors HeaderFilterRegex from .clang-tidy — relying on the config file
     # silently skips all header diagnostics on newer versions.
-    run-clang-tidy -quiet -p "${BUILD_DIR}" "${EXTRA_ARGS[@]}" \
+    "${tidy_runner}" -quiet -p "${BUILD_DIR}" "${EXTRA_ARGS[@]}" \
         '-header-filter=/src/(components|hal|nova|projects)/' \
         "${TIDY_SOURCE_RE}"
     echo "Linting complete."
