@@ -76,7 +76,7 @@ void on_expiry(TrapContext* ctx, std::uint64_t vm) noexcept {
   console::write("[watchdog] VM ");
   console::write_dec64(vm);
   console::write(" missed its heartbeat window — resetting\n");
-  smp::reset_vm(index, ctx, true);
+  (void)smp::reset_vm(index, ctx, true);
 }
 
 } // namespace

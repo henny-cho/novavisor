@@ -13,11 +13,12 @@
 //   - FP_SIMD          : dispatch FpSimdService (include/fp_simd.hpp),
 //                        escalating to GuestFaultService when unclaimed
 //   - MSR_MRS          : dispatch SysregService (include/sysreg.hpp),
-//                        panicking when unclaimed (EL2 asked for the trap)
+//                        escalating to GuestFaultService when unclaimed
 //   - DATA_ABORT_LOWER : dispatch MmioService (include/mmio.hpp),
 //                        escalating to GuestFaultService
 //                        (include/guest_fault.hpp)
-//   - all others       : dump TrapContext to UART and halt.
+//   - guest-originated : dump TrapContext and escalate to GuestFaultService
+//   - inconsistent ECs : dump TrapContext and halt.
 //
 // Subscribers include only the service header they extend; this header
 // is for the component itself (nexus composition) and the dump helper.
@@ -54,7 +55,7 @@ struct trap_handler_component {
 
   // Exports the trap services and registers the default sync trap
   // handler. HvcService / MmioService / GuestFaultService have no
-  // default subscriber; components (demo_hvc, vgic, core_vcpu, ...)
+  // default subscriber; components (demo_hvc, vgic, smp, ...)
   // extend them as needed.
   constexpr static auto config =
       cib::config(cib::exports<EL2SyncTrapService, HvcService, WfxService, FpSimdService, SysregService, MmioService,

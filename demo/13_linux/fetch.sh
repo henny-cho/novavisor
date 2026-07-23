@@ -15,7 +15,7 @@ LINUX_VER="6.12.30"
 LINUX_URL="https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${LINUX_VER}.tar.xz"
 BUSYBOX_VER="1.36.1"
 BUSYBOX_URL="https://busybox.net/downloads/busybox-${BUSYBOX_VER}.tar.bz2"
-RECIPE_REV="r3" # bump when the recipe below changes without a version bump
+RECIPE_REV="r5" # bump when the recipe below changes without a version bump
 
 WORKSPACE="${REPO}/external/linux"
 CACHE="${REPO}/external/cache/guests/13_linux"
@@ -55,32 +55,26 @@ if [[ ! -x "busybox-${BUSYBOX_VER}/busybox" ]]; then
 fi
 
 # --- initramfs: /init mounts proc/sys, proves userspace, drops to sh.
-# A `nova_mixed` kernel command line switches it into the
-# mixed-criticality scenario driver: the IVC page (0x60000000, mapped
-# into every VM and untouched by a warm reset) holds a boot counter,
-# so the first boot generates CPU load and panics itself (panic=-1
-# warm-resets the VM from pristine) while the second boot lands on
-# the shell. One image serves both the plain and the mixed demo.
+# Scenario-specific commands arrive through the virtual UART so the
+# same image remains reusable and boot behavior stays deterministic.
 cat > init.sh <<'EOF'
 #!/bin/sh
 /bin/busybox mount -t proc proc /proc
 /bin/busybox mount -t sysfs sysfs /sys
 /bin/busybox --install -s /bin
 uname -a
-if grep -q nova_mixed /proc/cmdline; then
-    boot=$(($(devmem 0x60000F00 32) + 1))
-    devmem 0x60000F00 32 $boot
-    echo "NOVA MIXED BOOT $boot"
-    if [ "$boot" = 1 ]; then
-        echo "NOVA LOAD START"
-        md5sum /dev/zero &
-        md5sum /dev/zero &
-        sleep 20
-        echo "NOVA LOAD DONE"
-        echo c > /proc/sysrq-trigger
-    fi
-fi
 exec /bin/sh
+EOF
+
+cat > mixed.sh <<'EOF'
+#!/bin/sh
+echo "NOVA MIXED BOOT 1"
+echo "NOVA LOAD START"
+md5sum /dev/zero >/dev/null &
+md5sum /dev/zero >/dev/null &
+sleep 20
+echo "NOVA LOAD DONE"
+echo c > /proc/sysrq-trigger
 EOF
 
 cat > initramfs.list <<EOF
@@ -94,6 +88,7 @@ dir /sys 0755 0 0
 dir /bin 0755 0 0
 dir /tmp 1777 0 0
 file /bin/busybox ${WORKSPACE}/busybox-${BUSYBOX_VER}/busybox 0755 0 0
+file /bin/nova-mixed ${WORKSPACE}/mixed.sh 0755 0 0
 slink /bin/sh busybox 0777 0 0
 file /init ${WORKSPACE}/init.sh 0755 0 0
 EOF

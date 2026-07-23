@@ -60,6 +60,26 @@ TEST(GetEc, IgnoresUpperBits) {
   EXPECT_EQ(get_ec(esr), ExceptionClass::HVC_AA64);
 }
 
+TEST(LowerSyncPolicy, GuestOriginatedClassesAreIsolated) {
+  EXPECT_TRUE(is_lower_sync_guest_fault(ExceptionClass::UNKNOWN));
+  EXPECT_TRUE(is_lower_sync_guest_fault(ExceptionClass::SVC_AA64));
+  EXPECT_TRUE(is_lower_sync_guest_fault(ExceptionClass::SVE));
+  EXPECT_TRUE(is_lower_sync_guest_fault(ExceptionClass::INST_ABORT_LOWER));
+  EXPECT_TRUE(is_lower_sync_guest_fault(ExceptionClass::PC_ALIGN));
+  EXPECT_TRUE(is_lower_sync_guest_fault(ExceptionClass::SP_ALIGN));
+  EXPECT_TRUE(is_lower_sync_guest_fault(ExceptionClass::BRKPT_LOWER));
+  EXPECT_TRUE(is_lower_sync_guest_fault(ExceptionClass::BRK));
+}
+
+TEST(LowerSyncPolicy, HypervisorInvariantClassesStayFatal) {
+  EXPECT_FALSE(is_lower_sync_guest_fault(ExceptionClass::INST_ABORT_CURRENT));
+  EXPECT_FALSE(is_lower_sync_guest_fault(ExceptionClass::DATA_ABORT_CURRENT));
+  EXPECT_FALSE(is_lower_sync_guest_fault(ExceptionClass::BRKPT_CURRENT));
+  EXPECT_FALSE(is_lower_sync_guest_fault(ExceptionClass::SOFTSTEP_CURRENT));
+  EXPECT_FALSE(is_lower_sync_guest_fault(ExceptionClass::WATCHPT_CURRENT));
+  EXPECT_FALSE(is_lower_sync_guest_fault(ExceptionClass::SERROR));
+}
+
 // ---------------------------------------------------------------------------
 // get_iss — extract ISS field (bits 24:0)
 // ---------------------------------------------------------------------------

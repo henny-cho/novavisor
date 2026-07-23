@@ -179,16 +179,20 @@ void arm_reset_timeout(std::size_t vm) noexcept {
                   &on_reset_timeout, vm);
 }
 
-// Runs only on the VM boot VCPU's owner. Returns true when the caller's
-// live frame belonged to a VCPU retired here and must be scheduled away
-// after all mailbox requests in the current batch have been handled.
-[[nodiscard]] auto begin_reset_local(std::size_t vm) noexcept -> bool {
+struct BeginResetResult {
+  bool accepted          = false;
+  bool schedule_required = false;
+};
+
+// Runs only on the VM boot VCPU's owner. A successful request can also
+// require scheduling away from a live frame retired during quiesce.
+[[nodiscard]] auto begin_reset_local(std::size_t vm) noexcept -> BeginResetResult {
   if (vm >= guest_table().size() || reset_token(vm) != kResetReserved) {
-    return false; // stale begin request; its lifecycle was already resolved
+    return {}; // stale begin request; its lifecycle was already resolved
   }
   if (slot_cpu(slot_of(vm)) != cpu::id()) {
     release_reset(vm);
-    return false;
+    return {};
   }
 
   std::uint32_t live_mask = 0;
@@ -203,7 +207,7 @@ void arm_reset_timeout(std::size_t vm) noexcept {
   if (!plan.accepted) {
     tracker.cancel();
     release_reset(vm);
-    return false;
+    return {};
   }
   g_reset_token[vm].store(plan.epoch, std::memory_order_release);
   console::write("[smp] VM ");
@@ -225,7 +229,7 @@ void arm_reset_timeout(std::size_t vm) noexcept {
       tracker.cancel();
       release_reset(vm);
       console::write("[smp] reset rejected: target core offline\n");
-      return false;
+      return {};
     }
   }
 
@@ -262,7 +266,7 @@ void arm_reset_timeout(std::size_t vm) noexcept {
   if (tracker.ready()) {
     finish_reset(vm);
   }
-  return schedule_required;
+  return {.accepted = true, .schedule_required = schedule_required};
 }
 
 void on_reset_timeout(TrapContext* /*ctx*/, std::uint64_t arg) noexcept {
@@ -486,33 +490,34 @@ void stop_vm(std::size_t vm, TrapContext* live) noexcept {
   }
 }
 
-void reset_vm(std::size_t vm, TrapContext* live, bool from_irq) noexcept {
+auto reset_vm(std::size_t vm, TrapContext* live, bool from_irq) noexcept -> bool {
   if (vm >= guest_table().size() || !vcpu::vm_on(vm)) {
-    return;
+    return false;
   }
 
   std::uint64_t expected = kResetInactive;
   if (!g_reset_token[vm].compare_exchange_strong(expected, kResetReserved, std::memory_order_acq_rel)) {
-    return; // a reset for this VM is already in flight
+    return false; // a reset for this VM is already in flight
   }
   vcpu::begin_lifecycle_transition();
 
   const std::size_t boot = slot_of(vm);
   if (slot_cpu(boot) == cpu::id()) {
-    if (begin_reset_local(vm)) {
+    const BeginResetResult result = begin_reset_local(vm);
+    if (result.schedule_required) {
       if (from_irq) {
         core_gic::defer_epilogue(&vcpu::schedule_after_retire);
       } else {
         vcpu::schedule_after_retire(live);
       }
     }
-    return;
+    return result.accepted;
   }
 
   if (!enqueue(slot_cpu(boot), {.op = Op::kBeginReset, .idx = static_cast<std::uint32_t>(vm), .a = 0, .b = 0}, true)) {
     release_reset(vm);
     console::write("[smp] reset rejected: coordinator mailbox unavailable\n");
-    return;
+    return false;
   }
 
   // SYSTEM_RESET must not return to a secondary caller while the boot
@@ -526,6 +531,7 @@ void reset_vm(std::size_t vm, TrapContext* live, bool from_irq) noexcept {
       vcpu::schedule_after_retire(live);
     }
   }
+  return true;
 }
 
 } // namespace nova::smp
@@ -538,6 +544,21 @@ void smp_component::handle_hvc(HvcCall* call) noexcept {
   }
   call->handled   = true;
   call->ctx->x[0] = smp::start_vm(static_cast<std::size_t>(call->ctx->x[1])) ? 0 : kSmcccNotSupported;
+}
+
+void smp_component::handle_guest_fault(GuestFaultCall* call) noexcept {
+  call->handled          = true;
+  const std::size_t slot = vcpu::current_index();
+  const std::size_t vm   = vm_of(slot);
+  console::write("[smp] guest fault in VM ");
+  console::write_dec64(vm);
+  console::write(" vCPU ");
+  console::write_dec64(vcpu_of(slot));
+  console::write(" — resetting\n");
+  if (!smp::reset_vm(vm, call->ctx)) {
+    console::write("[smp] guest fault recovery unavailable — stopping vCPU\n");
+    vcpu::exit_current(call->ctx);
+  }
 }
 
 void smp_component::handle_sysreg(SysregCall* call) noexcept {
@@ -602,7 +623,7 @@ void smp_component::handle_irq(IrqCall* call) noexcept {
       schedule_required = vcpu::retire_vcpu(r.idx) || schedule_required;
       break;
     case smp::Op::kBeginReset:
-      schedule_required = smp::begin_reset_local(r.idx) || schedule_required;
+      schedule_required = smp::begin_reset_local(r.idx).schedule_required || schedule_required;
       break;
     case smp::Op::kQuiesceVcpu: {
       const std::size_t vm = vm_of(r.idx);

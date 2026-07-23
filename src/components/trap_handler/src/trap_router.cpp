@@ -74,29 +74,29 @@ void dispatch_fp_simd(TrapContext* ctx) noexcept {
 }
 
 void dispatch_sysreg(TrapContext* ctx) noexcept {
-  // ELR points AT the trapped MSR/MRS — advance past it; subscribers
-  // emulate the register effect only.
-  ctx->elr += 4;
-
   SysregCall call{.ctx = ctx, .sysreg = esr::parse_sysreg_trap(ctx->esr), .handled = false};
   cib::service<SysregService>(&call);
 
   if (!call.handled) {
-    // Sysreg traps exist only because EL2 configured them — a miss is
-    // a hypervisor bug, not guest misbehavior.
-    console::write("[NOVA PANIC] unclaimed sysreg trap\n");
+    console::write("[trap_handler] unclaimed guest sysreg trap\n");
     dump_trap_context(ctx);
-    halt();
+    trap::dispatch_guest_fault(ctx);
+    return;
   }
+
+  // ELR points AT the trapped MSR/MRS. Advance only after successful
+  // emulation so fault diagnostics retain the offending instruction.
+  ctx->elr += 4;
 }
 
 } // namespace
 
 // EC-class router for lower-EL synchronous exceptions. Each supported
-// class gets a case that forwards to its dispatch; everything else
-// dumps and halts.
+// class gets a case that forwards to its dispatch; unhandled guest
+// exceptions are isolated through GuestFaultService.
 void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
-  switch (esr::get_ec(ctx->esr)) {
+  const auto ec = esr::get_ec(ctx->esr);
+  switch (ec) {
   case esr::ExceptionClass::HVC_AA64:
     dispatch_hvc(ctx);
     return;
@@ -126,10 +126,19 @@ void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
     return;
 
   default:
-    console::write("[NOVA PANIC] Unexpected lower-EL sync exception\n");
-    dump_trap_context(ctx);
-    halt();
+    break;
   }
+
+  if (esr::is_lower_sync_guest_fault(ec)) {
+    console::write("[trap_handler] unhandled guest synchronous exception\n");
+    dump_trap_context(ctx);
+    trap::dispatch_guest_fault(ctx);
+    return;
+  }
+
+  console::write("[NOVA PANIC] inconsistent lower-EL exception class\n");
+  dump_trap_context(ctx);
+  halt();
 }
 
 } // namespace nova

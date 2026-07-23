@@ -7,13 +7,13 @@
 // sequence number to pong, ring 1 brings the echo back, and each round
 // is timed with the virtual counter on this core.
 //
-// Protocol sentinels ride the same rings, outside the 1..ROUNDS range:
-// pong announces MSG_READY once booted (keeps its core-1 boot out of
-// the statistics), ping ends with MSG_DONE and waits for pong's DONE
-// echo — which orders pong's farewell line strictly before our exit.
+// A shared run counter survives warm reset. Three guest faults restart
+// ping while pong keeps polling on core 1; the fourth exhausts the
+// restart budget after MSG_DONE orders pong's normal retirement.
 
 #include "demo_hvc.h"
 #include "guest_ring.h"
+#include "nova/abi/guest_layout.h"
 
 #include <stdint.h>
 
@@ -22,6 +22,7 @@
 
 #define MSG_READY (~(uint64_t)0)
 #define MSG_DONE  (~(uint64_t)1)
+#define RUN_COUNT ((volatile uint64_t*)(NOVA_IVC_SHM_IPA + 0xF80))
 
 static inline uint64_t read_cntfrq(void) {
   uint64_t v;
@@ -66,34 +67,65 @@ static void push_wait(uintptr_t ring, uint64_t v) {
   }
 }
 
+__attribute__((noreturn)) static void trigger_fault(uint64_t run) {
+  switch (run) {
+  case 1:
+    hvc_puts_lit("fault test: instruction abort\n");
+    ((void (*)(void))(uintptr_t)0x200)();
+    break;
+  case 2:
+    hvc_puts_lit("fault test: undefined instruction\n");
+    __asm__ volatile("udf #0");
+    break;
+  case 3:
+    hvc_puts_lit("fault test: breakpoint\n");
+    __asm__ volatile("brk #0");
+    break;
+  default: {
+    hvc_puts_lit("fault test: pc alignment\n");
+    const uintptr_t target = NOVA_GUEST_IPA_BASE + 2;
+    __asm__ volatile("br %0" : : "r"(target));
+    break;
+  }
+  }
+  __builtin_unreachable();
+}
+
 int main(void) {
+  const uint64_t run = ++RUN_COUNT[0];
   hvc_puts_lit("ping: up\n");
 
-  if (hvc_vm_start(PONG_VM) != 0) {
-    hvc_puts_lit("vm_start failed\n");
-    return 1;
-  }
-  if (pop_wait(ring1_base()) != MSG_READY) {
-    hvc_puts_lit("bad ready marker\n");
-    return 1;
-  }
-
-  uint64_t total_ticks = 0;
-  for (uint64_t round = 1; round <= ROUNDS; ++round) {
-    const uint64_t t0 = read_cntvct();
-    push_wait(ring0_base(), round);
-    const uint64_t echo = pop_wait(ring1_base());
-    total_ticks += read_cntvct() - t0;
-    if (echo != round) {
-      hvc_puts_lit("echo mismatch\n");
+  if (run == 1) {
+    if (hvc_vm_start(PONG_VM) != 0) {
+      hvc_puts_lit("vm_start failed\n");
       return 1;
     }
+    if (pop_wait(ring1_base()) != MSG_READY) {
+      hvc_puts_lit("bad ready marker\n");
+      return 1;
+    }
+
+    uint64_t total_ticks = 0;
+    for (uint64_t round = 1; round <= ROUNDS; ++round) {
+      const uint64_t t0 = read_cntvct();
+      push_wait(ring0_base(), round);
+      const uint64_t echo = pop_wait(ring1_base());
+      total_ticks += read_cntvct() - t0;
+      if (echo != round) {
+        hvc_puts_lit("echo mismatch\n");
+        return 1;
+      }
+    }
+
+    const uint64_t avg_ns = total_ticks * 1000000000ULL / read_cntfrq() / ROUNDS;
+    hvc_puts_lit("smp pingpong: 1000 rounds, avg RTT=");
+    print_dec(avg_ns);
+    hvc_puts_lit(" ns\n");
   }
 
-  const uint64_t avg_ns = total_ticks * 1000000000ULL / read_cntfrq() / ROUNDS;
-  hvc_puts_lit("smp pingpong: 1000 rounds, avg RTT=");
-  print_dec(avg_ns);
-  hvc_puts_lit(" ns\n");
+  if (run < 4) {
+    trigger_fault(run);
+  }
 
   push_wait(ring0_base(), MSG_DONE);
   if (pop_wait(ring1_base()) != MSG_DONE) {
@@ -102,7 +134,8 @@ int main(void) {
   }
   // pong powers off right after its DONE echo; give its farewell and
   // the hypervisor's system_off line 50 ms of wall time so this VM's
-  // exit output lands strictly after them (single writer per instant).
+  // final fault lands strictly after them (single writer per instant).
   spin_ms(50);
-  return 0;
+  hvc_puts_lit("ping: peer survived guest faults\n");
+  trigger_fault(run);
 }

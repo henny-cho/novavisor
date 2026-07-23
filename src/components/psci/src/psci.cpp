@@ -54,12 +54,13 @@ void psci_component::handle_hvc(HvcCall* call) noexcept {
     smp::stop_vm(vm_of(vcpu::current_index()), call->ctx);
     return;
   case psci::Action::kSystemReset:
-    // Does not return either way: on success the live frame now holds
-    // the freshly seeded boot context (when vcpu 0 called; a secondary
-    // caller is stopped by the fan-out); on an exhausted restart
-    // budget the VM was stopped and the scheduler moved on.
+    // Accepted resets do not return: the live frame is replaced by the
+    // fresh boot context, or the caller is retired. A request collision
+    // can still report INTERNAL_FAILURE to the guest.
     log_power_event(" system_reset\n");
-    smp::reset_vm(vm_of(vcpu::current_index()), call->ctx);
+    if (!smp::reset_vm(vm_of(vcpu::current_index()), call->ctx)) {
+      call->ctx->x[0] = static_cast<std::uint64_t>(PSCI_INTERNAL_FAILURE);
+    }
     return;
   case psci::Action::kCpuOn: {
     // The target names a sibling vCPU of the calling VM; the start is

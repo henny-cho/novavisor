@@ -3,10 +3,9 @@
 // components/trap_handler/include/trap_handler/guest_fault.hpp
 //
 // GuestFaultService — escalation point for unrecoverable guest faults
-// (unclaimed MMIO, unemulatable aborts). The subscriber that owns VM
-// lifecycles (core_vcpu) sets `handled` and retires the offending
-// VCPU — other VMs keep running. With no subscriber the dispatcher
-// halts.
+// (unclaimed MMIO, unemulatable aborts). The VM lifecycle owner sets
+// `handled` and starts bounded VM-wide recovery while other VMs keep
+// running. With no subscriber the dispatcher halts.
 
 #include "nova/arch/trap_context.hpp"
 
