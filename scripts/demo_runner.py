@@ -28,13 +28,20 @@ import shlex
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
-try:
-    import yaml
-except ImportError:
-    sys.exit("demo_runner: missing PyYAML. Install with: apt-get install python3-yaml "
-             "or pip install --user PyYAML")
+
+def _require_yaml():
+    # Pure verifier tests do not parse manifests. Load this optional runtime
+    # dependency only for commands that need it.
+    try:
+        import yaml
+        return yaml
+    except ImportError:
+        sys.exit("demo_runner: missing PyYAML. Install with: apt-get install python3-yaml "
+                 "or pip install --user PyYAML")
 
 
 def _require_pexpect():
@@ -62,15 +69,19 @@ GUEST_LINK_BASE = 0x50000000
 class OutputCapture:
     """Keep a bounded diagnostic tail and stream only outside CI."""
 
-    def __init__(self, stream, max_chars: int = 32 * 1024):
+    def __init__(self, stream, max_bytes: int = 32 * 1024):
         self.stream = stream
-        self.max_chars = max_chars
+        self.max_bytes = max_bytes
         self.tail = ""
 
     def write(self, data: str) -> None:
         if self.stream is not None:
             self.stream.write(data)
-        self.tail = (self.tail + data)[-self.max_chars:]
+        encoded = (self.tail + data).encode("utf-8")
+        if len(encoded) > self.max_bytes:
+            encoded = encoded[-self.max_bytes:]
+        # The byte window may begin in the middle of a UTF-8 sequence.
+        self.tail = encoded.decode("utf-8", errors="ignore")
 
     def flush(self) -> None:
         if self.stream is not None:
@@ -88,6 +99,7 @@ def print_failure_tail(capture: OutputCapture) -> None:
 # ---------------------------------------------------------------------------
 
 def load_manifest(name: str) -> tuple[Path, dict]:
+    yaml = _require_yaml()
     manifest_path = DEMO_DIR / name / "manifest.yml"
     if not manifest_path.exists():
         sys.exit(f"demo_runner: no manifest at {manifest_path}")
@@ -97,6 +109,7 @@ def load_manifest(name: str) -> tuple[Path, dict]:
 
 
 def iter_demos() -> list[tuple[str, dict]]:
+    yaml = _require_yaml()
     out = []
     for p in sorted(DEMO_DIR.iterdir()):
         mf = p / "manifest.yml"
@@ -228,6 +241,73 @@ def build_qemu_cmd(elf: Path, demo_name: str, demo_build: Path, manifest: dict) 
 # Verification
 # ---------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class PatternMatch:
+    pattern: str
+    elapsed_seconds: float
+    remaining_seconds: float
+
+
+@dataclass(frozen=True)
+class VerificationResult:
+    failure: str | None = None
+    pattern: str | None = None
+    wait_seconds: float = 0.0
+
+    @property
+    def ok(self) -> bool:
+        return self.failure is None
+
+
+def verify_child_output(
+    child,
+    expectations: list[dict],
+    scenario_timeout: float,
+    *,
+    clock: Callable[[], float],
+    timeout_error: type[BaseException],
+    eof_error: type[BaseException],
+    on_match: Callable[[PatternMatch], None] | None = None,
+) -> VerificationResult:
+    """Verify one spawned process and terminate it on every exit path."""
+    try:
+        started_at = clock()
+        deadline = started_at + scenario_timeout
+
+        for exp in expectations:
+            pattern = exp["pattern"]
+            within = float(exp.get("within_seconds", scenario_timeout))
+            remaining = max(0.0, deadline - clock())
+            if remaining == 0.0:
+                return VerificationResult("timeout", pattern, 0.0)
+            wait = min(within, remaining)
+
+            try:
+                child.expect(pattern, timeout=wait)
+            except timeout_error:
+                return VerificationResult("timeout", pattern, wait)
+            except eof_error:
+                return VerificationResult("eof", pattern, wait)
+
+            matched_at = clock()
+            if on_match is not None:
+                on_match(PatternMatch(
+                    pattern=pattern,
+                    elapsed_seconds=max(0.0, matched_at - started_at),
+                    remaining_seconds=max(0.0, deadline - matched_at),
+                ))
+
+            # Input is causally tied to the matching prompt. Never send it
+            # before the corresponding output has been observed.
+            send = exp.get("send")
+            if send is not None:
+                child.send(send)
+
+        return VerificationResult()
+    finally:
+        child.terminate(force=True)
+
+
 def verify(name: str) -> int:
     _, manifest = load_manifest(name)
     if not manifest.get("enabled", False):
@@ -263,37 +343,32 @@ def _verify_one(name: str, manifest: dict, variant: dict) -> int:
     child = pexpect.spawn(cmd[0], cmd[1:], timeout=timeout, encoding="utf-8")
     capture = OutputCapture(None if os.environ.get("GITHUB_ACTIONS") == "true" else sys.stdout)
     child.logfile_read = capture
-    deadline = time.monotonic() + timeout
 
-    try:
-        for exp in variant.get("expect", []):
-            pattern = exp["pattern"]
-            within = int(exp.get("within_seconds", timeout))
-            remaining = deadline - time.monotonic()
-            wait = min(float(within), max(0.0, remaining))
-            try:
-                child.expect(pattern, timeout=wait)
-            except pexpect.TIMEOUT:
-                print(f"\n[demo_runner] FAIL: timeout waiting for /{pattern}/ "
-                      f"({wait:.1f}s; scenario limit {timeout}s)", file=sys.stderr)
-                print_failure_tail(capture)
-                return 1
-            except pexpect.EOF:
-                print(f"\n[demo_runner] FAIL: EOF before /{pattern}/",
-                      file=sys.stderr)
-                print_failure_tail(capture)
-                return 1
-            if capture.stream is None:
-                print(f"[demo_runner] matched /{pattern}/")
-            # Optional host input, sent only after the pattern above
-            # matched — keeps stdin-driven demos deterministic.
-            send = exp.get("send")
-            if send is not None:
-                child.send(send)
-        print(f"\n[demo_runner] PASS: {label}")
-        return 0
-    finally:
-        child.terminate(force=True)
+    def report_match(match: PatternMatch) -> None:
+        if capture.stream is None:
+            print(f"[demo_runner] matched /{match.pattern}/")
+
+    result = verify_child_output(
+        child,
+        variant.get("expect", []),
+        timeout,
+        clock=time.monotonic,
+        timeout_error=pexpect.TIMEOUT,
+        eof_error=pexpect.EOF,
+        on_match=report_match,
+    )
+    if result.failure == "timeout":
+        print(f"\n[demo_runner] FAIL: timeout waiting for /{result.pattern}/ "
+              f"({result.wait_seconds:.1f}s; scenario limit {timeout}s)", file=sys.stderr)
+        print_failure_tail(capture)
+        return 1
+    if result.failure == "eof":
+        print(f"\n[demo_runner] FAIL: EOF before /{result.pattern}/", file=sys.stderr)
+        print_failure_tail(capture)
+        return 1
+
+    print(f"\n[demo_runner] PASS: {label}")
+    return 0
 
 
 # ---------------------------------------------------------------------------

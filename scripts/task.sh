@@ -288,6 +288,9 @@ cmd_test() {
 
     echo "==> Running host tests..."
     ctest --preset "${PRESET}" --output-on-failure
+
+    echo "==> Running script unit tests..."
+    python3 -m unittest discover -s "${WORK_DIR}/tests/scripts" -p '*_test.py'
 }
 
 # Resolve the ELF path for the current build flavor, preferring Release if both
