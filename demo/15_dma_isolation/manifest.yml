@@ -1,5 +1,5 @@
 name: "15_dma_isolation"
-description: "A PCI DMA stream succeeds inside its owner window, faults outside it, and remains blocked after quarantine."
+description: "A guest-owned PCI stream is quarantined, reattached to a new reset generation, then detached on VM exit."
 phase: 19
 enabled: true
 timeout_seconds: 20
@@ -24,7 +24,15 @@ expect:
     within_seconds: 5
   - pattern: "\\[dma\\] EDU isolation probe passed"
     within_seconds: 5
-  - pattern: "dma isolation guest running"
+  - pattern: "dma lifecycle boot 1"
+    within_seconds: 5
+  - pattern: "\\[dma\\] VM 0 resumed generation 2"
+    within_seconds: 5
+  - pattern: "dma lifecycle boot 2"
     within_seconds: 5
   - pattern: "demo_exit code=0"
+    within_seconds: 5
+  - pattern: "\\[dma\\] VM 0 quiesced"
+    within_seconds: 5
+  - pattern: "\\[smp\\] VM 0 stopped"
     within_seconds: 5

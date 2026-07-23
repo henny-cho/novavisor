@@ -455,7 +455,14 @@ auto attach_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
   }
 
   for (const StreamBinding& binding : g_bindings) {
-    if (binding.owner_vm == vm && binding.state != DomainState::kAttached && !can_attach(binding, generation)) {
+    if (binding.owner_vm != vm) {
+      continue;
+    }
+    if (binding.state == DomainState::kAttached) {
+      if (!attachment_matches(binding, generation)) {
+        return false;
+      }
+    } else if (!can_attach(binding, generation)) {
       return false;
     }
   }

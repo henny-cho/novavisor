@@ -92,6 +92,11 @@ struct StreamBinding {
   return binding.configured() && binding.state != DomainState::kAttached && generation > binding.generation;
 }
 
+[[nodiscard]] constexpr auto attachment_matches(const StreamBinding& binding, std::uint64_t generation) noexcept
+    -> bool {
+  return binding.configured() && binding.state == DomainState::kAttached && binding.generation == generation;
+}
+
 [[nodiscard]] constexpr auto mark_attached(StreamBinding& binding, std::uint64_t generation) noexcept -> bool {
   if (!can_attach(binding, generation)) {
     return false;

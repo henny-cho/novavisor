@@ -8,7 +8,8 @@
 //   kSlotLegacyTimer  HVC_TIMER_SET one-shot (core_timer)
 //   kSlotCntvWake+i   parked-CNTV wake-up for blocked VCPU i (core_vcpu)
 //   kSlotWatchdog+i   heartbeat deadline for VM i (watchdog)
-//   kSlotReset+i      quiesce ACK deadline for VM i (smp boot owner)
+//   kSlotLifecycle+i  quiesce ACK deadline for VM i (smp boot owner)
+//   kSlotDmaDrain+i   non-blocking DMA drain polling for VM i
 //
 // Expiry runs inside IRQ dispatch: callbacks receive the live trap
 // frame and may swap it (preemption). The hardware timer is
@@ -28,10 +29,11 @@ namespace nova::soft_timer {
 
 inline constexpr std::size_t kSlotSlice       = 0;
 inline constexpr std::size_t kSlotLegacyTimer = 1;
-inline constexpr std::size_t kSlotCntvWake    = 2;                          // + vCPU slot, kMaxVcpus wide
-inline constexpr std::size_t kSlotWatchdog    = kSlotCntvWake + kMaxVcpus;  // + VM index, kMaxGuests wide
-inline constexpr std::size_t kSlotReset       = kSlotWatchdog + kMaxGuests; // + VM index, kMaxGuests wide
-inline constexpr std::size_t kSlotCount       = kSlotReset + kMaxGuests;
+inline constexpr std::size_t kSlotCntvWake    = 2;                           // + vCPU slot, kMaxVcpus wide
+inline constexpr std::size_t kSlotWatchdog    = kSlotCntvWake + kMaxVcpus;   // + VM index, kMaxGuests wide
+inline constexpr std::size_t kSlotLifecycle   = kSlotWatchdog + kMaxGuests;  // + VM index, kMaxGuests wide
+inline constexpr std::size_t kSlotDmaDrain    = kSlotLifecycle + kMaxGuests; // + VM index, kMaxGuests wide
+inline constexpr std::size_t kSlotCount       = kSlotDmaDrain + kMaxGuests;
 
 // Enable the CNTHP PPI at the GIC (RuntimeStart).
 void init() noexcept;

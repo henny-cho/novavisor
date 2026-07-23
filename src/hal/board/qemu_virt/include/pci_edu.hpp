@@ -76,14 +76,17 @@ inline void acquire_memory() noexcept {
   return read_config32(reg::kBar0) == kBar0 && read_mmio32(reg::kIdentity) == 0x0100'00ED;
 }
 
-inline void enable_bus_master() noexcept {
+[[nodiscard]] inline auto enable_bus_master() noexcept -> bool {
   write_config32(reg::kCommand, kPciCommandMemory | kPciCommandBusMaster);
   publish_memory();
+  return (read_config32(reg::kCommand) & (kPciCommandMemory | kPciCommandBusMaster)) ==
+         (kPciCommandMemory | kPciCommandBusMaster);
 }
 
-inline void disable_bus_master() noexcept {
+[[nodiscard]] inline auto disable_bus_master() noexcept -> bool {
   write_config32(reg::kCommand, kPciCommandMemory);
   publish_memory();
+  return (read_config32(reg::kCommand) & (kPciCommandMemory | kPciCommandBusMaster)) == kPciCommandMemory;
 }
 
 [[nodiscard]] inline auto dma_running() noexcept -> bool {

@@ -94,22 +94,17 @@ void wake(std::size_t index) noexcept;
 [[nodiscard]] auto reserve_start(std::size_t slot) noexcept -> bool;
 void               cancel_start(std::size_t slot) noexcept;
 
-// Cold-start a VM whose boot slot was reserved by smp: seed vcpu 0
-// from the descriptor and mark it ready. False when the VM is out of
-// range, another sibling is still live, the reservation is absent, or
-// its affinity is not this core.
-[[nodiscard]] auto start_vm(std::size_t vm) noexcept -> bool;
+// Cold-start is split so device isolation can adopt the new generation
+// before vcpu 0 becomes runnable. A zero generation means preparation
+// failed; publication accepts only the exact prepared generation.
+[[nodiscard]] auto prepare_start_vm(std::size_t vm) noexcept -> std::uint64_t;
+[[nodiscard]] auto publish_start_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool;
 
 // Complete a reserved PSCI CPU_ON: seed a secondary vCPU slot at
 // `entry` with context_id in x0 (SP stays 0 — PSCI leaves it to the
 // guest). False when the reservation is absent, the slot is invalid,
 // foreign-affinity, or its VM has retired.
 [[nodiscard]] auto start_vcpu(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noexcept -> bool;
-
-// Retire one local vCPU (PSCI CPU_OFF, VM-stop fan-out). A resident
-// target schedules away through `live`; a kOff or foreign one is a
-// no-op. The VM's watchdog is cancelled with its last vCPU.
-void stop_vcpu(std::size_t slot, TrapContext* live) noexcept;
 
 // Split retirement used by the SMP reset coordinator: publish kOff and
 // return whether the target was resident, allowing the caller to send
@@ -122,15 +117,10 @@ void               schedule_after_retire(TrapContext* live) noexcept;
 void begin_lifecycle_transition() noexcept;
 void end_lifecycle_transition() noexcept;
 
-// Restore and reseed an entirely quiesced VM. Must execute on vcpu 0's
-// owner core after every current-epoch ACK. False on ownership/liveness
-// violations or restart-budget exhaustion.
-[[nodiscard]] auto reset_quiesced_vm(std::size_t vm) noexcept -> bool;
-
-// HVC_EXIT epilogue: retire the calling vCPU and schedule away; halts
-// the machine once every vCPU machine-wide is kOff (kBlocked ones keep
-// it alive — they are owed a wake-up).
-void exit_current(TrapContext* live) noexcept;
+// Warm reset follows the same prepare/publish boundary. Memory restore
+// and generation advance happen while every vCPU remains off.
+[[nodiscard]] auto prepare_reset_quiesced_vm(std::size_t vm) noexcept -> std::uint64_t;
+[[nodiscard]] auto publish_reset_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool;
 
 // Deliver a private vIRQ to a vCPU through the vGIC: pends the INTID
 // and injects it into a free list register once the guest's enable

@@ -7,6 +7,7 @@
 
 #include "smp/smp.hpp"
 
+#include "dma_device/dma_device.hpp"
 #include "hal/console.hpp"
 #include "hal/cpu.hpp"
 #include "hal/gic.hpp"
@@ -42,8 +43,8 @@ enum class Op : std::uint8_t {
   kPostVirq,
   kCpuOn,
   kVmOwnerCall,
-  kStopVcpu,
   kBeginReset,
+  kBeginStop,
   kQuiesceVcpu,
   kQuiesceAck,
 };
@@ -68,27 +69,38 @@ struct Mailbox {
   std::size_t                           count = 0;
 };
 
-std::array<Mailbox, cpu::kMaxCpus> g_mail;
+std::array<Mailbox, cpu::kMaxCpus>     g_mail;
+std::array<sync::SpinLock, kMaxGuests> g_power_lock;
 
 static_assert(kMaxVcpus <= 32);
 std::array<std::atomic<std::uint32_t>, cpu::kMaxCpus> g_reevaluate{};
 
-// Reset state is modified only on each VM boot VCPU's owner core. The
-// atomic token reserves a reset before its begin request crosses cores
-// and prevents a concurrent cold start from reviving a quiescing VM.
-std::array<lifecycle::QuiesceTracker<kMaxVcpusPerVm>, kMaxGuests> g_reset;
-std::array<std::atomic<std::uint64_t>, kMaxGuests>                g_reset_token{};
+// VM lifecycle state is owned by the boot vCPU's core. The atomic token
+// serializes reset, stop, cold-start, and CPU_ON across cores.
+std::array<lifecycle::QuiesceTracker<kMaxVcpusPerVm>, kMaxGuests> g_lifecycle;
+std::array<std::atomic<std::uint64_t>, kMaxGuests>                g_lifecycle_token{};
 
-// Zero means no reset. The reserved value closes the race between a
-// caller claiming reset ownership and the boot owner publishing the
+enum class LifecycleMode : std::uint8_t {
+  kNone,
+  kReset,
+  kStop,
+};
+
+std::array<LifecycleMode, kMaxGuests> g_lifecycle_mode{};
+std::array<bool, kMaxGuests>          g_dma_pending{};
+std::array<bool, kMaxGuests>          g_dma_failed{};
+
+// Zero means inactive. The reserved value closes the race between a
+// caller claiming ownership and the boot owner publishing the
 // tracker epoch; remote quiesce commands carry the final epoch.
-inline constexpr std::uint64_t kResetInactive = 0;
-inline constexpr std::uint64_t kResetReserved = lifecycle::kUnpublishedEpoch;
+inline constexpr std::uint64_t kLifecycleInactive = 0;
+inline constexpr std::uint64_t kLifecycleReserved = lifecycle::kUnpublishedEpoch;
 
 // A cross-call should complete in microseconds, but emulation and
-// heavily instrumented builds need margin. Three retries make reset
+// heavily instrumented builds need margin. Three retries make lifecycle
 // failure bounded to roughly 400 ms without spuriously isolating a VM.
 inline constexpr std::uint64_t kQuiesceTimeoutMs = 100;
+inline constexpr std::uint64_t kDmaPollMs        = 1;
 
 // Set by each secondary as its last bring-up step; the primary's
 // bounded wait reads it. acquire/release pairs the secondary's init
@@ -107,12 +119,12 @@ inline constexpr std::uint64_t kOnlineWaitMs = 100;
   return vm_of(slot) < guest_table().size() && vcpu_of(slot) < guest_table()[vm_of(slot)].vcpus;
 }
 
-[[nodiscard]] auto reset_token(std::size_t vm) noexcept -> std::uint64_t {
-  return g_reset_token[vm].load(std::memory_order_acquire);
+[[nodiscard]] auto lifecycle_token(std::size_t vm) noexcept -> std::uint64_t {
+  return g_lifecycle_token[vm].load(std::memory_order_acquire);
 }
 
-[[nodiscard]] auto reset_blocks_start(std::size_t vm) noexcept -> bool {
-  return vm < g_reset_token.size() && reset_token(vm) != kResetInactive;
+[[nodiscard]] auto lifecycle_blocks_start(std::size_t vm) noexcept -> bool {
+  return vm < g_lifecycle_token.size() && lifecycle_token(vm) != kLifecycleInactive;
 }
 
 [[nodiscard]] auto enqueue(std::size_t target_cpu, Request r, bool lifecycle = false) noexcept -> bool {
@@ -134,26 +146,72 @@ inline constexpr std::uint64_t kOnlineWaitMs = 100;
   return true;
 }
 
-void release_reset(std::size_t vm) noexcept {
-  if (vm < g_reset_token.size()) {
-    g_reset_token[vm].store(kResetInactive, std::memory_order_release);
+void release_lifecycle(std::size_t vm) noexcept {
+  if (vm < g_lifecycle_token.size()) {
+    g_lifecycle_token[vm].store(kLifecycleInactive, std::memory_order_release);
   }
   vcpu::end_lifecycle_transition();
 }
 
-void finish_reset(std::size_t vm) noexcept {
-  auto& tracker = g_reset[vm];
-  if (!tracker.ready()) {
+[[nodiscard]] auto start_vm_local(std::size_t vm) noexcept -> bool {
+  const std::uint64_t generation = vcpu::prepare_start_vm(vm);
+  if (generation == 0U) {
+    return false;
+  }
+  if (!dma_device::resume_vm(vm, generation)) {
+    vcpu::cancel_start(slot_of(vm));
+    return false;
+  }
+  if (vcpu::publish_start_vm(vm, generation)) {
+    return true;
+  }
+  static_cast<void>(dma_device::begin_quiesce(vm));
+  return false;
+}
+
+void finish_lifecycle(std::size_t vm) noexcept {
+  auto& tracker = g_lifecycle[vm];
+  if (!tracker.ready() || g_dma_pending[vm]) {
+    return;
+  }
+
+  soft_timer::cancel(soft_timer::kSlotLifecycle + vm);
+  soft_timer::cancel(soft_timer::kSlotDmaDrain + vm);
+
+  if (g_dma_failed[vm]) {
+    (void)tracker.finish();
+    g_lifecycle_mode[vm] = LifecycleMode::kNone;
+    vcpu::end_lifecycle_transition();
+    console::write("[smp] VM ");
+    console::write_dec64(vm);
+    console::write(" stopped after DMA isolation failure\n");
+    return; // keep the lifecycle token latched
+  }
+
+  if (g_lifecycle_mode[vm] == LifecycleMode::kStop) {
+    (void)tracker.finish();
+    g_lifecycle_mode[vm] = LifecycleMode::kNone;
+    release_lifecycle(vm);
+    console::write("[smp] VM ");
+    console::write_dec64(vm);
+    console::write(" stopped\n");
     return;
   }
 
   console::write("[smp] VM ");
   console::write_dec64(vm);
   console::write(" quiesced — restoring\n");
-  soft_timer::cancel(soft_timer::kSlotReset + vm);
-  const bool restarted = vcpu::reset_quiesced_vm(vm);
+  const std::uint64_t generation = vcpu::prepare_reset_quiesced_vm(vm);
+  bool                restarted  = false;
+  if (generation != 0U && dma_device::resume_vm(vm, generation)) {
+    restarted = vcpu::publish_reset_vm(vm, generation);
+    if (!restarted) {
+      static_cast<void>(dma_device::begin_quiesce(vm));
+    }
+  }
   (void)tracker.finish();
-  release_reset(vm);
+  g_lifecycle_mode[vm] = LifecycleMode::kNone;
+  release_lifecycle(vm);
   if (!restarted) {
     console::write("[smp] VM ");
     console::write_dec64(vm);
@@ -163,35 +221,41 @@ void finish_reset(std::size_t vm) noexcept {
 
 void acknowledge_quiesce(std::size_t slot, std::uint64_t epoch) noexcept {
   const std::size_t vm = vm_of(slot);
-  if (vm >= guest_table().size() || reset_token(vm) != epoch) {
+  if (vm >= guest_table().size() || lifecycle_token(vm) != epoch) {
     return;
   }
-  const lifecycle::AckResult result = g_reset[vm].acknowledge(vcpu_of(slot), epoch);
+  const lifecycle::AckResult result = g_lifecycle[vm].acknowledge(vcpu_of(slot), epoch);
   if (result == lifecycle::AckResult::kReady) {
-    finish_reset(vm);
+    finish_lifecycle(vm);
   }
 }
 
-void on_reset_timeout(TrapContext* ctx, std::uint64_t arg) noexcept;
+void on_lifecycle_timeout(TrapContext* ctx, std::uint64_t arg) noexcept;
+void on_dma_drain(TrapContext* ctx, std::uint64_t arg) noexcept;
 
-void arm_reset_timeout(std::size_t vm) noexcept {
-  soft_timer::arm(soft_timer::kSlotReset + vm, hyp_timer::now() + hyp_timer::freq() * kQuiesceTimeoutMs / 1000U,
-                  &on_reset_timeout, vm);
+void arm_lifecycle_timeout(std::size_t vm) noexcept {
+  soft_timer::arm(soft_timer::kSlotLifecycle + vm, hyp_timer::now() + hyp_timer::freq() * kQuiesceTimeoutMs / 1000U,
+                  &on_lifecycle_timeout, vm);
 }
 
-struct BeginResetResult {
+void arm_dma_poll(std::size_t vm) noexcept {
+  soft_timer::arm(soft_timer::kSlotDmaDrain + vm, hyp_timer::now() + hyp_timer::freq() * kDmaPollMs / 1000U,
+                  &on_dma_drain, vm);
+}
+
+struct BeginLifecycleResult {
   bool accepted          = false;
   bool schedule_required = false;
 };
 
 // Runs only on the VM boot VCPU's owner. A successful request can also
 // require scheduling away from a live frame retired during quiesce.
-[[nodiscard]] auto begin_reset_local(std::size_t vm) noexcept -> BeginResetResult {
-  if (vm >= guest_table().size() || reset_token(vm) != kResetReserved) {
+[[nodiscard]] auto begin_lifecycle_local(std::size_t vm, LifecycleMode mode) noexcept -> BeginLifecycleResult {
+  if (vm >= guest_table().size() || lifecycle_token(vm) != kLifecycleReserved) {
     return {}; // stale begin request; its lifecycle was already resolved
   }
   if (slot_cpu(slot_of(vm)) != cpu::id()) {
-    release_reset(vm);
+    release_lifecycle(vm);
     return {};
   }
 
@@ -202,17 +266,20 @@ struct BeginResetResult {
     }
   }
 
-  auto&      tracker = g_reset[vm];
+  auto&      tracker = g_lifecycle[vm];
   const auto plan    = tracker.begin(live_mask);
   if (!plan.accepted) {
     tracker.cancel();
-    release_reset(vm);
+    release_lifecycle(vm);
     return {};
   }
-  g_reset_token[vm].store(plan.epoch, std::memory_order_release);
+  g_lifecycle_token[vm].store(plan.epoch, std::memory_order_release);
+  g_lifecycle_mode[vm] = mode;
+  g_dma_pending[vm]    = false;
+  g_dma_failed[vm]     = false;
   console::write("[smp] VM ");
   console::write_dec64(vm);
-  console::write(" reset epoch ");
+  console::write(mode == LifecycleMode::kReset ? " reset epoch " : " stop epoch ");
   console::write_dec64(plan.epoch);
   console::write(" pending mask 0x");
   console::write_hex64(plan.pending_mask);
@@ -227,13 +294,25 @@ struct BeginResetResult {
     const std::size_t owner = slot_cpu(slot_of(vm, v));
     if (owner != cpu::id() && (owner >= g_online.size() || !g_online[owner].load(std::memory_order_acquire))) {
       tracker.cancel();
-      release_reset(vm);
-      console::write("[smp] reset rejected: target core offline\n");
+      release_lifecycle(vm);
+      console::write("[smp] lifecycle rejected: target core offline\n");
       return {};
     }
   }
 
-  arm_reset_timeout(vm);
+  switch (dma_device::begin_quiesce(vm)) {
+  case dma_device::QuiesceResult::kComplete:
+    break;
+  case dma_device::QuiesceResult::kPending:
+    g_dma_pending[vm] = true;
+    arm_dma_poll(vm);
+    break;
+  case dma_device::QuiesceResult::kFailed:
+    g_dma_failed[vm] = true;
+    break;
+  }
+
+  arm_lifecycle_timeout(vm);
 
   for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
     if ((live_mask & (std::uint32_t{1} << v)) == 0U) {
@@ -264,19 +343,40 @@ struct BeginResetResult {
   }
 
   if (tracker.ready()) {
-    finish_reset(vm);
+    finish_lifecycle(vm);
   }
   return {.accepted = true, .schedule_required = schedule_required};
 }
 
-void on_reset_timeout(TrapContext* /*ctx*/, std::uint64_t arg) noexcept {
+void on_dma_drain(TrapContext* /*ctx*/, std::uint64_t arg) noexcept {
+  const auto vm = static_cast<std::size_t>(arg);
+  if (vm >= guest_table().size() || !g_dma_pending[vm] || lifecycle_token(vm) == kLifecycleInactive) {
+    return;
+  }
+
+  switch (dma_device::poll_quiesce(vm)) {
+  case dma_device::QuiesceResult::kPending:
+    arm_dma_poll(vm);
+    return;
+  case dma_device::QuiesceResult::kComplete:
+    g_dma_pending[vm] = false;
+    break;
+  case dma_device::QuiesceResult::kFailed:
+    g_dma_pending[vm] = false;
+    g_dma_failed[vm]  = true;
+    break;
+  }
+  finish_lifecycle(vm);
+}
+
+void on_lifecycle_timeout(TrapContext* /*ctx*/, std::uint64_t arg) noexcept {
   const auto vm = static_cast<std::size_t>(arg);
   if (vm >= guest_table().size()) {
     return;
   }
 
-  const std::uint64_t epoch   = reset_token(vm);
-  auto&               tracker = g_reset[vm];
+  const std::uint64_t epoch   = lifecycle_token(vm);
+  auto&               tracker = g_lifecycle[vm];
   switch (tracker.on_timeout(epoch)) {
   case lifecycle::TimeoutResult::kIgnored:
     return;
@@ -304,8 +404,8 @@ void on_reset_timeout(TrapContext* /*ctx*/, std::uint64_t arg) noexcept {
                       true);
       }
     }
-    if (reset_token(vm) == epoch && tracker.active()) {
-      arm_reset_timeout(vm);
+    if (lifecycle_token(vm) == epoch && tracker.active()) {
+      arm_lifecycle_timeout(vm);
     }
     return;
   }
@@ -316,7 +416,7 @@ void on_reset_timeout(TrapContext* /*ctx*/, std::uint64_t arg) noexcept {
     // epoch may still retire their targets. Other VMs keep running.
     console::write("[smp] VM ");
     console::write_dec64(vm);
-    console::write(" reset timed out — isolated, pending mask 0x");
+    console::write(" lifecycle timed out — isolated, pending mask 0x");
     console::write_hex64(tracker.pending_mask());
     console::write("\n");
     for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
@@ -373,19 +473,19 @@ void start_secondaries() noexcept {
 }
 
 auto start_vm(std::size_t vm) noexcept -> bool {
-  if (vm >= guest_table().size() || reset_blocks_start(vm) || vcpu::vm_on(vm)) {
+  if (vm >= guest_table().size() || lifecycle_blocks_start(vm) || vcpu::vm_on(vm) || !dma_device::can_start(vm)) {
     return false;
   }
   const std::size_t boot = slot_of(vm);
   if (!vcpu::reserve_start(boot)) {
     return false;
   }
-  if (reset_blocks_start(vm)) {
+  if (lifecycle_blocks_start(vm)) {
     vcpu::cancel_start(boot);
     return false;
   }
   if (slot_cpu(boot) == cpu::id()) {
-    return vcpu::start_vm(vm);
+    return start_vm_local(vm);
   }
   if (!enqueue(slot_cpu(boot), {.op = Op::kStartVm, .idx = static_cast<std::uint32_t>(vm), .a = 0, .b = 0})) {
     vcpu::cancel_start(boot);
@@ -441,7 +541,7 @@ auto cpu_on(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noe
     return CpuOnResult::kInvalid;
   }
   const std::size_t vm = vm_of(slot);
-  if (reset_blocks_start(vm)) {
+  if (lifecycle_blocks_start(vm)) {
     return CpuOnResult::kDenied;
   }
   if (!vcpu::reserve_start(slot)) {
@@ -454,7 +554,7 @@ auto cpu_on(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noe
       return CpuOnResult::kInternalFailure;
     }
   }
-  if (reset_blocks_start(vm)) {
+  if (lifecycle_blocks_start(vm)) {
     vcpu::cancel_start(slot);
     return CpuOnResult::kDenied;
   }
@@ -470,23 +570,60 @@ auto cpu_on(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noe
 }
 
 void stop_vm(std::size_t vm, TrapContext* live) noexcept {
-  // Stop every live vCPU except the caller's own, then the local one
-  // last — stopping a resident vCPU schedules away through `live`, so
-  // nothing may follow it on this path.
+  if (vm >= guest_table().size() || !vcpu::vm_on(vm)) {
+    return;
+  }
+
+  std::uint64_t expected = kLifecycleInactive;
+  if (!g_lifecycle_token[vm].compare_exchange_strong(expected, kLifecycleReserved, std::memory_order_acq_rel)) {
+    return;
+  }
+  vcpu::begin_lifecycle_transition();
+
   const std::size_t self = vcpu::current_index();
-  for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
-    const std::size_t slot = slot_of(vm, v);
-    if (slot == self || !vcpu::vcpu_on(slot)) {
-      continue;
+  const std::size_t boot = slot_of(vm);
+  if (slot_cpu(boot) == cpu::id()) {
+    const BeginLifecycleResult result = begin_lifecycle_local(vm, LifecycleMode::kStop);
+    if (result.schedule_required) {
+      vcpu::schedule_after_retire(live);
     }
-    if (slot_cpu(slot) == cpu::id()) {
-      vcpu::stop_vcpu(slot, live);
-    } else {
-      (void)enqueue(slot_cpu(slot), {.op = Op::kStopVcpu, .idx = static_cast<std::uint32_t>(slot), .a = 0, .b = 0});
+    return;
+  }
+
+  if (!enqueue(slot_cpu(boot), {.op = Op::kBeginStop, .idx = static_cast<std::uint32_t>(vm), .a = 0, .b = 0}, true)) {
+    release_lifecycle(vm);
+    console::write("[smp] stop rejected: coordinator mailbox unavailable\n");
+    return;
+  }
+  if (self < kMaxVcpus && vm_of(self) == vm && vcpu::retire_vcpu(self)) {
+    vcpu::schedule_after_retire(live);
+  }
+}
+
+void cpu_off(std::size_t slot, TrapContext* live) noexcept {
+  if (!valid_slot(slot)) {
+    return;
+  }
+  const std::size_t vm         = vm_of(slot);
+  bool              other_live = false;
+  bool              retired    = false;
+  {
+    sync::Guard guard{g_power_lock[vm]};
+    for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
+      const std::size_t sibling = slot_of(vm, v);
+      if (sibling != slot && vcpu::vcpu_on(sibling)) {
+        other_live = true;
+        break;
+      }
+    }
+    if (other_live) {
+      retired = vcpu::retire_vcpu(slot);
     }
   }
-  if (vm_of(self) == vm) {
-    vcpu::stop_vcpu(self, live);
+  if (!other_live) {
+    stop_vm(vm, live);
+  } else if (retired) {
+    vcpu::schedule_after_retire(live);
   }
 }
 
@@ -495,15 +632,15 @@ auto reset_vm(std::size_t vm, TrapContext* live, bool from_irq) noexcept -> bool
     return false;
   }
 
-  std::uint64_t expected = kResetInactive;
-  if (!g_reset_token[vm].compare_exchange_strong(expected, kResetReserved, std::memory_order_acq_rel)) {
+  std::uint64_t expected = kLifecycleInactive;
+  if (!g_lifecycle_token[vm].compare_exchange_strong(expected, kLifecycleReserved, std::memory_order_acq_rel)) {
     return false; // a reset for this VM is already in flight
   }
   vcpu::begin_lifecycle_transition();
 
   const std::size_t boot = slot_of(vm);
   if (slot_cpu(boot) == cpu::id()) {
-    const BeginResetResult result = begin_reset_local(vm);
+    const BeginLifecycleResult result = begin_lifecycle_local(vm, LifecycleMode::kReset);
     if (result.schedule_required) {
       if (from_irq) {
         core_gic::defer_epilogue(&vcpu::schedule_after_retire);
@@ -515,7 +652,7 @@ auto reset_vm(std::size_t vm, TrapContext* live, bool from_irq) noexcept -> bool
   }
 
   if (!enqueue(slot_cpu(boot), {.op = Op::kBeginReset, .idx = static_cast<std::uint32_t>(vm), .a = 0, .b = 0}, true)) {
-    release_reset(vm);
+    release_lifecycle(vm);
     console::write("[smp] reset rejected: coordinator mailbox unavailable\n");
     return false;
   }
@@ -556,8 +693,8 @@ void smp_component::handle_guest_fault(GuestFaultCall* call) noexcept {
   console::write_dec64(vcpu_of(slot));
   console::write(" — resetting\n");
   if (!smp::reset_vm(vm, call->ctx)) {
-    console::write("[smp] guest fault recovery unavailable — stopping vCPU\n");
-    vcpu::exit_current(call->ctx);
+    console::write("[smp] guest fault recovery unavailable — stopping VM\n");
+    smp::stop_vm(vm, call->ctx);
   }
 }
 
@@ -602,7 +739,7 @@ void smp_component::handle_irq(IrqCall* call) noexcept {
     const smp::Request& r = batch[i];
     switch (r.op) {
     case smp::Op::kStartVm:
-      if (smp::reset_blocks_start(r.idx) || !vcpu::start_vm(r.idx)) {
+      if (smp::lifecycle_blocks_start(r.idx) || !smp::start_vm_local(r.idx)) {
         vcpu::cancel_start(slot_of(r.idx));
       }
       break;
@@ -610,7 +747,7 @@ void smp_component::handle_irq(IrqCall* call) noexcept {
       (void)vcpu::post_virq(r.idx, static_cast<std::uint32_t>(r.a));
       break;
     case smp::Op::kCpuOn:
-      if (smp::reset_blocks_start(vm_of(r.idx)) || !vcpu::start_vcpu(r.idx, r.a, r.b)) {
+      if (smp::lifecycle_blocks_start(vm_of(r.idx)) || !vcpu::start_vcpu(r.idx, r.a, r.b)) {
         vcpu::cancel_start(r.idx);
       }
       break;
@@ -619,15 +756,17 @@ void smp_component::handle_irq(IrqCall* call) noexcept {
         r.callback(r.idx, r.a, r.b, r.c);
       }
       break;
-    case smp::Op::kStopVcpu:
-      schedule_required = vcpu::retire_vcpu(r.idx) || schedule_required;
-      break;
     case smp::Op::kBeginReset:
-      schedule_required = smp::begin_reset_local(r.idx).schedule_required || schedule_required;
+      schedule_required =
+          smp::begin_lifecycle_local(r.idx, smp::LifecycleMode::kReset).schedule_required || schedule_required;
+      break;
+    case smp::Op::kBeginStop:
+      schedule_required =
+          smp::begin_lifecycle_local(r.idx, smp::LifecycleMode::kStop).schedule_required || schedule_required;
       break;
     case smp::Op::kQuiesceVcpu: {
       const std::size_t vm = vm_of(r.idx);
-      if (smp::reset_token(vm) != r.a) {
+      if (smp::lifecycle_token(vm) != r.a) {
         break; // stale command from a completed or superseded reset
       }
       schedule_required       = vcpu::retire_vcpu(r.idx) || schedule_required;

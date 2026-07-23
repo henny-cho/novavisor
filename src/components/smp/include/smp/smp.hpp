@@ -25,6 +25,7 @@
 #include "core_mmu/core_mmu.hpp"
 #include "core_timer/core_timer.hpp"
 #include "core_vcpu/core_vcpu.hpp"
+#include "dma_device/dma_device.hpp"
 #include "smmu/smmu.hpp"
 #include "soft_timer/soft_timer.hpp"
 #include "trap_handler/guest_fault.hpp"
@@ -74,12 +75,12 @@ void start_secondaries() noexcept;
 // idempotent and state-derived.
 void reevaluate_virq(std::size_t slot) noexcept;
 
-// VM-wide power operations, fanned out per vCPU. stop_vm retires every
-// live vCPU (the caller's own last — that one schedules away through
-// `live` and the call does not return to guest code). reset_vm routes
-// through the boot owner, waits for current-epoch quiesce ACKs, then
-// restores memory and reseeds vcpu 0.
+// VM-wide power operations route through the boot owner and share one
+// serialized quiesce protocol. DMA is drained and detached before a
+// reset restores memory; the new generation is attached before vcpu 0
+// becomes runnable.
 void               stop_vm(std::size_t vm, TrapContext* live) noexcept;
+void               cpu_off(std::size_t slot, TrapContext* live) noexcept;
 [[nodiscard]] auto reset_vm(std::size_t vm, TrapContext* live, bool from_irq = false) noexcept -> bool;
 
 } // namespace nova::smp

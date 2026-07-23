@@ -73,6 +73,8 @@ TEST(SmmuDomain, TracksAttachDetachAndQuarantine) {
   EXPECT_EQ(binding.state, DomainState::kDetached);
 
   EXPECT_TRUE(mark_attached(binding, 1));
+  EXPECT_TRUE(attachment_matches(binding, 1));
+  EXPECT_FALSE(attachment_matches(binding, 2));
   EXPECT_FALSE(mark_attached(binding, 1));
   EXPECT_TRUE(mark_detached(binding));
   EXPECT_TRUE(mark_quarantined(binding));

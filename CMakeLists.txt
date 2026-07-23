@@ -130,6 +130,7 @@ if(CMAKE_CROSSCOMPILING)
         psci
         watchdog
         smmu
+        dma_device
         dma_probe
         smp
         vuart
