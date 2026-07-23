@@ -25,12 +25,15 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 import time
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -48,8 +51,7 @@ def _require_yaml():
 
 
 def _require_pexpect():
-    # pexpect is only needed for run/verify/verify-all. Keep `list` usable
-    # on minimal systems.
+    # Keep discovery usable on minimal systems without process-control deps.
     try:
         import pexpect  # noqa: F401
         return pexpect
@@ -69,6 +71,20 @@ QEMU = "qemu-system-aarch64"
 GUEST_LINK_BASE = 0x50000000
 
 
+@dataclass(frozen=True)
+class RestoreMetric:
+    vm: int
+    written_bytes: int
+    examined_bytes: int
+    elapsed_ms: int
+
+
+RESTORE_METRIC_PATTERN = re.compile(
+    r"\[core_vcpu\] VM (?P<vm>\d+) restored "
+    r"(?P<written>\d+)/(?P<examined>\d+) bytes in (?P<elapsed>\d+) ms"
+)
+
+
 class OutputCapture:
     """Keep a bounded diagnostic tail and stream only outside CI."""
 
@@ -76,10 +92,13 @@ class OutputCapture:
         self.stream = stream
         self.max_bytes = max_bytes
         self.tail = ""
+        self.restore_metrics: list[RestoreMetric] = []
+        self._line_buffer = ""
 
     def write(self, data: str) -> None:
         if self.stream is not None:
             self.stream.write(data)
+        self._consume_metrics(data)
         encoded = (self.tail + data).encode("utf-8")
         if len(encoded) > self.max_bytes:
             encoded = encoded[-self.max_bytes:]
@@ -90,6 +109,32 @@ class OutputCapture:
         if self.stream is not None:
             self.stream.flush()
 
+    def _consume_metrics(self, data: str) -> None:
+        lines = (self._line_buffer + data).splitlines(keepends=True)
+        self._line_buffer = ""
+        for line in lines:
+            if line.endswith(("\n", "\r")):
+                self._parse_metric(line)
+            else:
+                self._line_buffer = line[-512:]
+
+    def _parse_metric(self, line: str) -> None:
+        match = RESTORE_METRIC_PATTERN.search(line)
+        if match is None:
+            return
+        self.restore_metrics.append(RestoreMetric(
+            vm=int(match.group("vm")),
+            written_bytes=int(match.group("written")),
+            examined_bytes=int(match.group("examined")),
+            elapsed_ms=int(match.group("elapsed")),
+        ))
+        self.restore_metrics = self.restore_metrics[-32:]
+
+    def finish_metrics(self) -> None:
+        if self._line_buffer:
+            self._parse_metric(self._line_buffer)
+            self._line_buffer = ""
+
 
 def print_failure_tail(capture: OutputCapture) -> None:
     if capture.stream is None and capture.tail:
@@ -98,6 +143,7 @@ def print_failure_tail(capture: OutputCapture) -> None:
 
 
 def preserve_failure_tail(capture: OutputCapture, path: Path | None) -> None:
+    capture.finish_metrics()
     print_failure_tail(capture)
     if path is None:
         return
@@ -254,8 +300,10 @@ def build_qemu_cmd(elf: Path, demo_name: str, demo_build: Path, manifest: dict) 
 
 @dataclass(frozen=True)
 class PatternMatch:
+    index: int
     pattern: str
     elapsed_seconds: float
+    waited_seconds: float
     remaining_seconds: float
 
 
@@ -264,10 +312,25 @@ class VerificationResult:
     failure: str | None = None
     pattern: str | None = None
     wait_seconds: float = 0.0
+    elapsed_seconds: float = 0.0
+    remaining_seconds: float = 0.0
+    error: str = ""
+    traceback_text: str = ""
+    termination_attempted: bool = True
+    termination_succeeded: bool = True
+    termination_error: str = ""
+    matches: tuple[PatternMatch, ...] = ()
 
     @property
     def ok(self) -> bool:
-        return self.failure is None
+        return self.failure is None and self.termination_succeeded
+
+
+class VerificationInterrupted(BaseException):
+    def __init__(self, result: VerificationResult, cause: KeyboardInterrupt):
+        super().__init__(str(cause))
+        self.result = result
+        self.cause = cause
 
 
 @dataclass(frozen=True)
@@ -291,6 +354,72 @@ class PreparedVerification:
     expectations: tuple[dict, ...]
 
 
+def diagnostics_path_for_tail(tail_path: Path) -> Path:
+    suffix = ".qemu-tail.log"
+    name = tail_path.name
+    if name.endswith(suffix):
+        name = name[:-len(suffix)]
+    return tail_path.with_name(f"{name}.diagnostics.json")
+
+
+def initialize_failure_artifacts(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    for pattern in ("*.qemu-tail.log", "*.diagnostics.json"):
+        for stale in path.glob(pattern):
+            if stale.is_file():
+                stale.unlink()
+
+
+def preserve_failure_diagnostics(
+    capture: OutputCapture,
+    tail_path: Path | None,
+    prepared: PreparedVerification,
+    result: VerificationResult,
+) -> None:
+    preserve_failure_tail(capture, tail_path)
+    if tail_path is None:
+        return
+
+    diagnostics = {
+        "label": prepared.label,
+        "failure": {
+            "kind": result.failure,
+            "pattern": result.pattern,
+            "wait_seconds": result.wait_seconds,
+            "elapsed_seconds": result.elapsed_seconds,
+            "remaining_seconds": result.remaining_seconds,
+            "error": result.error,
+            "traceback": result.traceback_text,
+        },
+        "termination": {
+            "attempted": result.termination_attempted,
+            "succeeded": result.termination_succeeded,
+            "error": result.termination_error,
+        },
+        "matches": [
+            {
+                "index": match.index,
+                "pattern": match.pattern,
+                "elapsed_seconds": match.elapsed_seconds,
+                "waited_seconds": match.waited_seconds,
+                "remaining_seconds": match.remaining_seconds,
+            }
+            for match in result.matches
+        ],
+        "restore_metrics": [
+            {
+                "vm": metric.vm,
+                "written_bytes": metric.written_bytes,
+                "examined_bytes": metric.examined_bytes,
+                "elapsed_ms": metric.elapsed_ms,
+            }
+            for metric in capture.restore_metrics
+        ],
+    }
+    path = diagnostics_path_for_tail(tail_path)
+    path.write_text(f"{json.dumps(diagnostics, indent=2)}\n", encoding="utf-8")
+
+
 def verify_child_output(
     child,
     expectations: list[dict],
@@ -302,42 +431,155 @@ def verify_child_output(
     on_match: Callable[[PatternMatch], None] | None = None,
 ) -> VerificationResult:
     """Verify one spawned process and terminate it on every exit path."""
+    started_at = 0.0
+    deadline = 0.0
+    matches: list[PatternMatch] = []
+    result = VerificationResult()
+    interrupted: KeyboardInterrupt | None = None
+
     try:
         started_at = clock()
         deadline = started_at + scenario_timeout
 
-        for exp in expectations:
+        for index, exp in enumerate(expectations, start=1):
             pattern = exp["pattern"]
             within = float(exp.get("within_seconds", scenario_timeout))
-            remaining = max(0.0, deadline - clock())
+            wait_started = clock()
+            remaining = max(0.0, deadline - wait_started)
             if remaining == 0.0:
-                return VerificationResult("timeout", pattern, 0.0)
+                result = VerificationResult(
+                    failure="timeout",
+                    pattern=pattern,
+                    elapsed_seconds=max(0.0, wait_started - started_at),
+                    matches=tuple(matches),
+                )
+                break
             wait = min(within, remaining)
 
             try:
                 child.expect(pattern, timeout=wait)
             except timeout_error:
-                return VerificationResult("timeout", pattern, wait)
+                failed_at = clock()
+                result = VerificationResult(
+                    failure="timeout",
+                    pattern=pattern,
+                    wait_seconds=wait,
+                    elapsed_seconds=max(0.0, failed_at - started_at),
+                    remaining_seconds=max(0.0, deadline - failed_at),
+                    matches=tuple(matches),
+                )
+                break
             except eof_error:
-                return VerificationResult("eof", pattern, wait)
+                failed_at = clock()
+                result = VerificationResult(
+                    failure="eof",
+                    pattern=pattern,
+                    wait_seconds=wait,
+                    elapsed_seconds=max(0.0, failed_at - started_at),
+                    remaining_seconds=max(0.0, deadline - failed_at),
+                    matches=tuple(matches),
+                )
+                break
 
             matched_at = clock()
-            if on_match is not None:
-                on_match(PatternMatch(
+            if matched_at > wait_started + wait:
+                result = VerificationResult(
+                    failure="timeout",
                     pattern=pattern,
+                    wait_seconds=wait,
                     elapsed_seconds=max(0.0, matched_at - started_at),
                     remaining_seconds=max(0.0, deadline - matched_at),
-                ))
+                    matches=tuple(matches),
+                )
+                break
+            matched = PatternMatch(
+                index=index,
+                pattern=pattern,
+                elapsed_seconds=max(0.0, matched_at - started_at),
+                waited_seconds=max(0.0, matched_at - wait_started),
+                remaining_seconds=max(0.0, deadline - matched_at),
+            )
+            matches.append(matched)
+            if on_match is not None:
+                on_match(matched)
 
             # Input is causally tied to the matching prompt. Never send it
             # before the corresponding output has been observed.
             send = exp.get("send")
             if send is not None:
                 child.send(send)
-
-        return VerificationResult()
+        else:
+            finished_at = clock()
+            result = VerificationResult(
+                elapsed_seconds=max(0.0, finished_at - started_at),
+                remaining_seconds=max(0.0, deadline - finished_at),
+                matches=tuple(matches),
+            )
+    except KeyboardInterrupt as exc:
+        interrupted = exc
+        try:
+            failed_at = clock()
+        except (Exception, SystemExit):
+            failed_at = started_at
+        result = VerificationResult(
+            failure="interrupted",
+            elapsed_seconds=max(0.0, failed_at - started_at),
+            remaining_seconds=max(0.0, deadline - failed_at),
+            error="KeyboardInterrupt",
+            traceback_text="".join(traceback.format_exception(
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )),
+            matches=tuple(matches),
+        )
+    except (Exception, SystemExit) as exc:
+        try:
+            failed_at = clock()
+        except (Exception, SystemExit):
+            failed_at = started_at
+        result = VerificationResult(
+            failure="exception",
+            elapsed_seconds=max(0.0, failed_at - started_at),
+            remaining_seconds=max(0.0, deadline - failed_at),
+            error=f"{type(exc).__name__}: {exc}",
+            traceback_text="".join(traceback.format_exception(
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )),
+            matches=tuple(matches),
+        )
     finally:
-        child.terminate(force=True)
+        termination_succeeded = False
+        termination_error = ""
+        try:
+            termination_succeeded = bool(child.terminate(force=True))
+            if not termination_succeeded:
+                termination_error = "terminate(force=True) returned false"
+        except KeyboardInterrupt as exc:
+            termination_error = "KeyboardInterrupt"
+            if interrupted is None:
+                interrupted = exc
+        except (Exception, SystemExit) as exc:
+            termination_error = f"{type(exc).__name__}: {exc}"
+
+    final_result = VerificationResult(
+        failure=result.failure,
+        pattern=result.pattern,
+        wait_seconds=result.wait_seconds,
+        elapsed_seconds=result.elapsed_seconds,
+        remaining_seconds=result.remaining_seconds,
+        error=result.error,
+        traceback_text=result.traceback_text,
+        termination_attempted=True,
+        termination_succeeded=termination_succeeded,
+        termination_error=termination_error,
+        matches=result.matches,
+    )
+    if interrupted is not None:
+        raise VerificationInterrupted(final_result, interrupted)
+    return final_result
 
 
 def run_repeated_verification(
@@ -425,6 +667,25 @@ def prepare_verification(
     )
 
 
+def report_verification_failure(result: VerificationResult) -> None:
+    if result.failure == "timeout":
+        print(f"\n[demo_runner] FAIL: timeout waiting for /{result.pattern}/ "
+              f"(wait limit {result.wait_seconds:.1f}s, elapsed {result.elapsed_seconds:.1f}s, "
+              f"remaining {result.remaining_seconds:.1f}s)", file=sys.stderr)
+    elif result.failure == "eof":
+        print(f"\n[demo_runner] FAIL: EOF before /{result.pattern}/ "
+              f"(elapsed {result.elapsed_seconds:.1f}s, "
+              f"remaining {result.remaining_seconds:.1f}s)", file=sys.stderr)
+    elif result.failure in ("exception", "interrupted"):
+        print(f"\n[demo_runner] FAIL: verifier exception: {result.error} "
+              f"(elapsed {result.elapsed_seconds:.1f}s, "
+              f"remaining {result.remaining_seconds:.1f}s)", file=sys.stderr)
+
+    if result.termination_attempted and not result.termination_succeeded:
+        print(f"\n[demo_runner] FAIL: QEMU cleanup: {result.termination_error}",
+              file=sys.stderr)
+
+
 def run_prepared_verification(
     prepared: PreparedVerification,
     failure_tail: Path | None = None,
@@ -434,18 +695,36 @@ def run_prepared_verification(
     print(f"[demo_runner] --- {prepared.label} (phase {prepared.phase}) timeout={timeout}s ---")
     print(f"[demo_runner] $ {' '.join(shlex.quote(c) for c in prepared.command)}")
 
-    child = pexpect.spawn(
-        prepared.command[0],
-        list(prepared.command[1:]),
-        timeout=timeout,
-        encoding="utf-8",
-    )
     capture = OutputCapture(None if os.environ.get("GITHUB_ACTIONS") == "true" else sys.stdout)
+    try:
+        child = pexpect.spawn(
+            prepared.command[0],
+            list(prepared.command[1:]),
+            timeout=timeout,
+            encoding="utf-8",
+        )
+    except (Exception, SystemExit) as exc:
+        result = VerificationResult(
+            failure="spawn",
+            error=f"{type(exc).__name__}: {exc}",
+            traceback_text="".join(traceback.format_exception(
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )),
+            termination_attempted=False,
+            termination_succeeded=False,
+            termination_error="not attempted: process was not started",
+        )
+        print(f"\n[demo_runner] FAIL: QEMU spawn: {result.error}", file=sys.stderr)
+        preserve_failure_diagnostics(capture, failure_tail, prepared, result)
+        return 1
     child.logfile_read = capture
 
     def report_match(match: PatternMatch) -> None:
-        if capture.stream is None:
-            print(f"[demo_runner] matched /{match.pattern}/")
+        print(f"[demo_runner] matched[{match.index}/{len(prepared.expectations)}] "
+              f"/{match.pattern}/ elapsed={match.elapsed_seconds:.1f}s "
+              f"wait={match.waited_seconds:.1f}s remaining={match.remaining_seconds:.1f}s")
 
     try:
         result = verify_child_output(
@@ -457,25 +736,24 @@ def run_prepared_verification(
             eof_error=pexpect.EOF,
             on_match=report_match,
         )
+    except VerificationInterrupted as interrupted:
+        report_verification_failure(interrupted.result)
+        preserve_failure_diagnostics(capture, failure_tail, prepared, interrupted.result)
+        raise interrupted.cause.with_traceback(interrupted.cause.__traceback__)
     except BaseException:
         preserve_failure_tail(capture, failure_tail)
         raise
 
-    if result.failure == "timeout":
-        print(f"\n[demo_runner] FAIL: timeout waiting for /{result.pattern}/ "
-              f"({result.wait_seconds:.1f}s; scenario limit {timeout}s)", file=sys.stderr)
-        preserve_failure_tail(capture, failure_tail)
-        return 1
-    if result.failure == "eof":
-        print(f"\n[demo_runner] FAIL: EOF before /{result.pattern}/", file=sys.stderr)
-        preserve_failure_tail(capture, failure_tail)
+    if not result.ok:
+        report_verification_failure(result)
+        preserve_failure_diagnostics(capture, failure_tail, prepared, result)
         return 1
 
     print(f"\n[demo_runner] PASS: {prepared.label}")
     return 0
 
 
-def verify(name: str) -> int:
+def verify(name: str, artifact_dir: Path | None = None) -> int:
     _, manifest = load_manifest(name)
     if not manifest.get("enabled", False):
         print(f"[demo_runner] SKIP {name} (manifest.enabled=false)")
@@ -485,15 +763,26 @@ def verify(name: str) -> int:
     # `variants:` list — one full run (build + QEMU + expect) each, with
     # the shared guests list. demo/11_configurable uses this to verify
     # the same guest under two configs.
-    for variant in manifest_variants(manifest):
-        rc = _verify_one(name, manifest, variant)
+    for index, variant in enumerate(manifest_variants(manifest), start=1):
+        failure_tail = None
+        if artifact_dir is not None:
+            failure_tail = artifact_dir / f"{name}-variant-{index:02d}.qemu-tail.log"
+        rc = _verify_one(name, manifest, variant, failure_tail)
         if rc != 0:
             return rc
     return 0
 
 
-def _verify_one(name: str, manifest: dict, variant: dict) -> int:
-    return run_prepared_verification(prepare_verification(name, manifest, variant))
+def _verify_one(
+    name: str,
+    manifest: dict,
+    variant: dict,
+    failure_tail: Path | None = None,
+) -> int:
+    return run_prepared_verification(
+        prepare_verification(name, manifest, variant),
+        failure_tail,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -576,7 +865,10 @@ def cmd_debug(args) -> int:
 
 
 def cmd_verify(args) -> int:
-    return verify(args.name)
+    artifact_dir = Path(args.artifacts) if args.artifacts else None
+    if artifact_dir is not None:
+        initialize_failure_artifacts(artifact_dir)
+    return verify(args.name, artifact_dir)
 
 
 def cmd_verify_repeat(args) -> int:
@@ -591,10 +883,7 @@ def cmd_verify_repeat(args) -> int:
 
     artifact_dir = Path(args.artifacts) if args.artifacts else None
     if artifact_dir is not None:
-        artifact_dir.mkdir(parents=True, exist_ok=True)
-        for stale_tail in artifact_dir.glob("attempt-*.qemu-tail.log"):
-            if stale_tail.is_file():
-                stale_tail.unlink()
+        initialize_failure_artifacts(artifact_dir)
 
     demo_build = build_demos()
     prepared_runs = []
@@ -643,12 +932,16 @@ def cmd_verify_repeat(args) -> int:
     return 0 if passed == len(attempts) else 1
 
 
-def cmd_verify_all(_args) -> int:
+def cmd_verify_all(args) -> int:
     demos = iter_demos()
     enabled = [(n, m) for n, m in demos if m.get("enabled", False)]
     if not enabled:
         print("[demo_runner] no enabled demos; nothing to verify.")
         return 0
+
+    artifact_dir = Path(args.artifacts) if args.artifacts else None
+    if artifact_dir is not None:
+        initialize_failure_artifacts(artifact_dir)
 
     # Build once up front so per-demo failures don't keep rebuilding.
     build_hypervisor()
@@ -656,7 +949,7 @@ def cmd_verify_all(_args) -> int:
 
     failures = []
     for name, _mf in enabled:
-        rc = verify(name)
+        rc = verify(name, artifact_dir)
         if rc != 0:
             failures.append(name)
     if failures:
@@ -678,6 +971,8 @@ def main() -> int:
     p_run.add_argument("name", **demo_arg)
     p_ver = sub.add_parser("verify", help="run a demo and check manifest.expect")
     p_ver.add_argument("name", **demo_arg)
+    p_ver.add_argument("--artifacts", metavar="DIR",
+                       help="write bounded diagnostics for a failed run")
     p_repeat = sub.add_parser("verify-repeat", help="repeat one demo and report its success rate")
     p_repeat.add_argument("name", **demo_arg)
     p_repeat.add_argument("--runs", type=int, required=True, choices=range(1, 101),
@@ -686,7 +981,9 @@ def main() -> int:
                           help="write per-attempt status and elapsed time")
     p_repeat.add_argument("--artifacts", metavar="DIR",
                           help="write one bounded QEMU tail per failed attempt")
-    sub.add_parser("verify-all", help="run all enabled demos")
+    p_all = sub.add_parser("verify-all", help="run all enabled demos")
+    p_all.add_argument("--artifacts", metavar="DIR",
+                       help="write bounded diagnostics for failed runs")
     p_dbg = sub.add_parser("debug", help="launch a demo with QEMU halted and GDB stub on :1234")
     p_dbg.add_argument("name", **demo_arg)
     args = p.parse_args()

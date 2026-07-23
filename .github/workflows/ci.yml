@@ -108,7 +108,7 @@ jobs:
       - name: Demo verification (enabled demos only)
         # Each completed phase flips its demo's `enabled` flag to true,
         # making this step the phase's acceptance gate.
-        run: scripts/task.sh demo verify-all
+        run: scripts/task.sh demo verify-all --artifacts build/demo-failures
 
       - name: Upload demo artifacts on failure
         if: failure()
@@ -116,8 +116,12 @@ jobs:
         with:
           name: demo-artifacts
           path: |
+            build/demo-failures/
             build/demo/**/*.bin
             build/demo/**/*.elf
+            build/aarch64-debug/novavisor.elf
+            build/aarch64-debug/active_config.yml
+            build/aarch64-debug/guest_dtb/*.dtb
           if-no-files-found: ignore
 
   # Aggregate gate: one stable status-check name for branch protection,
