@@ -64,7 +64,7 @@ void log_raz_wi(std::uint64_t off) noexcept {
 
 void init() noexcept {
   console::rx_irq_enable();
-  gic::enable_spi(kUartSpi, /*target_cpu=*/0); // one input consumer: the primary core
+  (void)gic::enable_spi(kUartSpi, /*target_cpu=*/0); // one input consumer: the primary core
   console::write("vuart: PL011 emulation active, host RX -> focus VM\n");
 }
 

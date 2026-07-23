@@ -129,6 +129,8 @@ if(CMAKE_CROSSCOMPILING)
         ivc
         psci
         watchdog
+        smmu
+        dma_probe
         smp
         vuart
     )
@@ -162,6 +164,9 @@ else()
     nova_add_host_test(fmt_test)        # nova/fmt.hpp integer formatters
     nova_add_host_test(spin_lock_test)     # nova/sync.hpp mutual exclusion
     nova_add_host_test(restore_model_test) # sparse pristine restore
+    nova_add_host_test(dma_policy_test)    # Stream ID ownership and DMA windows
+    nova_add_host_test(gic_spi_test)       # arbitrary physical SPI banks
+    nova_add_host_test(pci_test)           # requester IDs and ECAM layout
 
     # Component tests (src/components/<name>/test/).
     nova_add_component_test(core_mmu stage2_descriptor_test) # Stage 2 descriptor encoding
@@ -177,5 +182,14 @@ else()
     nova_add_component_test(ivc ring_test)                   # SPSC ring protocol (threads)
     nova_add_component_test(vuart vuart_model_test)          # PL011 register model
     nova_add_component_test(dtb_parser fdt_model_test)       # FDT walker + guest extraction
+    nova_add_component_test(smmu ste_model_test)             # Stage-2-only STE encoding
+    nova_add_component_test(smmu queue_model_test)           # CMDQ/EVTQ phase transitions
+    nova_add_component_test(smmu fault_model_test)           # SID/address fault records
+    nova_add_component_test(smmu runtime_model_test)         # runtime capabilities and layout
+    nova_add_component_test(smmu command_model_test)         # command entry encoding
+    nova_add_component_test(smmu domain_model_test)          # guest DMA context lifecycle
+    nova_add_component_test(smmu dma_table_model_test)       # DMA-only Stage-2 mappings
+    target_include_directories(dma_table_model_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/components/core_mmu/include)
 
 endif() # CMAKE_CROSSCOMPILING

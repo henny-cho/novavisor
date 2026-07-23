@@ -33,25 +33,35 @@
 #define NOVA_GICD_TYPER2 0x000C
 #define NOVA_GICD_PIDR2  0xFFE8
 
-/* Distributor SPI banks, word 1 (INTIDs 32..63). Word 0 is the
+/* Distributor banks. Word 0 covers private INTIDs and is the
  * redistributor's job under affinity routing. */
-#define NOVA_GICD_IGROUPR1   0x0084
-#define NOVA_GICD_ISENABLER1 0x0104
-#define NOVA_GICD_ICENABLER1 0x0184
-#define NOVA_GICD_ISPENDR1   0x0204
-#define NOVA_GICD_ICPENDR1   0x0284
-#define NOVA_GICD_ISACTIVER1 0x0304
-#define NOVA_GICD_ICACTIVER1 0x0384
+#define NOVA_GICD_IGROUPR    0x0080
+#define NOVA_GICD_ISENABLER  0x0100
+#define NOVA_GICD_ICENABLER  0x0180
+#define NOVA_GICD_ISPENDR    0x0200
+#define NOVA_GICD_ICPENDR    0x0280
+#define NOVA_GICD_ISACTIVER  0x0300
+#define NOVA_GICD_ICACTIVER  0x0380
+#define NOVA_GICD_IGRPMODR   0x0D00
+#define NOVA_GICD_IGROUPR1   (NOVA_GICD_IGROUPR + 4)
+#define NOVA_GICD_ISENABLER1 (NOVA_GICD_ISENABLER + 4)
+#define NOVA_GICD_ICENABLER1 (NOVA_GICD_ICENABLER + 4)
+#define NOVA_GICD_ISPENDR1   (NOVA_GICD_ISPENDR + 4)
+#define NOVA_GICD_ICPENDR1   (NOVA_GICD_ICPENDR + 4)
+#define NOVA_GICD_ISACTIVER1 (NOVA_GICD_ISACTIVER + 4)
+#define NOVA_GICD_ICACTIVER1 (NOVA_GICD_ICACTIVER + 4)
 #define NOVA_GICD_IPRIORITYR 0x0400 /* byte-indexed by INTID */
-#define NOVA_GICD_ICFGR2     0x0C08
-#define NOVA_GICD_ICFGR3     0x0C0C
-#define NOVA_GICD_IGRPMODR1  0x0D04
+#define NOVA_GICD_ICFGR      0x0C00
+#define NOVA_GICD_ICFGR2     (NOVA_GICD_ICFGR + 8)
+#define NOVA_GICD_ICFGR3     (NOVA_GICD_ICFGR + 12)
+#define NOVA_GICD_IGRPMODR1  (NOVA_GICD_IGRPMODR + 4)
 #define NOVA_GICD_IROUTER    0x6000 /* 64-bit, +8 per INTID */
 
 /* GICD_CTLR bits (affinity-routing view). */
 #define NOVA_GICD_CTLR_ENABLE_GRP1 (1U << 1)
 #define NOVA_GICD_CTLR_ARE         (1U << 4)
 #define NOVA_GICD_CTLR_DS          (1U << 6)
+#define NOVA_GICD_CTLR_RWP         (1U << 31)
 
 /* Redistributor RD_base frame (GICR_BASE + offset). */
 #define NOVA_GICR_CTLR     0x0000

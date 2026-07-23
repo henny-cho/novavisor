@@ -32,6 +32,8 @@ guests:
 # whose echo+exit precedes the focus switch (Ctrl-T = \x14) — the
 # cycle skips retired VMs, landing on vm2 — and "pong" echoes there.
 expect:
+  - pattern: "\\[smmu\\] stage-2 isolation active"
+    within_seconds: 10
   - pattern: "core 1 online"
     within_seconds: 10
   - pattern: "\\[vm0\\] vuart up"

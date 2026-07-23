@@ -11,14 +11,14 @@
 #include "nova/fmt.hpp"
 #include "nova/sync.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
 namespace nova::console {
 
-// The UART is one shared FIFO — serialize each write across cores.
-// Hypervisor lines assembled from several write calls can still
-// interleave between calls; line-level ownership is console_mux's job.
+// The UART is one shared FIFO. Use write_parts for atomic multi-fragment lines.
 inline sync::SpinLock g_lock;
 
 inline void write(std::string_view sv) noexcept {
@@ -30,6 +30,15 @@ inline void write(std::string_view sv) noexcept {
 inline void write(const char* str) noexcept {
   sync::Guard guard{g_lock};
   board::qemu_virt::uart_puts(str);
+}
+
+// Emit one logical line from preformatted fragments under one lock.
+template <std::size_t N>
+inline void write_parts(const std::array<std::string_view, N>& parts) noexcept {
+  sync::Guard guard{g_lock};
+  for (const std::string_view part : parts) {
+    board::qemu_virt::uart_write(part);
+  }
 }
 
 // 16 zero-padded lowercase hex digits, no "0x" prefix.

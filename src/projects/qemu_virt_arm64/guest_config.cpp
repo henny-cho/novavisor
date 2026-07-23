@@ -12,6 +12,7 @@
 
 #include "dtb_parser/fdt_model.hpp"
 #include "hal/console.hpp"
+#include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova_panic/nova_panic.hpp"
 
@@ -102,6 +103,13 @@ void init_guest_table() noexcept {
 
 auto guest_table() noexcept -> std::span<const GuestDescriptor> {
   return {g_table.data(), g_count};
+}
+
+auto dma::assignment_table() noexcept -> std::span<const dma::Assignment> {
+  static constexpr std::array assignments{
+      dma::Assignment{.stream_id = 0x10, .vm = 0},
+  };
+  return assignments;
 }
 
 } // namespace nova

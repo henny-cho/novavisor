@@ -29,6 +29,7 @@
 #include "hal/timer.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/hvc_abi.h"
+#include "nova/fmt.hpp"
 #include "nova_panic/nova_panic.hpp"
 #include "soft_timer/soft_timer.hpp"
 #include "vgic/vgic.hpp"
@@ -39,6 +40,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 namespace nova {
 
@@ -575,15 +577,15 @@ auto reset_quiesced_vm(std::size_t vm) noexcept -> bool {
   const std::uint64_t restore_start = hyp_timer::now();
   const auto          restored      = mmu::reload_guest_image(vm);
   const std::uint64_t restore_ms    = (hyp_timer::now() - restore_start) * 1000U / hyp_timer::freq();
-  console::write("[core_vcpu] VM ");
-  console::write_dec64(vm);
-  console::write(" restored ");
-  console::write_dec64(restored.written_bytes);
-  console::write("/");
-  console::write_dec64(restored.examined_bytes);
-  console::write(" bytes in ");
-  console::write_dec64(restore_ms);
-  console::write(" ms\n");
+  fmt::DecBuf         vm_text{};
+  fmt::DecBuf         written_text{};
+  fmt::DecBuf         examined_text{};
+  fmt::DecBuf         elapsed_text{};
+  using namespace std::string_view_literals;
+  console::write_parts(std::array{"[core_vcpu] VM "sv, fmt::to_dec64(vm, vm_text), " restored "sv,
+                                  fmt::to_dec64(restored.written_bytes, written_text), "/"sv,
+                                  fmt::to_dec64(restored.examined_bytes, examined_text), " bytes in "sv,
+                                  fmt::to_dec64(restore_ms, elapsed_text), " ms\n"sv});
   vgic::vm_reset(vm); // SPI banks are VM-global — per-vCPU cpu_reset misses them
   publish_cntvoff(vm, hyp_timer::now());
   seed_boot(slot);
