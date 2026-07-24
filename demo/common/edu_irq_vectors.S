@@ -1,3 +1,4 @@
+// Shared EL1 vector table for EDU interrupt demos.
 .macro VEC_HANG
     .align 7
 1:  wfe
