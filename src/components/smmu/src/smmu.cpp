@@ -56,11 +56,6 @@ struct FaultBatch {
   std::size_t                            processed = 0;
 };
 
-struct FaultNoticeBatch {
-  std::array<FaultNotice, kEventCount> notices{};
-  std::size_t                          count = 0;
-};
-
 alignas(kStreamTableAlign) std::array<StreamTableEntry, kStreamCount> g_stream_table{};
 alignas(kCommandQueueAlign) std::array<CommandEntry, kCommandCount> g_command_queue{};
 alignas(kEventQueueAlign) std::array<EventRecord, kEventCount> g_event_queue{};
@@ -357,22 +352,11 @@ void log_fault(const DecodedEvent& event) noexcept {
   return batch;
 }
 
-[[nodiscard]] auto quarantine_faults(const FaultBatch& batch) noexcept -> FaultNoticeBatch {
-  FaultNoticeBatch notices{};
-  for (std::size_t i = 0; i < batch.count; ++i) {
-    const FaultNotice notice = quarantine_fault_stream(batch.stream_ids[i]);
-    if (!notice.valid()) {
-      continue;
-    }
-    notices.notices[notices.count++] = notice;
-  }
-  return notices;
-}
-
 void dispatch_faults(const FaultBatch& batch) noexcept {
   // Snapshot and quarantine every affected domain before recovery can
   // reattach a stream at a newer generation.
-  const FaultNoticeBatch notices = quarantine_faults(batch);
+  const auto notices = collect_fault_notices<kEventCount>(
+      std::span<const std::uint32_t>{batch.stream_ids.data(), batch.count}, quarantine_fault_stream);
   for (std::size_t i = 0; i < notices.count; ++i) {
     DmaFaultCall call{.notice = notices.notices[i]};
     cib::service<DmaFaultService>(&call);
