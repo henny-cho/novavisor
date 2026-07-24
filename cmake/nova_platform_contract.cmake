@@ -44,6 +44,25 @@ function(nova_validate_platform_manifest)
         message(FATAL_ERROR "Project '${NOVA_PROJECT}' selected no components")
     endif()
 
+    if(NOVA_BOARD_HARDWARE)
+        foreach(variable IN ITEMS
+                NOVA_BOARD_FIRMWARE_CHAIN
+                NOVA_BOARD_BL33_BASE
+                NOVA_BOARD_SERIAL_AUTOMATION
+                NOVA_BOARD_POWER_AUTOMATION)
+            if(NOT DEFINED ${variable} OR "${${variable}}" STREQUAL "")
+                message(FATAL_ERROR "Hardware board '${NOVA_BOARD}' requires ${variable}")
+            endif()
+        endforeach()
+        file(STRINGS "${NOVA_BOARD_INCLUDE_DIR}/board_layout.h" ram_base_line
+            REGEX "^#define[ \t]+NOVA_BOARD_RAM_BASE[ \t]+")
+        if(NOT ram_base_line MATCHES
+           "^#define[ \t]+NOVA_BOARD_RAM_BASE[ \t]+${NOVA_BOARD_BL33_BASE}([ \t]|$)")
+            message(FATAL_ERROR
+                "Board '${NOVA_BOARD}' BL33 base must match NOVA_BOARD_RAM_BASE")
+        endif()
+    endif()
+
     set(known_capabilities gicv3 smmuv3 dma)
     foreach(capability IN LISTS NOVA_BOARD_CAPABILITIES NOVA_PROJECT_CAPABILITIES)
         if(NOT capability IN_LIST known_capabilities)

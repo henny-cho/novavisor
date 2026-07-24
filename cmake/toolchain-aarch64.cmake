@@ -14,6 +14,8 @@ find_program(CMAKE_CXX_COMPILER aarch64-none-elf-g++ HINTS "${TOOLCHAIN_BIN_DIR}
 find_program(CMAKE_ASM_COMPILER aarch64-none-elf-gcc HINTS "${TOOLCHAIN_BIN_DIR}" REQUIRED)
 find_program(CMAKE_OBJCOPY aarch64-none-elf-objcopy HINTS "${TOOLCHAIN_BIN_DIR}" REQUIRED)
 find_program(CMAKE_OBJDUMP aarch64-none-elf-objdump HINTS "${TOOLCHAIN_BIN_DIR}" REQUIRED)
+find_program(CMAKE_READELF aarch64-none-elf-readelf HINTS "${TOOLCHAIN_BIN_DIR}" REQUIRED)
+find_program(CMAKE_NM aarch64-none-elf-nm HINTS "${TOOLCHAIN_BIN_DIR}" REQUIRED)
 
 # Bare-metal codegen flags common to C/C++/ASM.
 # Optimization level and -g are deliberately omitted: CMake's

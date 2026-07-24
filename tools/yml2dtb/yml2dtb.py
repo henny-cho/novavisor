@@ -62,15 +62,16 @@ def read_string_define(path: Path, name: str) -> str:
 def read_layout(path: Path, board_layout: Path) -> dict[str, int | str]:
     values = read_defines(path, [
         "NOVA_GUEST_IPA_BASE", "NOVA_GUEST_IPA_SIZE", "NOVA_GUEST_PA_ALIGN",
-        "NOVA_IVC_SHM_IPA", "NOVA_IVC_SHM_PA", "NOVA_IVC_SHM_SIZE",
-        "NOVA_GUEST_PRISTINE_PA", "NOVA_GUEST_DTB_SIZE",
+        "NOVA_IVC_SHM_IPA", "NOVA_IVC_SHM_SIZE", "NOVA_GUEST_DTB_SIZE",
         "NOVA_VUART_IPA_BASE", "NOVA_VUART_IPA_SIZE", "NOVA_VUART_SPI",
         "NOVA_GICD_IPA_BASE", "NOVA_GICR_IPA_BASE",
     ])
     values |= read_defines(GIC_REGS, ["NOVA_GICD_FRAME_SIZE", "NOVA_GICR_FRAME_SIZE"])
     values |= read_defines(board_layout, [
         "NOVA_BOARD_SMP_CPUS", "NOVA_BOARD_RAM_BASE", "NOVA_BOARD_RAM_SIZE",
-        "NOVA_BOARD_PHYS_RAM_SIZE",
+        "NOVA_BOARD_PHYS_RAM_BASE", "NOVA_BOARD_PHYS_RAM_SIZE",
+        "NOVA_BOARD_GUEST_PA_BASE", "NOVA_BOARD_IVC_SHM_PA",
+        "NOVA_BOARD_PRISTINE_PA",
         "NOVA_BOARD_UART0_BASE", "NOVA_BOARD_UART0_INTID",
         "NOVA_BOARD_GICD_BASE", "NOVA_BOARD_GICR_BASE",
         "NOVA_BOARD_SMMU_BASE", "NOVA_BOARD_SMMU_SIZE",
@@ -398,7 +399,7 @@ def load_config(path: Path, layout: dict[str, int], inventory: dict) -> tuple[li
     # the same cursor rule guest_config.cpp applies at boot. The whole
     # packed region must stay below the IVC page.
     align = layout["NOVA_GUEST_PA_ALIGN"]
-    load_pa = layout["NOVA_GUEST_IPA_BASE"]
+    load_pa = layout["NOVA_BOARD_GUEST_PA_BASE"]
     parsed = []
     for i, g in enumerate(guests):
         name = g.get("name", f"vm{i}")
@@ -423,27 +424,33 @@ def load_config(path: Path, layout: dict[str, int], inventory: dict) -> tuple[li
         if size < layout["NOVA_GUEST_IPA_SIZE"] or size % MIB:
             sys.exit(f"yml2dtb: {name}: memory_size {size:#x} must be a MiB "
                      f"multiple >= {layout['NOVA_GUEST_IPA_SIZE']:#x} (linker window)")
-        if load_pa + size > layout["NOVA_IVC_SHM_PA"]:
+        if load_pa + size > layout["NOVA_BOARD_IVC_SHM_PA"]:
             sys.exit(f"yml2dtb: {name}: window {load_pa:#x}+{size:#x} overlaps "
-                     f"the IVC page at {layout['NOVA_IVC_SHM_PA']:#x}")
+                     f"the IVC page at {layout['NOVA_BOARD_IVC_SHM_PA']:#x}")
         parsed.append({"name": name, "memory_size": size, "vcpus": vcpus,
                        "uart": uart, "bootargs": bootargs, "cores": cores,
                        "autostart": autostart, "load_pa": load_pa,
                        "entry": layout["NOVA_GUEST_IPA_BASE"], "devices": []})
         load_pa = (load_pa + size + align - 1) & ~(align - 1)
 
-    pristine_end = layout["NOVA_GUEST_PRISTINE_PA"] + sum(g["memory_size"] for g in parsed)
-    ram_end = layout["NOVA_BOARD_RAM_BASE"] + layout["NOVA_BOARD_PHYS_RAM_SIZE"]
-    if pristine_end > ram_end:
-        sys.exit(f"yml2dtb: pristine copies end at {pristine_end:#x}, past RAM end {ram_end:#x}")
-
+    pristine_size = sum(guest["memory_size"] for guest in parsed)
     physical_ranges = [
+        ("EL2 RAM", layout["NOVA_BOARD_RAM_BASE"], layout["NOVA_BOARD_RAM_SIZE"]),
+    ] + [
         (guest["name"], guest["load_pa"], guest["memory_size"]) for guest in parsed
     ] + [
-        ("IVC", layout["NOVA_IVC_SHM_PA"], layout["NOVA_IVC_SHM_SIZE"]),
-        ("pristine", layout["NOVA_GUEST_PRISTINE_PA"],
-         sum(guest["memory_size"] for guest in parsed)),
+        ("IVC", layout["NOVA_BOARD_IVC_SHM_PA"], layout["NOVA_IVC_SHM_SIZE"]),
+        ("pristine", layout["NOVA_BOARD_PRISTINE_PA"], pristine_size),
     ]
+    ram_base = layout["NOVA_BOARD_PHYS_RAM_BASE"]
+    ram_end = ram_base + layout["NOVA_BOARD_PHYS_RAM_SIZE"]
+    for name, base, size in physical_ranges:
+        if not range_valid(base, size) or base < ram_base or base + size > ram_end:
+            config_error(path, f"{name} physical range lies outside board RAM")
+    for index, (name, base, size) in enumerate(physical_ranges):
+        for other_name, other_base, other_size in physical_ranges[:index]:
+            if ranges_overlap(base, size, other_base, other_size):
+                config_error(path, f"{name} physical range overlaps {other_name}")
     for device in inventory["devices"]:
         for name, base, size in physical_ranges:
             if ranges_overlap(device["mmio_base"], device["mmio_size"], base, size):

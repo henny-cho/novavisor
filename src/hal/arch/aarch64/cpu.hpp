@@ -4,17 +4,16 @@
 //
 // Per-core identity and the SMC conduit — pure architecture.
 
-#include <cstddef>
 #include <cstdint>
 
 namespace nova::arch {
 
-// This core's index. Aff0 of MPIDR_EL1 — flat cluster topology (one
-// affinity level), which holds for every supported board so far.
-[[nodiscard]] inline auto cpu_id() noexcept -> std::size_t {
+// Physical affinity in the MPIDR/IROUTER representation. Board code
+// maps this value to its dense per-CPU state index.
+[[nodiscard]] inline auto cpu_affinity() noexcept -> std::uint64_t {
   std::uint64_t mpidr = 0;
   __asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
-  return static_cast<std::size_t>(mpidr & 0xFFU);
+  return mpidr & 0x000000FF00FFFFFFULL;
 }
 
 // The MPIDR value the guest reads at EL1. Per-vCPU: written on every

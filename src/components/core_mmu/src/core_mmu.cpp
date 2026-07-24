@@ -12,6 +12,7 @@
 
 #include "core_mmu/stage2_builder.hpp"
 #include "core_mmu/stage2_descriptor.hpp"
+#include "hal/board/active/board.hpp"
 #include "hal/console.hpp"
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
@@ -102,7 +103,7 @@ auto pristine_slot(std::size_t index) noexcept -> void* {
   for (std::size_t i = 0; i < index; ++i) {
     offset += guests[i].ipa_size;
   }
-  return reinterpret_cast<void*>(NOVA_GUEST_PRISTINE_PA + offset);
+  return reinterpret_cast<void*>(board::active::kGuestPristinePa + offset);
 }
 
 [[noreturn]] void panic_stage2(std::size_t guest_index) noexcept {
@@ -168,7 +169,8 @@ void build_guest_tables(std::size_t index, const GuestDescriptor& guest) noexcep
   mmu::init_tables(tables);
 
   if (!mmu::map_range(tables, guest.ipa_base, guest.load_pa, guest.ipa_size, mmu::desc::kAttrNormalRwx) ||
-      !mmu::map_range(tables, NOVA_IVC_SHM_IPA, NOVA_IVC_SHM_PA, NOVA_IVC_SHM_SIZE, mmu::desc::kAttrNormalRwData)) {
+      !mmu::map_range(tables, NOVA_IVC_SHM_IPA, board::active::kIvcShmPa, NOVA_IVC_SHM_SIZE,
+                      mmu::desc::kAttrNormalRwData)) {
     panic_stage2(index);
   }
   for (const dma::DeviceRegion& region : dma::device_region_table()) {

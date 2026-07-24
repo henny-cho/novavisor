@@ -1,0 +1,5 @@
+guests:
+  - name: platform-smoke
+    memory_size: 0x00100000
+    vcpus: 1
+    uart: none

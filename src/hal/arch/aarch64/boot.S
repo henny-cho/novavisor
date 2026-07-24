@@ -25,12 +25,14 @@ _start:
     // If not EL2 (Hypervisor mode), hang
     b.ne .Lhang
 
-    // Park any core that is not the primary — cold-boot init (BSS zero,
-    // table builds) must run exactly once. Aff0 is the core index on
-    // this board.
+    // Park any core that is not the board's boot PE. Compare all four
+    // affinity levels so a second cluster's Aff0=0 cannot enter twice.
     mrs x0, mpidr_el1
-    and x0, x0, #0xFF
-    cbnz x0, .Lhang
+    ldr x1, =0x000000FF00FFFFFF
+    and x0, x0, x1
+    ldr x1, =NOVA_BOARD_BOOT_MPIDR
+    cmp x0, x1
+    b.ne .Lhang
 
     // Set up stack pointer for EL2
     ldr x0, =__stack_top

@@ -1,5 +1,7 @@
 #pragma once
 
+// Minimal GICv3 guest-hosting composition shared by board profiles.
+
 #include "boot_msg/boot_msg.hpp"
 #include "core_gic/core_gic.hpp"
 #include "core_mmu/core_mmu.hpp"

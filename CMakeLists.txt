@@ -170,6 +170,7 @@ else()
     nova_add_host_test(restore_model_test) # sparse pristine restore
     nova_add_host_test(dma_policy_test)    # Stream ID ownership and DMA windows
     nova_add_host_test(gic_spi_test)       # arbitrary physical SPI banks
+    nova_add_host_test(gic_sgi_test)       # affinity-aware SGI encoding
     nova_add_host_test(pci_test)           # requester IDs and ECAM layout
     nova_add_host_test(payload_test)       # embedded image metadata and checksum
 

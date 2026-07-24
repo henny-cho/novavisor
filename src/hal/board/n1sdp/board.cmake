@@ -1,0 +1,11 @@
+set(NOVA_BOARD_ARCH "aarch64")
+set(NOVA_BOARD_REQUIRED_CPU "neoverse-n1")
+set(NOVA_BOARD_CAPABILITIES
+    gicv3
+    smmuv3
+)
+set(NOVA_BOARD_HARDWARE TRUE)
+set(NOVA_BOARD_FIRMWARE_CHAIN "trusted-firmware-a:n1sdp")
+set(NOVA_BOARD_BL33_BASE "0xE0000000")
+set(NOVA_BOARD_SERIAL_AUTOMATION "dbg-usb-ap")
+set(NOVA_BOARD_POWER_AUTOMATION "dbg-usb-mcc")

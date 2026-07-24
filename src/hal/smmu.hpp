@@ -13,23 +13,23 @@ inline constexpr std::uint32_t kCommandIntid = board::active::kSmmuCommandIntid;
 inline constexpr std::uint32_t kErrorIntid   = board::active::kSmmuErrorIntid;
 
 [[nodiscard]] inline auto read32(std::uint32_t offset) noexcept -> std::uint32_t {
-  return board::active::smmuv3::read32(offset);
+  return board::active::Smmuv3::read32(offset);
 }
 
 inline void write32(std::uint32_t offset, std::uint32_t value) noexcept {
-  board::active::smmuv3::write32(offset, value);
+  board::active::Smmuv3::write32(offset, value);
 }
 
 inline void write64(std::uint32_t offset, std::uint64_t value) noexcept {
-  board::active::smmuv3::write64(offset, value);
+  board::active::Smmuv3::write64(offset, value);
 }
 
 inline void publish_memory() noexcept {
-  board::active::smmuv3::publish_memory();
+  board::active::Smmuv3::publish_memory();
 }
 
 inline void acquire_memory() noexcept {
-  board::active::smmuv3::acquire_memory();
+  board::active::Smmuv3::acquire_memory();
 }
 
 } // namespace nova::smmu::hw

@@ -20,7 +20,11 @@ def find_violations(root: Path) -> list[tuple[Path, int, str]]:
     board_root = root / "src" / "hal" / "board"
     board_names: set[str] = set()
     if board_root.exists():
-        board_names = {path.name for path in board_root.iterdir() if path.is_dir()}
+        board_names = {
+            path.name
+            for path in board_root.iterdir()
+            if path.is_dir() and (path / "board.cmake").is_file()
+        }
     for tree in GENERIC_TREES:
         base = root / tree
         if not base.exists():

@@ -27,20 +27,20 @@ inline constexpr std::uint32_t kSpecialIntidBase = arch::gicv3::kSpecialIntidBas
 // smp::secondary_main). The virtual CPU interface is brought up by
 // the vgic component through hal/gic_virt.hpp.
 inline void init_cpu() noexcept {
-  board::active::gicv3::redistributor_init();
+  board::active::Gicv3::redistributor_init();
   arch::gicv3::cpu_interface_init();
 }
 
 // Cold-boot bring-up on the primary: the system-wide distributor,
 // then this core's share.
 inline void init() noexcept {
-  board::active::gicv3::distributor_init();
+  board::active::Gicv3::distributor_init();
   init_cpu();
 }
 
 // Enable a private interrupt (SGI/PPI, INTID 0..31) for this PE.
 inline void enable_ppi(std::uint32_t intid) noexcept {
-  board::active::gicv3::enable_ppi(intid);
+  board::active::Gicv3::enable_ppi(intid);
 }
 
 // Route a standard shared peripheral interrupt to one core and enable
@@ -50,11 +50,11 @@ inline auto enable_spi(std::uint32_t intid, std::size_t target_cpu, SpiTrigger t
   if (target_cpu >= board::active::kSmpCpus) {
     return false;
   }
-  return board::active::gicv3::enable_spi(intid, static_cast<std::uint32_t>(target_cpu), trigger);
+  return board::active::Gicv3::enable_spi(intid, static_cast<std::uint32_t>(target_cpu), trigger);
 }
 
 inline auto disable_spi(std::uint32_t intid) noexcept -> bool {
-  return board::active::gicv3::disable_spi(intid);
+  return board::active::Gicv3::disable_spi(intid);
 }
 
 inline auto configure_spi(std::uint32_t intid, std::size_t target_cpu, SpiTrigger trigger = SpiTrigger::kLevel) noexcept
@@ -62,24 +62,31 @@ inline auto configure_spi(std::uint32_t intid, std::size_t target_cpu, SpiTrigge
   if (target_cpu >= board::active::kSmpCpus) {
     return false;
   }
-  return board::active::gicv3::configure_spi(intid, static_cast<std::uint32_t>(target_cpu), trigger);
+  return board::active::Gicv3::configure_spi(intid, static_cast<std::uint32_t>(target_cpu), trigger);
 }
 
 inline auto mask_spi(std::uint32_t intid) noexcept -> bool {
-  return board::active::gicv3::mask_spi(intid);
+  return board::active::Gicv3::mask_spi(intid);
 }
 
 inline auto unmask_spi(std::uint32_t intid) noexcept -> bool {
-  return board::active::gicv3::unmask_spi(intid);
+  return board::active::Gicv3::unmask_spi(intid);
 }
 
 inline auto clear_pending_spi(std::uint32_t intid) noexcept -> bool {
-  return board::active::gicv3::clear_pending_spi(intid);
+  return board::active::Gicv3::clear_pending_spi(intid);
 }
 
 // Send an SGI to another core (EL2 cross-call IPI).
 inline void send_sgi(std::size_t target_cpu, std::uint32_t intid) noexcept {
-  arch::gicv3::send_sgi(target_cpu, intid);
+  if (target_cpu >= board::active::kCpuAffinity.size() || intid >= arch::gicv3::kSgiCount) {
+    return;
+  }
+  const std::uint64_t affinity = board::active::kCpuAffinity[target_cpu];
+  if (!arch::gicv3::sgi_target_supported(affinity)) {
+    return;
+  }
+  arch::gicv3::send_sgi(affinity, intid);
 }
 
 // Physical interrupt handshake for the EL2 IRQ handler.

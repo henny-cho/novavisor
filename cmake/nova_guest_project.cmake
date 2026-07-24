@@ -70,6 +70,19 @@ function(nova_add_guest_project)
                 $<TARGET_FILE:novavisor.elf>
         COMMENT "Checking novavisor.elf is FP/SIMD-free"
     )
+    set(image_layout_args)
+    if(NOVA_PROJECT_REQUIRE_EMBEDDED_PAYLOAD)
+        list(APPEND image_layout_args --require-payload)
+    endif()
+    add_custom_command(TARGET novavisor.elf POST_BUILD
+        COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/check_image_layout.py
+                --elf $<TARGET_FILE:novavisor.elf>
+                --board-layout ${NOVA_BOARD_INCLUDE_DIR}/board_layout.h
+                --readelf ${CMAKE_READELF}
+                --nm ${CMAKE_NM}
+                ${image_layout_args}
+        COMMENT "Checking linked image layout"
+    )
     add_custom_command(TARGET novavisor.elf POST_BUILD
         COMMAND ${CMAKE_OBJCOPY} -O binary
                 $<TARGET_FILE:novavisor.elf> ${CMAKE_BINARY_DIR}/novavisor.bin

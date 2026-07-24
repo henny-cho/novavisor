@@ -1,6 +1,7 @@
 #include "smmu/smmu.hpp"
 
 #include "core_mmu/stage2_builder.hpp"
+#include "hal/board/active/board.hpp"
 #include "hal/console.hpp"
 #include "hal/gic.hpp"
 #include "hal/smmu.hpp"
@@ -182,8 +183,8 @@ std::uint32_t                              g_audit_events  = 0;
   }
   const std::array protected_pa{
       dma::PhysicalRange{.base = 0, .size = NOVA_GUEST_IPA_BASE},
-      dma::PhysicalRange{.base = NOVA_IVC_SHM_PA, .size = NOVA_IVC_SHM_SIZE},
-      dma::PhysicalRange{.base = NOVA_GUEST_PRISTINE_PA, .size = pristine_size},
+      dma::PhysicalRange{.base = board::active::kIvcShmPa, .size = NOVA_IVC_SHM_SIZE},
+      dma::PhysicalRange{.base = board::active::kGuestPristinePa, .size = pristine_size},
   };
   if (!dma::validate_policy(assignments, devices, guests, {.sid_bits = kSidBits, .protected_pa = protected_pa}).ok()) {
     return false;

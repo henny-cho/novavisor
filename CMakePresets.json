@@ -50,6 +50,21 @@
       }
     },
     {
+      "name": "aarch64-n1sdp-release",
+      "displayName": "N1SDP AArch64 Release",
+      "description": "Neoverse N1 SDP BL33 image with embedded guest payload",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/aarch64-n1sdp-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchain-aarch64.cmake",
+        "NOVA_ARCH": "aarch64",
+        "NOVA_BOARD": "n1sdp",
+        "NOVA_BOARD_CPU": "neoverse-n1",
+        "NOVA_PROJECT": "n1sdp_arm64"
+      }
+    },
+    {
       "name": "host-debug",
       "displayName": "Host Debug",
       "description": "Debug build for host (x86_64) GTest suite",
@@ -72,6 +87,10 @@
     {
       "name": "aarch64-minimal-release",
       "configurePreset": "aarch64-minimal-release"
+    },
+    {
+      "name": "aarch64-n1sdp-release",
+      "configurePreset": "aarch64-n1sdp-release"
     },
     {
       "name": "host-debug",

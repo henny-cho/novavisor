@@ -1,17 +1,10 @@
-// projects/qemu_virt_arm64/guest_config.cpp
-//
-// Defines the nova::guest_table() contract (nova/abi/guest.hpp) for
-// this target. The per-guest scalars (window size, vcpu count, uart)
-// are parsed at boot from the DTB blobs yml2dtb embedded into the
-// image; placement (PA slot, entry, stack, VMID, affinity) derives
-// from the list index by the same rules the static table used. This
-// TU is linked directly into novavisor.elf — it is the injection
-// point that keeps core components free of projects/ includes.
+// Builds the runtime guest table from generated payload metadata and DTBs.
 
 #include "guest_config.hpp"
 
 #include "device_policy.hpp"
 #include "dtb_parser/fdt_model.hpp"
+#include "hal/board/active/board.hpp"
 #include "hal/console.hpp"
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
@@ -53,31 +46,31 @@ std::size_t                             g_count = 0;
 
 } // namespace
 
-namespace qemu_virt {
+namespace project {
 
 void init_guest_table() noexcept {
   const std::size_t count = g_guest_payload_count;
   if (count == 0 || count > kMaxGuests) {
     panic_guest_config(count);
   }
-  std::uint64_t load_pa = kGuestIpaBase; // packed PA cursor
+  std::uint64_t load_pa = board::active::kGuestPaBase;
   for (std::size_t i = 0; i < count; ++i) {
-    const payload::Metadata&            payload = g_guest_payloads[i];
-    const std::span<const std::uint8_t> blob{payload.dtb_start,
-                                             static_cast<std::size_t>(payload.dtb_end - payload.dtb_start)};
+    const payload::Metadata&            metadata = g_guest_payloads[i];
+    const std::span<const std::uint8_t> blob{metadata.dtb_start,
+                                             static_cast<std::size_t>(metadata.dtb_end - metadata.dtb_start)};
     const fdt::GuestInfo                info = fdt::parse_guest(blob);
     // yml2dtb validated sizes and collisions at build time — a failure
     // here means the blob or the parser regressed, not the config.
     if (!info.ok || info.cpus > kMaxVcpusPerVm || info.mem_base != kGuestIpaBase || blob.size() > NOVA_GUEST_DTB_SIZE ||
-        payload.load_pa != load_pa || payload.memory_size != info.mem_size || payload.entry < kGuestIpaBase ||
-        payload.entry >= kGuestIpaBase + info.mem_size) {
+        metadata.load_pa != load_pa || metadata.memory_size != info.mem_size || metadata.entry < kGuestIpaBase ||
+        metadata.entry >= kGuestIpaBase + info.mem_size) {
       panic_guest_config(i);
     }
     g_table[i] = GuestDescriptor{
         .ipa_base         = kGuestIpaBase,
         .ipa_size         = info.mem_size,
-        .load_pa          = payload.load_pa,
-        .entry_pc         = payload.entry,
+        .load_pa          = metadata.load_pa,
+        .entry_pc         = metadata.entry,
         .stack_top        = guest_dtb_ipa(info.mem_size),
         .vmid             = static_cast<std::uint16_t>(i + 1),
         .vcpus            = static_cast<std::uint8_t>(info.cpus),
@@ -87,9 +80,9 @@ void init_guest_table() noexcept {
         .dtb              = blob.data(),
         .dtb_size         = static_cast<std::uint32_t>(blob.size()),
         .dtb_ipa          = guest_dtb_ipa(info.mem_size),
-        .payload          = payload.image,
-        .payload_size     = payload.image_size,
-        .payload_checksum = payload.checksum,
+        .payload          = metadata.image,
+        .payload_size     = metadata.image_size,
+        .payload_checksum = metadata.checksum,
     };
     // Config-driven core assignment overrides the index-derived table
     // (yml2dtb validated the core indices at build time).
@@ -103,7 +96,7 @@ void init_guest_table() noexcept {
   g_count = count;
 }
 
-} // namespace qemu_virt
+} // namespace project
 
 auto guest_table() noexcept -> std::span<const GuestDescriptor> {
   return {g_table.data(), g_count};

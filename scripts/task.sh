@@ -41,10 +41,11 @@ print_usage() {
     echo "  objdump     Disassemble novavisor.elf (interleaved with source)"
     echo "  ci          Run the full CI pipeline (format check + build + lint + test + demo)"
     echo "  test        Build and run host GTest suite (x86_64, no toolchain)"
-    echo "  demo        Manage demo guests (list | fetch | run | verify | verify-repeat | verify-all | debug)"
+    echo "  demo        Manage demo guests (list | build | fetch | run | verify | verify-repeat | verify-all | debug)"
     echo ""
     echo "Options:"
     echo "  --release   Build in Release mode (default: Debug)"
+    echo "  --preset P  Build an explicit CMake preset"
     echo "  --clean     (build only) Remove the build directory first"
     echo "  --config F  (build/run) Guest config YAML (default: configs/default.yml)"
     echo "  --payloads F (build/run) Resolved payload YAML (default: configs/payloads.yml)"
@@ -143,6 +144,21 @@ _parse_payloads() {
     fi
 }
 
+_parse_preset() {
+    local expect=0
+    for arg in "$@"; do
+        if [[ ${expect} -eq 1 ]]; then
+            echo "${arg}"
+            return 0
+        fi
+        [[ "${arg}" == "--preset" ]] && expect=1
+    done
+    if [[ ${expect} -eq 1 ]]; then
+        echo "Error: --preset requires a name" >&2
+        exit 2
+    fi
+}
+
 # Point the build tree at a guest config (default: configs/default.yml).
 # Copies only on content change, so Ninja regenerates the guest DTBs
 # exactly when the config differs — no CMake reconfigure involved (the
@@ -195,6 +211,9 @@ cmd_build() {
 
     local PRESET="aarch64-debug"
     [[ "${BUILD_TYPE}" == "Release" ]] && PRESET="aarch64-release"
+    local SELECTED_PRESET
+    SELECTED_PRESET=$(_parse_preset "$@")
+    [[ -n "${SELECTED_PRESET}" ]] && PRESET="${SELECTED_PRESET}"
 
     local CONFIG
     CONFIG=$(_parse_config "$@")
@@ -349,6 +368,9 @@ _resolve_elf() {
     BUILD_TYPE=$(_parse_build_type "$@")
     local PRESET="aarch64-debug"
     [[ "${BUILD_TYPE}" == "Release" ]] && PRESET="aarch64-release"
+    local SELECTED_PRESET
+    SELECTED_PRESET=$(_parse_preset "$@")
+    [[ -n "${SELECTED_PRESET}" ]] && PRESET="${SELECTED_PRESET}"
 
     local ELF
     ELF="$(_preset_dir "${PRESET}")/novavisor.elf"
@@ -396,7 +418,7 @@ cmd_demo() {
     local sub="${1:-list}"
     shift || true
     case "${sub}" in
-        list|fetch|run|verify|verify-repeat|verify-all|debug)
+        list|build|fetch|run|verify|verify-repeat|verify-all|debug)
             # -u: unbuffered stdout so VS Code's background problem matcher
             # sees the ==> markers emitted by `demo debug` before QEMU
             # replaces the process and output sits in a 4K block buffer.
@@ -404,7 +426,7 @@ cmd_demo() {
             ;;
         *)
             echo "Error: unknown demo subcommand '${sub}'" >&2
-            echo "Usage: $0 demo {list|fetch|run|verify|verify-repeat|verify-all|debug} [options]" >&2
+            echo "Usage: $0 demo {list|build|fetch|run|verify|verify-repeat|verify-all|debug} [options]" >&2
             exit 2
             ;;
     esac
