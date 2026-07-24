@@ -4,6 +4,8 @@
 
 #include <stdint.h>
 
+#define RUN_COUNT (*(volatile uint64_t*)(NOVA_IVC_SHM_IPA + 0xFC8))
+
 extern char _demo_vectors[];
 
 static volatile uint32_t g_irq_count                            = 0;
@@ -79,6 +81,9 @@ static int run_dma_round_trip(void) {
 }
 
 int main(void) {
+  const uint64_t run = ++RUN_COUNT;
+  nova_edu_publish();
+
   if (nova_edu_read32(NOVA_EDU_IDENTITY_REG) != NOVA_EDU_IDENTITY) {
     hvc_puts_lit("edu dma: identity mismatch\n");
     return 1;
@@ -95,6 +100,23 @@ int main(void) {
     return 2;
   }
 
-  hvc_puts_lit("edu dma: direct round-trip and 2 irqs ok\n");
-  return 0;
+  if (run == 1U) {
+    hvc_puts_lit("edu dma: pre-fault round-trip ok\n");
+    hvc_puts_lit("edu dma: guest fault submitted\n");
+    nova_edu_submit_dma(NOVA_EDU_INTERNAL_BUFFER, NOVA_GUEST_IPA_BASE + NOVA_GUEST_IPA_SIZE, sizeof(g_scratch),
+                        NOVA_EDU_DMA_TO_PCI);
+    for (;;) {
+      hvc_yield();
+    }
+  }
+
+  if (run == 2U) {
+    RUN_COUNT = 0;
+    nova_edu_publish();
+    hvc_puts_lit("edu dma: recovery round-trip and 2 irqs ok\n");
+    return 0;
+  }
+
+  hvc_puts_lit("edu dma: unexpected boot generation\n");
+  return 3;
 }
