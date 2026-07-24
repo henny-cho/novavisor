@@ -1,11 +1,14 @@
 #include "dma_device/dma_device.hpp"
 
+#include "dma_device/lifecycle_model.hpp"
 #include "hal/console.hpp"
 #include "hal/dma_device.hpp"
 #include "hal/timer.hpp"
+#include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/sync.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -13,25 +16,46 @@
 namespace nova::dma_device {
 namespace {
 
-inline constexpr std::size_t   kOwnerVm   = 0;
-inline constexpr std::uint64_t kTimeoutMs = 2'000;
+inline constexpr std::size_t   kMaxDevices = 8;
+inline constexpr std::uint64_t kTimeoutMs  = 2'000;
 
-enum class State : std::uint8_t {
-  kUnavailable,
-  kQuiesced,
-  kQuiescing,
-  kResuming,
-  kActive,
-  kFailed,
-};
+namespace device = hw::device;
 
-sync::SpinLock g_lock;
-State          g_state      = State::kUnavailable;
-std::uint64_t  g_generation = 0;
-std::uint64_t  g_deadline   = 0;
+sync::SpinLock        g_lock;
+Registry<kMaxDevices> g_registry;
+bool                  g_registry_valid = false;
 
 [[nodiscard]] auto deadline_after_ms(std::uint64_t milliseconds) noexcept -> std::uint64_t {
   return hyp_timer::now() + (hyp_timer::freq() / 1000U) * milliseconds;
+}
+
+[[nodiscard]] constexpr auto backend_known(dma::DeviceId device_id) noexcept -> bool {
+  return device_id == device::kDmaDeviceId;
+}
+
+[[nodiscard]] auto backend_present(dma::DeviceId device_id) noexcept -> bool {
+  return backend_known(device_id) && device::present();
+}
+
+[[nodiscard]] auto backend_configure(dma::DeviceId device_id) noexcept -> bool {
+  return backend_known(device_id) && device::configure_bar();
+}
+
+[[nodiscard]] auto backend_disable(dma::DeviceId device_id) noexcept -> bool {
+  return backend_known(device_id) && device::disable_bus_master();
+}
+
+[[nodiscard]] auto backend_enable(dma::DeviceId device_id) noexcept -> bool {
+  return backend_known(device_id) && device::enable_bus_master();
+}
+
+[[nodiscard]] auto backend_running(dma::DeviceId device_id) noexcept -> bool {
+  return backend_known(device_id) && device::dma_running();
+}
+
+[[nodiscard]] auto backend_start(dma::DeviceId device_id, std::uint64_t source, std::uint64_t destination,
+                                 std::uint64_t count, bool to_ram) noexcept -> bool {
+  return backend_known(device_id) && device::start_dma(source, destination, count, to_ram);
 }
 
 void log_state(std::size_t vm, std::string_view state, std::uint64_t generation = 0) noexcept {
@@ -46,13 +70,25 @@ void log_state(std::size_t vm, std::string_view state, std::uint64_t generation 
   console::write("\n");
 }
 
-void mark_failed(std::size_t vm, const char* reason) noexcept {
-  static_cast<void>(hw::device::disable_bus_master());
-  static_cast<void>(smmu::quarantine_vm(vm));
+void fail_vm(std::size_t vm, const char* reason) noexcept {
+  std::array<dma::DeviceId, kMaxDevices> device_ids{};
+  std::size_t                            count = 0;
   {
     sync::Guard guard{g_lock};
-    g_state = State::kFailed;
+    for (Entry& entry : g_registry.entries()) {
+      if (entry.owner_vm != vm || entry.state == State::kUnavailable) {
+        continue;
+      }
+      entry.state              = State::kFailed;
+      entry.generation         = 0;
+      entry.bus_master_blocked = true;
+      device_ids[count++]      = entry.device_id;
+    }
   }
+  for (std::size_t i = 0; i < count; ++i) {
+    static_cast<void>(backend_disable(device_ids[i]));
+  }
+  static_cast<void>(smmu::quarantine_vm(vm));
   console::write("[dma] VM ");
   console::write_dec64(vm);
   console::write(" isolated: ");
@@ -61,18 +97,61 @@ void mark_failed(std::size_t vm, const char* reason) noexcept {
 }
 
 [[nodiscard]] auto complete_quiesce(std::size_t vm) noexcept -> QuiesceResult {
-  hw::device::acquire_memory();
+  std::array<dma::DeviceId, kMaxDevices> device_ids{};
+  std::size_t                            count = 0;
+  {
+    sync::Guard guard{g_lock};
+    for (const Entry& entry : g_registry.entries()) {
+      if (entry.owner_vm != vm || entry.state == State::kUnavailable || entry.state == State::kQuiesced) {
+        continue;
+      }
+      if (entry.state == State::kFailed) {
+        return QuiesceResult::kFailed;
+      }
+      if (entry.state == State::kDetaching || entry.state != State::kQuiescing || !entry.bus_master_blocked) {
+        return QuiesceResult::kPending;
+      }
+      device_ids[count++] = entry.device_id;
+    }
+  }
+
+  for (std::size_t i = 0; i < count; ++i) {
+    device::acquire_memory();
+    if (backend_running(device_ids[i])) {
+      return QuiesceResult::kPending;
+    }
+  }
+
+  bool detach_required = false;
+  {
+    sync::Guard guard{g_lock};
+    for (Entry& entry : g_registry.entries()) {
+      if (entry.owner_vm != vm || entry.state == State::kUnavailable || entry.state == State::kQuiesced) {
+        continue;
+      }
+      if (entry.state != State::kQuiescing || !entry.bus_master_blocked) {
+        return entry.state == State::kFailed ? QuiesceResult::kFailed : QuiesceResult::kPending;
+      }
+      entry.state     = State::kDetaching;
+      detach_required = true;
+    }
+  }
+  if (!detach_required) {
+    return QuiesceResult::kComplete;
+  }
   if (!smmu::detach_vm(vm)) {
-    mark_failed(vm, "stream detach");
+    fail_vm(vm, "stream detach");
     return QuiesceResult::kFailed;
   }
   static_cast<void>(smmu::poll_events());
   {
     sync::Guard guard{g_lock};
-    if (g_state != State::kQuiescing) {
-      return g_state == State::kQuiesced ? QuiesceResult::kComplete : QuiesceResult::kFailed;
+    for (Entry& entry : g_registry.entries()) {
+      if (entry.owner_vm == vm && entry.state == State::kDetaching) {
+        entry.state      = State::kQuiesced;
+        entry.generation = 0;
+      }
     }
-    g_state = State::kQuiesced;
   }
   log_state(vm, "quiesced");
   return QuiesceResult::kComplete;
@@ -81,107 +160,164 @@ void mark_failed(std::size_t vm, const char* reason) noexcept {
 } // namespace
 
 void init() noexcept {
-  sync::Guard guard{g_lock};
-  g_state      = State::kUnavailable;
-  g_generation = 0;
-  if (!hw::device::present()) {
-    return;
+  {
+    sync::Guard guard{g_lock};
+    g_registry.reset();
+    g_registry_valid = true;
+    for (const dma::Assignment& assignment : dma::assignment_table()) {
+      if (!g_registry.add(assignment.device_id, assignment.vm)) {
+        g_registry_valid = false;
+        console::write("[dma] device registry configuration failed\n");
+        return;
+      }
+    }
   }
-  if (guest_table().size() <= kOwnerVm || !hw::device::configure_bar()) {
-    console::write("[dma] device configuration failed\n");
-    g_state = State::kFailed;
-    return;
+
+  for (Entry& entry : g_registry.entries()) {
+    if (!backend_present(entry.device_id)) {
+      entry.state = backend_known(entry.device_id) ? State::kUnavailable : State::kFailed;
+      continue;
+    }
+    if (!backend_configure(entry.device_id)) {
+      console::write("[dma] device configuration failed\n");
+      entry.state = State::kFailed;
+      continue;
+    }
+    entry.state              = State::kQuiesced;
+    entry.bus_master_blocked = true;
   }
-  g_state = State::kQuiesced;
 }
 
 auto begin_quiesce(std::size_t vm) noexcept -> QuiesceResult {
+  std::array<dma::DeviceId, kMaxDevices> device_ids{};
+  std::size_t                            count   = 0;
+  bool                                   pending = false;
   {
     sync::Guard guard{g_lock};
-    if (vm != kOwnerVm || g_state == State::kUnavailable || g_state == State::kQuiesced) {
-      return QuiesceResult::kComplete;
-    }
-    if (g_state == State::kFailed) {
+    if (!g_registry_valid) {
       return QuiesceResult::kFailed;
     }
-    if (g_state == State::kQuiescing) {
-      return QuiesceResult::kPending;
+    for (Entry& entry : g_registry.entries()) {
+      if (entry.owner_vm != vm || entry.state == State::kUnavailable || entry.state == State::kQuiesced) {
+        continue;
+      }
+      if (entry.state == State::kFailed) {
+        return QuiesceResult::kFailed;
+      }
+      if (entry.state == State::kQuiescing || entry.state == State::kDetaching) {
+        pending = true;
+        continue;
+      }
+      if (entry.state != State::kActive) {
+        return QuiesceResult::kFailed;
+      }
+      entry.state              = State::kQuiescing;
+      entry.deadline           = deadline_after_ms(kTimeoutMs);
+      entry.bus_master_blocked = false;
+      device_ids[count++]      = entry.device_id;
+      pending                  = true;
     }
-    if (g_state != State::kActive) {
-      return QuiesceResult::kFailed;
-    }
-    g_state    = State::kQuiescing;
-    g_deadline = deadline_after_ms(kTimeoutMs);
   }
 
-  if (!hw::device::disable_bus_master()) {
-    mark_failed(vm, "bus-master disable");
-    return QuiesceResult::kFailed;
+  for (std::size_t i = 0; i < count; ++i) {
+    if (!backend_disable(device_ids[i])) {
+      fail_vm(vm, "bus-master disable");
+      return QuiesceResult::kFailed;
+    }
+    sync::Guard guard{g_lock};
+    if (Entry* entry = g_registry.find(device_ids[i]); entry != nullptr && entry->state == State::kQuiescing) {
+      entry->bus_master_blocked = true;
+    }
   }
-  if (hw::device::dma_running()) {
-    return QuiesceResult::kPending;
+  return pending ? complete_quiesce(vm) : QuiesceResult::kComplete;
+}
+
+auto poll_quiesce(std::size_t vm) noexcept -> QuiesceResult {
+  std::array<dma::DeviceId, kMaxDevices> device_ids{};
+  std::size_t                            count    = 0;
+  std::uint64_t                          deadline = UINT64_MAX;
+  {
+    sync::Guard guard{g_lock};
+    if (!g_registry_valid) {
+      return QuiesceResult::kFailed;
+    }
+    for (const Entry& entry : g_registry.entries()) {
+      if (entry.owner_vm != vm || entry.state == State::kUnavailable || entry.state == State::kQuiesced) {
+        continue;
+      }
+      if (entry.state == State::kFailed) {
+        return QuiesceResult::kFailed;
+      }
+      if (entry.state == State::kDetaching || entry.state != State::kQuiescing || !entry.bus_master_blocked) {
+        return QuiesceResult::kPending;
+      }
+      device_ids[count++] = entry.device_id;
+      if (entry.deadline < deadline) {
+        deadline = entry.deadline;
+      }
+    }
+  }
+  if (count == 0) {
+    return QuiesceResult::kComplete;
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    if (backend_running(device_ids[i])) {
+      if (hyp_timer::now() < deadline) {
+        return QuiesceResult::kPending;
+      }
+      fail_vm(vm, "device drain timeout");
+      return QuiesceResult::kFailed;
+    }
   }
   return complete_quiesce(vm);
 }
 
-auto poll_quiesce(std::size_t vm) noexcept -> QuiesceResult {
-  std::uint64_t deadline = 0;
-  {
-    sync::Guard guard{g_lock};
-    if (vm != kOwnerVm || g_state == State::kUnavailable || g_state == State::kQuiesced) {
-      return QuiesceResult::kComplete;
-    }
-    if (g_state == State::kFailed) {
-      return QuiesceResult::kFailed;
-    }
-    if (g_state != State::kQuiescing) {
-      return QuiesceResult::kFailed;
-    }
-    deadline = g_deadline;
-  }
-
-  if (!hw::device::dma_running()) {
-    return complete_quiesce(vm);
-  }
-  if (hyp_timer::now() < deadline) {
-    return QuiesceResult::kPending;
-  }
-  mark_failed(vm, "device drain timeout");
-  return QuiesceResult::kFailed;
-}
-
 auto resume_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
+  std::array<dma::DeviceId, kMaxDevices> device_ids{};
+  std::size_t                            count = 0;
   {
     sync::Guard guard{g_lock};
-    if (vm != kOwnerVm || g_state == State::kUnavailable) {
+    if (!g_registry_valid || generation == 0U || g_registry.owner_failed(vm)) {
+      return false;
+    }
+    if (g_registry.owner_active(vm, generation)) {
       return true;
     }
-    if (g_state == State::kFailed || generation == 0U) {
-      return false;
+    for (Entry& entry : g_registry.entries()) {
+      if (entry.owner_vm != vm || entry.state == State::kUnavailable) {
+        continue;
+      }
+      if (entry.state != State::kQuiesced) {
+        return false;
+      }
+      entry.state         = State::kResuming;
+      device_ids[count++] = entry.device_id;
     }
-    if (g_state == State::kActive) {
-      return g_generation == generation;
-    }
-    if (g_state != State::kQuiesced) {
-      return false;
-    }
-    g_state = State::kResuming;
+  }
+  if (count == 0) {
+    return true;
   }
 
   static_cast<void>(smmu::poll_events());
   if (!smmu::attach_vm(vm, generation)) {
-    mark_failed(vm, "stream attach");
+    fail_vm(vm, "stream attach");
     return false;
   }
-
-  if (!hw::device::enable_bus_master()) {
-    mark_failed(vm, "bus-master enable");
-    return false;
+  for (std::size_t i = 0; i < count; ++i) {
+    if (!backend_enable(device_ids[i])) {
+      fail_vm(vm, "bus-master enable");
+      return false;
+    }
   }
   {
     sync::Guard guard{g_lock};
-    g_generation = generation;
-    g_state      = State::kActive;
+    for (Entry& entry : g_registry.entries()) {
+      if (entry.owner_vm == vm && entry.state == State::kResuming) {
+        entry.generation         = generation;
+        entry.state              = State::kActive;
+        entry.bus_master_blocked = false;
+      }
+    }
   }
   log_state(vm, "resumed", generation);
   return true;
@@ -189,12 +325,21 @@ auto resume_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
 
 auto can_start(std::size_t vm) noexcept -> bool {
   sync::Guard guard{g_lock};
-  return vm != kOwnerVm || g_state != State::kFailed;
+  return g_registry_valid && !g_registry.owner_failed(vm);
 }
 
 auto is_active(std::size_t vm, std::uint64_t generation) noexcept -> bool {
   sync::Guard guard{g_lock};
-  return vm == kOwnerVm && g_state == State::kActive && generation != 0U && generation == g_generation;
+  return g_registry_valid && g_registry.owner_active(vm, generation);
+}
+
+auto start_dma(dma::DeviceId device_id, std::size_t vm, std::uint64_t generation, std::uint64_t source,
+               std::uint64_t destination, std::uint64_t count, bool to_ram) noexcept -> bool {
+  sync::Guard  guard{g_lock};
+  const Entry* entry = g_registry.find(device_id);
+  return g_registry_valid && entry != nullptr && entry->owner_vm == vm && entry->state == State::kActive &&
+         generation != 0U && entry->generation == generation &&
+         backend_start(device_id, source, destination, count, to_ram);
 }
 
 } // namespace nova::dma_device

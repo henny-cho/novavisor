@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core_vcpu/core_vcpu.hpp"
+#include "nova/abi/dma.hpp"
 #include "smmu/smmu.hpp"
 
 #include <cib/top.hpp>
@@ -27,6 +28,8 @@ void init() noexcept;
 [[nodiscard]] auto resume_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool;
 [[nodiscard]] auto can_start(std::size_t vm) noexcept -> bool;
 [[nodiscard]] auto is_active(std::size_t vm, std::uint64_t generation) noexcept -> bool;
+[[nodiscard]] auto start_dma(dma::DeviceId device_id, std::size_t vm, std::uint64_t generation, std::uint64_t source,
+                             std::uint64_t destination, std::uint64_t count, bool to_ram) noexcept -> bool;
 
 } // namespace nova::dma_device
 
