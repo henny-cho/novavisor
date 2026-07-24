@@ -64,6 +64,8 @@ class DevicePolicyTest(unittest.TestCase):
         self.assertIn(".stream_id = 0x10U, .vm = 1", policy)
         self.assertIn(".ipa_base = 0x10000000ULL", policy)
         self.assertIn(".virtual_intid = 48", policy)
+        self.assertIn("ResetCapability::kQuiesce", policy)
+        self.assertIn(".coherent = true", policy)
 
     def test_rejects_invalid_owner_and_missing_stream(self):
         self.config_path.write_text(TWO_GUESTS.replace("owner: 1", "owner: 2"))
@@ -108,6 +110,23 @@ class DevicePolicyTest(unittest.TestCase):
 
         self.config_path.write_text(TWO_GUESTS.replace("guest_ipa: 0x10000000", "guest_ipa: 0x60000000"))
         with self.assertRaisesRegex(SystemExit, "guest_ipa overlaps IVC"):
+            self.load()
+
+    def test_rejects_inventory_beyond_runtime_capacity(self):
+        records = []
+        for index in range(YML2DTB.MAX_DEVICES + 1):
+            records.append(f"""\
+  - id: edu{index}
+    device_id: {index}
+    compatible: qemu,edu
+    streams: [{0x10 + index}]
+    mmio: {{base: {0x10000000 + index * 0x100000:#x}, size: 0x00100000}}
+    interrupt: {{intid: {40 + index}, trigger: level}}
+    coherent: true
+    reset: quiesce
+""")
+        self.inventory_path.write_text("sid_bits: 8\ndevices:\n" + "".join(records))
+        with self.assertRaisesRegex(SystemExit, "exceeds registry capacity 8"):
             self.load()
 
 

@@ -122,4 +122,8 @@ auto dma::device_interrupt_table() noexcept -> std::span<const dma::DeviceInterr
   return generated::kDeviceInterrupts;
 }
 
+auto dma::device_capability_table() noexcept -> std::span<const dma::DeviceCapability> {
+  return generated::kDeviceCapabilities;
+}
+
 } // namespace nova

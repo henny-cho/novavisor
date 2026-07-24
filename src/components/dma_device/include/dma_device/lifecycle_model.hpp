@@ -36,6 +36,17 @@ public:
     count_   = 0;
   }
 
+  [[nodiscard]] constexpr auto load(std::span<const dma::Assignment> assignments) noexcept -> bool {
+    reset();
+    for (const dma::Assignment& assignment : assignments) {
+      if (!add(assignment.device_id, assignment.vm)) {
+        reset();
+        return false;
+      }
+    }
+    return true;
+  }
+
   [[nodiscard]] constexpr auto add(dma::DeviceId device_id, std::size_t owner_vm) noexcept -> bool {
     for (std::size_t i = 0; i < count_; ++i) {
       if (entries_[i].device_id == device_id) {
@@ -92,6 +103,16 @@ public:
       }
     }
     return false;
+  }
+
+  constexpr void fail_owner(std::size_t vm) noexcept {
+    for (Entry& entry : entries()) {
+      if (entry.owner_vm == vm && entry.state != State::kUnavailable) {
+        entry.state              = State::kFailed;
+        entry.generation         = 0;
+        entry.bus_master_blocked = true;
+      }
+    }
   }
 
 private:

@@ -41,6 +41,18 @@ enum class InterruptTrigger : std::uint8_t {
   kEdge,
 };
 
+enum class ResetCapability : std::uint8_t {
+  kNone,
+  kQuiesce,
+  kFunction,
+};
+
+struct DeviceCapability {
+  DeviceId        device_id = kNoDevice;
+  ResetCapability reset     = ResetCapability::kNone;
+  bool            coherent  = false;
+};
+
 struct DeviceInterrupt {
   DeviceId         device_id      = kNoDevice;
   std::uint32_t    physical_intid = 0;
@@ -57,6 +69,7 @@ auto assignment_table() noexcept -> std::span<const Assignment>;
 auto device_stream_table() noexcept -> std::span<const DeviceStream>;
 auto device_region_table() noexcept -> std::span<const DeviceRegion>;
 auto device_interrupt_table() noexcept -> std::span<const DeviceInterrupt>;
+auto device_capability_table() noexcept -> std::span<const DeviceCapability>;
 
 struct PhysicalRange {
   std::uint64_t base = 0;
