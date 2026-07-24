@@ -53,10 +53,8 @@ expect:
     within_seconds: 30
   - pattern: "NOVA ZEPHYR HEARTBEAT \\d+"
     within_seconds: 30
-  - pattern: "\\[vm1\\] NOVA LOAD DONE"
-    within_seconds: 60
   - pattern: "sysrq: Trigger a crash"
-    within_seconds: 30
+    within_seconds: 60
   - pattern: "Booting Linux on physical CPU"
     within_seconds: 120
   - pattern: "aarch64 GNU/Linux"

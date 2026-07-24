@@ -1,10 +1,9 @@
 #pragma once
 
 // FDT fixtures for fdt_model_test — bytes produced by the real
-// generator so the parser and tools/yml2dtb/yml2dtb.py verify each
-// other. Regenerate after changing either side:
-//   python3 tools/yml2dtb/yml2dtb.py configs/large.yml -o /tmp/fdt
-//   python3 tools/yml2dtb/yml2dtb.py configs/mixed.yml -o /tmp/fdt
+// generator so the parser and configuration pipeline verify each
+// other. Regeneration requires the selected board layout and device
+// inventory alongside each source configuration.
 //   (kNoUartDtb: a 1-guest config with memory_size 0x300000, vcpus 1,
 //    uart none), then re-dump the byte arrays.
 

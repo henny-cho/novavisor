@@ -11,7 +11,8 @@
 
 namespace nova::board::qemu_virt {
 
-constexpr uintptr_t UART0_BASE = NOVA_BOARD_UART0_BASE;
+constexpr uintptr_t            UART0_BASE = NOVA_BOARD_UART0_BASE;
+inline constexpr std::uint32_t kUartIntid = NOVA_BOARD_UART0_INTID;
 
 // GICv3 (requires -machine virt,gic-version=3).
 constexpr uintptr_t GICD_BASE = NOVA_BOARD_GICD_BASE; // distributor
