@@ -4,7 +4,7 @@
 # The base image already ships build-essential, git, cmake (>= 3.25), python3,
 # and a non-root `vscode` user with passwordless sudo — we only add the
 # bare-metal hypervisor toolchain on top.
-FROM mcr.microsoft.com/devcontainers/cpp:2-debian13
+FROM mcr.microsoft.com/devcontainers/cpp:3-debian13
 
 ARG USERNAME=vscode
 ENV DEBIAN_FRONTEND=noninteractive \
