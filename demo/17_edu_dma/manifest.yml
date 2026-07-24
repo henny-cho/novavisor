@@ -1,5 +1,5 @@
 name: "17_edu_dma"
-description: "The owner guest submits a two-way EDU DMA transfer and completes both level interrupts."
+description: "Guest-originated DMA faults reset the owner and preserve direct DMA in the next generation."
 phase: 21
 enabled: true
 timeout_seconds: 20
@@ -11,8 +11,11 @@ qemu_devices:
 forbid:
   - "edu dma: identity mismatch"
   - "edu dma: round-trip failed"
+  - "edu dma: unexpected boot generation"
   - "unhandled physical IRQ"
   - "demo_exit code=[1-9]"
+  - "\\[smp\\] DMA fault in VM 0 sid 16 generation 3"
+  - "\\[dma\\] VM 0 resumed generation 4"
 
 guests:
   - name: "edu_dma"
@@ -28,7 +31,19 @@ expect:
     within_seconds: 10
   - pattern: "\\[dma\\] VM 0 resumed generation 2"
     within_seconds: 5
-  - pattern: "edu dma: direct round-trip and 2 irqs ok"
+  - pattern: "edu dma: pre-fault round-trip ok"
+    within_seconds: 5
+  - pattern: "edu dma: guest fault submitted"
+    within_seconds: 5
+  - pattern: "\\[smmu\\] fault type=0x0*10 sid=16 iova=0x0*50100000"
+    within_seconds: 5
+  - pattern: "\\[smp\\] DMA fault in VM 0 sid 16 generation 2"
+    within_seconds: 5
+  - pattern: "\\[dma\\] VM 0 quiesced"
+    within_seconds: 5
+  - pattern: "\\[dma\\] VM 0 resumed generation 3"
+    within_seconds: 5
+  - pattern: "edu dma: recovery round-trip and 2 irqs ok"
     within_seconds: 5
   - pattern: "demo_exit code=0"
     within_seconds: 5
