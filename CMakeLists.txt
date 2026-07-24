@@ -171,6 +171,7 @@ else()
     nova_add_host_test(dma_policy_test)    # Stream ID ownership and DMA windows
     nova_add_host_test(gic_spi_test)       # arbitrary physical SPI banks
     nova_add_host_test(pci_test)           # requester IDs and ECAM layout
+    nova_add_host_test(payload_test)       # embedded image metadata and checksum
 
     # Component tests (src/components/<name>/test/).
     nova_add_component_test(core_mmu stage2_descriptor_test) # Stage 2 descriptor encoding

@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -98,6 +99,57 @@ class DemoRunnerVerificationTest(unittest.TestCase):
                 "invalid",
                 Path("/tmp/demo"),
                 {"qemu_devices": "edu", "guests": []},
+            )
+
+    def test_embedded_qemu_command_omits_external_loader(self):
+        command = demo_runner.build_qemu_cmd(
+            Path("/tmp/novavisor.elf"),
+            "embedded",
+            Path("/tmp/demo"),
+            {
+                "payload_mode": "embedded",
+                "guests": [{
+                    "name": "guest",
+                    "binary": "guest.bin",
+                    "load_addr": 0x50000000,
+                    "entry": 0x50000000,
+                    "memory_size": 0x100000,
+                }],
+            },
+        )
+
+        self.assertFalse(any("loader,file=" in argument for argument in command))
+
+    def test_embedded_payload_manifest_pins_binary_digest_and_placement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "guest.bin"
+            binary.write_bytes(b"guest image")
+            manifest = {
+                "payload_mode": "embedded",
+                "guests": [{
+                    "name": "guest",
+                    "binary": "guest.bin",
+                    "load_addr": 0x50000000,
+                    "entry": 0x50000000,
+                    "memory_size": 0x100000,
+                }],
+            }
+            with (
+                mock.patch.object(demo_runner, "BUILD_DIR", root / "build"),
+                mock.patch.object(
+                    demo_runner, "resolve_guest_binary", return_value=binary
+                ),
+            ):
+                path = demo_runner.prepare_payload_manifest(
+                    "embedded", root, manifest
+                )
+
+            payload = json.loads(path.read_text())["payloads"][0]
+            self.assertEqual(payload["binary"], str(binary))
+            self.assertEqual(payload["load_pa"], 0x50000000)
+            self.assertEqual(
+                payload["sha256"], hashlib.sha256(b"guest image").hexdigest()
             )
 
     def test_scenario_deadline_bounds_each_pattern_wait(self):

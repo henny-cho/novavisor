@@ -10,6 +10,10 @@ function(nova_add_guest_project)
     if(NOT EXISTS ${guest_config_file})
         file(COPY_FILE ${CMAKE_SOURCE_DIR}/configs/default.yml ${guest_config_file})
     endif()
+    set(guest_payload_file ${CMAKE_BINARY_DIR}/active_payloads.yml)
+    if(NOT EXISTS ${guest_payload_file})
+        file(COPY_FILE ${CMAKE_SOURCE_DIR}/configs/payloads.yml ${guest_payload_file})
+    endif()
     set(guest_dtb_dir ${CMAKE_BINARY_DIR}/guest_dtb)
     add_custom_command(
         OUTPUT ${guest_dtb_dir}/guest_dtbs.S
@@ -19,13 +23,15 @@ function(nova_add_guest_project)
                 -o ${guest_dtb_dir}
                 --board-layout ${NOVA_BOARD_INCLUDE_DIR}/board_layout.h
                 --inventory ${NOVA_BOARD_DIR}/device_inventory.yml
+                --payloads ${guest_payload_file}
         DEPENDS ${guest_config_file}
+                ${guest_payload_file}
                 ${CMAKE_SOURCE_DIR}/tools/yml2dtb/yml2dtb.py
                 ${CMAKE_SOURCE_DIR}/src/nova/abi/guest_layout.h
                 ${CMAKE_SOURCE_DIR}/src/nova/arch/gicv3_regs.h
                 ${NOVA_BOARD_INCLUDE_DIR}/board_layout.h
                 ${NOVA_BOARD_DIR}/device_inventory.yml
-        COMMENT "Generating guest configuration"
+        COMMENT "Generating guest payload bundle"
     )
 
     add_executable(novavisor.elf

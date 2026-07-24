@@ -15,6 +15,7 @@
 #include "hal/console.hpp"
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
+#include "nova/abi/payload.hpp"
 #include "nova_panic/nova_panic.hpp"
 
 #include <array>
@@ -22,15 +23,11 @@
 #include <cstdint>
 #include <span>
 
-// Emitted by tools/yml2dtb into .rodata.guest_dtb: one {start,end}
-// pair per configured guest.
+// One generated record per configured guest. The binary pointer is null
+// when the external loader compatibility mode is selected.
 extern "C" {
-struct GuestDtbBlob {
-  const std::uint8_t* start;
-  const std::uint8_t* end;
-};
-extern const GuestDtbBlob  g_guest_dtbs[];
-extern const std::uint32_t g_guest_dtb_count;
+extern const nova::payload::Metadata g_guest_payloads[];
+extern const std::uint32_t           g_guest_payload_count;
 }
 
 namespace nova {
@@ -59,34 +56,40 @@ std::size_t                             g_count = 0;
 namespace qemu_virt {
 
 void init_guest_table() noexcept {
-  const std::size_t count = g_guest_dtb_count;
+  const std::size_t count = g_guest_payload_count;
   if (count == 0 || count > kMaxGuests) {
     panic_guest_config(count);
   }
   std::uint64_t load_pa = kGuestIpaBase; // packed PA cursor
   for (std::size_t i = 0; i < count; ++i) {
-    const std::span<const std::uint8_t> blob{g_guest_dtbs[i].start,
-                                             static_cast<std::size_t>(g_guest_dtbs[i].end - g_guest_dtbs[i].start)};
+    const payload::Metadata&            payload = g_guest_payloads[i];
+    const std::span<const std::uint8_t> blob{payload.dtb_start,
+                                             static_cast<std::size_t>(payload.dtb_end - payload.dtb_start)};
     const fdt::GuestInfo                info = fdt::parse_guest(blob);
     // yml2dtb validated sizes and collisions at build time — a failure
     // here means the blob or the parser regressed, not the config.
-    if (!info.ok || info.cpus > kMaxVcpusPerVm || info.mem_base != kGuestIpaBase || blob.size() > NOVA_GUEST_DTB_SIZE) {
+    if (!info.ok || info.cpus > kMaxVcpusPerVm || info.mem_base != kGuestIpaBase || blob.size() > NOVA_GUEST_DTB_SIZE ||
+        payload.load_pa != load_pa || payload.memory_size != info.mem_size || payload.entry < kGuestIpaBase ||
+        payload.entry >= kGuestIpaBase + info.mem_size) {
       panic_guest_config(i);
     }
     g_table[i] = GuestDescriptor{
-        .ipa_base   = kGuestIpaBase,
-        .ipa_size   = info.mem_size,
-        .load_pa    = load_pa,
-        .entry_pc   = kGuestEntry,
-        .stack_top  = guest_dtb_ipa(info.mem_size),
-        .vmid       = static_cast<std::uint16_t>(i + 1),
-        .vcpus      = static_cast<std::uint8_t>(info.cpus),
-        .cpu        = kAffinity[i],
-        .uart       = info.has_uart ? UartKind::kVuart : UartKind::kNone,
-        .auto_start = info.autostart,
-        .dtb        = blob.data(),
-        .dtb_size   = static_cast<std::uint32_t>(blob.size()),
-        .dtb_ipa    = guest_dtb_ipa(info.mem_size),
+        .ipa_base         = kGuestIpaBase,
+        .ipa_size         = info.mem_size,
+        .load_pa          = payload.load_pa,
+        .entry_pc         = payload.entry,
+        .stack_top        = guest_dtb_ipa(info.mem_size),
+        .vmid             = static_cast<std::uint16_t>(i + 1),
+        .vcpus            = static_cast<std::uint8_t>(info.cpus),
+        .cpu              = kAffinity[i],
+        .uart             = info.has_uart ? UartKind::kVuart : UartKind::kNone,
+        .auto_start       = info.autostart,
+        .dtb              = blob.data(),
+        .dtb_size         = static_cast<std::uint32_t>(blob.size()),
+        .dtb_ipa          = guest_dtb_ipa(info.mem_size),
+        .payload          = payload.image,
+        .payload_size     = payload.image_size,
+        .payload_checksum = payload.checksum,
     };
     // Config-driven core assignment overrides the index-derived table
     // (yml2dtb validated the core indices at build time).
