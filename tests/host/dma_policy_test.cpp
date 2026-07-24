@@ -118,11 +118,15 @@ TEST(DmaPolicy, ValidatesDeviceStreamsAndSingleOwner) {
       {.device_id = 2, .stream_id = 0x20, .vm = 1},
   }};
   EXPECT_TRUE(nova::dma::validate_policy(assigned, multi_sid_devices, kGuests, kLimits).ok());
+  EXPECT_EQ(nova::dma::owner_of(assigned, 1), 0U);
+  EXPECT_EQ(nova::dma::owner_of(assigned, 2), 1U);
+  EXPECT_EQ(nova::dma::owner_of(assigned, 3), nova::dma::kNoVm);
 
   auto conflicting  = assigned;
   conflicting[1].vm = 1;
   EXPECT_EQ(nova::dma::validate_policy(conflicting, multi_sid_devices, kGuests, kLimits).error,
             PolicyError::kConflictingDeviceOwner);
+  EXPECT_EQ(nova::dma::owner_of(conflicting, 1), nova::dma::kNoVm);
 }
 
 TEST(DmaPolicy, RejectsUnknownAndPartialDeviceAssignments) {

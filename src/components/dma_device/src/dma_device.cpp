@@ -3,6 +3,7 @@
 #include "dma_device/lifecycle_model.hpp"
 #include "hal/console.hpp"
 #include "hal/dma_device.hpp"
+#include "hal/gic.hpp"
 #include "hal/timer.hpp"
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
@@ -58,6 +59,55 @@ bool                  g_registry_valid = false;
   return backend_known(device_id) && device::start_dma(source, destination, count, to_ram);
 }
 
+void backend_clear_interrupts(dma::DeviceId device_id) noexcept {
+  if (backend_known(device_id)) {
+    device::clear_interrupts();
+  }
+}
+
+[[nodiscard]] auto interrupt_for_device(dma::DeviceId device_id) noexcept -> const dma::DeviceInterrupt* {
+  for (const dma::DeviceInterrupt& interrupt : dma::device_interrupt_table()) {
+    if (interrupt.device_id == device_id) {
+      return &interrupt;
+    }
+  }
+  return nullptr;
+}
+
+[[nodiscard]] auto interrupt_for_physical(std::uint32_t intid) noexcept -> const dma::DeviceInterrupt* {
+  for (const dma::DeviceInterrupt& interrupt : dma::device_interrupt_table()) {
+    if (interrupt.physical_intid == intid) {
+      return &interrupt;
+    }
+  }
+  return nullptr;
+}
+
+void mask_interrupt(dma::DeviceId device_id) noexcept {
+  if (const dma::DeviceInterrupt* interrupt = interrupt_for_device(device_id); interrupt != nullptr) {
+    static_cast<void>(gic::mask_spi(interrupt->physical_intid));
+  }
+}
+
+void reset_interrupt(dma::DeviceId device_id) noexcept {
+  if (const dma::DeviceInterrupt* interrupt = interrupt_for_device(device_id); interrupt != nullptr) {
+    static_cast<void>(gic::mask_spi(interrupt->physical_intid));
+    backend_clear_interrupts(device_id);
+    static_cast<void>(gic::clear_pending_spi(interrupt->physical_intid));
+  }
+}
+
+[[nodiscard]] auto prepare_interrupt(dma::DeviceId device_id, std::size_t vm) noexcept -> bool {
+  const dma::DeviceInterrupt* interrupt = interrupt_for_device(device_id);
+  if (interrupt == nullptr) {
+    return true;
+  }
+  reset_interrupt(device_id);
+  const auto guests = guest_table();
+  return vm < guests.size() &&
+         gic::configure_spi(interrupt->physical_intid, guests[vm].cpu[0], gic::SpiTrigger::kLevel);
+}
+
 void log_state(std::size_t vm, std::string_view state, std::uint64_t generation = 0) noexcept {
   console::write("[dma] VM ");
   console::write_dec64(vm);
@@ -86,6 +136,7 @@ void fail_vm(std::size_t vm, const char* reason) noexcept {
     }
   }
   for (std::size_t i = 0; i < count; ++i) {
+    reset_interrupt(device_ids[i]);
     static_cast<void>(backend_disable(device_ids[i]));
   }
   static_cast<void>(smmu::quarantine_vm(vm));
@@ -183,6 +234,11 @@ void init() noexcept {
       entry.state = State::kFailed;
       continue;
     }
+    if (!prepare_interrupt(entry.device_id, entry.owner_vm)) {
+      console::write("[dma] interrupt configuration failed\n");
+      entry.state = State::kFailed;
+      continue;
+    }
     entry.state              = State::kQuiesced;
     entry.bus_master_blocked = true;
   }
@@ -192,6 +248,11 @@ auto begin_quiesce(std::size_t vm) noexcept -> QuiesceResult {
   std::array<dma::DeviceId, kMaxDevices> device_ids{};
   std::size_t                            count   = 0;
   bool                                   pending = false;
+  for (const dma::Assignment& assignment : dma::assignment_table()) {
+    if (assignment.vm == vm) {
+      mask_interrupt(assignment.device_id);
+    }
+  }
   {
     sync::Guard guard{g_lock};
     if (!g_registry_valid) {
@@ -220,6 +281,7 @@ auto begin_quiesce(std::size_t vm) noexcept -> QuiesceResult {
   }
 
   for (std::size_t i = 0; i < count; ++i) {
+    reset_interrupt(device_ids[i]);
     if (!backend_disable(device_ids[i])) {
       fail_vm(vm, "bus-master disable");
       return QuiesceResult::kFailed;
@@ -304,6 +366,10 @@ auto resume_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
     return false;
   }
   for (std::size_t i = 0; i < count; ++i) {
+    if (!prepare_interrupt(device_ids[i], vm)) {
+      fail_vm(vm, "interrupt prepare");
+      return false;
+    }
     if (!backend_enable(device_ids[i])) {
       fail_vm(vm, "bus-master enable");
       return false;
@@ -317,6 +383,13 @@ auto resume_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
         entry.state              = State::kActive;
         entry.bus_master_blocked = false;
       }
+    }
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    if (const dma::DeviceInterrupt* interrupt = interrupt_for_device(device_ids[i]);
+        interrupt != nullptr && !gic::unmask_spi(interrupt->physical_intid)) {
+      fail_vm(vm, "interrupt unmask");
+      return false;
     }
   }
   log_state(vm, "resumed", generation);
@@ -343,3 +416,58 @@ auto start_dma(dma::DeviceId device_id, std::size_t vm, std::uint64_t generation
 }
 
 } // namespace nova::dma_device
+
+namespace nova {
+
+void dma_device_component::handle_irq(IrqCall* call) noexcept {
+  const dma::DeviceInterrupt* interrupt = dma_device::interrupt_for_physical(call->intid);
+  if (interrupt == nullptr) {
+    return;
+  }
+  call->handled = true;
+  static_cast<void>(gic::mask_spi(interrupt->physical_intid));
+
+  std::size_t   vm         = dma::kNoVm;
+  std::uint64_t generation = 0;
+  {
+    sync::Guard              guard{dma_device::g_lock};
+    const dma_device::Entry* entry = dma_device::g_registry.find(interrupt->device_id);
+    if (dma_device::g_registry_valid && entry != nullptr && entry->state == dma_device::State::kActive) {
+      vm         = entry->owner_vm;
+      generation = entry->generation;
+    }
+  }
+  if (vm == dma::kNoVm) {
+    return;
+  }
+  const std::size_t target_vcpu = vgic::spi_target_vcpu(vm, interrupt->virtual_intid);
+  if (!vgic::post_tracked(slot_of(vm, target_vcpu), interrupt->virtual_intid, interrupt->physical_intid, generation)) {
+    dma_device::fail_vm(vm, "virtual interrupt post");
+  }
+}
+
+void dma_device_component::handle_virtual_eoi(VirtualEoiCall* call) noexcept {
+  const std::size_t vm = vm_of(call->slot);
+  for (const dma::DeviceInterrupt& interrupt : dma::device_interrupt_table()) {
+    if (interrupt.physical_intid != call->token.physical_intid || interrupt.virtual_intid != call->virtual_intid) {
+      continue;
+    }
+    call->handled = true;
+    bool current  = false;
+    {
+      sync::Guard              guard{dma_device::g_lock};
+      const dma_device::Entry* entry = dma_device::g_registry.find(interrupt.device_id);
+      current                        = dma_device::g_registry_valid && entry != nullptr && entry->owner_vm == vm &&
+                entry->state == dma_device::State::kActive && entry->generation == call->token.generation;
+    }
+    if (current) {
+      static_cast<void>(gic::clear_pending_spi(interrupt.physical_intid));
+      if (!gic::unmask_spi(interrupt.physical_intid)) {
+        dma_device::fail_vm(vm, "interrupt rearm");
+      }
+    }
+    return;
+  }
+}
+
+} // namespace nova

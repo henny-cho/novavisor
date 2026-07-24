@@ -5,7 +5,7 @@
 //
 // Covers the Phase 5/6 single-window scenario (IPA 0x5000_0000, 1 MiB),
 // the L2 Block path for 2 MiB-aligned chunks, multi-range composition,
-// and the failure modes (pool exhaustion, 1 GiB crossing, overlap,
+// and the failure modes (pool exhaustion, address overflow, overlap,
 // bad alignment).
 
 #include "core_mmu/stage2_builder.hpp"
@@ -19,7 +19,8 @@ namespace {
 
 // Arbitrary distinct non-zero PAs. The hypervisor uses real link-time
 // addresses; the builder treats these as opaque frame identifiers.
-constexpr std::uint64_t kFakeL2Pa = 0x0000'0000'0001'0000ULL;
+constexpr std::uint64_t                kFakeL2Pa = 0x0000'0000'0001'0000ULL;
+constexpr std::array<std::uint64_t, 2> kFakeL2Pas{kFakeL2Pa, 0x0000'0000'0006'0000ULL};
 
 constexpr std::size_t                          kPoolSize = 4;
 constexpr std::array<std::uint64_t, kPoolSize> kFakeL3Pas{0x2'0000ULL, 0x3'0000ULL, 0x4'0000ULL, 0x5'0000ULL};
@@ -67,9 +68,11 @@ TEST(Stage2Builder, L3IndexExtractsBits20To12) {
 class IdentityMapFixture : public ::testing::Test {
 protected:
   Table                        l1{};
-  Table                        l2{};
+  std::array<Table, 2>         l2_pool{};
+  Table&                       l2 = l2_pool[0];
   std::array<Table, kPoolSize> pool{};
-  Stage2Tables tables{.l1 = &l1, .l2 = &l2, .l2_pa = kFakeL2Pa, .l3_pool = pool, .l3_pool_pas = kFakeL3Pas};
+  Stage2Tables                 tables{
+                      .l1 = &l1, .l2_pool = l2_pool, .l2_pool_pas = kFakeL2Pas, .l3_pool = pool, .l3_pool_pas = kFakeL3Pas};
 
   [[nodiscard]] bool build(std::uint64_t base = kIpaBase, std::uint64_t size = kIpaSize,
                            std::uint64_t attrs = desc::kAttrNormalRwx) {
@@ -231,6 +234,19 @@ TEST_F(IdentityMapFixture, TwoDisjointRangesShareTables) {
   EXPECT_EQ(output_addr(pool[0][0]), kIpaBase);
 }
 
+TEST_F(IdentityMapFixture, MapsDeviceBarInASeparateL1Region) {
+  init_tables(tables);
+  ASSERT_TRUE(map_identity_range(tables, kIpaBase, kIpaSize, desc::kAttrNormalRwx));
+  ASSERT_TRUE(map_identity_range(tables, 0x1000'0000ULL, kIpaSize, desc::kAttrDeviceRw));
+
+  EXPECT_EQ(tables.l2_used, 2U);
+  const Table& device_l2  = l2_pool[1];
+  Table* const page_table = detail::find_l3(tables, output_addr(device_l2[l2_index(0x1000'0000ULL)]));
+  ASSERT_NE(page_table, nullptr);
+  EXPECT_EQ(mem_attr((*page_table)[0]), desc::kMemAttrDevice_nGnRE);
+  EXPECT_TRUE(execute_never((*page_table)[0]));
+}
+
 TEST_F(IdentityMapFixture, SecondRangeInSameSlotReusesL3Table) {
   init_tables(tables);
   ASSERT_TRUE(map_identity_range(tables, kIpaBase, kIpaSize, desc::kAttrNormalRwx));
@@ -307,16 +323,26 @@ TEST_F(IdentityMapFixture, RejectsUnalignedPa) {
   EXPECT_FALSE(map_range(tables, kIpaBase, kIpaBase + 1, kIpaSize, desc::kAttrNormalRwx));
 }
 
-TEST_F(IdentityMapFixture, RejectsRangeCrossing1GiB) {
+TEST_F(IdentityMapFixture, MapsRangeCrossing1GiBWithTwoL2Tables) {
   // 0x7FF0_0000 + 2 MiB crosses the 2 GiB line (L1 index 1 → 2).
-  EXPECT_FALSE(build(0x7FF0'0000ULL, k2MiB));
+  ASSERT_TRUE(build(0x7FF0'0000ULL, k2MiB));
+  EXPECT_EQ(tables.l2_used, 2U);
+  EXPECT_EQ(output_addr(l1[1]), kFakeL2Pas[0]);
+  EXPECT_EQ(output_addr(l1[2]), kFakeL2Pas[1]);
 }
 
-TEST_F(IdentityMapFixture, RejectsSecond1GiBRegion) {
+TEST_F(IdentityMapFixture, MapsSecond1GiBRegion) {
   init_tables(tables);
   ASSERT_TRUE(map_identity_range(tables, kIpaBase, kIpaSize, desc::kAttrNormalRwx));
-  // 0x8000_0000 lives in L1 slot 2 — a second region needs a second L2.
-  EXPECT_FALSE(map_identity_range(tables, 0x8000'0000ULL, kIpaSize, desc::kAttrNormalRwx));
+  ASSERT_TRUE(map_identity_range(tables, 0x8000'0000ULL, kIpaSize, desc::kAttrNormalRwx));
+  EXPECT_EQ(tables.l2_used, 2U);
+}
+
+TEST_F(IdentityMapFixture, RejectsL2PoolExhaustion) {
+  init_tables(tables);
+  ASSERT_TRUE(map_identity_range(tables, 0x1000'0000ULL, kIpaSize, desc::kAttrNormalRwx));
+  ASSERT_TRUE(map_identity_range(tables, 0x5000'0000ULL, kIpaSize, desc::kAttrNormalRwx));
+  EXPECT_FALSE(map_identity_range(tables, 0x9000'0000ULL, kIpaSize, desc::kAttrNormalRwx));
 }
 
 TEST_F(IdentityMapFixture, RejectsPoolExhaustion) {
@@ -332,4 +358,16 @@ TEST_F(IdentityMapFixture, RejectsPageOverlapOnExistingBlock) {
   init_tables(tables);
   ASSERT_TRUE(map_identity_range(tables, kIpaBase, k2MiB, desc::kAttrNormalRwx));
   EXPECT_FALSE(map_identity_range(tables, kIpaBase + k4KiB, k4KiB, desc::kAttrNormalRwData));
+}
+
+TEST_F(IdentityMapFixture, RejectsPageOverlapOnExistingPage) {
+  init_tables(tables);
+  ASSERT_TRUE(map_identity_range(tables, kIpaBase, k4KiB, desc::kAttrNormalRwx));
+  EXPECT_FALSE(map_identity_range(tables, kIpaBase, k4KiB, desc::kAttrNormalRwData));
+}
+
+TEST_F(IdentityMapFixture, RejectsAddressSpaceOverflow) {
+  init_tables(tables);
+  EXPECT_FALSE(map_range(tables, (1ULL << 39U) - k4KiB, 0, 2 * k4KiB, desc::kAttrNormalRwx));
+  EXPECT_FALSE(map_range(tables, 0, (1ULL << 40U) - k4KiB, 2 * k4KiB, desc::kAttrNormalRwx));
 }

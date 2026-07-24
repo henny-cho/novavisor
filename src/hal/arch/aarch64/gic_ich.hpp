@@ -52,6 +52,18 @@ inline auto read_hcr() noexcept -> std::uint64_t {
   return v;
 }
 
+inline auto read_misr() noexcept -> std::uint64_t {
+  std::uint64_t v = 0;
+  __asm__ volatile("mrs %0, S3_4_C12_C11_2" : "=r"(v)); // ICH_MISR_EL2
+  return v;
+}
+
+inline auto read_eisr() noexcept -> std::uint64_t {
+  std::uint64_t v = 0;
+  __asm__ volatile("mrs %0, S3_4_C12_C11_3" : "=r"(v)); // ICH_EISR_EL2
+  return v;
+}
+
 inline void write_hcr(std::uint64_t value) noexcept {
   __asm__ volatile("msr S3_4_C12_C11_0, %0" ::"r"(value));
 }

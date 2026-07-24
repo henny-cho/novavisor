@@ -64,6 +64,14 @@ inline auto read_hcr() noexcept -> std::uint64_t {
   return arch::gicv3::read_hcr();
 }
 
+inline auto read_misr() noexcept -> std::uint64_t {
+  return arch::gicv3::read_misr();
+}
+
+inline auto read_eisr() noexcept -> std::uint64_t {
+  return arch::gicv3::read_eisr();
+}
+
 inline void write_hcr(std::uint64_t value) noexcept {
   arch::gicv3::write_hcr(value);
 }

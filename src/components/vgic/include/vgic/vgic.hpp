@@ -21,6 +21,7 @@
 #include "core_gic/core_gic.hpp"
 #include "trap_handler/mmio.hpp"
 #include "trap_handler/sysreg.hpp"
+#include "vgic/vgic_delivery.hpp"
 
 #include <cib/top.hpp>
 #include <cstddef>
@@ -58,6 +59,8 @@ void cpu_restore(std::size_t index) noexcept;
 // re-read atomically with the pending update, then that owner is
 // reevaluated. False beyond the advertised INTID range.
 [[nodiscard]] auto post(std::size_t index, std::uint32_t vintid) noexcept -> bool;
+[[nodiscard]] auto post_tracked(std::size_t index, std::uint32_t vintid, std::uint32_t physical_intid,
+                                std::uint64_t generation) noexcept -> bool;
 
 // Refill one owner-local target after a register-state change and
 // report whether it now has a deliverable interrupt.
@@ -82,6 +85,15 @@ void vm_reset(std::size_t vm) noexcept;
 
 namespace nova {
 
+struct VirtualEoiCall {
+  std::size_t    slot          = 0;
+  std::uint32_t  virtual_intid = 0;
+  vgic::EoiToken token{};
+  bool           handled = false;
+};
+
+struct VirtualEoiService : public callback::service<VirtualEoiCall*> {};
+
 struct vgic_component {
   // Claims the GICD/GICR frame IPAs.
   static void handle_mmio(MmioCall* call) noexcept;
@@ -97,9 +109,10 @@ struct vgic_component {
 
   constexpr static auto INIT = flow::action<"vgic_init">([]() noexcept { vgic::init(); });
 
-  constexpr static auto config = cib::config(
-      cib::extend<cib::RuntimeStart>(*INIT), cib::extend<MmioService>(&vgic_component::handle_mmio),
-      cib::extend<IrqService>(&vgic_component::handle_irq), cib::extend<SysregService>(&vgic_component::handle_sysreg));
+  constexpr static auto config = cib::config(cib::exports<VirtualEoiService>, cib::extend<cib::RuntimeStart>(*INIT),
+                                             cib::extend<MmioService>(&vgic_component::handle_mmio),
+                                             cib::extend<IrqService>(&vgic_component::handle_irq),
+                                             cib::extend<SysregService>(&vgic_component::handle_sysreg));
 };
 
 } // namespace nova

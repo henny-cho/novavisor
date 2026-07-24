@@ -45,7 +45,7 @@ inline constexpr std::size_t kEventQueueAlign   = kEventCount * sizeof(EventReco
 
 struct alignas(mmu::k4KiB) DmaTableSet {
   mmu::Table                             l1;
-  mmu::Table                             l2;
+  std::array<mmu::Table, 1>              l2_pool;
   std::array<mmu::Table, kDmaL3PoolSize> l3_pool;
 };
 static_assert(sizeof(DmaTableSet) % mmu::k4KiB == 0);
@@ -194,14 +194,17 @@ std::uint32_t                              g_audit_events  = 0;
   for (std::size_t vm = 0; vm < guests.size(); ++vm) {
     DmaTableSet& set = g_dma_tables[vm];
 
+    const std::array<std::uint64_t, 1> l2_pas{
+        reinterpret_cast<std::uint64_t>(&set.l2_pool[0]),
+    };
     std::array<std::uint64_t, kDmaL3PoolSize> l3_pas{};
     for (std::size_t i = 0; i < kDmaL3PoolSize; ++i) {
       l3_pas[i] = reinterpret_cast<std::uint64_t>(&set.l3_pool[i]);
     }
     mmu::Stage2Tables tables{
         .l1          = &set.l1,
-        .l2          = &set.l2,
-        .l2_pa       = reinterpret_cast<std::uint64_t>(&set.l2),
+        .l2_pool     = set.l2_pool,
+        .l2_pool_pas = l2_pas,
         .l3_pool     = set.l3_pool,
         .l3_pool_pas = l3_pas,
     };

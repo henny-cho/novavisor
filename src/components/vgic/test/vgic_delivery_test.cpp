@@ -184,3 +184,26 @@ TEST(VgicMakeLr, FieldEncoding) {
   EXPECT_EQ((lr >> kLrPriorityShift) & 0xFFU, 0x80U);
   EXPECT_EQ(lr_vintid(lr), 27U);
 }
+
+TEST(VgicSpiRefill, MovesTrackedLevelTokenIntoEoiMaintenanceLr) {
+  CpuState                       c{};
+  DistState                      d{};
+  std::array<EoiToken, kNumSpis> tokens{};
+  d.spi_enabled = 1U << 5U;
+  d.spi_pending = 1U << 5U;
+  tokens[5]     = {.virtual_intid = 37, .physical_intid = 37, .generation = 4};
+
+  EXPECT_FALSE(refill(c, kLrs, &d, 0, 1, &tokens));
+  EXPECT_EQ(lr_vintid(c.lr[0]), 37U);
+  EXPECT_NE(c.lr[0] & kLrEoi, 0U);
+  EXPECT_EQ(c.lr_token[0].virtual_intid, 37U);
+  EXPECT_EQ(c.lr_token[0].physical_intid, 37U);
+  EXPECT_EQ(c.lr_token[0].generation, 4U);
+  EXPECT_FALSE(tokens[5].valid());
+
+  const EoiToken completed = take_eoi_token(c, 0);
+  EXPECT_EQ(completed.virtual_intid, 37U);
+  EXPECT_EQ(completed.physical_intid, 37U);
+  EXPECT_EQ(completed.generation, 4U);
+  EXPECT_FALSE(take_eoi_token(c, 0).valid());
+}

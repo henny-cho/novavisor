@@ -29,6 +29,19 @@ struct DeviceStream {
   std::uint32_t stream_id = 0;
 };
 
+struct DeviceRegion {
+  DeviceId      device_id = kNoDevice;
+  std::uint64_t ipa_base  = 0;
+  std::uint64_t pa_base   = 0;
+  std::uint64_t size      = 0;
+};
+
+struct DeviceInterrupt {
+  DeviceId      device_id      = kNoDevice;
+  std::uint32_t physical_intid = 0;
+  std::uint32_t virtual_intid  = 0;
+};
+
 // Defined by the active project. An empty table keeps every stream
 // blocked while still initializing guest-owned translation contexts.
 auto assignment_table() noexcept -> std::span<const Assignment>;
@@ -36,6 +49,8 @@ auto assignment_table() noexcept -> std::span<const Assignment>;
 // Defined by the active project from the selected board's device
 // inventory. Every assigned device must use exactly these streams.
 auto device_stream_table() noexcept -> std::span<const DeviceStream>;
+auto device_region_table() noexcept -> std::span<const DeviceRegion>;
+auto device_interrupt_table() noexcept -> std::span<const DeviceInterrupt>;
 
 struct PhysicalRange {
   std::uint64_t base = 0;
@@ -92,6 +107,21 @@ struct AccessDecision {
 
   [[nodiscard]] constexpr auto allowed() const noexcept -> bool { return result == AccessResult::kAllow; }
 };
+
+[[nodiscard]] constexpr auto owner_of(std::span<const Assignment> assignments, DeviceId device_id) noexcept
+    -> std::size_t {
+  std::size_t owner = kNoVm;
+  for (const Assignment& assignment : assignments) {
+    if (assignment.device_id != device_id) {
+      continue;
+    }
+    if (owner != kNoVm && owner != assignment.vm) {
+      return kNoVm;
+    }
+    owner = assignment.vm;
+  }
+  return owner;
+}
 
 [[nodiscard]] constexpr auto range_well_formed(std::uint64_t base, std::uint64_t size) noexcept -> bool {
   return size != 0 && base <= std::numeric_limits<std::uint64_t>::max() - (size - 1U);

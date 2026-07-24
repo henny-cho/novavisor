@@ -122,4 +122,27 @@ auto dma::device_stream_table() noexcept -> std::span<const dma::DeviceStream> {
   return devices;
 }
 
+auto dma::device_region_table() noexcept -> std::span<const dma::DeviceRegion> {
+  static constexpr std::array regions{
+      dma::DeviceRegion{
+          .device_id = edu::kDmaDeviceId,
+          .ipa_base  = edu::kBar0,
+          .pa_base   = edu::kBar0,
+          .size      = edu::kBar0Size,
+      },
+  };
+  return regions;
+}
+
+auto dma::device_interrupt_table() noexcept -> std::span<const dma::DeviceInterrupt> {
+  static constexpr std::array interrupts{
+      dma::DeviceInterrupt{
+          .device_id      = edu::kDmaDeviceId,
+          .physical_intid = edu::kPhysicalIntid,
+          .virtual_intid  = edu::kVirtualIntid,
+      },
+  };
+  return interrupts;
+}
+
 } // namespace nova

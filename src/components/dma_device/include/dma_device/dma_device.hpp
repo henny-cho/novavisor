@@ -3,6 +3,7 @@
 #include "core_vcpu/core_vcpu.hpp"
 #include "nova/abi/dma.hpp"
 #include "smmu/smmu.hpp"
+#include "vgic/vgic.hpp"
 
 #include <cib/top.hpp>
 #include <cstddef>
@@ -36,9 +37,15 @@ void init() noexcept;
 namespace nova {
 
 struct dma_device_component {
+  static void handle_irq(IrqCall* call) noexcept;
+  static void handle_virtual_eoi(VirtualEoiCall* call) noexcept;
+
   constexpr static auto INIT = flow::action<"dma_device_init">([]() noexcept { dma_device::init(); });
 
-  constexpr static auto config = cib::config(cib::extend<cib::RuntimeStart>(core_vcpu_component::INIT >> *INIT));
+  constexpr static auto config =
+      cib::config(cib::extend<cib::RuntimeStart>(vgic_component::INIT >> core_vcpu_component::INIT >> *INIT),
+                  cib::extend<IrqService>(&dma_device_component::handle_irq),
+                  cib::extend<VirtualEoiService>(&dma_device_component::handle_virtual_eoi));
 };
 
 } // namespace nova

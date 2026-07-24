@@ -27,6 +27,7 @@ struct SpiRegisters {
   std::uint32_t group_offset   = 0;
   std::uint32_t enable_offset  = 0;
   std::uint32_t disable_offset = 0;
+  std::uint32_t clear_offset   = 0;
   std::uint32_t config_offset  = 0;
   std::uint32_t edge_bit       = 0;
   std::uint32_t route_offset   = 0;
@@ -45,6 +46,7 @@ struct SpiRegisters {
       .group_offset   = NOVA_GICD_IGROUPR + bank * kBankStride,
       .enable_offset  = NOVA_GICD_ISENABLER + bank * kBankStride,
       .disable_offset = NOVA_GICD_ICENABLER + bank * kBankStride,
+      .clear_offset   = NOVA_GICD_ICPENDR + bank * kBankStride,
       .config_offset  = NOVA_GICD_ICFGR + config_bank * kBankStride,
       .edge_bit       = std::uint32_t{1} << ((intid % 16U) * 2U + 1U),
       .route_offset   = NOVA_GICD_IROUTER + intid * kRouteStride,

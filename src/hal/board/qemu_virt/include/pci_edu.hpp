@@ -14,6 +14,9 @@ inline constexpr std::uint16_t  kDmaDeviceId    = 0;
 inline constexpr std::uint16_t  kStreamId       = arch::pci::requester_id(kBdf);
 inline constexpr std::uint32_t  kPciDeviceId    = 0x11E8'1234;
 inline constexpr std::uint64_t  kBar0           = NOVA_BOARD_PCIE_MMIO_BASE;
+inline constexpr std::uint64_t  kBar0Size       = 0x0010'0000;
+inline constexpr std::uint32_t  kPhysicalIntid  = 37;
+inline constexpr std::uint32_t  kVirtualIntid   = 37;
 inline constexpr std::uint64_t  kInternalBuffer = 0x0004'0000;
 inline constexpr std::uint64_t  kBufferSize     = 4096;
 
@@ -27,6 +30,9 @@ inline constexpr std::uint16_t kId             = 0x00;
 inline constexpr std::uint16_t kCommand        = 0x04;
 inline constexpr std::uint16_t kBar0           = 0x10;
 inline constexpr std::uint64_t kIdentity       = 0x00;
+inline constexpr std::uint64_t kIrqStatus      = 0x24;
+inline constexpr std::uint64_t kIrqRaise       = 0x60;
+inline constexpr std::uint64_t kIrqAcknowledge = 0x64;
 inline constexpr std::uint64_t kDmaSource      = 0x80;
 inline constexpr std::uint64_t kDmaDestination = 0x88;
 inline constexpr std::uint64_t kDmaCount       = 0x90;
@@ -53,6 +59,10 @@ inline void write_config32(std::uint16_t offset, std::uint32_t value) noexcept {
   return *reinterpret_cast<volatile std::uint64_t*>(kBar0 + offset);
 }
 
+inline void write_mmio32(std::uint64_t offset, std::uint32_t value) noexcept {
+  *reinterpret_cast<volatile std::uint32_t*>(kBar0 + offset) = value;
+}
+
 inline void write_mmio64(std::uint64_t offset, std::uint64_t value) noexcept {
   *reinterpret_cast<volatile std::uint64_t*>(kBar0 + offset) = value;
 }
@@ -63,6 +73,14 @@ inline void publish_memory() noexcept {
 
 inline void acquire_memory() noexcept {
   __asm__ volatile("dsb osh" ::: "memory");
+}
+
+inline void clear_interrupts() noexcept {
+  const std::uint32_t pending = read_mmio32(reg::kIrqStatus);
+  if (pending != 0U) {
+    write_mmio32(reg::kIrqAcknowledge, pending);
+    publish_memory();
+  }
 }
 
 [[nodiscard]] inline auto present() noexcept -> bool {
