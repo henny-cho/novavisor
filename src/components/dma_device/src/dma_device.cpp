@@ -1,5 +1,6 @@
 #include "dma_device/dma_device.hpp"
 
+#include "dma_device/backend_model.hpp"
 #include "dma_device/lifecycle_model.hpp"
 #include "hal/console.hpp"
 #include "hal/dma_device.hpp"
@@ -30,38 +31,76 @@ bool                  g_registry_valid = false;
   return hyp_timer::now() + (hyp_timer::freq() / 1000U) * milliseconds;
 }
 
+[[nodiscard]] auto edu_drained() noexcept -> bool {
+  device::acquire_memory();
+  return !device::dma_running();
+}
+
+inline constexpr std::array<Backend, 1> kBackends{{
+    {
+        .device_id        = device::kDmaDeviceId,
+        .reset_capability = dma::ResetCapability::kQuiesce,
+        .present          = device::present,
+        .configure        = device::configure_bar,
+        .quiesce          = device::disable_bus_master,
+        .drained          = edu_drained,
+        .reset            = nullptr,
+        .resume           = device::enable_bus_master,
+        .start_dma        = device::start_dma,
+        .clear_interrupts = device::clear_interrupts,
+    },
+}};
+
+[[nodiscard]] constexpr auto backend_for(dma::DeviceId device_id) noexcept -> const Backend* {
+  return find_backend(kBackends, device_id);
+}
+
 [[nodiscard]] constexpr auto backend_known(dma::DeviceId device_id) noexcept -> bool {
-  return device_id == device::kDmaDeviceId;
+  return backend_for(device_id) != nullptr;
 }
 
 [[nodiscard]] auto backend_present(dma::DeviceId device_id) noexcept -> bool {
-  return backend_known(device_id) && device::present();
+  const Backend* backend = backend_for(device_id);
+  return backend != nullptr && backend->present();
 }
 
 [[nodiscard]] auto backend_configure(dma::DeviceId device_id) noexcept -> bool {
-  return backend_known(device_id) && device::configure_bar();
+  const Backend* backend = backend_for(device_id);
+  return backend != nullptr && backend->configure();
 }
 
-[[nodiscard]] auto backend_disable(dma::DeviceId device_id) noexcept -> bool {
-  return backend_known(device_id) && device::disable_bus_master();
+[[nodiscard]] auto backend_quiesce(dma::DeviceId device_id) noexcept -> bool {
+  const Backend* backend = backend_for(device_id);
+  return backend != nullptr && backend->quiesce();
 }
 
-[[nodiscard]] auto backend_enable(dma::DeviceId device_id) noexcept -> bool {
-  return backend_known(device_id) && device::enable_bus_master();
+[[nodiscard]] auto backend_drained(dma::DeviceId device_id) noexcept -> bool {
+  const Backend* backend = backend_for(device_id);
+  return backend != nullptr && backend->drained();
 }
 
-[[nodiscard]] auto backend_running(dma::DeviceId device_id) noexcept -> bool {
-  return backend_known(device_id) && device::dma_running();
+[[nodiscard]] auto backend_reset(dma::DeviceId device_id) noexcept -> bool {
+  const Backend* backend = backend_for(device_id);
+  if (backend == nullptr || backend->reset_capability == dma::ResetCapability::kNone) {
+    return false;
+  }
+  return backend->reset_capability == dma::ResetCapability::kQuiesce || (backend->reset != nullptr && backend->reset());
+}
+
+[[nodiscard]] auto backend_resume(dma::DeviceId device_id) noexcept -> bool {
+  const Backend* backend = backend_for(device_id);
+  return backend != nullptr && backend->resume();
 }
 
 [[nodiscard]] auto backend_start(dma::DeviceId device_id, std::uint64_t source, std::uint64_t destination,
                                  std::uint64_t count, bool to_ram) noexcept -> bool {
-  return backend_known(device_id) && device::start_dma(source, destination, count, to_ram);
+  const Backend* backend = backend_for(device_id);
+  return backend != nullptr && backend->start_dma(source, destination, count, to_ram);
 }
 
 void backend_clear_interrupts(dma::DeviceId device_id) noexcept {
-  if (backend_known(device_id)) {
-    device::clear_interrupts();
+  if (const Backend* backend = backend_for(device_id); backend != nullptr) {
+    backend->clear_interrupts();
   }
 }
 
@@ -126,19 +165,17 @@ void fail_vm(std::size_t vm, const char* reason) noexcept {
   std::size_t                            count = 0;
   {
     sync::Guard guard{g_lock};
-    for (Entry& entry : g_registry.entries()) {
+    for (const Entry& entry : g_registry.entries()) {
       if (entry.owner_vm != vm || entry.state == State::kUnavailable) {
         continue;
       }
-      entry.state              = State::kFailed;
-      entry.generation         = 0;
-      entry.bus_master_blocked = true;
-      device_ids[count++]      = entry.device_id;
+      device_ids[count++] = entry.device_id;
     }
+    g_registry.fail_owner(vm);
   }
   for (std::size_t i = 0; i < count; ++i) {
     reset_interrupt(device_ids[i]);
-    static_cast<void>(backend_disable(device_ids[i]));
+    static_cast<void>(backend_quiesce(device_ids[i]));
   }
   static_cast<void>(smmu::quarantine_vm(vm));
   console::write("[dma] VM ");
@@ -168,9 +205,14 @@ void fail_vm(std::size_t vm, const char* reason) noexcept {
   }
 
   for (std::size_t i = 0; i < count; ++i) {
-    device::acquire_memory();
-    if (backend_running(device_ids[i])) {
+    if (!backend_drained(device_ids[i])) {
       return QuiesceResult::kPending;
+    }
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    if (!backend_reset(device_ids[i])) {
+      fail_vm(vm, "device reset");
+      return QuiesceResult::kFailed;
     }
   }
 
@@ -212,22 +254,30 @@ void fail_vm(std::size_t vm, const char* reason) noexcept {
 } // namespace
 
 void init() noexcept {
+  const BackendPolicyCheck policy =
+      validate_backend_policy(dma::assignment_table(), dma::device_capability_table(), kBackends, kMaxDevices);
+  if (!policy.ok()) {
+    g_registry_valid = false;
+    console::write("[dma] backend policy configuration failed\n");
+    return;
+  }
   {
     sync::Guard guard{g_lock};
-    g_registry.reset();
-    g_registry_valid = true;
-    for (const dma::Assignment& assignment : dma::assignment_table()) {
-      if (!g_registry.add(assignment.device_id, assignment.vm)) {
-        g_registry_valid = false;
-        console::write("[dma] device registry configuration failed\n");
-        return;
-      }
+    g_registry_valid = g_registry.load(dma::assignment_table());
+    if (!g_registry_valid) {
+      console::write("[dma] device registry configuration failed\n");
+      return;
     }
   }
 
   for (Entry& entry : g_registry.entries()) {
     if (!backend_present(entry.device_id)) {
       entry.state = backend_known(entry.device_id) ? State::kUnavailable : State::kFailed;
+      continue;
+    }
+    if (backend_for(entry.device_id)->reset_capability == dma::ResetCapability::kNone) {
+      console::write("[dma] device has no safe reset capability\n");
+      entry.state = State::kFailed;
       continue;
     }
     if (!backend_configure(entry.device_id)) {
@@ -283,7 +333,7 @@ auto begin_quiesce(std::size_t vm) noexcept -> QuiesceResult {
 
   for (std::size_t i = 0; i < count; ++i) {
     reset_interrupt(device_ids[i]);
-    if (!backend_disable(device_ids[i])) {
+    if (!backend_quiesce(device_ids[i])) {
       fail_vm(vm, "bus-master disable");
       return QuiesceResult::kFailed;
     }
@@ -324,7 +374,7 @@ auto poll_quiesce(std::size_t vm) noexcept -> QuiesceResult {
     return QuiesceResult::kComplete;
   }
   for (std::size_t i = 0; i < count; ++i) {
-    if (backend_running(device_ids[i])) {
+    if (!backend_drained(device_ids[i])) {
       if (hyp_timer::now() < deadline) {
         return QuiesceResult::kPending;
       }
@@ -371,7 +421,7 @@ auto resume_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
       fail_vm(vm, "interrupt prepare");
       return false;
     }
-    if (!backend_enable(device_ids[i])) {
+    if (!backend_resume(device_ids[i])) {
       fail_vm(vm, "bus-master enable");
       return false;
     }

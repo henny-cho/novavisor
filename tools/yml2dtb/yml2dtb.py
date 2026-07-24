@@ -36,6 +36,7 @@ GIC_REGS = REPO / "src" / "nova" / "arch" / "gicv3_regs.h"
 RAM_END = 0x8000_0000
 
 MIB = 0x10_0000
+MAX_DEVICES = 8
 
 # ---------------------------------------------------------------------------
 # Layout header
@@ -287,6 +288,8 @@ def load_inventory(path: Path, layout: dict[str, int]) -> dict:
     records = doc.get("devices")
     if not isinstance(records, list):
         config_error(path, "'devices' must be a list")
+    if len(records) > MAX_DEVICES:
+        config_error(path, f"device count exceeds registry capacity {MAX_DEVICES}")
 
     protected = [
         ("EL2 RAM", layout["NOVA_BOARD_RAM_BASE"], layout["NOVA_BOARD_RAM_SIZE"]),
@@ -568,6 +571,13 @@ def emit_device_policy(inventory: dict, assigned: list[dict]) -> str:
             device["virtual_intid"], device["trigger"].capitalize()))
         for device in assigned
     ]
+    capabilities = [
+        ("nova::dma::DeviceCapability{.device_id = %d, "
+         ".reset = nova::dma::ResetCapability::k%s, .coherent = %s}"
+         % (device["device_id"], device["reset"].capitalize(),
+            str(device["coherent"]).lower()))
+        for device in inventory["devices"]
+    ]
     lines = [
         "#pragma once",
         "",
@@ -583,6 +593,7 @@ def emit_device_policy(inventory: dict, assigned: list[dict]) -> str:
     lines += emit_array("nova::dma::DeviceStream", "kDeviceStreams", streams)
     lines += emit_array("nova::dma::DeviceRegion", "kDeviceRegions", regions)
     lines += emit_array("nova::dma::DeviceInterrupt", "kDeviceInterrupts", interrupts)
+    lines += emit_array("nova::dma::DeviceCapability", "kDeviceCapabilities", capabilities)
     lines += ["} // namespace nova::generated", ""]
     return "\n".join(lines)
 
