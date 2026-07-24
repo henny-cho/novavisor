@@ -1,3 +1,5 @@
-# hal/board/qemu_virt — header-only MMIO descriptors + PL011 UART for QEMU virt.
-add_library(hal_board_qemu_virt INTERFACE)
-target_include_directories(hal_board_qemu_virt INTERFACE ${CMAKE_SOURCE_DIR}/src)
+# Header-only MMIO descriptors and active facade for the selected board.
+add_library(nova_board INTERFACE)
+target_include_directories(nova_board INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src)

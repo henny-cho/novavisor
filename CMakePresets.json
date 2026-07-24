@@ -11,7 +11,10 @@
       "hidden": true,
       "inherits": "base",
       "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchain-aarch64.cmake"
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchain-aarch64.cmake",
+        "NOVA_ARCH": "aarch64",
+        "NOVA_BOARD": "qemu_virt",
+        "NOVA_PROJECT": "qemu_virt_arm64"
       }
     },
     {

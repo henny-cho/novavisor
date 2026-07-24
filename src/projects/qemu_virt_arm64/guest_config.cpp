@@ -11,7 +11,7 @@
 #include "guest_config.hpp"
 
 #include "dtb_parser/fdt_model.hpp"
-#include "hal/board/qemu_virt/include/pci_edu.hpp"
+#include "hal/board/active/dma_device.hpp"
 #include "hal/console.hpp"
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
@@ -36,7 +36,7 @@ extern const std::uint32_t g_guest_dtb_count;
 namespace nova {
 namespace {
 
-namespace edu = board::qemu_virt::pci_edu;
+namespace edu = board::active::pci_edu;
 static_assert(edu::kBar0Size == NOVA_EDU_BAR0_SIZE);
 
 // Entry [0] boots automatically; the rest stay off until a guest

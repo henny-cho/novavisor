@@ -72,6 +72,40 @@ if(CMAKE_CROSSCOMPILING)
     # Bare-metal ELF (aarch64-none-elf cross build)
     # ===========================================================================
 
+    set(NOVA_ARCH "aarch64" CACHE STRING "Architecture HAL")
+    set(NOVA_BOARD "qemu_virt" CACHE STRING "Board HAL")
+    set(NOVA_PROJECT "qemu_virt_arm64" CACHE STRING "Composition project")
+    foreach(selection IN ITEMS NOVA_ARCH NOVA_BOARD NOVA_PROJECT)
+        if(NOT "${${selection}}" MATCHES "^[A-Za-z0-9_]+$")
+            message(FATAL_ERROR "${selection} must be an identifier: '${${selection}}'")
+        endif()
+    endforeach()
+
+    set(NOVA_ARCH_DIR "${CMAKE_SOURCE_DIR}/src/hal/arch/${NOVA_ARCH}")
+    set(NOVA_BOARD_DIR "${CMAKE_SOURCE_DIR}/src/hal/board/${NOVA_BOARD}")
+    set(NOVA_PROJECT_DIR "${CMAKE_SOURCE_DIR}/src/projects/${NOVA_PROJECT}")
+    foreach(kind IN ITEMS ARCH BOARD PROJECT)
+        if(NOT EXISTS "${NOVA_${kind}_DIR}/CMakeLists.txt")
+            message(FATAL_ERROR "Unsupported NOVA_${kind}: '${NOVA_${kind}}'")
+        endif()
+    endforeach()
+    set(NOVA_BOARD_INCLUDE_DIR "${NOVA_BOARD_DIR}/include")
+    if(NOT EXISTS "${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/board_layout.h")
+        message(FATAL_ERROR "Board '${NOVA_BOARD}' does not provide the active HAL facade")
+    endif()
+    if(NOT EXISTS "${NOVA_PROJECT_DIR}/project.cmake")
+        message(FATAL_ERROR "Project '${NOVA_PROJECT}' does not provide its build manifest")
+    endif()
+    include("${NOVA_PROJECT_DIR}/project.cmake")
+    if(NOT NOVA_PROJECT_ARCH STREQUAL NOVA_ARCH OR NOT NOVA_PROJECT_BOARD STREQUAL NOVA_BOARD)
+        message(FATAL_ERROR
+            "Project '${NOVA_PROJECT}' requires arch=${NOVA_PROJECT_ARCH}, board=${NOVA_PROJECT_BOARD}")
+    endif()
+    if(NOT NOVA_COMPONENTS)
+        message(FATAL_ERROR "Project '${NOVA_PROJECT}' selected no components")
+    endif()
+    message(STATUS "Nova platform: arch=${NOVA_ARCH}, board=${NOVA_BOARD}, project=${NOVA_PROJECT}")
+
     # Silence CPM version-mismatch warnings from CIB's transitive deps.
     nova_pin_cib_transitive_packages()
 
@@ -106,41 +140,26 @@ if(CMAKE_CROSSCOMPILING)
         GIT_TAG 3e4d41ca57de475f4b769320308e80a103c8f5d6
     )
 
-    # HAL: architecture mechanisms + board bindings (each owns its own
-    # CMakeLists.txt).
-    add_subdirectory(src/hal/arch/aarch64)
-    add_subdirectory(src/hal/board/qemu_virt)
+    # Only the selected architecture and board enter the build graph.
+    add_subdirectory("${NOVA_BOARD_DIR}" "${CMAKE_BINARY_DIR}/platform/board")
+    add_subdirectory("${NOVA_ARCH_DIR}" "${CMAKE_BINARY_DIR}/platform/arch")
+    if(NOT TARGET nova_board OR NOT TARGET nova_arch OR
+       NOT TARGET nova_arch_linker_script OR NOT NOVA_LINKER_SCRIPT)
+        message(FATAL_ERROR "Selected HAL does not provide the required build contract")
+    endif()
+    add_library(nova_platform INTERFACE)
+    target_link_libraries(nova_platform INTERFACE nova_board)
 
-    # Components — one add_subdirectory and one link entry per name.
-    # Only components composed in projects/*/nexus.hpp belong here.
-    set(NOVA_COMPONENTS
-        nova_panic
-        trap_handler
-        boot_msg
-        dtb_parser
-        core_mmu
-        core_gic
-        vgic
-        soft_timer
-        core_timer
-        core_vcpu
-        console_mux
-        demo_hvc
-        ivc
-        psci
-        watchdog
-        smmu
-        dma_device
-        dma_probe
-        smp
-        vuart
-    )
+    # Only components selected by the active composition project are built.
     foreach(component IN LISTS NOVA_COMPONENTS)
+        if(NOT EXISTS "${CMAKE_SOURCE_DIR}/src/components/${component}/CMakeLists.txt")
+            message(FATAL_ERROR "Project '${NOVA_PROJECT}' selected unknown component '${component}'")
+        endif()
         add_subdirectory(src/components/${component})
     endforeach()
 
     # Composition root: nexus + guest table + the novavisor.elf target.
-    add_subdirectory(src/projects/qemu_virt_arm64)
+    add_subdirectory("${NOVA_PROJECT_DIR}" "${CMAKE_BINARY_DIR}/platform/project")
 
 else()
     # ===========================================================================
