@@ -102,6 +102,21 @@ jobs:
           cmake --preset aarch64-minimal-release
           cmake --build --preset aarch64-minimal-release
 
+      - name: Build N1SDP payload profile
+        run: |
+          scripts/task.sh demo build
+          python3 tools/payload_manifest.py \
+            --binary build/demo/01_hello/hello.bin \
+            --output build/n1sdp-payloads.yml \
+            --name platform-smoke \
+            --load-pa 0x80000000 \
+            --entry 0x50000000 \
+            --memory-size 0x00100000
+          scripts/task.sh build \
+            --preset aarch64-n1sdp-release \
+            --config configs/platform-smoke.yml \
+            --payloads build/n1sdp-payloads.yml
+
       - name: Lint
         # run-clang-tidy over the debug tree's compile database; the debug
         # objects are reused by the demo step below.
@@ -133,6 +148,8 @@ jobs:
             build/aarch64-debug/active_config.yml
             build/aarch64-debug/active_payloads.yml
             build/aarch64-debug/guest_dtb/*.dtb
+            build/aarch64-n1sdp-release/novavisor.elf
+            build/aarch64-n1sdp-release/active_payloads.yml
           if-no-files-found: ignore
 
   # Aggregate gate: one stable status-check name for branch protection,

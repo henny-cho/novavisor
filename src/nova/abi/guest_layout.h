@@ -3,10 +3,6 @@
  * Guest memory window shared by the selected project configuration and
  * guest linker script for Stage 2 mapping, entry, stack, and DTB placement.
  *
- * The QEMU loader address in each demo's manifest.yml (guests[].load_addr)
- * must match NOVA_GUEST_IPA_BASE — the demo runner consumes the manifest
- * at runtime, so it cannot include this header.
- *
  * Plain #defines only: this header must survive the assembler, the
  * linker-script preprocessor, and the C/C++ compilers alike.
  */
@@ -29,32 +25,17 @@
  * guests[].load_addr must equal the packed PA tools/yml2dtb computes. */
 #define NOVA_GUEST_PA_ALIGN 0x00200000 /* 2 MiB */
 
-/* IVC shared page: one 4 KiB page mapped RW (XN) into every VM at the
- * same IPA. It caps the packed guest-window region (0x5000_0000..here,
- * 256 MiB — enforced by tools/yml2dtb), so no window can overlap it;
- * IPA equals PA, keeping slot 0 identity. */
+/* IVC shared page: one 4 KiB page mapped RW (XN) into every VM.
+ * Its physical location is selected by the active board. */
 #define NOVA_IVC_SHM_IPA  0x60000000
-#define NOVA_IVC_SHM_PA   0x60000000
 #define NOVA_IVC_SHM_SIZE 0x00001000 /* 4 KiB */
 
-/* Pristine image area: at boot the hypervisor copies each guest window
- * here (slots packed at the running sum of window sizes), and a warm
- * reset copies it back — guests dirty their .data/BSS/stack, so
- * reseeding the CPU context alone cannot reboot them. EL2-only: never
- * mapped into Stage 2, so no guest can corrupt its own reset image.
- * Sits above the IVC page; tools/yml2dtb bounds the copies to RAM end. */
-#define NOVA_GUEST_PRISTINE_PA 0x60100000
-
 /* Emulated GICv3 frames: left unmapped in Stage 2 so every access traps
- * into the vGIC. The IPAs equal the board's physical GIC addresses so
- * the guest sees the memory map a DTB would advertise. Register offsets
- * within the frames come from nova/arch/gicv3_regs.h. */
+ * into the vGIC. Register offsets come from gicv3_regs.h. */
 #define NOVA_GICD_IPA_BASE 0x08000000
 #define NOVA_GICR_IPA_BASE 0x080A0000
 
-/* Emulated PL011 (vuart): same unmapped-frame technique, IPA equal to
- * the board's physical UART so guests run an unmodified virt-map
- * driver. RX delivery uses the same SPI number the physical UART has. */
+/* Emulated PL011 uses the same unmapped-frame technique. */
 #define NOVA_VUART_IPA_BASE 0x09000000
 #define NOVA_VUART_IPA_SIZE 0x00001000
 #define NOVA_VUART_SPI      33

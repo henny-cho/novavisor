@@ -934,6 +934,11 @@ def _verify_one(
 # Subcommands
 # ---------------------------------------------------------------------------
 
+def cmd_build(_args) -> int:
+    build_demos()
+    return 0
+
+
 def cmd_fetch(args) -> int:
     # Delegate to the demo's own fetch.sh (pinned versions, idempotent
     # caching into external/cache/guests/<demo>/ live there).
@@ -1111,6 +1116,7 @@ def main() -> int:
     p = argparse.ArgumentParser(prog="demo_runner")
     sub = p.add_subparsers(dest="subcommand", required=True)
     sub.add_parser("list", help="list demos and their enabled status")
+    sub.add_parser("build", help="build in-tree demo guests")
     demo_arg = dict(metavar="id|name", help="demo ID from `list` (e.g. 2) or directory name (e.g. 02_timer)")
     p_fetch = sub.add_parser("fetch", help="populate the external image cache for a demo")
     p_fetch.add_argument("name", **demo_arg)
@@ -1140,6 +1146,7 @@ def main() -> int:
 
     dispatch = {
         "list": cmd_list,
+        "build": cmd_build,
         "fetch": cmd_fetch,
         "run": cmd_run,
         "verify": cmd_verify,

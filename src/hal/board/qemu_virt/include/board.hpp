@@ -6,6 +6,7 @@
 
 #include "board_layout.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -21,9 +22,13 @@ constexpr uintptr_t GICR_BASE = NOVA_BOARD_GICR_BASE; // redistributor frame, CP
 constexpr uintptr_t SMMU_BASE = NOVA_BOARD_SMMU_BASE;
 constexpr uintptr_t SMMU_SIZE = NOVA_BOARD_SMMU_SIZE;
 
-inline constexpr std::size_t   kSmpCpus          = NOVA_BOARD_SMP_CPUS;
-inline constexpr std::uint32_t kSmmuEventIntid   = NOVA_BOARD_SMMU_EVENT_INTID;
-inline constexpr std::uint32_t kSmmuCommandIntid = NOVA_BOARD_SMMU_CMD_INTID;
-inline constexpr std::uint32_t kSmmuErrorIntid   = NOVA_BOARD_SMMU_ERROR_INTID;
+inline constexpr std::size_t                         kSmpCpus = NOVA_BOARD_SMP_CPUS;
+inline constexpr std::array<std::uint64_t, kSmpCpus> kCpuAffinity{0x0, 0x1};
+inline constexpr std::uint64_t                       kGuestPaBase      = NOVA_BOARD_GUEST_PA_BASE;
+inline constexpr std::uint64_t                       kIvcShmPa         = NOVA_BOARD_IVC_SHM_PA;
+inline constexpr std::uint64_t                       kGuestPristinePa  = NOVA_BOARD_PRISTINE_PA;
+inline constexpr std::uint32_t                       kSmmuEventIntid   = NOVA_BOARD_SMMU_EVENT_INTID;
+inline constexpr std::uint32_t                       kSmmuCommandIntid = NOVA_BOARD_SMMU_CMD_INTID;
+inline constexpr std::uint32_t                       kSmmuErrorIntid   = NOVA_BOARD_SMMU_ERROR_INTID;
 
 } // namespace nova::board::qemu_virt

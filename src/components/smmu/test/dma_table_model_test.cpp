@@ -42,7 +42,8 @@ TEST(SmmuDmaTable, MapsOnlyGuestRam) {
   EXPECT_TRUE(mmu::is_valid(tables.l3[0][mmu::l3_index(guest.ipa_base)]));
   EXPECT_EQ(mmu::output_addr(tables.l3[0][mmu::l3_index(guest.ipa_base)]), guest.load_pa);
   EXPECT_FALSE(mmu::is_valid(tables.l2_pool[0][mmu::l2_index(NOVA_IVC_SHM_IPA)]));
-  EXPECT_FALSE(mmu::is_valid(tables.l2_pool[0][mmu::l2_index(NOVA_GUEST_PRISTINE_PA)]));
+  constexpr std::uint64_t kUnmappedControlPa = 0x60100000;
+  EXPECT_FALSE(mmu::is_valid(tables.l2_pool[0][mmu::l2_index(kUnmappedControlPa)]));
 }
 
 TEST(SmmuDmaTable, UsesBlocksForAlignedRam) {

@@ -21,13 +21,13 @@ inline sync::SpinLock g_lock;
 
 inline void write(std::string_view sv) noexcept {
   sync::Guard guard{g_lock};
-  board::active::uart_write(sv);
+  board::active::Uart::write(sv);
 }
 
 // Null-terminated C strings (extern "C" boundaries, __func__-style values).
 inline void write(const char* str) noexcept {
   sync::Guard guard{g_lock};
-  board::active::uart_puts(str);
+  board::active::Uart::write(str);
 }
 
 // Emit one logical line from preformatted fragments under one lock.
@@ -35,7 +35,7 @@ template <std::size_t N>
 inline void write_parts(const std::array<std::string_view, N>& parts) noexcept {
   sync::Guard guard{g_lock};
   for (const std::string_view part : parts) {
-    board::active::uart_write(part);
+    board::active::Uart::write(part);
   }
 }
 
@@ -55,13 +55,13 @@ inline void write_dec64(std::uint64_t v) noexcept {
 // by construction (the UART interrupt is routed to one core), so the
 // write lock is not involved — RX and TX are separate FIFOs.
 [[nodiscard]] inline auto try_read() noexcept -> int {
-  return board::active::uart_try_read();
+  return board::active::Uart::try_read();
 }
 
 // Unmask the console's RX interrupt at the device. GIC routing of the
 // UART SPI stays with the caller (hal/gic.hpp enable_spi).
 inline void rx_irq_enable() noexcept {
-  board::active::uart_rx_irq_enable();
+  board::active::Uart::rx_irq_enable();
 }
 
 } // namespace nova::console

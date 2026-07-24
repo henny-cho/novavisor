@@ -20,7 +20,7 @@ extern "C" void novavisor_main();
 void novavisor_main() {
   // Boot core only (secondaries enter via novavisor_secondary), before
   // RuntimeStart — every guest_table() consumer sees a populated table.
-  nova::qemu_virt::init_guest_table();
+  nova::project::init_guest_table();
   nova::nova_top top{};
   top.main(); // [[noreturn]]
 }

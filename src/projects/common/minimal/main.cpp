@@ -6,7 +6,7 @@
 extern "C" void novavisor_main();
 
 void novavisor_main() {
-  nova::qemu_virt::init_guest_table();
+  nova::project::init_guest_table();
   nova::nova_top top{};
   top.main();
 }

@@ -1,141 +1,19 @@
 #pragma once
 
-// GICv3 distributor/redistributor MMIO driver for the QEMU virt board
-// (-machine gic-version=3) — the board-address-dependent half of the
-// GIC. The CPU-interface halves are pure architecture and live in
-// hal/arch/aarch64/gic_icc.hpp / gic_ich.hpp. Register offsets and bit
-// layouts come from the shared architecture header; only GICD_BASE /
-// GICR_BASE come from the board memory map.
-
 #include "board.hpp"
-#include "nova/arch/gicv3_regs.h"
-#include "nova/arch/gicv3_spi.hpp"
+#include "hal/board/common/gicv3.hpp"
 
 #include <cstdint>
 
-namespace nova::board::qemu_virt::gicv3 {
+namespace nova::board::qemu_virt {
 
-inline auto mmio32(uintptr_t addr) noexcept -> volatile uint32_t* {
-  return reinterpret_cast<volatile uint32_t*>(addr);
-}
+struct GicConfig {
+  inline static constexpr std::uintptr_t kDistributorBase   = GICD_BASE;
+  inline static constexpr std::uintptr_t kRedistributorBase = GICR_BASE;
+  inline static constexpr auto           kCpuAffinity       = board::qemu_virt::kCpuAffinity;
+};
 
-inline void wait_for_rwp() noexcept {
-  while ((*mmio32(GICD_BASE + NOVA_GICD_CTLR) & NOVA_GICD_CTLR_RWP) != 0U) {
-  }
-}
+static_assert(GicConfig::kCpuAffinity.size() == kSmpCpus);
+using Gicv3 = common::Gicv3<GicConfig>;
 
-// This core's redistributor frame, found by matching GICR_TYPER's
-// affinity field against the caller's MPIDR. Falls back to the last
-// frame (TYPER.Last terminates the walk) — unreachable when the GIC
-// exposes one redistributor per core, as it must.
-inline auto redist_frame() noexcept -> uintptr_t {
-  std::uint64_t mpidr = 0;
-  __asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
-  const auto affinity = static_cast<uint32_t>(((mpidr >> 32U) & 0xFFU) << 24U | (mpidr & 0x00FFFFFFU));
-
-  uintptr_t frame = GICR_BASE;
-  for (;;) {
-    const uint32_t typer_lo = *mmio32(frame + NOVA_GICR_TYPER);
-    const uint32_t typer_hi = *mmio32(frame + NOVA_GICR_TYPER_HI); // affinity value
-    if (typer_hi == affinity || (typer_lo & NOVA_GICR_TYPER_LAST) != 0U) {
-      return frame;
-    }
-    frame += NOVA_GICR_FRAME_SIZE;
-  }
-}
-
-// Enable Group 1 forwarding at the distributor — system-wide, once,
-// before any core wakes its redistributor.
-inline void distributor_init() noexcept {
-  *mmio32(GICD_BASE + NOVA_GICD_CTLR) = NOVA_GICD_CTLR_ARE;
-  wait_for_rwp();
-  *mmio32(GICD_BASE + NOVA_GICD_CTLR) = NOVA_GICD_CTLR_ARE | NOVA_GICD_CTLR_ENABLE_GRP1;
-  __asm__ volatile("dsb sy" ::: "memory");
-}
-
-// Wake this core's redistributor and put its SGIs/PPIs in Group 1 (the
-// group the CPU interface enables). Per-core, on that core.
-inline void redistributor_init() noexcept {
-  const uintptr_t frame = redist_frame();
-
-  auto* const waker = mmio32(frame + NOVA_GICR_WAKER);
-  *waker            = *waker & ~NOVA_GICR_WAKER_PROCESSOR_SLEEP;
-  while ((*waker & NOVA_GICR_WAKER_CHILDREN_ASLEEP) != 0U) {
-    // wait for the redistributor to wake
-  }
-
-  *mmio32(frame + NOVA_GICR_IGROUPR0) = ~0U;
-}
-
-// Enable one SGI/PPI (INTID 0..31) at this core's redistributor.
-inline void enable_ppi(uint32_t intid) noexcept {
-  *mmio32(redist_frame() + NOVA_GICR_ISENABLER0) = 1U << intid;
-}
-
-// Route one standard SPI to a core while leaving it masked:
-// Group 1, level-triggered reset config, IROUTER = the core's Aff0.
-// Distributor state is system-wide — call from single-threaded
-// bring-up or serialize externally.
-inline auto configure_spi(uint32_t intid, uint32_t core, arch::gicv3::SpiTrigger trigger) noexcept -> bool {
-  const arch::gicv3::SpiRegisters regs  = arch::gicv3::spi_registers(intid);
-  const std::uint32_t             typer = *mmio32(GICD_BASE + NOVA_GICD_TYPER);
-  if (!regs.valid || !arch::gicv3::spi_implemented(intid, typer) || core >= NOVA_BOARD_SMP_CPUS) {
-    return false;
-  }
-
-  *mmio32(GICD_BASE + regs.disable_offset) = regs.bit;
-  wait_for_rwp();
-  *mmio32(GICD_BASE + regs.group_offset) |= regs.bit;
-  *reinterpret_cast<volatile uint8_t*>(GICD_BASE + NOVA_GICD_IPRIORITYR + intid) = arch::gicv3::kDefaultPriority;
-
-  auto* const         config = mmio32(GICD_BASE + regs.config_offset);
-  const std::uint32_t edge   = trigger == arch::gicv3::SpiTrigger::kEdge ? regs.edge_bit : 0U;
-  *config                    = (*config & ~regs.edge_bit) | edge;
-
-  *reinterpret_cast<volatile uint64_t*>(GICD_BASE + regs.route_offset) = core;
-  __asm__ volatile("dsb sy" ::: "memory");
-  return true;
-}
-
-inline auto mask_spi(uint32_t intid) noexcept -> bool {
-  const arch::gicv3::SpiRegisters regs  = arch::gicv3::spi_registers(intid);
-  const std::uint32_t             typer = *mmio32(GICD_BASE + NOVA_GICD_TYPER);
-  if (!regs.valid || !arch::gicv3::spi_implemented(intid, typer)) {
-    return false;
-  }
-  *mmio32(GICD_BASE + regs.disable_offset) = regs.bit;
-  wait_for_rwp();
-  return true;
-}
-
-inline auto unmask_spi(uint32_t intid) noexcept -> bool {
-  const arch::gicv3::SpiRegisters regs  = arch::gicv3::spi_registers(intid);
-  const std::uint32_t             typer = *mmio32(GICD_BASE + NOVA_GICD_TYPER);
-  if (!regs.valid || !arch::gicv3::spi_implemented(intid, typer)) {
-    return false;
-  }
-  *mmio32(GICD_BASE + regs.enable_offset) = regs.bit;
-  __asm__ volatile("dsb sy" ::: "memory");
-  return true;
-}
-
-inline auto clear_pending_spi(uint32_t intid) noexcept -> bool {
-  const arch::gicv3::SpiRegisters regs  = arch::gicv3::spi_registers(intid);
-  const std::uint32_t             typer = *mmio32(GICD_BASE + NOVA_GICD_TYPER);
-  if (!regs.valid || !arch::gicv3::spi_implemented(intid, typer)) {
-    return false;
-  }
-  *mmio32(GICD_BASE + regs.clear_offset) = regs.bit;
-  __asm__ volatile("dsb sy" ::: "memory");
-  return true;
-}
-
-inline auto enable_spi(uint32_t intid, uint32_t core, arch::gicv3::SpiTrigger trigger) noexcept -> bool {
-  return configure_spi(intid, core, trigger) && unmask_spi(intid);
-}
-
-inline auto disable_spi(uint32_t intid) noexcept -> bool {
-  return mask_spi(intid);
-}
-
-} // namespace nova::board::qemu_virt::gicv3
+} // namespace nova::board::qemu_virt

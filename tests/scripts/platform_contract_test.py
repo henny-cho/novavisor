@@ -21,7 +21,9 @@ class PlatformBoundaryTests(unittest.TestCase):
     def test_board_reference_in_generic_tree_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "src" / "hal" / "board" / "qemu_virt").mkdir(parents=True)
+            board = root / "src" / "hal" / "board" / "qemu_virt"
+            board.mkdir(parents=True)
+            (board / "board.cmake").write_text("")
             source = root / "src" / "components" / "sample" / "sample.cpp"
             source.parent.mkdir(parents=True)
             source.write_text('#include "hal/board/qemu_virt/board.hpp"\n')

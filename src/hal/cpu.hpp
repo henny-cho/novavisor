@@ -16,7 +16,13 @@ namespace nova::cpu {
 inline constexpr std::size_t kMaxCpus = board::active::kSmpCpus;
 
 [[nodiscard]] inline auto id() noexcept -> std::size_t {
-  return arch::cpu_id();
+  const std::uint64_t affinity = arch::cpu_affinity();
+  for (std::size_t index = 0; index < board::active::kCpuAffinity.size(); ++index) {
+    if (board::active::kCpuAffinity[index] == affinity) {
+      return index;
+    }
+  }
+  __builtin_trap();
 }
 
 } // namespace nova::cpu

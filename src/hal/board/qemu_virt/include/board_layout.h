@@ -20,7 +20,11 @@
  * in this budget; guest windows (nova/abi/guest_layout.h) live above it. */
 #define NOVA_BOARD_RAM_BASE      0x40000000
 #define NOVA_BOARD_RAM_SIZE      0x08000000 /* 128 MiB */
+#define NOVA_BOARD_PHYS_RAM_BASE 0x40000000
 #define NOVA_BOARD_PHYS_RAM_SIZE 0x40000000 /* QEMU -m 1024 */
+#define NOVA_BOARD_GUEST_PA_BASE 0x50000000
+#define NOVA_BOARD_IVC_SHM_PA    0x60000000
+#define NOVA_BOARD_PRISTINE_PA   0x60100000
 
 /* Guest CPU node exposed by the generated DT. */
 #define NOVA_BOARD_GUEST_CPU_COMPATIBLE "arm,cortex-a57"
@@ -29,6 +33,7 @@
  * out per core by the linker script; core i's SP starts at
  * __stack_top - i * NOVA_BOARD_EL2_STACK_SIZE (boot.S). */
 #define NOVA_BOARD_SMP_CPUS       2
+#define NOVA_BOARD_BOOT_MPIDR     0x0
 #define NOVA_BOARD_EL2_STACK_SIZE 0x4000 /* 16 KiB per core */
 
 /* Peripheral bases. */
