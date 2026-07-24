@@ -15,7 +15,7 @@ using nova::smmu::FaultKind;
 constexpr std::array<GuestDescriptor, 1> kGuests{{
     {.ipa_base = 0x5000'0000, .ipa_size = 0x0080'0000, .load_pa = 0x5080'0000},
 }};
-constexpr std::array<Assignment, 1>      kAssignments{{{.stream_id = 0x10, .vm = 0}}};
+constexpr std::array<Assignment, 1>      kAssignments{{{.device_id = 1, .stream_id = 0x10, .vm = 0}}};
 constexpr nova::dma::PolicyLimits        kLimits{.sid_bits = 8};
 
 TEST(SmmuFault, AllowsOwnedAddressWithoutEvent) {
@@ -59,7 +59,7 @@ TEST(SmmuFault, InvalidAddressProducesStage2TranslationRecord) {
 }
 
 TEST(SmmuFault, InvalidPolicyHaltsWithoutHardwareEvent) {
-  constexpr std::array<Assignment, 1> invalid{{{.stream_id = 0x10, .vm = 1}}};
+  constexpr std::array<Assignment, 1> invalid{{{.device_id = 1, .stream_id = 0x10, .vm = 1}}};
   const auto result = nova::smmu::classify_request(invalid, kGuests, kLimits, 0x10, 0x5000'0000, 8, DmaAccess::kWrite);
   EXPECT_EQ(result.kind, FaultKind::kInvalidPolicy);
   EXPECT_EQ(result.action, FaultAction::kHaltHypervisor);

@@ -168,6 +168,7 @@ std::uint32_t                              g_audit_events  = 0;
 [[nodiscard]] auto build_dma_contexts(const Capabilities& caps) noexcept -> bool {
   const auto guests      = guest_table();
   const auto assignments = dma::assignment_table();
+  const auto devices     = dma::device_stream_table();
   if (guests.empty() || guests.size() > kMaxGuests) {
     return false;
   }
@@ -184,7 +185,7 @@ std::uint32_t                              g_audit_events  = 0;
       dma::PhysicalRange{.base = NOVA_IVC_SHM_PA, .size = NOVA_IVC_SHM_SIZE},
       dma::PhysicalRange{.base = NOVA_GUEST_PRISTINE_PA, .size = pristine_size},
   };
-  if (!dma::validate_policy(assignments, guests, {.sid_bits = kSidBits, .protected_pa = protected_pa}).ok()) {
+  if (!dma::validate_policy(assignments, devices, guests, {.sid_bits = kSidBits, .protected_pa = protected_pa}).ok()) {
     return false;
   }
 

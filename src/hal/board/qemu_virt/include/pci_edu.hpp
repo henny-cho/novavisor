@@ -10,8 +10,9 @@
 namespace nova::board::qemu_virt::pci_edu {
 
 inline constexpr arch::pci::Bdf kBdf{.bus = 0, .device = 2, .function = 0};
+inline constexpr std::uint16_t  kDmaDeviceId    = 0;
 inline constexpr std::uint16_t  kStreamId       = arch::pci::requester_id(kBdf);
-inline constexpr std::uint32_t  kDeviceId       = 0x11E8'1234;
+inline constexpr std::uint32_t  kPciDeviceId    = 0x11E8'1234;
 inline constexpr std::uint64_t  kBar0           = NOVA_BOARD_PCIE_MMIO_BASE;
 inline constexpr std::uint64_t  kInternalBuffer = 0x0004'0000;
 inline constexpr std::uint64_t  kBufferSize     = 4096;
@@ -65,7 +66,7 @@ inline void acquire_memory() noexcept {
 }
 
 [[nodiscard]] inline auto present() noexcept -> bool {
-  return read_config32(reg::kId) == kDeviceId;
+  return read_config32(reg::kId) == kPciDeviceId;
 }
 
 [[nodiscard]] inline auto configure_bar() noexcept -> bool {

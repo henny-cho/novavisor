@@ -11,18 +11,31 @@
 
 namespace nova::dma {
 
+using DeviceId = std::uint16_t;
+
 inline constexpr std::size_t   kNoVm            = std::numeric_limits<std::size_t>::max();
+inline constexpr DeviceId      kNoDevice        = std::numeric_limits<DeviceId>::max();
 inline constexpr std::uint32_t kFaultAuditBurst = 4;
 inline constexpr std::uint64_t kPageSize        = 4096;
 
 struct Assignment {
+  DeviceId      device_id = kNoDevice;
   std::uint32_t stream_id = 0;
   std::size_t   vm        = kNoVm;
+};
+
+struct DeviceStream {
+  DeviceId      device_id = kNoDevice;
+  std::uint32_t stream_id = 0;
 };
 
 // Defined by the active project. An empty table keeps every stream
 // blocked while still initializing guest-owned translation contexts.
 auto assignment_table() noexcept -> std::span<const Assignment>;
+
+// Defined by the active project from the selected board's device
+// inventory. Every assigned device must use exactly these streams.
+auto device_stream_table() noexcept -> std::span<const DeviceStream>;
 
 struct PhysicalRange {
   std::uint64_t base = 0;
@@ -41,8 +54,12 @@ enum class PolicyError : std::uint8_t {
   kOverlappingGuestPa,
   kProtectedPaOverlap,
   kInvalidOwner,
+  kInvalidDevice,
   kStreamIdOutOfRange,
   kDuplicateStream,
+  kConflictingDeviceOwner,
+  kUnknownDeviceStream,
+  kIncompleteDeviceAssignment,
 };
 
 struct PolicyCheck {
@@ -126,6 +143,9 @@ struct AccessDecision {
     if (assignments[i].vm >= guests.size()) {
       return {.error = PolicyError::kInvalidOwner, .index = i};
     }
+    if (assignments[i].device_id == kNoDevice) {
+      return {.error = PolicyError::kInvalidDevice, .index = i};
+    }
     if (limits.sid_bits < std::numeric_limits<std::uint32_t>::digits &&
         assignments[i].stream_id >= (std::uint32_t{1} << limits.sid_bits)) {
       return {.error = PolicyError::kStreamIdOutOfRange, .index = i};
@@ -134,9 +154,67 @@ struct AccessDecision {
       if (assignments[i].stream_id == assignments[j].stream_id) {
         return {.error = PolicyError::kDuplicateStream, .index = i, .related_index = j};
       }
+      if (assignments[i].device_id == assignments[j].device_id && assignments[i].vm != assignments[j].vm) {
+        return {.error = PolicyError::kConflictingDeviceOwner, .index = i, .related_index = j};
+      }
     }
   }
   return {};
+}
+
+[[nodiscard]] constexpr auto validate_device_policy(std::span<const Assignment>   assignments,
+                                                    std::span<const DeviceStream> devices,
+                                                    std::uint8_t                  sid_bits) noexcept -> PolicyCheck {
+  if (sid_bits == 0 || sid_bits > std::numeric_limits<std::uint32_t>::digits) {
+    return {.error = PolicyError::kInvalidCapabilities};
+  }
+  for (std::size_t i = 0; i < devices.size(); ++i) {
+    if (devices[i].device_id == kNoDevice) {
+      return {.error = PolicyError::kInvalidDevice, .index = i};
+    }
+    if (sid_bits < std::numeric_limits<std::uint32_t>::digits &&
+        devices[i].stream_id >= (std::uint32_t{1} << sid_bits)) {
+      return {.error = PolicyError::kStreamIdOutOfRange, .index = i};
+    }
+    for (std::size_t j = 0; j < i; ++j) {
+      if (devices[i].stream_id == devices[j].stream_id) {
+        return {.error = PolicyError::kDuplicateStream, .index = i, .related_index = j};
+      }
+    }
+  }
+
+  for (std::size_t i = 0; i < assignments.size(); ++i) {
+    bool found = false;
+    for (const DeviceStream& device : devices) {
+      found = found || (assignments[i].device_id == device.device_id && assignments[i].stream_id == device.stream_id);
+    }
+    if (!found) {
+      return {.error = PolicyError::kUnknownDeviceStream, .index = i};
+    }
+  }
+
+  for (std::size_t i = 0; i < devices.size(); ++i) {
+    bool device_assigned = false;
+    bool stream_assigned = false;
+    for (const Assignment& assignment : assignments) {
+      if (assignment.device_id == devices[i].device_id) {
+        device_assigned = true;
+        stream_assigned = stream_assigned || assignment.stream_id == devices[i].stream_id;
+      }
+    }
+    if (device_assigned && !stream_assigned) {
+      return {.error = PolicyError::kIncompleteDeviceAssignment, .index = i};
+    }
+  }
+  return {};
+}
+
+[[nodiscard]] constexpr auto validate_policy(std::span<const Assignment>      assignments,
+                                             std::span<const DeviceStream>    devices,
+                                             std::span<const GuestDescriptor> guests, PolicyLimits limits) noexcept
+    -> PolicyCheck {
+  const PolicyCheck ownership = validate_policy(assignments, guests, limits);
+  return ownership.ok() ? validate_device_policy(assignments, devices, limits.sid_bits) : ownership;
 }
 
 [[nodiscard]] constexpr auto decide_access(std::span<const Assignment>      assignments,
