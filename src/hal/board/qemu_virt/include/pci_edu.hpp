@@ -3,6 +3,7 @@
 // QEMU educational PCI DMA device access.
 
 #include "board_layout.h"
+#include "nova/abi/edu.h"
 #include "nova/arch/pci.hpp"
 
 #include <cstdint>
@@ -16,26 +17,26 @@ inline constexpr std::uint32_t  kPciDeviceId    = 0x11E8'1234;
 inline constexpr std::uint64_t  kBar0           = NOVA_BOARD_PCIE_MMIO_BASE;
 inline constexpr std::uint64_t  kBar0Size       = 0x0010'0000;
 inline constexpr std::uint32_t  kPhysicalIntid  = 37;
-inline constexpr std::uint64_t  kInternalBuffer = 0x0004'0000;
-inline constexpr std::uint64_t  kBufferSize     = 4096;
+inline constexpr std::uint64_t  kInternalBuffer = NOVA_EDU_INTERNAL_BUFFER;
+inline constexpr std::uint64_t  kBufferSize     = NOVA_EDU_BUFFER_SIZE;
 
 inline constexpr std::uint16_t kPciCommandMemory    = 1U << 1U;
 inline constexpr std::uint16_t kPciCommandBusMaster = 1U << 2U;
-inline constexpr std::uint64_t kDmaRun              = 1U << 0U;
-inline constexpr std::uint64_t kDmaToRam            = 1U << 1U;
+inline constexpr std::uint64_t kDmaRun              = NOVA_EDU_DMA_RUN;
+inline constexpr std::uint64_t kDmaToRam            = NOVA_EDU_DMA_TO_PCI;
 
 namespace reg {
 inline constexpr std::uint16_t kId             = 0x00;
 inline constexpr std::uint16_t kCommand        = 0x04;
 inline constexpr std::uint16_t kBar0           = 0x10;
-inline constexpr std::uint64_t kIdentity       = 0x00;
-inline constexpr std::uint64_t kIrqStatus      = 0x24;
-inline constexpr std::uint64_t kIrqRaise       = 0x60;
-inline constexpr std::uint64_t kIrqAcknowledge = 0x64;
-inline constexpr std::uint64_t kDmaSource      = 0x80;
-inline constexpr std::uint64_t kDmaDestination = 0x88;
-inline constexpr std::uint64_t kDmaCount       = 0x90;
-inline constexpr std::uint64_t kDmaCommand     = 0x98;
+inline constexpr std::uint64_t kIdentity       = NOVA_EDU_IDENTITY_REG;
+inline constexpr std::uint64_t kIrqStatus      = NOVA_EDU_IRQ_STATUS;
+inline constexpr std::uint64_t kIrqRaise       = NOVA_EDU_IRQ_RAISE;
+inline constexpr std::uint64_t kIrqAcknowledge = NOVA_EDU_IRQ_ACK;
+inline constexpr std::uint64_t kDmaSource      = NOVA_EDU_DMA_SOURCE;
+inline constexpr std::uint64_t kDmaDestination = NOVA_EDU_DMA_DEST;
+inline constexpr std::uint64_t kDmaCount       = NOVA_EDU_DMA_COUNT;
+inline constexpr std::uint64_t kDmaCommand     = NOVA_EDU_DMA_COMMAND;
 } // namespace reg
 
 [[nodiscard]] inline auto config_address(std::uint16_t offset) noexcept -> std::uint64_t {
@@ -91,7 +92,7 @@ inline void clear_interrupts() noexcept {
   write_config32(reg::kBar0, static_cast<std::uint32_t>(kBar0));
   write_config32(reg::kCommand, kPciCommandMemory);
   publish_memory();
-  return read_config32(reg::kBar0) == kBar0 && read_mmio32(reg::kIdentity) == 0x0100'00ED;
+  return read_config32(reg::kBar0) == kBar0 && read_mmio32(reg::kIdentity) == NOVA_EDU_IDENTITY;
 }
 
 [[nodiscard]] inline auto enable_bus_master() noexcept -> bool {
