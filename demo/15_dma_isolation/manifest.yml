@@ -10,8 +10,8 @@ qemu_devices:
 
 forbid:
   - "\\[dma\\] runtime fault request failed"
-  - "\\[smp\\] DMA fault in VM 0 sid 16 generation 3"
-  - "\\[dma\\] VM 0 resumed generation 4"
+  - "\\[smp\\] DMA fault in VM 0 sid 16 generation 4"
+  - "\\[dma\\] VM 0 resumed generation 5"
 
 guests:
   - name: "dma_isolation"
@@ -31,7 +31,7 @@ expect:
     within_seconds: 5
   - pattern: "dma lifecycle boot 1"
     within_seconds: 5
-  - pattern: "\\[dma\\] VM 0 resumed generation 2"
+  - pattern: "\\[dma\\] VM 0 resumed generation 3"
     within_seconds: 5
   - pattern: "dma lifecycle boot 2"
     within_seconds: 5
@@ -39,9 +39,9 @@ expect:
     within_seconds: 5
   - pattern: "\\[smmu\\] fault type=0x0*10 sid=16 iova=0x0*50100000"
     within_seconds: 5
-  - pattern: "\\[smp\\] DMA fault in VM 0 sid 16 generation 2"
+  - pattern: "\\[smp\\] DMA fault in VM 0 sid 16 generation 3"
     within_seconds: 5
-  - pattern: "\\[dma\\] VM 0 resumed generation 3"
+  - pattern: "\\[dma\\] VM 0 resumed generation 4"
     within_seconds: 5
   - pattern: "dma lifecycle boot 3"
     within_seconds: 5

@@ -166,6 +166,10 @@ void run() noexcept {
   }
   static_cast<void>(smmu::poll_events());
   console::write("[dma] EDU isolation probe passed\n");
+  const std::uint64_t recovered_generation = vcpu::renew_preboot_generation(resources.owner_vm);
+  if (recovered_generation == 0U || !dma_device::resume_vm(resources.owner_vm, recovered_generation)) {
+    fail("guest activation", resources);
+  }
 }
 
 auto inject_runtime_fault(std::size_t vm, std::uint64_t generation) noexcept -> bool {

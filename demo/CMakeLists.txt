@@ -107,5 +107,6 @@ add_subdirectory(09_guest_smp)        # Phase 13
 add_subdirectory(10_console_mux)      # Phase 14
 add_subdirectory(11_configurable)     # Phase 15
 add_subdirectory(15_dma_isolation)
+add_subdirectory(16_edu_passthrough)
 # Real-OS demos (Zephyr/Linux, Phase 16+) reference external images and
 # need no cmake subdir.
