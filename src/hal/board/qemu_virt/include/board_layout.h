@@ -28,7 +28,8 @@
 #define NOVA_BOARD_EL2_STACK_SIZE 0x4000 /* 16 KiB per core */
 
 /* Peripheral bases. */
-#define NOVA_BOARD_UART0_BASE 0x09000000
+#define NOVA_BOARD_UART0_BASE  0x09000000
+#define NOVA_BOARD_UART0_INTID 33
 
 /* GICv3 (requires -machine virt,gic-version=3). */
 #define NOVA_BOARD_GICD_BASE 0x08000000 /* distributor */

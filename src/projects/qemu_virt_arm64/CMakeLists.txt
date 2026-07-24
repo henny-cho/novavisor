@@ -11,10 +11,18 @@ endif()
 set(GUEST_DTB_DIR ${CMAKE_BINARY_DIR}/guest_dtb)
 add_custom_command(
     OUTPUT ${GUEST_DTB_DIR}/guest_dtbs.S
-    COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/yml2dtb/yml2dtb.py ${GUEST_CONFIG} -o ${GUEST_DTB_DIR}
+           ${GUEST_DTB_DIR}/device_policy.hpp
+    COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/yml2dtb/yml2dtb.py
+            ${GUEST_CONFIG}
+            -o ${GUEST_DTB_DIR}
+            --board-layout ${NOVA_BOARD_INCLUDE_DIR}/board_layout.h
+            --inventory ${NOVA_BOARD_DIR}/device_inventory.yml
     DEPENDS ${GUEST_CONFIG}
             ${CMAKE_SOURCE_DIR}/tools/yml2dtb/yml2dtb.py
             ${CMAKE_SOURCE_DIR}/src/nova/abi/guest_layout.h
+            ${CMAKE_SOURCE_DIR}/src/nova/arch/gicv3_regs.h
+            ${NOVA_BOARD_INCLUDE_DIR}/board_layout.h
+            ${NOVA_BOARD_DIR}/device_inventory.yml
     COMMENT "yml2dtb: generating guest DTBs from ${GUEST_CONFIG}"
 )
 
@@ -25,6 +33,7 @@ add_executable(novavisor.elf
     # at boot from the embedded guest DTBs.
     guest_config.cpp
     ${GUEST_DTB_DIR}/guest_dtbs.S
+    ${GUEST_DTB_DIR}/device_policy.hpp
 )
 
 # Outputs stay at the build root — scripts (task.sh run/debug,
@@ -34,6 +43,7 @@ set_target_properties(novavisor.elf PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_
 target_include_directories(novavisor.elf PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${GUEST_DTB_DIR}
 )
 
 target_link_libraries(novavisor.elf PRIVATE

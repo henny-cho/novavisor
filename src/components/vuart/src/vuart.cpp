@@ -8,6 +8,7 @@
 
 #include "console_mux/console_mux.hpp"
 #include "core_vcpu/core_vcpu.hpp"
+#include "hal/board/active/board.hpp"
 #include "hal/console.hpp"
 #include "hal/gic.hpp"
 #include "nova/abi/guest.hpp"
@@ -24,7 +25,8 @@
 namespace nova::vuart {
 namespace {
 
-inline constexpr std::uint32_t kUartSpi = NOVA_VUART_SPI;
+inline constexpr std::uint32_t kUartSpi         = NOVA_VUART_SPI;
+inline constexpr std::uint32_t kPhysicalUartSpi = board::active::kUartIntid;
 
 // Per-VM UART state. RX injection (primary core) races guest MMIO
 // (owner core) — the lock covers every model mutation.
@@ -64,7 +66,7 @@ void log_raz_wi(std::uint64_t off) noexcept {
 
 void init() noexcept {
   console::rx_irq_enable();
-  (void)gic::enable_spi(kUartSpi, /*target_cpu=*/0); // one input consumer: the primary core
+  (void)gic::enable_spi(kPhysicalUartSpi, /*target_cpu=*/0);
   console::write("vuart: PL011 emulation active, host RX -> focus VM\n");
 }
 
@@ -114,7 +116,7 @@ void vuart_component::handle_mmio(MmioCall* call) noexcept {
 }
 
 void vuart_component::handle_irq(IrqCall* call) noexcept {
-  if (call->intid != vuart::kUartSpi) {
+  if (call->intid != vuart::kPhysicalUartSpi) {
     return;
   }
   call->handled = true;

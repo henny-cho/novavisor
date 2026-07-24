@@ -10,8 +10,8 @@
 
 #include "guest_config.hpp"
 
+#include "device_policy.hpp"
 #include "dtb_parser/fdt_model.hpp"
-#include "hal/board/active/dma_device.hpp"
 #include "hal/console.hpp"
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
@@ -35,9 +35,6 @@ extern const std::uint32_t g_guest_dtb_count;
 
 namespace nova {
 namespace {
-
-namespace edu = board::active::pci_edu;
-static_assert(edu::kBar0Size == NOVA_EDU_BAR0_SIZE);
 
 // Entry [0] boots automatically; the rest stay off until a guest
 // issues HVC_VM_START. Static affinity by slot: VMs 0/1 boot on
@@ -110,40 +107,19 @@ auto guest_table() noexcept -> std::span<const GuestDescriptor> {
 }
 
 auto dma::assignment_table() noexcept -> std::span<const dma::Assignment> {
-  static constexpr std::array assignments{
-      dma::Assignment{.device_id = edu::kDmaDeviceId, .stream_id = edu::kStreamId, .vm = 0},
-  };
-  return assignments;
+  return generated::kDmaAssignments;
 }
 
 auto dma::device_stream_table() noexcept -> std::span<const dma::DeviceStream> {
-  static constexpr std::array devices{
-      dma::DeviceStream{.device_id = edu::kDmaDeviceId, .stream_id = edu::kStreamId},
-  };
-  return devices;
+  return generated::kDeviceStreams;
 }
 
 auto dma::device_region_table() noexcept -> std::span<const dma::DeviceRegion> {
-  static constexpr std::array regions{
-      dma::DeviceRegion{
-          .device_id = edu::kDmaDeviceId,
-          .ipa_base  = NOVA_EDU_BAR0_IPA,
-          .pa_base   = edu::kBar0,
-          .size      = NOVA_EDU_BAR0_SIZE,
-      },
-  };
-  return regions;
+  return generated::kDeviceRegions;
 }
 
 auto dma::device_interrupt_table() noexcept -> std::span<const dma::DeviceInterrupt> {
-  static constexpr std::array interrupts{
-      dma::DeviceInterrupt{
-          .device_id      = edu::kDmaDeviceId,
-          .physical_intid = edu::kPhysicalIntid,
-          .virtual_intid  = NOVA_EDU_SPI,
-      },
-  };
-  return interrupts;
+  return generated::kDeviceInterrupts;
 }
 
 } // namespace nova

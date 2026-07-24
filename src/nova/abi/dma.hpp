@@ -36,10 +36,16 @@ struct DeviceRegion {
   std::uint64_t size      = 0;
 };
 
+enum class InterruptTrigger : std::uint8_t {
+  kLevel,
+  kEdge,
+};
+
 struct DeviceInterrupt {
-  DeviceId      device_id      = kNoDevice;
-  std::uint32_t physical_intid = 0;
-  std::uint32_t virtual_intid  = 0;
+  DeviceId         device_id      = kNoDevice;
+  std::uint32_t    physical_intid = 0;
+  std::uint32_t    virtual_intid  = 0;
+  InterruptTrigger trigger        = InterruptTrigger::kLevel;
 };
 
 // Defined by the active project. An empty table keeps every stream
