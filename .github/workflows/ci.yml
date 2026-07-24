@@ -97,6 +97,11 @@ jobs:
       - name: Build (Release)
         run: scripts/task.sh build --release
 
+      - name: Build minimal platform profile
+        run: |
+          cmake --preset aarch64-minimal-release
+          cmake --build --preset aarch64-minimal-release
+
       - name: Lint
         # run-clang-tidy over the debug tree's compile database; the debug
         # objects are reused by the demo step below.

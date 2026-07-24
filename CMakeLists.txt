@@ -58,6 +58,7 @@ include(cmake/clang_tidy.cmake)
 
 # Target-definition helpers (nova_add_component, nova_add_host_test).
 include(cmake/nova_helpers.cmake)
+include(cmake/nova_platform_contract.cmake)
 
 # CMake Package Manager (CPM) — v0.42.1. Must be included before any CPM
 # dependency so CIB's bundled get_cpm.cmake (pinned at v0.40.2) finds CPM
@@ -84,26 +85,11 @@ if(CMAKE_CROSSCOMPILING)
     set(NOVA_ARCH_DIR "${CMAKE_SOURCE_DIR}/src/hal/arch/${NOVA_ARCH}")
     set(NOVA_BOARD_DIR "${CMAKE_SOURCE_DIR}/src/hal/board/${NOVA_BOARD}")
     set(NOVA_PROJECT_DIR "${CMAKE_SOURCE_DIR}/src/projects/${NOVA_PROJECT}")
-    foreach(kind IN ITEMS ARCH BOARD PROJECT)
-        if(NOT EXISTS "${NOVA_${kind}_DIR}/CMakeLists.txt")
-            message(FATAL_ERROR "Unsupported NOVA_${kind}: '${NOVA_${kind}}'")
-        endif()
-    endforeach()
     set(NOVA_BOARD_INCLUDE_DIR "${NOVA_BOARD_DIR}/include")
-    if(NOT EXISTS "${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/board_layout.h")
-        message(FATAL_ERROR "Board '${NOVA_BOARD}' does not provide the active HAL facade")
-    endif()
-    if(NOT EXISTS "${NOVA_PROJECT_DIR}/project.cmake")
-        message(FATAL_ERROR "Project '${NOVA_PROJECT}' does not provide its build manifest")
-    endif()
+    nova_validate_selection_paths()
+    include("${NOVA_BOARD_DIR}/board.cmake")
     include("${NOVA_PROJECT_DIR}/project.cmake")
-    if(NOT NOVA_PROJECT_ARCH STREQUAL NOVA_ARCH OR NOT NOVA_PROJECT_BOARD STREQUAL NOVA_BOARD)
-        message(FATAL_ERROR
-            "Project '${NOVA_PROJECT}' requires arch=${NOVA_PROJECT_ARCH}, board=${NOVA_PROJECT_BOARD}")
-    endif()
-    if(NOT NOVA_COMPONENTS)
-        message(FATAL_ERROR "Project '${NOVA_PROJECT}' selected no components")
-    endif()
+    nova_validate_platform_manifest()
     message(STATUS "Nova platform: arch=${NOVA_ARCH}, board=${NOVA_BOARD}, project=${NOVA_PROJECT}")
 
     # Silence CPM version-mismatch warnings from CIB's transitive deps.
@@ -143,10 +129,7 @@ if(CMAKE_CROSSCOMPILING)
     # Only the selected architecture and board enter the build graph.
     add_subdirectory("${NOVA_BOARD_DIR}" "${CMAKE_BINARY_DIR}/platform/board")
     add_subdirectory("${NOVA_ARCH_DIR}" "${CMAKE_BINARY_DIR}/platform/arch")
-    if(NOT TARGET nova_board OR NOT TARGET nova_arch OR
-       NOT TARGET nova_arch_linker_script OR NOT NOVA_LINKER_SCRIPT)
-        message(FATAL_ERROR "Selected HAL does not provide the required build contract")
-    endif()
+    nova_validate_platform_targets()
     add_library(nova_platform INTERFACE)
     target_link_libraries(nova_platform INTERFACE nova_board)
 
@@ -159,6 +142,7 @@ if(CMAKE_CROSSCOMPILING)
     endforeach()
 
     # Composition root: nexus + guest table + the novavisor.elf target.
+    include(cmake/nova_guest_project.cmake)
     add_subdirectory("${NOVA_PROJECT_DIR}" "${CMAKE_BINARY_DIR}/platform/project")
 
 else()

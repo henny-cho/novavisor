@@ -27,9 +27,12 @@ find_program(CMAKE_OBJDUMP aarch64-none-elf-objdump HINTS "${TOOLCHAIN_BIN_DIR}"
 # -f{function,data}-sections gives --gc-sections per-symbol granularity;
 # linker.ld keeps mandatory sections via KEEP(.text.boot/.text.vec) and
 # matches the split names with *(.text*)/*(.data*) wildcards.
-# Board CPU: override per board with -DNOVA_BOARD_CPU=... (e.g. cortex-a72
-# for RPi4). Default matches the QEMU virt invocation in scripts/task.sh.
-set(NOVA_BOARD_CPU "cortex-a57" CACHE STRING "Target CPU passed to -mcpu")
+# The active preset must select the board CPU explicitly. A toolchain
+# default could silently compile a new board with the previous board's ISA.
+list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES NOVA_BOARD_CPU)
+if(NOT DEFINED NOVA_BOARD_CPU OR NOT NOVA_BOARD_CPU MATCHES "^[A-Za-z0-9_.+-]+$")
+    message(FATAL_ERROR "NOVA_BOARD_CPU must be selected by the board preset")
+endif()
 
 set(COMMON_FLAGS "-mcpu=${NOVA_BOARD_CPU} -mstrict-align -ffunction-sections -fdata-sections")
 

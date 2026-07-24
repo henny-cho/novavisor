@@ -18,8 +18,12 @@
 
 /* QEMU virt: RAM starts at 1 GiB. The hypervisor image + stack must fit
  * in this budget; guest windows (nova/abi/guest_layout.h) live above it. */
-#define NOVA_BOARD_RAM_BASE 0x40000000
-#define NOVA_BOARD_RAM_SIZE 0x08000000 /* 128 MiB */
+#define NOVA_BOARD_RAM_BASE      0x40000000
+#define NOVA_BOARD_RAM_SIZE      0x08000000 /* 128 MiB */
+#define NOVA_BOARD_PHYS_RAM_SIZE 0x40000000 /* QEMU -m 1024 */
+
+/* Guest CPU node exposed by the generated DT. */
+#define NOVA_BOARD_GUEST_CPU_COMPATIBLE "arm,cortex-a57"
 
 /* Physical CPU count (QEMU -smp must match) and the EL2 stack carved
  * out per core by the linker script; core i's SP starts at
