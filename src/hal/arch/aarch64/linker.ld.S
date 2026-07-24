@@ -4,7 +4,7 @@
  * the RAM window comes from the active board's board_layout.h so this
  * file stays board-agnostic.
  */
-#include "hal/board/qemu_virt/include/board_layout.h"
+#include "hal/board/active/board_layout.h"
 
 ENTRY(_start)
 

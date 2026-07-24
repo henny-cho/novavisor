@@ -6,6 +6,7 @@
 
 #include "board_layout.h"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace nova::board::qemu_virt {
@@ -18,5 +19,10 @@ constexpr uintptr_t GICR_BASE = NOVA_BOARD_GICR_BASE; // redistributor frame, CP
 
 constexpr uintptr_t SMMU_BASE = NOVA_BOARD_SMMU_BASE;
 constexpr uintptr_t SMMU_SIZE = NOVA_BOARD_SMMU_SIZE;
+
+inline constexpr std::size_t   kSmpCpus          = NOVA_BOARD_SMP_CPUS;
+inline constexpr std::uint32_t kSmmuEventIntid   = NOVA_BOARD_SMMU_EVENT_INTID;
+inline constexpr std::uint32_t kSmmuCommandIntid = NOVA_BOARD_SMMU_CMD_INTID;
+inline constexpr std::uint32_t kSmmuErrorIntid   = NOVA_BOARD_SMMU_ERROR_INTID;
 
 } // namespace nova::board::qemu_virt

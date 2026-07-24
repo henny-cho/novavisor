@@ -25,7 +25,7 @@ function(nova_add_component name)
     target_include_directories(${name} ${scope}
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/src/components/${name}/include)
-    target_link_libraries(${name} ${scope} cib ${ARG_DEPS})
+    target_link_libraries(${name} ${scope} cib nova_platform ${ARG_DEPS})
 endfunction()
 
 # nova_add_host_test(<name>)

@@ -1,7 +1,4 @@
-# qemu_virt_arm64 — the composition root: picks the board/arch HAL,
-# composes the components (nexus.hpp), defines the guest table, and
-# links the final ELF. Adding a project/board means adding a sibling
-# directory, not touching the root build.
+# Composition root for the selected AArch64 virt machine.
 
 # Guest configuration pipeline: active_config.yml (seeded from
 # configs/default.yml at configure time, switched in place by
@@ -40,8 +37,8 @@ target_include_directories(novavisor.elf PRIVATE
 )
 
 target_link_libraries(novavisor.elf PRIVATE
-    hal_arch_aarch64
-    hal_board_qemu_virt
+    nova_arch
+    nova_platform
     ${NOVA_COMPONENTS}
     # Frameworks
     cib etl
@@ -54,15 +51,15 @@ target_link_libraries(novavisor.elf PRIVATE
 )
 
 target_link_options(novavisor.elf PRIVATE
-    -T ${HAL_ARCH_LINKER_SCRIPT}
+    -T ${NOVA_LINKER_SCRIPT}
     -nostartfiles
     -nostdlib
     -Wl,--gc-sections
 )
 # The script is generated (linker.ld.S template + board_layout.h);
 # make sure it exists before linking and relink when it changes.
-add_dependencies(novavisor.elf hal_arch_linker_script)
-set_target_properties(novavisor.elf PROPERTIES LINK_DEPENDS ${HAL_ARCH_LINKER_SCRIPT})
+add_dependencies(novavisor.elf nova_arch_linker_script)
+set_target_properties(novavisor.elf PROPERTIES LINK_DEPENDS ${NOVA_LINKER_SCRIPT})
 
 # EL2 must be FP/SIMD-free outside the FP bank save/restore asm
 # (CPTR_EL2.TFP + lazy guest FP switching). -mgeneral-regs-only covers

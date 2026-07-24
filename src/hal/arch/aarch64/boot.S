@@ -11,7 +11,7 @@
 //                          all shared state were initialized by the
 //                          primary before CPU_ON was issued.
 
-#include "hal/board/qemu_virt/include/board_layout.h"
+#include "hal/board/active/board_layout.h"
 
 .global _start
 .section .text.boot
