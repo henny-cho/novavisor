@@ -305,6 +305,9 @@ cmd_test() {
 
     echo "==> Running script unit tests..."
     python3 -m unittest discover -s "${WORK_DIR}/tests/scripts" -p '*_test.py'
+
+    echo "==> Checking reusable source boundaries..."
+    python3 "${WORK_DIR}/tools/check_platform_boundaries.py"
 }
 
 # Resolve the ELF path for the current build flavor, preferring Release if both

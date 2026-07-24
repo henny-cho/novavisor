@@ -2,8 +2,6 @@ set(NOVA_PROJECT_ARCH "aarch64")
 set(NOVA_PROJECT_BOARD "qemu_virt")
 set(NOVA_PROJECT_CAPABILITIES
     gicv3
-    smmuv3
-    dma
 )
 
 set(NOVA_COMPONENTS
@@ -16,15 +14,6 @@ set(NOVA_COMPONENTS
     vgic
     soft_timer
     core_timer
-    core_vcpu
     console_mux
-    demo_hvc
-    ivc
-    psci
-    watchdog
-    smmu
-    dma_device
-    dma_probe
-    smp
-    vuart
+    core_vcpu
 )

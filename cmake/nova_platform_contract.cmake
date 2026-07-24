@@ -1,0 +1,105 @@
+# Build-time contract for selectable architecture, board, and project profiles.
+
+function(nova_validate_selection_paths)
+    foreach(kind IN ITEMS ARCH BOARD PROJECT)
+        if(NOT EXISTS "${NOVA_${kind}_DIR}/CMakeLists.txt")
+            message(FATAL_ERROR "Unsupported NOVA_${kind}: '${NOVA_${kind}}'")
+        endif()
+    endforeach()
+    if(NOT EXISTS "${NOVA_BOARD_DIR}/board.cmake")
+        message(FATAL_ERROR "Board '${NOVA_BOARD}' does not provide its manifest")
+    endif()
+    if(NOT EXISTS "${NOVA_BOARD_DIR}/device_inventory.yml")
+        message(FATAL_ERROR "Board '${NOVA_BOARD}' does not provide a device inventory")
+    endif()
+    if(NOT EXISTS "${NOVA_PROJECT_DIR}/project.cmake")
+        message(FATAL_ERROR "Project '${NOVA_PROJECT}' does not provide its manifest")
+    endif()
+endfunction()
+
+function(nova_validate_platform_manifest)
+    foreach(variable IN ITEMS
+            NOVA_BOARD_ARCH
+            NOVA_BOARD_REQUIRED_CPU
+            NOVA_PROJECT_ARCH
+            NOVA_PROJECT_BOARD)
+        if(NOT DEFINED ${variable} OR "${${variable}}" STREQUAL "")
+            message(FATAL_ERROR "${variable} is required by the selected manifest")
+        endif()
+    endforeach()
+
+    if(NOT NOVA_BOARD_ARCH STREQUAL NOVA_ARCH)
+        message(FATAL_ERROR "Board '${NOVA_BOARD}' requires arch=${NOVA_BOARD_ARCH}")
+    endif()
+    if(NOT NOVA_PROJECT_ARCH STREQUAL NOVA_ARCH OR
+       NOT NOVA_PROJECT_BOARD STREQUAL NOVA_BOARD)
+        message(FATAL_ERROR
+            "Project '${NOVA_PROJECT}' requires arch=${NOVA_PROJECT_ARCH}, board=${NOVA_PROJECT_BOARD}")
+    endif()
+    if(NOT NOVA_BOARD_CPU STREQUAL NOVA_BOARD_REQUIRED_CPU)
+        message(FATAL_ERROR
+            "Board '${NOVA_BOARD}' requires CPU model '${NOVA_BOARD_REQUIRED_CPU}', got '${NOVA_BOARD_CPU}'")
+    endif()
+    if(NOT NOVA_COMPONENTS)
+        message(FATAL_ERROR "Project '${NOVA_PROJECT}' selected no components")
+    endif()
+
+    set(known_capabilities gicv3 smmuv3 dma)
+    foreach(capability IN LISTS NOVA_BOARD_CAPABILITIES NOVA_PROJECT_CAPABILITIES)
+        if(NOT capability IN_LIST known_capabilities)
+            message(FATAL_ERROR "Unknown platform capability '${capability}'")
+        endif()
+    endforeach()
+    foreach(capability IN LISTS NOVA_PROJECT_CAPABILITIES)
+        if(NOT capability IN_LIST NOVA_BOARD_CAPABILITIES)
+            message(FATAL_ERROR
+                "Project '${NOVA_PROJECT}' requires unsupported capability '${capability}'")
+        endif()
+    endforeach()
+
+    set(required_gicv3 core_gic vgic)
+    set(required_smmuv3 smmu)
+    set(required_dma dma_device dma_probe)
+    foreach(capability IN LISTS known_capabilities)
+        foreach(component IN LISTS required_${capability})
+            if(capability IN_LIST NOVA_PROJECT_CAPABILITIES)
+                if(NOT component IN_LIST NOVA_COMPONENTS)
+                    message(FATAL_ERROR
+                        "Capability '${capability}' requires component '${component}'")
+                endif()
+            elseif(component IN_LIST NOVA_COMPONENTS)
+                message(FATAL_ERROR
+                    "Component '${component}' requires capability '${capability}'")
+            endif()
+        endforeach()
+    endforeach()
+    if(dma IN_LIST NOVA_PROJECT_CAPABILITIES AND
+       NOT smmuv3 IN_LIST NOVA_PROJECT_CAPABILITIES)
+        message(FATAL_ERROR "Capability 'dma' requires capability 'smmuv3'")
+    endif()
+
+    set(required_facades board.hpp board_layout.h gicv3.hpp uart.hpp)
+    if(smmuv3 IN_LIST NOVA_PROJECT_CAPABILITIES)
+        list(APPEND required_facades smmuv3.hpp)
+    endif()
+    if(dma IN_LIST NOVA_PROJECT_CAPABILITIES)
+        list(APPEND required_facades dma_device.hpp)
+    endif()
+    foreach(facade IN LISTS required_facades)
+        if(NOT EXISTS "${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/${facade}")
+            message(FATAL_ERROR
+                "Board '${NOVA_BOARD}' is missing active facade '${facade}'")
+        endif()
+    endforeach()
+endfunction()
+
+function(nova_validate_platform_targets)
+    foreach(target IN ITEMS nova_board nova_arch nova_arch_linker_script)
+        if(NOT TARGET ${target})
+            message(FATAL_ERROR "Selected platform is missing target '${target}'")
+        endif()
+    endforeach()
+    if(NOT NOVA_LINKER_SCRIPT)
+        message(FATAL_ERROR "Selected architecture did not export NOVA_LINKER_SCRIPT")
+    endif()
+endfunction()

@@ -1,9 +1,7 @@
 /* nova/abi/guest_layout.h
  *
- * Phase 5 guest memory window — the single source of truth shared by:
- *   - projects/qemu_virt_arm64/include/guest_config.hpp (Stage 2 map,
- *     ELR/SP_EL1 seeding)
- *   - demo/common/linker.ld.S (guest link base; preprocessed at build)
+ * Guest memory window shared by the selected project configuration and
+ * guest linker script for Stage 2 mapping, entry, stack, and DTB placement.
  *
  * The QEMU loader address in each demo's manifest.yml (guests[].load_addr)
  * must match NOVA_GUEST_IPA_BASE — the demo runner consumes the manifest

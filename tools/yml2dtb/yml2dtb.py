@@ -31,10 +31,6 @@ REPO = Path(__file__).resolve().parents[2]
 DEFAULT_LAYOUT = REPO / "src" / "nova" / "abi" / "guest_layout.h"
 GIC_REGS = REPO / "src" / "nova" / "arch" / "gicv3_regs.h"
 
-# QEMU virt RAM ceiling (-m 1024 in task.sh run / demo_runner.py):
-# 0x4000_0000 + 1 GiB. Pristine copies must stay below it.
-RAM_END = 0x8000_0000
-
 MIB = 0x10_0000
 MAX_DEVICES = 8
 
@@ -54,7 +50,15 @@ def read_defines(path: Path, wanted: list[str]) -> dict[str, int]:
     return values
 
 
-def read_layout(path: Path, board_layout: Path) -> dict[str, int]:
+def read_string_define(path: Path, name: str) -> str:
+    text = path.read_text()
+    match = re.search(rf'#define\s+{name}\s+"([^"]+)"', text)
+    if not match:
+        sys.exit(f"yml2dtb: {name} not found in {path}")
+    return match.group(1)
+
+
+def read_layout(path: Path, board_layout: Path) -> dict[str, int | str]:
     values = read_defines(path, [
         "NOVA_GUEST_IPA_BASE", "NOVA_GUEST_IPA_SIZE", "NOVA_GUEST_PA_ALIGN",
         "NOVA_IVC_SHM_IPA", "NOVA_IVC_SHM_PA", "NOVA_IVC_SHM_SIZE",
@@ -65,12 +69,15 @@ def read_layout(path: Path, board_layout: Path) -> dict[str, int]:
     values |= read_defines(GIC_REGS, ["NOVA_GICD_FRAME_SIZE", "NOVA_GICR_FRAME_SIZE"])
     values |= read_defines(board_layout, [
         "NOVA_BOARD_SMP_CPUS", "NOVA_BOARD_RAM_BASE", "NOVA_BOARD_RAM_SIZE",
+        "NOVA_BOARD_PHYS_RAM_SIZE",
         "NOVA_BOARD_UART0_BASE", "NOVA_BOARD_UART0_INTID",
         "NOVA_BOARD_GICD_BASE", "NOVA_BOARD_GICR_BASE",
         "NOVA_BOARD_SMMU_BASE", "NOVA_BOARD_SMMU_SIZE",
         "NOVA_BOARD_SMMU_EVENT_INTID", "NOVA_BOARD_SMMU_CMD_INTID",
         "NOVA_BOARD_SMMU_ERROR_INTID",
     ])
+    values["NOVA_BOARD_GUEST_CPU_COMPATIBLE"] = read_string_define(
+        board_layout, "NOVA_BOARD_GUEST_CPU_COMPATIBLE")
     return values
 
 
@@ -179,7 +186,7 @@ def build_guest_dtb(guest: dict, layout: dict[str, int]) -> bytes:
     for n in range(guest["vcpus"]):
         w.begin_node(f"cpu@{n}")
         w.prop_str("device_type", "cpu")
-        w.prop_str("compatible", "arm,cortex-a57")
+        w.prop_str("compatible", layout["NOVA_BOARD_GUEST_CPU_COMPATIBLE"])
         w.prop_u32("reg", n)
         w.prop_str("enable-method", "psci")
         w.end_node()
@@ -424,8 +431,9 @@ def load_config(path: Path, layout: dict[str, int], inventory: dict) -> tuple[li
         load_pa = (load_pa + size + align - 1) & ~(align - 1)
 
     pristine_end = layout["NOVA_GUEST_PRISTINE_PA"] + sum(g["memory_size"] for g in parsed)
-    if pristine_end > RAM_END:
-        sys.exit(f"yml2dtb: pristine copies end at {pristine_end:#x}, past RAM end {RAM_END:#x}")
+    ram_end = layout["NOVA_BOARD_RAM_BASE"] + layout["NOVA_BOARD_PHYS_RAM_SIZE"]
+    if pristine_end > ram_end:
+        sys.exit(f"yml2dtb: pristine copies end at {pristine_end:#x}, past RAM end {ram_end:#x}")
 
     physical_ranges = [
         (guest["name"], guest["load_pa"], guest["memory_size"]) for guest in parsed

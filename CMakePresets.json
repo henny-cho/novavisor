@@ -14,6 +14,7 @@
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchain-aarch64.cmake",
         "NOVA_ARCH": "aarch64",
         "NOVA_BOARD": "qemu_virt",
+        "NOVA_BOARD_CPU": "cortex-a57",
         "NOVA_PROJECT": "qemu_virt_arm64"
       }
     },
@@ -38,6 +39,17 @@
       }
     },
     {
+      "name": "aarch64-minimal-release",
+      "displayName": "AArch64 Minimal Release",
+      "description": "Release build without SMMU or DMA components",
+      "inherits": "aarch64-base",
+      "binaryDir": "${sourceDir}/build/aarch64-minimal-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NOVA_PROJECT": "qemu_virt_arm64_minimal"
+      }
+    },
+    {
       "name": "host-debug",
       "displayName": "Host Debug",
       "description": "Debug build for host (x86_64) GTest suite",
@@ -56,6 +68,10 @@
     {
       "name": "aarch64-release",
       "configurePreset": "aarch64-release"
+    },
+    {
+      "name": "aarch64-minimal-release",
+      "configurePreset": "aarch64-minimal-release"
     },
     {
       "name": "host-debug",
