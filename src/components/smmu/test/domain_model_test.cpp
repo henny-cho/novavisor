@@ -88,6 +88,27 @@ TEST(SmmuDomain, TracksAttachDetachAndQuarantine) {
   EXPECT_EQ(snapshot_fault(binding, 0x10).generation, 2);
 }
 
+TEST(SmmuDomain, CoalescesRepeatedStreamFaultsBeforeRecovery) {
+  StreamBinding binding{};
+  ASSERT_TRUE(configure_binding(binding, 0, kGuests.size()));
+  ASSERT_TRUE(mark_attached(binding, 2));
+  constexpr std::array<std::uint32_t, 2> streams{0x10, 0x10};
+
+  const auto notices = collect_fault_notices<streams.size()>(streams, [&](std::uint32_t stream_id) {
+    const FaultNotice notice = snapshot_fault(binding, stream_id);
+    if (notice.valid()) {
+      EXPECT_TRUE(mark_quarantined(binding));
+    }
+    return notice;
+  });
+
+  ASSERT_EQ(notices.count, 1);
+  EXPECT_EQ(notices.notices[0].owner_vm, 0);
+  EXPECT_EQ(notices.notices[0].stream_id, 0x10);
+  EXPECT_EQ(notices.notices[0].generation, 2);
+  EXPECT_EQ(binding.state, DomainState::kQuarantined);
+}
+
 TEST(SmmuDomain, RejectsInvalidOrConflictingBinding) {
   StreamBinding binding{};
   EXPECT_FALSE(configure_binding(binding, kGuests.size(), kGuests.size()));

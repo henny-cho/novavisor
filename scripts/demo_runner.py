@@ -362,6 +362,7 @@ class PreparedVerification:
     command: tuple[str, ...]
     timeout_seconds: int
     expectations: tuple[dict, ...]
+    forbidden_patterns: tuple[str, ...] = ()
 
 
 def diagnostics_path_for_tail(tail_path: Path) -> Path:
@@ -440,6 +441,7 @@ def verify_child_output(
     eof_error: type[BaseException],
     on_match: Callable[[PatternMatch], None] | None = None,
     fatal_patterns: tuple[str, ...] = (),
+    forbidden_patterns: tuple[str, ...] = (),
 ) -> VerificationResult:
     """Verify one spawned process and terminate it on every exit path."""
     started_at = 0.0
@@ -468,7 +470,8 @@ def verify_child_output(
             wait = min(within, remaining)
 
             try:
-                patterns = [pattern, *fatal_patterns] if fatal_patterns else pattern
+                monitored_patterns = (*forbidden_patterns, pattern, *fatal_patterns)
+                patterns = list(monitored_patterns) if forbidden_patterns or fatal_patterns else pattern
                 matched_index = child.expect(patterns, timeout=wait)
             except timeout_error:
                 failed_at = clock()
@@ -494,11 +497,23 @@ def verify_child_output(
                 break
 
             matched_at = clock()
-            if fatal_patterns and matched_index != 0:
-                fatal_pattern = fatal_patterns[matched_index - 1]
+            expected_index = len(forbidden_patterns)
+            if forbidden_patterns and matched_index < expected_index:
+                result = VerificationResult(
+                    failure="forbidden",
+                    pattern=forbidden_patterns[matched_index],
+                    wait_seconds=max(0.0, matched_at - wait_started),
+                    elapsed_seconds=max(0.0, matched_at - started_at),
+                    remaining_seconds=max(0.0, deadline - matched_at),
+                    error=f"while waiting for /{pattern}/",
+                    matches=tuple(matches),
+                )
+                break
+            if fatal_patterns and matched_index > expected_index:
+                fatal_index = matched_index - expected_index - 1
                 result = VerificationResult(
                     failure="fatal",
-                    pattern=fatal_pattern,
+                    pattern=fatal_patterns[fatal_index],
                     wait_seconds=max(0.0, matched_at - wait_started),
                     elapsed_seconds=max(0.0, matched_at - started_at),
                     remaining_seconds=max(0.0, deadline - matched_at),
@@ -588,6 +603,42 @@ def verify_child_output(
         except (Exception, SystemExit) as exc:
             termination_error = f"{type(exc).__name__}: {exc}"
 
+        if result.failure is None and termination_succeeded and forbidden_patterns:
+            try:
+                drain_index = child.expect([*forbidden_patterns, eof_error], timeout=1.0)
+                if drain_index < len(forbidden_patterns):
+                    failed_at = clock()
+                    result = VerificationResult(
+                        failure="forbidden",
+                        pattern=forbidden_patterns[drain_index],
+                        elapsed_seconds=max(0.0, failed_at - started_at),
+                        remaining_seconds=max(0.0, deadline - failed_at),
+                        error="after all expected output matched",
+                        matches=tuple(matches),
+                    )
+            except eof_error:
+                pass
+            except KeyboardInterrupt as exc:
+                if interrupted is None:
+                    interrupted = exc
+            except (Exception, SystemExit) as exc:
+                try:
+                    failed_at = clock()
+                except (Exception, SystemExit):
+                    failed_at = started_at
+                result = VerificationResult(
+                    failure="exception",
+                    elapsed_seconds=max(0.0, failed_at - started_at),
+                    remaining_seconds=max(0.0, deadline - failed_at),
+                    error=f"post-termination output check failed: {type(exc).__name__}: {exc}",
+                    traceback_text="".join(traceback.format_exception(
+                        type(exc),
+                        exc,
+                        exc.__traceback__,
+                    )),
+                    matches=tuple(matches),
+                )
+
     final_result = VerificationResult(
         failure=result.failure,
         pattern=result.pattern,
@@ -665,6 +716,18 @@ def manifest_variants(manifest: dict) -> list[dict]:
     }]
 
 
+def manifest_pattern_list(manifest: dict, key: str) -> tuple[str, ...]:
+    patterns = manifest.get(key, [])
+    if not isinstance(patterns, list) or any(not isinstance(pattern, str) or not pattern for pattern in patterns):
+        raise SystemExit(f"[demo_runner] manifest '{key}' must be a list of non-empty patterns")
+    for pattern in patterns:
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise SystemExit(f"[demo_runner] manifest '{key}' has invalid pattern /{pattern}/: {exc}") from exc
+    return tuple(patterns)
+
+
 def prepare_verification(
     name: str,
     manifest: dict,
@@ -674,6 +737,10 @@ def prepare_verification(
     elf_snapshot: Path | None = None,
 ) -> PreparedVerification:
     label = name if "name" not in variant else f"{name}[{variant['name']}]"
+    forbidden_patterns = manifest_pattern_list(manifest, "forbid")
+    expectations = tuple(variant.get("expect", []))
+    if forbidden_patterns and not expectations:
+        raise SystemExit("[demo_runner] manifest 'forbid' requires at least one expected pattern")
     elf = build_hypervisor(variant.get("config"))
     if elf_snapshot is not None:
         elf_snapshot.parent.mkdir(parents=True, exist_ok=True)
@@ -687,7 +754,8 @@ def prepare_verification(
         phase=manifest.get("phase"),
         command=tuple(command),
         timeout_seconds=int(manifest.get("timeout_seconds", 30)),
-        expectations=tuple(variant.get("expect", [])),
+        expectations=expectations,
+        forbidden_patterns=forbidden_patterns,
     )
 
 
@@ -702,6 +770,10 @@ def report_verification_failure(result: VerificationResult) -> None:
               f"remaining {result.remaining_seconds:.1f}s)", file=sys.stderr)
     elif result.failure == "fatal":
         print(f"\n[demo_runner] FAIL: fatal output /{result.pattern}/ {result.error} "
+              f"(elapsed {result.elapsed_seconds:.1f}s, "
+              f"remaining {result.remaining_seconds:.1f}s)", file=sys.stderr)
+    elif result.failure == "forbidden":
+        print(f"\n[demo_runner] FAIL: forbidden output /{result.pattern}/ {result.error} "
               f"(elapsed {result.elapsed_seconds:.1f}s, "
               f"remaining {result.remaining_seconds:.1f}s)", file=sys.stderr)
     elif result.failure in ("exception", "interrupted"):
@@ -764,6 +836,7 @@ def run_prepared_verification(
             eof_error=pexpect.EOF,
             on_match=report_match,
             fatal_patterns=FATAL_OUTPUT_PATTERNS,
+            forbidden_patterns=prepared.forbidden_patterns,
         )
     except VerificationInterrupted as interrupted:
         report_verification_failure(interrupted.result)

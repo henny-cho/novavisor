@@ -26,10 +26,13 @@ inline constexpr std::uint64_t kLrStateMask     = 3ULL << 62U; // 00 = inactive
 inline constexpr std::uint64_t kLrStatePending  = 1ULL << 62U;
 inline constexpr std::uint64_t kLrGroup1        = 1ULL << 60U;
 inline constexpr std::uint64_t kLrPriorityShift = 48U;
+inline constexpr std::uint64_t kLrEoi           = 1ULL << 41U;
 inline constexpr std::uint64_t kLrVintidMask    = 0xFFFF'FFFFULL;
 
-[[nodiscard]] constexpr auto make_lr(std::uint32_t vintid, std::uint8_t priority) noexcept -> std::uint64_t {
-  return kLrStatePending | kLrGroup1 | (static_cast<std::uint64_t>(priority) << kLrPriorityShift) | vintid;
+[[nodiscard]] constexpr auto make_lr(std::uint32_t vintid, std::uint8_t priority, bool maintenance_eoi = false) noexcept
+    -> std::uint64_t {
+  return kLrStatePending | kLrGroup1 | (static_cast<std::uint64_t>(priority) << kLrPriorityShift) |
+         (maintenance_eoi ? kLrEoi : 0U) | vintid;
 }
 
 // True while the entry is pending or active — the guest has not
@@ -50,7 +53,26 @@ inline constexpr std::uint64_t kLrVintidMask    = 0xFFFF'FFFFULL;
 struct CpuState {
   RedistState                        redist;
   std::array<std::uint64_t, kMaxLrs> lr{};
+  struct EoiToken {
+    std::uint32_t virtual_intid  = 0;
+    std::uint32_t physical_intid = 0;
+    std::uint64_t generation     = 0;
+
+    [[nodiscard]] constexpr auto valid() const noexcept -> bool { return generation != 0U; }
+  };
+  std::array<EoiToken, kMaxLrs> lr_token{};
 };
+
+using EoiToken = CpuState::EoiToken;
+
+[[nodiscard]] constexpr auto take_eoi_token(CpuState& cpu, std::size_t slot) noexcept -> EoiToken {
+  if (slot >= cpu.lr_token.size()) {
+    return {};
+  }
+  const EoiToken token = cpu.lr_token[slot];
+  cpu.lr_token[slot]   = {};
+  return token;
+}
 
 // --- Delivery -----------------------------------------------------------------
 
@@ -95,7 +117,7 @@ struct CpuState {
 // candidates. Returns true only when a distinct deliverable INTID could
 // not fit because every LR is occupied.
 inline auto refill(CpuState& c, std::size_t lr_count, DistState* dist = nullptr, std::uint32_t vcpu = 0,
-                   std::size_t vcpus = 1) noexcept -> bool {
+                   std::size_t vcpus = 1, std::array<EoiToken, kNumSpis>* spi_tokens = nullptr) noexcept -> bool {
   constexpr std::uint32_t kPriorityLimit = 0x100; // above every 8-bit priority
   for (;;) {
     std::uint32_t       best      = kMaxIntid;
@@ -128,7 +150,13 @@ inline auto refill(CpuState& c, std::size_t lr_count, DistState* dist = nullptr,
     if (slot == lr_count) {
       return true; // all LRs busy — maintenance IRQ refills later
     }
-    c.lr[slot] = make_lr(best, static_cast<std::uint8_t>(best_prio));
+    EoiToken token{};
+    if (best >= kNumPrivate && spi_tokens != nullptr) {
+      token                             = (*spi_tokens)[best - kNumPrivate];
+      (*spi_tokens)[best - kNumPrivate] = {};
+    }
+    c.lr_token[slot] = token;
+    c.lr[slot]       = make_lr(best, static_cast<std::uint8_t>(best_prio), token.valid());
     if (best < kNumPrivate) {
       c.redist.pending &= ~(1U << best);
     } else {

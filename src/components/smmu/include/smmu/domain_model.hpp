@@ -5,6 +5,7 @@
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -49,6 +50,25 @@ struct FaultNotice {
 
   [[nodiscard]] constexpr auto valid() const noexcept -> bool { return owner_vm != dma::kNoVm && generation != 0U; }
 };
+
+template <std::size_t Capacity>
+struct FaultNoticeBatch {
+  std::array<FaultNotice, Capacity> notices{};
+  std::size_t                       count = 0;
+};
+
+template <std::size_t Capacity, typename Quarantine>
+[[nodiscard]] constexpr auto collect_fault_notices(std::span<const std::uint32_t> stream_ids,
+                                                   Quarantine quarantine) noexcept -> FaultNoticeBatch<Capacity> {
+  FaultNoticeBatch<Capacity> notices{};
+  for (const std::uint32_t stream_id : stream_ids) {
+    const FaultNotice notice = quarantine(stream_id);
+    if (notice.valid() && notices.count < notices.notices.size()) {
+      notices.notices[notices.count++] = notice;
+    }
+  }
+  return notices;
+}
 
 [[nodiscard]] constexpr auto snapshot_fault(const StreamBinding& binding, std::uint32_t stream_id) noexcept
     -> FaultNotice {

@@ -11,6 +11,7 @@
 #include "guest_config.hpp"
 
 #include "dtb_parser/fdt_model.hpp"
+#include "hal/board/qemu_virt/include/pci_edu.hpp"
 #include "hal/console.hpp"
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
@@ -34,6 +35,8 @@ extern const std::uint32_t g_guest_dtb_count;
 
 namespace nova {
 namespace {
+
+namespace edu = board::qemu_virt::pci_edu;
 
 // Entry [0] boots automatically; the rest stay off until a guest
 // issues HVC_VM_START. Static affinity by slot: VMs 0/1 boot on
@@ -107,9 +110,39 @@ auto guest_table() noexcept -> std::span<const GuestDescriptor> {
 
 auto dma::assignment_table() noexcept -> std::span<const dma::Assignment> {
   static constexpr std::array assignments{
-      dma::Assignment{.stream_id = 0x10, .vm = 0},
+      dma::Assignment{.device_id = edu::kDmaDeviceId, .stream_id = edu::kStreamId, .vm = 0},
   };
   return assignments;
+}
+
+auto dma::device_stream_table() noexcept -> std::span<const dma::DeviceStream> {
+  static constexpr std::array devices{
+      dma::DeviceStream{.device_id = edu::kDmaDeviceId, .stream_id = edu::kStreamId},
+  };
+  return devices;
+}
+
+auto dma::device_region_table() noexcept -> std::span<const dma::DeviceRegion> {
+  static constexpr std::array regions{
+      dma::DeviceRegion{
+          .device_id = edu::kDmaDeviceId,
+          .ipa_base  = edu::kBar0,
+          .pa_base   = edu::kBar0,
+          .size      = edu::kBar0Size,
+      },
+  };
+  return regions;
+}
+
+auto dma::device_interrupt_table() noexcept -> std::span<const dma::DeviceInterrupt> {
+  static constexpr std::array interrupts{
+      dma::DeviceInterrupt{
+          .device_id      = edu::kDmaDeviceId,
+          .physical_intid = edu::kPhysicalIntid,
+          .virtual_intid  = edu::kVirtualIntid,
+      },
+  };
+  return interrupts;
 }
 
 } // namespace nova

@@ -19,12 +19,20 @@ namespace {
 
 using namespace std::literals;
 
-inline constexpr std::size_t   kOwnerVm       = 0;
 inline constexpr std::uint64_t kTransferBytes = sizeof(std::uint64_t);
 inline constexpr std::uint64_t kTimeoutMs     = 2'000;
 inline constexpr std::uint64_t kSentinelMask  = 0xA5A5'5A5A'3C3C'C3C3ULL;
 
 namespace device = dma_device::hw::device;
+
+[[nodiscard]] auto assignment() noexcept -> const dma::Assignment* {
+  for (const dma::Assignment& candidate : dma::assignment_table()) {
+    if (candidate.device_id == device::kDmaDeviceId) {
+      return &candidate;
+    }
+  }
+  return nullptr;
+}
 
 [[nodiscard]] auto deadline_after_ms(std::uint64_t milliseconds) noexcept -> std::uint64_t {
   return hyp_timer::now() + (hyp_timer::freq() / 1000U) * milliseconds;
@@ -53,22 +61,25 @@ namespace device = dma_device::hw::device;
   }
 }
 
-[[nodiscard]] auto transfer(std::uint64_t source, std::uint64_t destination, bool to_ram) noexcept -> bool {
-  return device::start_dma(source, destination, kTransferBytes, to_ram) && wait_idle();
+[[nodiscard]] auto transfer(std::size_t vm, std::uint64_t generation, std::uint64_t source, std::uint64_t destination,
+                            bool to_ram) noexcept -> bool {
+  return dma_device::start_dma(device::kDmaDeviceId, vm, generation, source, destination, kTransferBytes, to_ram) &&
+         wait_idle();
 }
 
 struct ProbeResources {
   volatile std::uint64_t* scratch           = nullptr;
   std::uint64_t           original          = 0;
+  std::size_t             owner_vm          = dma::kNoVm;
   bool                    device_configured = false;
 };
 
 [[nodiscard]] auto release(ProbeResources& resources) noexcept -> bool {
   bool quiesced = true;
   if (resources.device_configured) {
-    auto result = dma_device::begin_quiesce(kOwnerVm);
+    auto result = dma_device::begin_quiesce(resources.owner_vm);
     while (result == dma_device::QuiesceResult::kPending) {
-      result = dma_device::poll_quiesce(kOwnerVm);
+      result = dma_device::poll_quiesce(resources.owner_vm);
     }
     quiesced = result == dma_device::QuiesceResult::kComplete;
   }
@@ -93,17 +104,23 @@ void run() noexcept {
     return;
   }
 
+  const dma::Assignment* device_assignment = assignment();
+  if (device_assignment == nullptr) {
+    return;
+  }
   ProbeResources resources{};
   const auto     guests = guest_table();
-  if (guests.empty()) {
+  if (device_assignment->vm >= guests.size()) {
     fail("guest configuration", resources);
   }
   resources.device_configured        = true;
-  const GuestDescriptor& guest       = guests[kOwnerVm];
+  resources.owner_vm                 = device_assignment->vm;
+  const GuestDescriptor& guest       = guests[resources.owner_vm];
+  const std::uint64_t    generation  = vcpu::vm_generation(resources.owner_vm);
   const std::uint64_t    source_ipa  = guest.entry_pc;
   const std::uint64_t    scratch_ipa = guest.dtb_ipa - kTransferBytes;
   if (guest.dtb_ipa < guest.ipa_base + kTransferBytes || !guest.contains(source_ipa, kTransferBytes) ||
-      !guest.contains(scratch_ipa, kTransferBytes) || !dma_device::resume_vm(kOwnerVm, vcpu::vm_generation(kOwnerVm))) {
+      !guest.contains(scratch_ipa, kTransferBytes) || !dma_device::resume_vm(resources.owner_vm, generation)) {
     fail("stream attach", resources);
   }
 
@@ -118,7 +135,8 @@ void run() noexcept {
   *scratch = sentinel;
   device::publish_memory();
 
-  if (!transfer(source_ipa, device::kInternalBuffer, false) || !transfer(device::kInternalBuffer, scratch_ipa, true)) {
+  if (!transfer(resources.owner_vm, generation, source_ipa, device::kInternalBuffer, false) ||
+      !transfer(resources.owner_vm, generation, device::kInternalBuffer, scratch_ipa, true)) {
     fail("round-trip timeout", resources);
   }
   if (*scratch != expected) {
@@ -128,14 +146,14 @@ void run() noexcept {
 
   *scratch = sentinel;
   device::publish_memory();
-  if (!transfer(device::kInternalBuffer, guest.ipa_base + guest.ipa_size, true)) {
+  if (!transfer(resources.owner_vm, generation, device::kInternalBuffer, guest.ipa_base + guest.ipa_size, true)) {
     fail("fault request timeout", resources);
   }
   if (!wait_for_fault()) {
     fail("missing SMMU fault", resources);
   }
 
-  if (!transfer(device::kInternalBuffer, scratch_ipa, true)) {
+  if (!transfer(resources.owner_vm, generation, device::kInternalBuffer, scratch_ipa, true)) {
     fail("quarantine retry timeout", resources);
   }
   device::acquire_memory();
@@ -152,11 +170,12 @@ void run() noexcept {
 
 auto inject_runtime_fault(std::size_t vm, std::uint64_t generation) noexcept -> bool {
   const auto guests = guest_table();
-  if (vm >= guests.size() || !device::present() || !dma_device::is_active(vm, generation)) {
+  if (vm >= guests.size() || !device::present()) {
     return false;
   }
   const GuestDescriptor& guest = guests[vm];
-  if (!device::start_dma(device::kInternalBuffer, guest.ipa_base + guest.ipa_size, kTransferBytes, true)) {
+  if (!dma_device::start_dma(device::kDmaDeviceId, vm, generation, device::kInternalBuffer,
+                             guest.ipa_base + guest.ipa_size, kTransferBytes, true)) {
     return false;
   }
   console::write("[dma] runtime fault requested\n");

@@ -57,6 +57,26 @@ inline auto disable_spi(std::uint32_t intid) noexcept -> bool {
   return board::qemu_virt::gicv3::disable_spi(intid);
 }
 
+inline auto configure_spi(std::uint32_t intid, std::size_t target_cpu, SpiTrigger trigger = SpiTrigger::kLevel) noexcept
+    -> bool {
+  if (target_cpu >= NOVA_BOARD_SMP_CPUS) {
+    return false;
+  }
+  return board::qemu_virt::gicv3::configure_spi(intid, static_cast<std::uint32_t>(target_cpu), trigger);
+}
+
+inline auto mask_spi(std::uint32_t intid) noexcept -> bool {
+  return board::qemu_virt::gicv3::mask_spi(intid);
+}
+
+inline auto unmask_spi(std::uint32_t intid) noexcept -> bool {
+  return board::qemu_virt::gicv3::unmask_spi(intid);
+}
+
+inline auto clear_pending_spi(std::uint32_t intid) noexcept -> bool {
+  return board::qemu_virt::gicv3::clear_pending_spi(intid);
+}
+
 // Send an SGI to another core (EL2 cross-call IPI).
 inline void send_sgi(std::size_t target_cpu, std::uint32_t intid) noexcept {
   arch::gicv3::send_sgi(target_cpu, intid);

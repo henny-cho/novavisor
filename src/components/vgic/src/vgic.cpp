@@ -46,9 +46,10 @@ std::size_t                            g_lr_count = 0;
 // can MMIO their views concurrently and an SPI post can race a sibling
 // vCPU's MMIO — one lock serializes every distributor and redistributor
 // register-file RMW (MMIO write, post, refill).
-std::array<DistState, kMaxGuests> g_dist;
-sync::SpinLock                    g_dist_lock;
-ReevaluateHook                    g_reevaluate_hook = nullptr;
+std::array<DistState, kMaxGuests>                      g_dist;
+std::array<std::array<EoiToken, kNumSpis>, kMaxGuests> g_spi_tokens;
+sync::SpinLock                                         g_dist_lock;
+ReevaluateHook                                         g_reevaluate_hook = nullptr;
 
 [[nodiscard]] auto resident_here() noexcept -> std::size_t& {
   return g_resident[cpu::id()];
@@ -79,8 +80,8 @@ void flush(std::size_t index) noexcept {
   {
     sync::Guard       guard{g_dist_lock}; // refill claims `pending` bits — races sibling-frame MMIO
     const std::size_t vm = vm_of(index);
-    overflow =
-        refill(cpu, g_lr_count, &g_dist[vm], static_cast<std::uint32_t>(vcpu_of(index)), guest_table()[vm].vcpus);
+    overflow = refill(cpu, g_lr_count, &g_dist[vm], static_cast<std::uint32_t>(vcpu_of(index)), guest_table()[vm].vcpus,
+                      &g_spi_tokens[vm]);
   }
   const std::uint64_t hcr = gic_virt::kIchHcrBase | (overflow ? gic_virt::kIchHcrUie : 0U);
 
@@ -94,6 +95,39 @@ void flush(std::size_t index) noexcept {
   }
 }
 
+void drain_eois(std::size_t index) noexcept {
+  if (index != resident_here()) {
+    return;
+  }
+  const std::uint64_t eisr = gic_virt::read_eisr();
+  if (eisr == 0U) {
+    return;
+  }
+
+  std::array<VirtualEoiCall, kMaxLrs> calls{};
+  std::size_t                         call_count = 0;
+  CpuState&                           cpu        = g_cpu[index];
+  for (std::size_t i = 0; i < g_lr_count && i < cpu.lr.size(); ++i) {
+    if ((eisr & (1ULL << i)) == 0U) {
+      continue;
+    }
+    cpu.lr[i]            = gic_virt::read_lr(i);
+    const EoiToken token = take_eoi_token(cpu, i);
+    if (token.valid()) {
+      calls[call_count++] = {
+          .slot          = index,
+          .virtual_intid = token.virtual_intid,
+          .token         = token,
+      };
+    }
+    cpu.lr[i] = 0;
+    gic_virt::write_lr(i, 0);
+  }
+  for (std::size_t i = 0; i < call_count; ++i) {
+    cib::service<VirtualEoiService>(&calls[i]);
+  }
+}
+
 void log_raz_wi(const char* frame, std::uint64_t off) noexcept {
   console::write("[vgic] RAZ/WI ");
   console::write(frame);
@@ -104,12 +138,20 @@ void log_raz_wi(const char* frame, std::uint64_t off) noexcept {
 
 void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
   const std::size_t slot  = resident_here();
-  DistState&        dist  = g_dist[vm_of(slot)];
+  const std::size_t vm    = vm_of(slot);
+  DistState&        dist  = g_dist[vm];
   bool              known = false;
   {
     sync::Guard guard{g_dist_lock}; // SPI banks race post/refill across cores
     if (call->write) {
       known = dist_write(dist, off, call->size, call->value);
+      if (known && off == kGicdIcpendr1) {
+        for (std::size_t i = 0; i < kNumSpis; ++i) {
+          if (g_spi_tokens[vm][i].valid()) {
+            dist.spi_pending |= 1U << i;
+          }
+        }
+      }
     } else {
       const MmioRead r = dist_read(dist, off, call->size);
       known            = r.known;
@@ -124,7 +166,6 @@ void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
   // out after dropping the model lock; the SMP hook coalesces remote
   // owner work and local targets refill immediately.
   if (call->write) {
-    const std::size_t vm = vm_of(slot);
     for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
       request_reevaluate(slot_of(vm, v));
     }
@@ -209,6 +250,7 @@ void cpu_reset(std::size_t index) noexcept {
 }
 
 void cpu_save(std::size_t index) noexcept {
+  drain_eois(index);
   CpuState& cpu = g_cpu[index];
   for (std::size_t i = 0; i < g_lr_count; ++i) {
     cpu.lr[i] = gic_virt::read_lr(i);
@@ -254,6 +296,28 @@ auto post(std::size_t index, std::uint32_t vintid) noexcept -> bool {
   return true;
 }
 
+auto post_tracked(std::size_t index, std::uint32_t vintid, std::uint32_t physical_intid,
+                  std::uint64_t generation) noexcept -> bool {
+  if (vintid < kNumPrivate || vintid >= kMaxIntid || generation == 0U) {
+    return false;
+  }
+  std::size_t target = index;
+  {
+    sync::Guard       guard{g_dist_lock};
+    const std::size_t vm        = vm_of(index);
+    const std::size_t spi_index = vintid - kNumPrivate;
+    EoiToken&         token     = g_spi_tokens[vm][spi_index];
+    if (token.valid()) {
+      return token.physical_intid == physical_intid && token.generation == generation;
+    }
+    token = {.virtual_intid = vintid, .physical_intid = physical_intid, .generation = generation};
+    g_dist[vm].spi_pending |= 1U << spi_index;
+    target = slot_of(vm, spi_target(g_dist[vm], vintid, guest_table()[vm].vcpus));
+  }
+  request_reevaluate(target);
+  return true;
+}
+
 auto reevaluate(std::size_t index) noexcept -> bool {
   flush(index);
   return has_deliverable(index);
@@ -266,7 +330,8 @@ auto spi_target_vcpu(std::size_t vm, std::uint32_t intid) noexcept -> std::size_
 
 void vm_reset(std::size_t vm) noexcept {
   sync::Guard guard{g_dist_lock};
-  g_dist[vm] = DistState{};
+  g_dist[vm]       = DistState{};
+  g_spi_tokens[vm] = {};
 }
 
 auto has_deliverable(std::size_t index) noexcept -> bool {
@@ -367,11 +432,13 @@ void vgic_component::handle_irq(IrqCall* call) noexcept {
   if (call->intid != gic_virt::kMaintenanceIntid) {
     return;
   }
-  call->handled = true;
+  call->handled              = true;
+  const std::size_t resident = vgic::resident_here();
+  vgic::drain_eois(resident);
   // Underflow: the guest resident on the receiving core drained its
   // LRs while software pending remained — top them up. flush() drops
   // UIE once the queue is empty, deasserting this (level) interrupt.
-  vgic::flush(vgic::resident_here());
+  vgic::flush(resident);
 }
 
 } // namespace nova

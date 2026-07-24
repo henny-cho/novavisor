@@ -166,6 +166,100 @@ class DemoRunnerVerificationTest(unittest.TestCase):
         self.assertEqual(result.elapsed_seconds, 0.5)
         self.assertEqual(child.terminate_calls, [True])
 
+    def test_manifest_forbidden_output_stops_before_expected_pattern(self):
+        class ForbiddenChild(FakeChild):
+            def expect(self, patterns, timeout):
+                self.events.append(("expect", patterns, timeout))
+                self.clock.advance(0.25)
+                return 0
+
+        clock = FakeClock()
+        child = ForbiddenChild(clock)
+        forbidden = (r"\[dma\] VM 0 resumed generation 4",)
+        result = demo_runner.verify_child_output(
+            child,
+            [{"pattern": "dma lifecycle boot 3"}],
+            20,
+            clock=clock,
+            timeout_error=FakeTimeout,
+            eof_error=FakeEof,
+            fatal_patterns=demo_runner.FATAL_OUTPUT_PATTERNS,
+            forbidden_patterns=forbidden,
+        )
+
+        self.assertEqual(result.failure, "forbidden")
+        self.assertEqual(result.pattern, forbidden[0])
+        self.assertEqual(result.error, "while waiting for /dma lifecycle boot 3/")
+        self.assertEqual(result.elapsed_seconds, 0.25)
+        self.assertEqual(child.terminate_calls, [True])
+
+    def test_manifest_forbid_patterns_are_shared_and_validated(self):
+        manifest = {"forbid": ["generation 4"]}
+        self.assertEqual(
+            demo_runner.manifest_pattern_list(manifest, "forbid"),
+            ("generation 4",),
+        )
+        for invalid in ("generation 4", [""], ["["]):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(SystemExit):
+                    demo_runner.manifest_pattern_list({"forbid": invalid}, "forbid")
+
+    def test_forbidden_output_after_last_expected_is_detected_during_drain(self):
+        class BufferedForbiddenChild(FakeChild):
+            def __init__(self, clock):
+                super().__init__(clock)
+                self.expect_calls = 0
+
+            def expect(self, patterns, timeout):
+                self.events.append(("expect", patterns, timeout))
+                self.expect_calls += 1
+                if self.expect_calls == 1:
+                    return 1
+                return 0
+
+        clock = FakeClock()
+        child = BufferedForbiddenChild(clock)
+        forbidden = ("generation 4",)
+        result = demo_runner.verify_child_output(
+            child,
+            [{"pattern": "boot 3"}],
+            20,
+            clock=clock,
+            timeout_error=FakeTimeout,
+            eof_error=FakeEof,
+            forbidden_patterns=forbidden,
+        )
+
+        self.assertEqual(result.failure, "forbidden")
+        self.assertEqual(result.pattern, forbidden[0])
+        self.assertEqual(result.error, "after all expected output matched")
+        self.assertEqual(child.terminate_calls, [True])
+
+    def test_clean_eof_after_last_expected_preserves_success(self):
+        class CleanChild(FakeChild):
+            def __init__(self, clock):
+                super().__init__(clock)
+                self.expect_calls = 0
+
+            def expect(self, patterns, timeout):
+                self.events.append(("expect", patterns, timeout))
+                self.expect_calls += 1
+                return 1
+
+        child = CleanChild(FakeClock())
+        result = demo_runner.verify_child_output(
+            child,
+            [{"pattern": "boot 3"}],
+            20,
+            clock=child.clock,
+            timeout_error=FakeTimeout,
+            eof_error=FakeEof,
+            forbidden_patterns=("generation 4",),
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(child.terminate_calls, [True])
+
     def test_send_occurs_only_after_its_pattern_matches(self):
         clock = FakeClock()
         child = FakeChild(clock)

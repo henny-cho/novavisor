@@ -13,6 +13,7 @@
 #include "core_mmu/stage2_builder.hpp"
 #include "core_mmu/stage2_descriptor.hpp"
 #include "hal/console.hpp"
+#include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/guest_layout.h"
 #include "nova_panic/nova_panic.hpp"
@@ -33,11 +34,12 @@ namespace {
 // The L3 pool serves sub-2 MiB fragments only — the 1 MiB guest window
 // and the IVC shared page land in the same 2 MiB slot, so one pool
 // table suffices today; the second is headroom for window growth.
-inline constexpr std::size_t kL3PoolSize = 2;
+inline constexpr std::size_t kL2PoolSize = 2;
+inline constexpr std::size_t kL3PoolSize = 3;
 
 struct TableSet {
   mmu::Table                          l1;
-  mmu::Table                          l2;
+  std::array<mmu::Table, kL2PoolSize> l2_pool;
   std::array<mmu::Table, kL3PoolSize> l3_pool;
 };
 
@@ -114,21 +116,28 @@ auto pristine_slot(std::size_t index) noexcept -> void* {
 void build_guest_tables(std::size_t index, const GuestDescriptor& guest) noexcept {
   TableSet& set = stage2_sets[index];
 
+  std::array<std::uint64_t, kL2PoolSize> l2_pas{};
+  for (std::size_t i = 0; i < kL2PoolSize; ++i) {
+    l2_pas[i] = reinterpret_cast<std::uint64_t>(&set.l2_pool[i]);
+  }
   std::array<std::uint64_t, kL3PoolSize> l3_pas{};
   for (std::size_t i = 0; i < kL3PoolSize; ++i) {
     l3_pas[i] = reinterpret_cast<std::uint64_t>(&set.l3_pool[i]);
   }
 
-  mmu::Stage2Tables tables{.l1          = &set.l1,
-                           .l2          = &set.l2,
-                           .l2_pa       = reinterpret_cast<std::uint64_t>(&set.l2),
-                           .l3_pool     = set.l3_pool,
-                           .l3_pool_pas = l3_pas};
+  mmu::Stage2Tables tables{
+      .l1 = &set.l1, .l2_pool = set.l2_pool, .l2_pool_pas = l2_pas, .l3_pool = set.l3_pool, .l3_pool_pas = l3_pas};
   mmu::init_tables(tables);
 
   if (!mmu::map_range(tables, guest.ipa_base, guest.load_pa, guest.ipa_size, mmu::desc::kAttrNormalRwx) ||
       !mmu::map_range(tables, NOVA_IVC_SHM_IPA, NOVA_IVC_SHM_PA, NOVA_IVC_SHM_SIZE, mmu::desc::kAttrNormalRwData)) {
     panic_stage2(index);
+  }
+  for (const dma::DeviceRegion& region : dma::device_region_table()) {
+    if (dma::owner_of(dma::assignment_table(), region.device_id) == index &&
+        !mmu::map_range(tables, region.ipa_base, region.pa_base, region.size, mmu::desc::kAttrDeviceRw)) {
+      panic_stage2(index);
+    }
   }
 
   g_vttbr[index] =

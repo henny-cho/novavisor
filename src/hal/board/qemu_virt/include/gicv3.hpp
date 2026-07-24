@@ -72,11 +72,11 @@ inline void enable_ppi(uint32_t intid) noexcept {
   *mmio32(redist_frame() + NOVA_GICR_ISENABLER0) = 1U << intid;
 }
 
-// Route one standard SPI to a core and enable it at the distributor:
+// Route one standard SPI to a core while leaving it masked:
 // Group 1, level-triggered reset config, IROUTER = the core's Aff0.
 // Distributor state is system-wide — call from single-threaded
 // bring-up or serialize externally.
-inline auto enable_spi(uint32_t intid, uint32_t core, arch::gicv3::SpiTrigger trigger) noexcept -> bool {
+inline auto configure_spi(uint32_t intid, uint32_t core, arch::gicv3::SpiTrigger trigger) noexcept -> bool {
   const arch::gicv3::SpiRegisters regs  = arch::gicv3::spi_registers(intid);
   const std::uint32_t             typer = *mmio32(GICD_BASE + NOVA_GICD_TYPER);
   if (!regs.valid || !arch::gicv3::spi_implemented(intid, typer) || core >= NOVA_BOARD_SMP_CPUS) {
@@ -94,13 +94,10 @@ inline auto enable_spi(uint32_t intid, uint32_t core, arch::gicv3::SpiTrigger tr
 
   *reinterpret_cast<volatile uint64_t*>(GICD_BASE + regs.route_offset) = core;
   __asm__ volatile("dsb sy" ::: "memory");
-  *mmio32(GICD_BASE + regs.enable_offset) = regs.bit;
-  __asm__ volatile("dsb sy" ::: "memory");
   return true;
 }
 
-// Disable one standard SPI without changing its group or route.
-inline auto disable_spi(uint32_t intid) noexcept -> bool {
+inline auto mask_spi(uint32_t intid) noexcept -> bool {
   const arch::gicv3::SpiRegisters regs  = arch::gicv3::spi_registers(intid);
   const std::uint32_t             typer = *mmio32(GICD_BASE + NOVA_GICD_TYPER);
   if (!regs.valid || !arch::gicv3::spi_implemented(intid, typer)) {
@@ -109,6 +106,36 @@ inline auto disable_spi(uint32_t intid) noexcept -> bool {
   *mmio32(GICD_BASE + regs.disable_offset) = regs.bit;
   wait_for_rwp();
   return true;
+}
+
+inline auto unmask_spi(uint32_t intid) noexcept -> bool {
+  const arch::gicv3::SpiRegisters regs  = arch::gicv3::spi_registers(intid);
+  const std::uint32_t             typer = *mmio32(GICD_BASE + NOVA_GICD_TYPER);
+  if (!regs.valid || !arch::gicv3::spi_implemented(intid, typer)) {
+    return false;
+  }
+  *mmio32(GICD_BASE + regs.enable_offset) = regs.bit;
+  __asm__ volatile("dsb sy" ::: "memory");
+  return true;
+}
+
+inline auto clear_pending_spi(uint32_t intid) noexcept -> bool {
+  const arch::gicv3::SpiRegisters regs  = arch::gicv3::spi_registers(intid);
+  const std::uint32_t             typer = *mmio32(GICD_BASE + NOVA_GICD_TYPER);
+  if (!regs.valid || !arch::gicv3::spi_implemented(intid, typer)) {
+    return false;
+  }
+  *mmio32(GICD_BASE + regs.clear_offset) = regs.bit;
+  __asm__ volatile("dsb sy" ::: "memory");
+  return true;
+}
+
+inline auto enable_spi(uint32_t intid, uint32_t core, arch::gicv3::SpiTrigger trigger) noexcept -> bool {
+  return configure_spi(intid, core, trigger) && unmask_spi(intid);
+}
+
+inline auto disable_spi(uint32_t intid) noexcept -> bool {
+  return mask_spi(intid);
 }
 
 } // namespace nova::board::qemu_virt::gicv3

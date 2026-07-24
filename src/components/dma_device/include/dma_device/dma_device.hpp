@@ -1,7 +1,9 @@
 #pragma once
 
 #include "core_vcpu/core_vcpu.hpp"
+#include "nova/abi/dma.hpp"
 #include "smmu/smmu.hpp"
+#include "vgic/vgic.hpp"
 
 #include <cib/top.hpp>
 #include <cstddef>
@@ -27,15 +29,23 @@ void init() noexcept;
 [[nodiscard]] auto resume_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool;
 [[nodiscard]] auto can_start(std::size_t vm) noexcept -> bool;
 [[nodiscard]] auto is_active(std::size_t vm, std::uint64_t generation) noexcept -> bool;
+[[nodiscard]] auto start_dma(dma::DeviceId device_id, std::size_t vm, std::uint64_t generation, std::uint64_t source,
+                             std::uint64_t destination, std::uint64_t count, bool to_ram) noexcept -> bool;
 
 } // namespace nova::dma_device
 
 namespace nova {
 
 struct dma_device_component {
+  static void handle_irq(IrqCall* call) noexcept;
+  static void handle_virtual_eoi(VirtualEoiCall* call) noexcept;
+
   constexpr static auto INIT = flow::action<"dma_device_init">([]() noexcept { dma_device::init(); });
 
-  constexpr static auto config = cib::config(cib::extend<cib::RuntimeStart>(core_vcpu_component::INIT >> *INIT));
+  constexpr static auto config =
+      cib::config(cib::extend<cib::RuntimeStart>(vgic_component::INIT >> core_vcpu_component::INIT >> *INIT),
+                  cib::extend<IrqService>(&dma_device_component::handle_irq),
+                  cib::extend<VirtualEoiService>(&dma_device_component::handle_virtual_eoi));
 };
 
 } // namespace nova

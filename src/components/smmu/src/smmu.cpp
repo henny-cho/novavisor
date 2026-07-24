@@ -45,7 +45,7 @@ inline constexpr std::size_t kEventQueueAlign   = kEventCount * sizeof(EventReco
 
 struct alignas(mmu::k4KiB) DmaTableSet {
   mmu::Table                             l1;
-  mmu::Table                             l2;
+  std::array<mmu::Table, 1>              l2_pool;
   std::array<mmu::Table, kDmaL3PoolSize> l3_pool;
 };
 static_assert(sizeof(DmaTableSet) % mmu::k4KiB == 0);
@@ -54,11 +54,6 @@ struct FaultBatch {
   std::array<std::uint32_t, kEventCount> stream_ids{};
   std::size_t                            count     = 0;
   std::size_t                            processed = 0;
-};
-
-struct FaultNoticeBatch {
-  std::array<FaultNotice, kEventCount> notices{};
-  std::size_t                          count = 0;
 };
 
 alignas(kStreamTableAlign) std::array<StreamTableEntry, kStreamCount> g_stream_table{};
@@ -173,6 +168,7 @@ std::uint32_t                              g_audit_events  = 0;
 [[nodiscard]] auto build_dma_contexts(const Capabilities& caps) noexcept -> bool {
   const auto guests      = guest_table();
   const auto assignments = dma::assignment_table();
+  const auto devices     = dma::device_stream_table();
   if (guests.empty() || guests.size() > kMaxGuests) {
     return false;
   }
@@ -189,7 +185,7 @@ std::uint32_t                              g_audit_events  = 0;
       dma::PhysicalRange{.base = NOVA_IVC_SHM_PA, .size = NOVA_IVC_SHM_SIZE},
       dma::PhysicalRange{.base = NOVA_GUEST_PRISTINE_PA, .size = pristine_size},
   };
-  if (!dma::validate_policy(assignments, guests, {.sid_bits = kSidBits, .protected_pa = protected_pa}).ok()) {
+  if (!dma::validate_policy(assignments, devices, guests, {.sid_bits = kSidBits, .protected_pa = protected_pa}).ok()) {
     return false;
   }
 
@@ -198,14 +194,17 @@ std::uint32_t                              g_audit_events  = 0;
   for (std::size_t vm = 0; vm < guests.size(); ++vm) {
     DmaTableSet& set = g_dma_tables[vm];
 
+    const std::array<std::uint64_t, 1> l2_pas{
+        reinterpret_cast<std::uint64_t>(&set.l2_pool[0]),
+    };
     std::array<std::uint64_t, kDmaL3PoolSize> l3_pas{};
     for (std::size_t i = 0; i < kDmaL3PoolSize; ++i) {
       l3_pas[i] = reinterpret_cast<std::uint64_t>(&set.l3_pool[i]);
     }
     mmu::Stage2Tables tables{
         .l1          = &set.l1,
-        .l2          = &set.l2,
-        .l2_pa       = reinterpret_cast<std::uint64_t>(&set.l2),
+        .l2_pool     = set.l2_pool,
+        .l2_pool_pas = l2_pas,
         .l3_pool     = set.l3_pool,
         .l3_pool_pas = l3_pas,
     };
@@ -357,22 +356,11 @@ void log_fault(const DecodedEvent& event) noexcept {
   return batch;
 }
 
-[[nodiscard]] auto quarantine_faults(const FaultBatch& batch) noexcept -> FaultNoticeBatch {
-  FaultNoticeBatch notices{};
-  for (std::size_t i = 0; i < batch.count; ++i) {
-    const FaultNotice notice = quarantine_fault_stream(batch.stream_ids[i]);
-    if (!notice.valid()) {
-      continue;
-    }
-    notices.notices[notices.count++] = notice;
-  }
-  return notices;
-}
-
 void dispatch_faults(const FaultBatch& batch) noexcept {
   // Snapshot and quarantine every affected domain before recovery can
   // reattach a stream at a newer generation.
-  const FaultNoticeBatch notices = quarantine_faults(batch);
+  const auto notices = collect_fault_notices<kEventCount>(
+      std::span<const std::uint32_t>{batch.stream_ids.data(), batch.count}, quarantine_fault_stream);
   for (std::size_t i = 0; i < notices.count; ++i) {
     DmaFaultCall call{.notice = notices.notices[i]};
     cib::service<DmaFaultService>(&call);

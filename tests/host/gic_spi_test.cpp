@@ -13,6 +13,7 @@ TEST(GicSpi, SelectsFirstSharedBankBoundaries) {
   EXPECT_EQ(regs.group_offset, 0x0084);
   EXPECT_EQ(regs.enable_offset, 0x0104);
   EXPECT_EQ(regs.disable_offset, 0x0184);
+  EXPECT_EQ(regs.clear_offset, 0x0284);
   EXPECT_EQ(regs.config_offset, 0x0C08);
   EXPECT_EQ(regs.edge_bit, 1U << 1U);
   EXPECT_EQ(regs.route_offset, 0x6100);
@@ -43,6 +44,7 @@ TEST(GicSpi, SelectsSmmuInterruptBanks) {
   EXPECT_EQ(first.group_offset, 0x008C);
   EXPECT_EQ(first.enable_offset, 0x010C);
   EXPECT_EQ(first.disable_offset, 0x018C);
+  EXPECT_EQ(first.clear_offset, 0x028C);
   EXPECT_EQ(first.config_offset, 0x0C18);
   EXPECT_EQ(first.edge_bit, 1U << 21U);
   EXPECT_EQ(first.route_offset, 0x6350);
