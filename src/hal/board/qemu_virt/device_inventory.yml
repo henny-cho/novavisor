@@ -1,0 +1,11 @@
+sid_bits: 8
+
+devices:
+  - id: edu0
+    device_id: 0
+    compatible: "qemu,edu"
+    streams: [0x10]
+    mmio: { base: 0x10000000, size: 0x00100000 }
+    interrupt: { intid: 37, trigger: level }
+    coherent: true
+    reset: quiesce

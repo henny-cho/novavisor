@@ -1,2 +1,5 @@
 guests:
   - { name: dma_isolation, memory_size: 0x00100000, vcpus: 1, uart: none }
+
+devices:
+  - { id: edu0, owner: 0, guest_ipa: 0x10000000, virtual_intid: 37 }

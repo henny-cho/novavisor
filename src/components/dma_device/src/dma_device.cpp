@@ -104,8 +104,9 @@ void reset_interrupt(dma::DeviceId device_id) noexcept {
   }
   reset_interrupt(device_id);
   const auto guests = guest_table();
-  return vm < guests.size() &&
-         gic::configure_spi(interrupt->physical_intid, guests[vm].cpu[0], gic::SpiTrigger::kLevel);
+  const auto trigger =
+      interrupt->trigger == dma::InterruptTrigger::kLevel ? gic::SpiTrigger::kLevel : gic::SpiTrigger::kEdge;
+  return vm < guests.size() && gic::configure_spi(interrupt->physical_intid, guests[vm].cpu[0], trigger);
 }
 
 void log_state(std::size_t vm, std::string_view state, std::uint64_t generation = 0) noexcept {
