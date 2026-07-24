@@ -100,6 +100,11 @@ void               cancel_start(std::size_t slot) noexcept;
 [[nodiscard]] auto prepare_start_vm(std::size_t vm) noexcept -> std::uint64_t;
 [[nodiscard]] auto publish_start_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool;
 
+// Replace the seeded boot instance before MainLoop starts. A preboot
+// device verifier uses this after quarantining the initial generation,
+// so the guest and its streams become active under one fresh token.
+[[nodiscard]] auto renew_preboot_generation(std::size_t vm) noexcept -> std::uint64_t;
+
 // Complete a reserved PSCI CPU_ON: seed a secondary vCPU slot at
 // `entry` with context_id in x0 (SP stays 0 — PSCI leaves it to the
 // guest). False when the reservation is absent, the slot is invalid,

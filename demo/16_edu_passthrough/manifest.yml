@@ -1,0 +1,36 @@
+name: "16_edu_passthrough"
+description: "An owner guest drives the EDU BAR directly and completes repeated level IRQs through the virtual GIC."
+phase: 20
+enabled: true
+timeout_seconds: 20
+
+config: "configs/dma.yml"
+qemu_devices:
+  - "edu,bus=pcie.0,addr=2.0,dma_mask=0xffffffffff"
+
+forbid:
+  - "edu passthrough: identity mismatch"
+  - "edu passthrough: interrupt mismatch"
+  - "unhandled physical IRQ"
+  - "demo_exit code=[1-9]"
+
+guests:
+  - name: "edu_passthrough"
+    binary: "edu_passthrough.bin"
+    load_addr:   0x50000000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+
+expect:
+  - pattern: "\\[dma\\] EDU isolation probe passed"
+    within_seconds: 10
+  - pattern: "\\[dma\\] VM 0 resumed generation 2"
+    within_seconds: 5
+  - pattern: "edu passthrough: 8 level irqs ok"
+    within_seconds: 5
+  - pattern: "demo_exit code=0"
+    within_seconds: 5
+  - pattern: "\\[dma\\] VM 0 quiesced"
+    within_seconds: 5

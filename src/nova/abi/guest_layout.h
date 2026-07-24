@@ -61,6 +61,13 @@
 #define NOVA_VUART_IPA_SIZE 0x00001000
 #define NOVA_VUART_SPI      33
 
+/* Direct-assignment contract for the educational PCI device. The BAR
+ * is mapped only into its owner VM; its level SPI is delivered through
+ * the virtual GIC and rearmed after the guest's EOI. */
+#define NOVA_EDU_BAR0_IPA  0x10000000
+#define NOVA_EDU_BAR0_SIZE 0x00100000
+#define NOVA_EDU_SPI       37
+
 /* Guest DTB: each guest's configuration blob (built by tools/yml2dtb)
  * is copied to the top of that guest's configured window before the
  * pristine snapshot, and its IPA is handed to the boot vCPU in x0

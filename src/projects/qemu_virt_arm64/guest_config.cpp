@@ -37,6 +37,7 @@ namespace nova {
 namespace {
 
 namespace edu = board::qemu_virt::pci_edu;
+static_assert(edu::kBar0Size == NOVA_EDU_BAR0_SIZE);
 
 // Entry [0] boots automatically; the rest stay off until a guest
 // issues HVC_VM_START. Static affinity by slot: VMs 0/1 boot on
@@ -126,9 +127,9 @@ auto dma::device_region_table() noexcept -> std::span<const dma::DeviceRegion> {
   static constexpr std::array regions{
       dma::DeviceRegion{
           .device_id = edu::kDmaDeviceId,
-          .ipa_base  = edu::kBar0,
+          .ipa_base  = NOVA_EDU_BAR0_IPA,
           .pa_base   = edu::kBar0,
-          .size      = edu::kBar0Size,
+          .size      = NOVA_EDU_BAR0_SIZE,
       },
   };
   return regions;
@@ -139,7 +140,7 @@ auto dma::device_interrupt_table() noexcept -> std::span<const dma::DeviceInterr
       dma::DeviceInterrupt{
           .device_id      = edu::kDmaDeviceId,
           .physical_intid = edu::kPhysicalIntid,
-          .virtual_intid  = edu::kVirtualIntid,
+          .virtual_intid  = NOVA_EDU_SPI,
       },
   };
   return interrupts;

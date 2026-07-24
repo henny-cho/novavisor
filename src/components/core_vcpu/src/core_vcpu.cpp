@@ -104,6 +104,7 @@ static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
 // Incremented whenever a VM's boot vCPU enters a new powered-on
 // instance. Cross-core watchdog requests use it as a stale-work token.
 std::array<std::atomic<std::uint64_t>, kMaxGuests> g_vm_generation{};
+bool                                               g_scheduler_started = false;
 
 // vCPUs not yet retired, machine-wide — the only scheduler state
 // shared across cores. Each core idles on its own empty ready-set; the
@@ -394,6 +395,7 @@ void init() noexcept {
 }
 
 [[noreturn]] void enter_cpu() noexcept {
+  g_scheduler_started = true;
   // Scratch frame for IRQ drain while no guest has ever run on this
   // core. Callbacks never frame-swap into it: with no resident VCPU
   // the slice is parked and yield is a no-op — a cross-call start
@@ -510,6 +512,21 @@ auto publish_start_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool
   end_lifecycle_transition();
   reschedule_slice(); // the resident VCPU just gained a competitor
   return true;
+}
+
+auto renew_preboot_generation(std::size_t vm) noexcept -> std::uint64_t {
+  const std::size_t slot = slot_of(vm);
+  if (g_scheduler_started || vm >= vm_of(g_count) || affinity(slot) != cpu::id() ||
+      g_vcpus[slot].state != sched::State::kReady || published_power(slot) != PowerState::kOn ||
+      vm_has_live_except(vm, slot)) {
+    return 0;
+  }
+
+  vgic::vm_reset(vm);
+  publish_cntvoff(vm, hyp_timer::now());
+  seed_boot(slot);
+  advance_vm_generation(vm);
+  return vm_generation(vm);
 }
 
 auto start_vcpu(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noexcept -> bool {

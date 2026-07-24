@@ -16,7 +16,6 @@ inline constexpr std::uint32_t  kPciDeviceId    = 0x11E8'1234;
 inline constexpr std::uint64_t  kBar0           = NOVA_BOARD_PCIE_MMIO_BASE;
 inline constexpr std::uint64_t  kBar0Size       = 0x0010'0000;
 inline constexpr std::uint32_t  kPhysicalIntid  = 37;
-inline constexpr std::uint32_t  kVirtualIntid   = 37;
 inline constexpr std::uint64_t  kInternalBuffer = 0x0004'0000;
 inline constexpr std::uint64_t  kBufferSize     = 4096;
 
