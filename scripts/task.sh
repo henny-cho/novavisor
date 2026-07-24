@@ -47,6 +47,7 @@ print_usage() {
     echo "  --release   Build in Release mode (default: Debug)"
     echo "  --clean     (build only) Remove the build directory first"
     echo "  --config F  (build/run) Guest config YAML (default: configs/default.yml)"
+    echo "  --payloads F (build/run) Resolved payload YAML (default: configs/payloads.yml)"
     echo "  --check     (format only) Verify formatting without modifying files"
     echo "  -h, --help  Show this help message"
 }
@@ -127,6 +128,21 @@ _parse_config() {
     fi
 }
 
+_parse_payloads() {
+    local expect=0
+    for arg in "$@"; do
+        if [[ ${expect} -eq 1 ]]; then
+            echo "${arg}"
+            return 0
+        fi
+        [[ "${arg}" == "--payloads" ]] && expect=1
+    done
+    if [[ ${expect} -eq 1 ]]; then
+        echo "Error: --payloads requires a file argument" >&2
+        exit 2
+    fi
+}
+
 # Point the build tree at a guest config (default: configs/default.yml).
 # Copies only on content change, so Ninja regenerates the guest DTBs
 # exactly when the config differs — no CMake reconfigure involved (the
@@ -142,6 +158,19 @@ _sync_config() {
     mkdir -p "${preset_dir}"
     if ! cmp -s "${config}" "${preset_dir}/active_config.yml"; then
         cp "${config}" "${preset_dir}/active_config.yml"
+    fi
+}
+
+_sync_payloads() {
+    local preset_dir="$1"
+    local payloads="${2:-${WORK_DIR}/configs/payloads.yml}"
+    if [ ! -f "${payloads}" ]; then
+        echo "Error: payload manifest not found: ${payloads}" >&2
+        exit 1
+    fi
+    mkdir -p "${preset_dir}"
+    if ! cmp -s "${payloads}" "${preset_dir}/active_payloads.yml"; then
+        cp "${payloads}" "${preset_dir}/active_payloads.yml"
     fi
 }
 
@@ -170,6 +199,9 @@ cmd_build() {
     local CONFIG
     CONFIG=$(_parse_config "$@")
     _sync_config "$(_preset_dir "${PRESET}")" "${CONFIG}"
+    local PAYLOADS
+    PAYLOADS=$(_parse_payloads "$@")
+    _sync_payloads "$(_preset_dir "${PRESET}")" "${PAYLOADS}"
 
     # Configure only on the first run; afterwards Ninja re-runs CMake by
     # itself whenever a CMakeLists.txt changes, so repeat builds stay fast.

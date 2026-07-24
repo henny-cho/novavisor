@@ -3,6 +3,7 @@ description: "First EL1 guest — prints via HVC_PUTS and exits cleanly."
 phase: 5
 enabled: true
 timeout_seconds: 10
+payload_mode: embedded
 
 guests:
   - name: "hello"

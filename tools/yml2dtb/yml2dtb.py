@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""YAML guest/device config -> FDT blobs, runtime policy, and assembly.
+"""YAML guest/device config -> payload bundle, runtime policy, and assembly.
 
 Reads a guest configuration YAML (configs/*.yml), validates it against
 the platform layout and selected board inventory, and emits:
@@ -7,8 +7,8 @@ the platform layout and selected board inventory, and emits:
   <outdir>/guest<N>.dtb   one FDT (v17) per guest, the blob the guest
                           receives in x0 and the hypervisor parses to
                           build its runtime guest table
-  <outdir>/guest_dtbs.S   .incbin wrapper exposing g_guest_dtbs[] /
-                          g_guest_dtb_count to the hypervisor image
+  <outdir>/guest_dtbs.S   .incbin wrapper exposing guest binary, DTB,
+                          placement, size, and checksum metadata
   <outdir>/device_policy.hpp
                           static DMA ownership and device tables
 
@@ -23,6 +23,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import zlib
 from pathlib import Path
 
 import yaml
@@ -427,7 +428,8 @@ def load_config(path: Path, layout: dict[str, int], inventory: dict) -> tuple[li
                      f"the IVC page at {layout['NOVA_IVC_SHM_PA']:#x}")
         parsed.append({"name": name, "memory_size": size, "vcpus": vcpus,
                        "uart": uart, "bootargs": bootargs, "cores": cores,
-                       "autostart": autostart, "load_pa": load_pa, "devices": []})
+                       "autostart": autostart, "load_pa": load_pa,
+                       "entry": layout["NOVA_GUEST_IPA_BASE"], "devices": []})
         load_pa = (load_pa + size + align - 1) & ~(align - 1)
 
     pristine_end = layout["NOVA_GUEST_PRISTINE_PA"] + sum(g["memory_size"] for g in parsed)
@@ -502,42 +504,127 @@ def load_config(path: Path, layout: dict[str, int], inventory: dict) -> tuple[li
     return parsed, assigned
 
 
+def load_payloads(path: Path, guests: list[dict], layout: dict[str, int]) -> list[dict | None]:
+    doc = yaml.safe_load(path.read_text())
+    records = doc.get("payloads") if isinstance(doc, dict) else None
+    if not isinstance(records, list):
+        config_error(path, "'payloads' must be a list")
+    if not records:
+        return [None] * len(guests)
+    if len(records) > len(guests):
+        config_error(path, "payload count exceeds the guest table")
+
+    parsed: list[dict | None] = [None] * len(guests)
+    for record_index, record in enumerate(records):
+        if not isinstance(record, dict):
+            config_error(path, f"payloads[{record_index}] must be a mapping")
+        guest_index = integer(
+            record.get("guest"), path, f"payloads[{record_index}].guest"
+        )
+        if not 0 <= guest_index < len(guests):
+            config_error(path, f"payloads[{record_index}].guest is outside the guest table")
+        if parsed[guest_index] is not None:
+            config_error(path, f"duplicate payload for guest {guest_index}")
+        guest = guests[guest_index]
+
+        binary_value = record.get("binary")
+        if not isinstance(binary_value, str) or not binary_value or '"' in binary_value or "\n" in binary_value:
+            config_error(path, f"payloads[{record_index}].binary must be an assembly-safe path")
+        binary = Path(binary_value)
+        if not binary.is_absolute() or not binary.is_file():
+            config_error(path, f"payloads[{record_index}].binary must be an existing absolute file")
+        data = binary.read_bytes()
+        if not data:
+            config_error(path, f"payloads[{record_index}].binary must not be empty")
+
+        expected_sha256 = record.get("sha256")
+        actual_sha256 = hashlib.sha256(data).hexdigest()
+        if not isinstance(expected_sha256, str) or expected_sha256 != actual_sha256:
+            config_error(path, f"payloads[{record_index}].sha256 does not match the binary")
+
+        load_pa = integer(
+            record.get("load_pa"), path, f"payloads[{record_index}].load_pa"
+        )
+        entry = integer(record.get("entry"), path, f"payloads[{record_index}].entry")
+        memory_size = integer(
+            record.get("memory_size"), path, f"payloads[{record_index}].memory_size"
+        )
+        if load_pa != guest["load_pa"] or memory_size != guest["memory_size"]:
+            config_error(path, f"payloads[{record_index}] placement does not match guest config")
+        ipa_base = layout["NOVA_GUEST_IPA_BASE"]
+        if not ipa_base <= entry < ipa_base + memory_size:
+            config_error(path, f"payloads[{record_index}].entry lies outside guest memory")
+        usable_size = memory_size - layout["NOVA_GUEST_DTB_SIZE"]
+        if len(data) > usable_size:
+            config_error(path, f"payloads[{record_index}].binary overlaps the guest DTB reservation")
+
+        parsed[guest_index] = {
+            "binary": binary.resolve(),
+            "size": len(data),
+            "entry": entry,
+            "checksum": zlib.crc32(data) & 0xFFFFFFFF,
+            "sha256": actual_sha256,
+        }
+    return parsed
+
+
 # ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------
 
-def emit_asm(outdir: Path, count: int, digest: str) -> str:
+def emit_asm(outdir: Path, guests: list[dict], payloads: list[dict | None], digest: str) -> str:
     lines = [
         "// Generated by tools/yml2dtb/yml2dtb.py — do not edit.",
-        "// Embeds the per-guest FDT blobs and the lookup table the",
-        "// runtime guest_table construction reads at boot.",
+        "// Embeds per-guest binaries, FDT blobs, and boot metadata.",
         # The digest makes this file's text change whenever any blob
         # changes, so ninja's restat never prunes the recompile that
         # re-reads the .incbin payloads.
         f"// blobs sha256: {digest}",
         "",
-        '    .section .rodata.guest_dtb, "a"',
+        '    .section .rodata.guest_payload, "a"',
     ]
-    for i in range(count):
+    for i in range(len(guests)):
         lines += [
             "    .balign 8",
             f"guest_dtb_{i}_start:",
             f'    .incbin "{outdir}/guest{i}.dtb"',
             f"guest_dtb_{i}_end:",
         ]
+    for i, payload in enumerate(payloads):
+        if payload is not None:
+            lines += [
+                "    .balign 16",
+                f"guest_image_{i}_start:",
+                f'    .incbin "{payload["binary"]}"',
+                f"guest_image_{i}_end:",
+            ]
     lines += [
         "",
         "    .balign 8",
-        "    .global g_guest_dtbs",
-        "g_guest_dtbs:",
+        "    .global g_guest_payloads",
+        "g_guest_payloads:",
     ]
-    for i in range(count):
-        lines += [f"    .quad guest_dtb_{i}_start", f"    .quad guest_dtb_{i}_end"]
+    for i, (guest, payload) in enumerate(zip(guests, payloads, strict=True)):
+        image = f"guest_image_{i}_start" if payload is not None else "0"
+        image_size = payload["size"] if payload is not None else 0
+        entry = payload["entry"] if payload is not None else guest["entry"]
+        checksum = payload["checksum"] if payload is not None else 0
+        lines += [
+            f"    .quad {image}",
+            f"    .quad guest_dtb_{i}_start",
+            f"    .quad guest_dtb_{i}_end",
+            f"    .quad 0x{guest['load_pa']:X}",
+            f"    .quad 0x{entry:X}",
+            f"    .quad 0x{guest['memory_size']:X}",
+            f"    .quad 0x{image_size:X}",
+            f"    .word 0x{checksum:08X}",
+            "    .word 0",
+        ]
     lines += [
         "",
-        "    .global g_guest_dtb_count",
-        "g_guest_dtb_count:",
-        f"    .word {count}",
+        "    .global g_guest_payload_count",
+        "g_guest_payload_count:",
+        f"    .word {len(guests)}",
         "",
     ]
     return "\n".join(lines)
@@ -616,11 +703,14 @@ def main() -> int:
                     help="selected board_layout.h")
     ap.add_argument("--inventory", type=Path, required=True,
                     help="selected board device inventory")
+    ap.add_argument("--payloads", type=Path, required=True,
+                    help="resolved guest binary payload manifest")
     args = ap.parse_args()
 
     layout = read_layout(args.layout, args.board_layout)
     inventory = load_inventory(args.inventory, layout)
     guests, assigned = load_config(args.config, layout, inventory)
+    payloads = load_payloads(args.payloads, guests, layout)
 
     args.outdir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
@@ -641,8 +731,11 @@ def main() -> int:
                 capture_output=True, text=True)
             if r.returncode != 0:
                 sys.exit(f"yml2dtb: {guest['name']}: dtc rejected the blob:\n{r.stderr}")
+    for payload in payloads:
+        if payload is not None:
+            digest.update(payload["sha256"].encode())
     (args.outdir / "guest_dtbs.S").write_text(
-        emit_asm(args.outdir.resolve(), len(guests), digest.hexdigest()))
+        emit_asm(args.outdir.resolve(), guests, payloads, digest.hexdigest()))
     (args.outdir / "device_policy.hpp").write_text(
         emit_device_policy(inventory, assigned))
     print(f"yml2dtb: {args.config} -> {len(guests)} guest DTB(s), "

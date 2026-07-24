@@ -71,6 +71,12 @@ struct GuestDescriptor {
   std::uint32_t       dtb_size = 0;
   std::uint64_t       dtb_ipa  = 0;
 
+  // Optional binary embedded in the hypervisor image. A zero size keeps
+  // compatibility with an external loader.
+  const std::uint8_t* payload          = nullptr;
+  std::uint64_t       payload_size     = 0;
+  std::uint32_t       payload_checksum = 0;
+
   // True when [ipa, ipa + len) lies fully inside the guest window.
   // len must not exceed ipa_size (callers clamp first).
   [[nodiscard]] constexpr auto contains(std::uint64_t ipa, std::uint64_t len) const noexcept -> bool {

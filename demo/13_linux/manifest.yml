@@ -3,6 +3,7 @@ description: "Upstream Linux (trimmed arm64 defconfig, embedded BusyBox initramf
 phase: 17
 enabled: true
 timeout_seconds: 600
+payload_mode: embedded
 
 config: "configs/linux.yml"
 

@@ -131,6 +131,7 @@ jobs:
             build/demo/**/*.elf
             build/aarch64-debug/novavisor.elf
             build/aarch64-debug/active_config.yml
+            build/aarch64-debug/active_payloads.yml
             build/aarch64-debug/guest_dtb/*.dtb
           if-no-files-found: ignore
 

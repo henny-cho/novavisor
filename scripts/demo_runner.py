@@ -3,7 +3,7 @@
 NovaVisor demo harness.
 
 Reads a demo's manifest.yml, builds the hypervisor and demo guest(s),
-launches QEMU with the guest loaded via -device loader, and verifies
+launches QEMU with embedded or external-loader payloads, and verifies
 that expected output patterns appear within their per-pattern deadlines.
 
 Exits 0 on PASS, non-zero on any failure. CI gates on this exit code.
@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
@@ -210,7 +211,7 @@ def run(cmd: list[str], **kw) -> None:
     subprocess.check_call(cmd, **kw)
 
 
-def build_hypervisor(config: str | None = None) -> Path:
+def build_hypervisor(config: str | None = None, payloads: Path | None = None) -> Path:
     # Always delegate to task.sh: a no-change Ninja rebuild is nearly free,
     # while skipping on HV_ELF existence would verify against a stale binary
     # after source edits. `config` (repo-relative guest config YAML) flows
@@ -222,6 +223,8 @@ def build_hypervisor(config: str | None = None) -> Path:
         if not cfg.exists():
             sys.exit(f"demo_runner: guest config not found: {cfg}")
         cmd += ["--config", str(cfg)]
+    if payloads is not None:
+        cmd += ["--payloads", str(payloads)]
     run(cmd)
     return HV_ELF
 
@@ -273,6 +276,44 @@ def resolve_guest_binary(demo_name: str, demo_build: Path, manifest: dict, spec:
              f"tried {', '.join(str(c) for c in candidates)}{hint}")
 
 
+def payload_mode(manifest: dict) -> str:
+    mode = manifest.get("payload_mode", "loader")
+    if mode not in ("loader", "embedded"):
+        raise SystemExit("[demo_runner] payload_mode must be 'loader' or 'embedded'")
+    return mode
+
+
+def prepare_payload_manifest(
+    demo_name: str,
+    demo_build: Path,
+    manifest: dict,
+) -> Path | None:
+    if payload_mode(manifest) != "embedded":
+        return None
+
+    records = []
+    for index, guest in enumerate(manifest.get("guests", [])):
+        binary = resolve_guest_binary(demo_name, demo_build, manifest, guest).resolve()
+        records.append({
+            "guest": index,
+            "name": guest["name"],
+            "binary": str(binary),
+            "sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+            "load_pa": guest["load_addr"],
+            "entry": guest["entry"],
+            "memory_size": guest["memory_size"],
+        })
+    if not records:
+        raise SystemExit(f"[demo_runner] {demo_name}: embedded mode requires guests")
+
+    path = BUILD_DIR / "payload-manifests" / f"{demo_name}.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = f"{json.dumps({'payloads': records}, indent=2)}\n"
+    if not path.exists() or path.read_text() != content:
+        path.write_text(content)
+    return path
+
+
 def build_qemu_cmd(elf: Path, demo_name: str, demo_build: Path, manifest: dict) -> list[str]:
     cmd = [
         QEMU,
@@ -289,9 +330,8 @@ def build_qemu_cmd(elf: Path, demo_name: str, demo_build: Path, manifest: dict) 
         raise SystemExit(f"[demo_runner] {demo_name}: qemu_devices must be a list of non-empty strings")
     for device in devices:
         cmd += ["-device", device]
+    embedded = payload_mode(manifest) == "embedded"
     for guest in manifest.get("guests", []):
-        binary = resolve_guest_binary(demo_name, demo_build, manifest, guest)
-        addr = guest["load_addr"]
         vcpus = guest.get("vcpus", 1)
         if not 1 <= vcpus <= 2:  # kMaxVcpusPerVm (nova/abi/guest.hpp)
             raise SystemExit(f"[demo_runner] {demo_name}: guest '{guest.get('name')}' asks for "
@@ -300,7 +340,9 @@ def build_qemu_cmd(elf: Path, demo_name: str, demo_build: Path, manifest: dict) 
         if uart not in ("none", "vuart"):  # UartKind (nova/abi/guest.hpp)
             raise SystemExit(f"[demo_runner] {demo_name}: guest '{guest.get('name')}' asks for "
                              f"uart '{uart}' (supported: none, vuart)")
-        cmd += ["-device", f"loader,file={binary},addr={addr:#x},force-raw=on"]
+        if not embedded:
+            binary = resolve_guest_binary(demo_name, demo_build, manifest, guest)
+            cmd += ["-device", f"loader,file={binary},addr={guest['load_addr']:#x},force-raw=on"]
     return cmd
 
 
@@ -741,13 +783,14 @@ def prepare_verification(
     expectations = tuple(variant.get("expect", []))
     if forbidden_patterns and not expectations:
         raise SystemExit("[demo_runner] manifest 'forbid' requires at least one expected pattern")
-    elf = build_hypervisor(variant.get("config"))
+    if demo_build is None:
+        demo_build = build_demos()
+    payloads = prepare_payload_manifest(name, demo_build, manifest)
+    elf = build_hypervisor(variant.get("config"), payloads)
     if elf_snapshot is not None:
         elf_snapshot.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(elf, elf_snapshot)
         elf = elf_snapshot
-    if demo_build is None:
-        demo_build = build_demos()
     command = build_qemu_cmd(elf, name, demo_build, manifest)
     return PreparedVerification(
         label=label,
@@ -916,8 +959,9 @@ def cmd_list(_args) -> int:
 def cmd_run(args) -> int:
     # Non-verifying interactive launch. Useful for manual poking.
     _, manifest = load_manifest(args.name)
-    elf = build_hypervisor(manifest_config(manifest))
     demo_build = build_demos()
+    payloads = prepare_payload_manifest(args.name, demo_build, manifest)
+    elf = build_hypervisor(manifest_config(manifest), payloads)
     cmd = build_qemu_cmd(elf, args.name, demo_build, manifest)
     print(f"[demo_runner] $ {' '.join(shlex.quote(c) for c in cmd)}")
     print("[demo_runner] Press Ctrl-A x to exit QEMU.")
@@ -932,8 +976,9 @@ def cmd_debug(args) -> int:
     # scripts/task.sh debug so .vscode/tasks.json's background problem matcher
     # works unchanged.
     _, manifest = load_manifest(args.name)
-    elf = build_hypervisor(manifest_config(manifest))
     demo_build = build_demos()
+    payloads = prepare_payload_manifest(args.name, demo_build, manifest)
+    elf = build_hypervisor(manifest_config(manifest), payloads)
 
     # Shared fixed path so .vscode/launch.json can `source` it without
     # substituting the demo name — keeps the launch config free of

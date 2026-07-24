@@ -1,6 +1,8 @@
 import importlib.util
+import hashlib
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 
@@ -128,6 +130,89 @@ class DevicePolicyTest(unittest.TestCase):
         self.inventory_path.write_text("sid_bits: 8\ndevices:\n" + "".join(records))
         with self.assertRaisesRegex(SystemExit, "exceeds registry capacity 8"):
             self.load()
+
+
+class PayloadBundleTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.inventory_path = self.root / "inventory.yml"
+        self.config_path = self.root / "config.yml"
+        self.binary_path = self.root / "guest.bin"
+        self.payload_path = self.root / "payloads.yml"
+        self.inventory_path.write_text(INVENTORY)
+        self.config_path.write_text(TWO_GUESTS)
+        self.binary_path.write_bytes(b"embedded guest image")
+        self.layout = YML2DTB.read_layout(YML2DTB.DEFAULT_LAYOUT, BOARD_LAYOUT)
+        inventory = YML2DTB.load_inventory(self.inventory_path, self.layout)
+        self.guests, _ = YML2DTB.load_config(
+            self.config_path, self.layout, inventory
+        )
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def write_payloads(self, *, sha256: str | None = None):
+        digest = sha256 or hashlib.sha256(self.binary_path.read_bytes()).hexdigest()
+        self.payload_path.write_text(
+            "payloads:\n"
+            f"  - {{guest: 0, name: vm0, binary: {self.binary_path}, "
+            f"sha256: {digest}, load_pa: 0x50000000, "
+            "entry: 0x50000000, memory_size: 0x00100000}\n"
+            f"  - {{guest: 1, name: vm1, binary: {self.binary_path}, "
+            f"sha256: {digest}, load_pa: 0x50200000, "
+            "entry: 0x50000000, memory_size: 0x00100000}\n"
+        )
+
+    def test_emits_binary_dtb_and_metadata_records(self):
+        self.write_payloads()
+        payloads = YML2DTB.load_payloads(
+            self.payload_path, self.guests, self.layout
+        )
+
+        self.assertEqual(payloads[0]["size"], len(self.binary_path.read_bytes()))
+        self.assertEqual(
+            payloads[0]["checksum"],
+            zlib.crc32(self.binary_path.read_bytes()) & 0xFFFFFFFF,
+        )
+        assembly = YML2DTB.emit_asm(
+            self.root, self.guests, payloads, "test-digest"
+        )
+        self.assertIn(f'.incbin "{self.binary_path}"', assembly)
+        self.assertIn(".global g_guest_payloads", assembly)
+        self.assertIn(".quad 0x50200000", assembly)
+        self.assertIn(f".word 0x{payloads[0]['checksum']:08X}", assembly)
+
+    def test_empty_payload_list_keeps_loader_compatibility(self):
+        self.payload_path.write_text("payloads: []\n")
+        payloads = YML2DTB.load_payloads(
+            self.payload_path, self.guests, self.layout
+        )
+        assembly = YML2DTB.emit_asm(
+            self.root, self.guests, payloads, "test-digest"
+        )
+
+        self.assertEqual(payloads, [None, None])
+        self.assertNotIn("guest_image_0_start", assembly)
+        self.assertIn(".quad 0x0", assembly)
+        self.assertIn(".word 0x00000000", assembly)
+
+    def test_rejects_checksum_and_guest_index_mismatch(self):
+        self.write_payloads(sha256="0" * 64)
+        with self.assertRaisesRegex(SystemExit, "sha256 does not match"):
+            YML2DTB.load_payloads(self.payload_path, self.guests, self.layout)
+
+        self.payload_path.write_text("payloads:\n  - {guest: 2}\n")
+        with self.assertRaisesRegex(SystemExit, "outside the guest table"):
+            YML2DTB.load_payloads(self.payload_path, self.guests, self.layout)
+
+    def test_rejects_binary_overlapping_dtb_reservation(self):
+        self.binary_path.write_bytes(
+            b"x" * (self.guests[0]["memory_size"] - self.layout["NOVA_GUEST_DTB_SIZE"] + 1)
+        )
+        self.write_payloads()
+        with self.assertRaisesRegex(SystemExit, "overlaps the guest DTB"):
+            YML2DTB.load_payloads(self.payload_path, self.guests, self.layout)
 
 
 if __name__ == "__main__":

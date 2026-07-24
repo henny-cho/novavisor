@@ -16,6 +16,7 @@
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/guest_layout.h"
+#include "nova/abi/payload.hpp"
 #include "nova_panic/nova_panic.hpp"
 
 #include <array>
@@ -111,6 +112,43 @@ auto pristine_slot(std::size_t index) noexcept -> void* {
   halt();
 }
 
+[[noreturn]] void panic_payload(std::size_t guest_index) noexcept {
+  console::write("[NOVA PANIC] embedded payload invalid for guest ");
+  console::write_dec64(guest_index);
+  console::write("\n");
+  halt();
+}
+
+void validate_payloads(std::span<const GuestDescriptor> guests) noexcept {
+  for (std::size_t i = 0; i < guests.size(); ++i) {
+    const GuestDescriptor& guest = guests[i];
+    const payload::Layout  layout{
+         .source     = reinterpret_cast<std::uintptr_t>(guest.payload),
+         .image_size = guest.payload_size,
+         .load_pa    = guest.load_pa,
+         .ipa_base   = guest.ipa_base,
+         .ipa_size   = guest.ipa_size,
+         .entry      = guest.entry_pc,
+         .dtb_ipa    = guest.dtb_ipa,
+         .checksum   = guest.payload_checksum,
+    };
+    if (!payload::layout_valid(layout)) {
+      panic_payload(i);
+    }
+    if (guest.payload_size != 0) {
+      const std::span<const std::uint8_t> image{guest.payload, static_cast<std::size_t>(guest.payload_size)};
+      if (!payload::contents_valid(layout, image)) {
+        panic_payload(i);
+      }
+    }
+    for (std::size_t other = 0; other < i; ++other) {
+      if (payload::ranges_overlap(guest.load_pa, guest.ipa_size, guests[other].load_pa, guests[other].ipa_size)) {
+        panic_payload(i);
+      }
+    }
+  }
+}
+
 // Populate one guest's table set: its window (IPA → PA slot) plus the
 // IVC shared page (same IPA in every VM, RW non-executable).
 void build_guest_tables(std::size_t index, const GuestDescriptor& guest) noexcept {
@@ -162,6 +200,7 @@ void init_and_activate() noexcept {
     console::write("[NOVA PANIC] guest_table size out of range\n");
     halt();
   }
+  validate_payloads(guests);
 
   for (std::size_t i = 0; i < guests.size(); ++i) {
     build_guest_tables(i, guests[i]);
@@ -169,10 +208,18 @@ void init_and_activate() noexcept {
 
   nova_stage2_activate(g_vttbr[0], kVtcrEl2, kHcrEl2);
 
-  // Place each guest's configuration blob at its window-top slot so
-  // the pristine snapshot below captures it — a warm reset then
-  // restores DTB and image together through the same copy.
-  for (const GuestDescriptor& guest : guests) {
+  // Copy embedded binaries before the DTB and pristine snapshot.
+  for (std::size_t i = 0; i < guests.size(); ++i) {
+    const GuestDescriptor& guest = guests[i];
+    if (guest.payload_size != 0) {
+      void* destination = reinterpret_cast<void*>(guest.load_pa);
+      std::memcpy(destination, guest.payload, static_cast<std::size_t>(guest.payload_size));
+      const std::span<const std::uint8_t> copied{static_cast<const std::uint8_t*>(destination),
+                                                 static_cast<std::size_t>(guest.payload_size)};
+      if (payload::checksum32(copied) != guest.payload_checksum) {
+        panic_payload(i);
+      }
+    }
     if (guest.dtb_size != 0) {
       std::memcpy(reinterpret_cast<void*>(guest.to_pa(guest.dtb_ipa)), guest.dtb, guest.dtb_size);
     }
