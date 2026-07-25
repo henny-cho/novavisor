@@ -191,16 +191,19 @@ void fail_vm(std::size_t vm, const char* reason) noexcept {
   {
     sync::Guard guard{g_lock};
     for (const Entry& entry : g_registry.entries()) {
-      if (entry.owner_vm != vm || entry.state == State::kUnavailable || entry.state == State::kQuiesced) {
+      if (entry.owner_vm != vm) {
         continue;
       }
-      if (entry.state == State::kFailed) {
+      switch (classify_quiescing(entry.state, entry.bus_master_blocked)) {
+      case ScanAction::kSkip:
+        continue;
+      case ScanAction::kFail:
         return QuiesceResult::kFailed;
-      }
-      if (entry.state == State::kDetaching || entry.state != State::kQuiescing || !entry.bus_master_blocked) {
+      case ScanAction::kPending:
         return QuiesceResult::kPending;
+      case ScanAction::kCollect:
+        device_ids[count++] = entry.device_id;
       }
-      device_ids[count++] = entry.device_id;
     }
   }
 
@@ -220,14 +223,20 @@ void fail_vm(std::size_t vm, const char* reason) noexcept {
   {
     sync::Guard guard{g_lock};
     for (Entry& entry : g_registry.entries()) {
-      if (entry.owner_vm != vm || entry.state == State::kUnavailable || entry.state == State::kQuiesced) {
+      if (entry.owner_vm != vm) {
         continue;
       }
-      if (entry.state != State::kQuiescing || !entry.bus_master_blocked) {
-        return entry.state == State::kFailed ? QuiesceResult::kFailed : QuiesceResult::kPending;
+      switch (classify_quiescing(entry.state, entry.bus_master_blocked)) {
+      case ScanAction::kSkip:
+        continue;
+      case ScanAction::kFail:
+        return QuiesceResult::kFailed;
+      case ScanAction::kPending:
+        return QuiesceResult::kPending;
+      case ScanAction::kCollect:
+        entry.state     = State::kDetaching;
+        detach_required = true;
       }
-      entry.state     = State::kDetaching;
-      detach_required = true;
     }
   }
   if (!detach_required) {
@@ -313,18 +322,19 @@ auto begin_quiesce(std::size_t vm) noexcept -> QuiesceResult {
       return QuiesceResult::kFailed;
     }
     for (Entry& entry : g_registry.entries()) {
-      if (entry.owner_vm != vm || entry.state == State::kUnavailable || entry.state == State::kQuiesced) {
+      if (entry.owner_vm != vm) {
         continue;
       }
-      if (entry.state == State::kFailed) {
-        return QuiesceResult::kFailed;
-      }
-      if (entry.state == State::kQuiescing || entry.state == State::kDetaching) {
-        pending = true;
+      switch (classify_begin_quiesce(entry.state)) {
+      case ScanAction::kSkip:
         continue;
-      }
-      if (entry.state != State::kActive) {
+      case ScanAction::kFail:
         return QuiesceResult::kFailed;
+      case ScanAction::kPending:
+        pending = true; // already mid-quiesce — converge through complete_quiesce
+        continue;
+      case ScanAction::kCollect:
+        break;
       }
       entry.state              = State::kQuiescing;
       entry.deadline           = deadline_after_ms(kTimeoutMs);
@@ -358,18 +368,21 @@ auto poll_quiesce(std::size_t vm) noexcept -> QuiesceResult {
       return QuiesceResult::kFailed;
     }
     for (const Entry& entry : g_registry.entries()) {
-      if (entry.owner_vm != vm || entry.state == State::kUnavailable || entry.state == State::kQuiesced) {
+      if (entry.owner_vm != vm) {
         continue;
       }
-      if (entry.state == State::kFailed) {
+      switch (classify_quiescing(entry.state, entry.bus_master_blocked)) {
+      case ScanAction::kSkip:
+        continue;
+      case ScanAction::kFail:
         return QuiesceResult::kFailed;
-      }
-      if (entry.state == State::kDetaching || entry.state != State::kQuiescing || !entry.bus_master_blocked) {
+      case ScanAction::kPending:
         return QuiesceResult::kPending;
-      }
-      device_ids[count++] = entry.device_id;
-      if (entry.deadline < deadline) {
-        deadline = entry.deadline;
+      case ScanAction::kCollect:
+        device_ids[count++] = entry.device_id;
+        if (entry.deadline < deadline) {
+          deadline = entry.deadline;
+        }
       }
     }
   }
@@ -400,14 +413,19 @@ auto resume_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
       return true;
     }
     for (Entry& entry : g_registry.entries()) {
-      if (entry.owner_vm != vm || entry.state == State::kUnavailable) {
+      if (entry.owner_vm != vm) {
         continue;
       }
-      if (entry.state != State::kQuiesced) {
+      switch (classify_resume(entry.state)) {
+      case ScanAction::kSkip:
+        continue;
+      case ScanAction::kFail:
+      case ScanAction::kPending: // resume never defers — a non-quiesced entry fails the request
         return false;
+      case ScanAction::kCollect:
+        entry.state         = State::kResuming;
+        device_ids[count++] = entry.device_id;
       }
-      entry.state         = State::kResuming;
-      device_ids[count++] = entry.device_id;
     }
   }
   if (count == 0) {
