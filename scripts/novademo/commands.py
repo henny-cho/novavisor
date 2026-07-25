@@ -274,9 +274,11 @@ def cmd_verify_repeat(args) -> int:
 
     demo_build = build.build_demos()
     prepared_runs = []
+    elf_snapshots = []
     for index, variant in enumerate(manifest.manifest_variants(demo_manifest), start=1):
         snapshot = (settings.BUILD_DIR / "demo-repeat" / args.name
                     / f"variant-{index}" / "novavisor.elf")
+        elf_snapshots.append(snapshot)
         prepared_runs.append(prepare_verification(
             args.name,
             demo_manifest,
@@ -315,6 +317,9 @@ def cmd_verify_repeat(args) -> int:
     success_rate = 100.0 * passed / len(attempts)
     print(f"[demo_runner] repeat summary: {passed}/{len(attempts)} passed "
           f"({success_rate:.1f}%), total={total_seconds:.1f}s")
+    report.append_github_summary(f"{args.name} recovery soak", attempts, summary_path)
+    if passed != len(attempts) and artifacts is not None:
+        report.collect_evidence(artifacts, args.name, demo_manifest, elf_snapshots)
     return 0 if passed == len(attempts) else 1
 
 

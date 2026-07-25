@@ -1,0 +1,79 @@
+# Nightly recovery soaks. One workflow, one matrix entry per soak target —
+# the per-attempt summary and failure evidence are produced by the demo
+# harness itself (verify-repeat --artifacts), so a job only restores caches,
+# runs the soak, and uploads one directory.
+name: Recovery Soak
+
+on:
+  schedule:
+    # 03:17 KST. Offset from the hour to avoid peak shared-runner demand.
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Recovery attempts per target (empty = per-target default)
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: dma
+            demo: "15"
+            default-runs: "10"
+            timeout: 45
+            fetch: "false"
+          - target: mixed
+            demo: "14"
+            default-runs: "5"
+            timeout: 90
+            fetch: "true"
+    concurrency:
+      group: soak-${{ matrix.target }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:26.04
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: ${{ matrix.timeout }}
+    env:
+      SOAK_DIR: build/soak-${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-target
+        with:
+          guests: ${{ matrix.fetch }}
+          ccache-prefix: ccache-soak-${{ matrix.target }}
+
+      - name: Fetch external guest images
+        if: matrix.fetch == 'true'
+        run: scripts/task.sh demo fetch ${{ matrix.demo }}
+
+      - name: Repeat recovery
+        # The harness writes the per-attempt CSV, the GitHub step summary,
+        # and (on failure) the QEMU tails, diagnostics, and build evidence
+        # into ${SOAK_DIR}.
+        run: |
+          scripts/task.sh demo verify-repeat ${{ matrix.demo }} \
+            --runs "${{ inputs.runs || matrix.default-runs }}" \
+            --summary "${SOAK_DIR}/summary.csv" \
+            --artifacts "${SOAK_DIR}"
+
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: soak-${{ matrix.target }}-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: error
+          path: build/soak-${{ matrix.target }}/

@@ -7,12 +7,17 @@ owned here, so CI can rely on one place defining them.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
+import os
+import shutil
+import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from . import settings
 from .console import (
     FailureKind,
     OutputCapture,
@@ -127,3 +132,89 @@ def append_repeat_summary(path: Path, attempt: RepeatAttempt) -> None:
             f"{attempt.elapsed_seconds:.3f}",
             attempt.error,
         ))
+
+
+def append_github_summary(
+    title: str,
+    attempts: list[RepeatAttempt],
+    summary_csv: Path | None,
+) -> None:
+    """Publish the soak result to the GitHub Actions step summary.
+
+    The harness already knows the pass rate, so workflows never post-process
+    the CSV. No-op outside Actions (GITHUB_STEP_SUMMARY unset).
+    """
+    target = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not target:
+        return
+    passed = sum(1 for attempt in attempts if attempt.ok)
+    total = len(attempts)
+    rate = 100.0 * passed / total if total else 0.0
+    elapsed = sum(attempt.elapsed_seconds for attempt in attempts)
+    lines = [
+        f"## {title}",
+        "",
+        f"**Result:** {passed}/{total} passed ({rate:.1f}%), total {elapsed:.1f}s",
+        "",
+    ]
+    if summary_csv is not None and summary_csv.exists():
+        lines += ["```csv", summary_csv.read_text().rstrip("\n"), "```"]
+    with open(target, "a", encoding="utf-8") as stream:
+        stream.write("\n".join(lines) + "\n")
+
+
+def _first_line(cmd: list[str]) -> str:
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
+    except OSError as exc:
+        return f"unavailable: {exc}"
+    return out.splitlines()[0] if out else "unavailable"
+
+
+def collect_evidence(
+    artifacts: ArtifactPaths,
+    name: str,
+    manifest: dict,
+    elf_snapshots: list[Path],
+) -> None:
+    """Copy everything a failure investigation needs next to the QEMU tails.
+
+    A workflow then uploads the artifacts directory as-is instead of
+    hard-coding build-tree paths that silently rot when the harness moves.
+    """
+    evidence = artifacts.root / "evidence"
+    evidence.mkdir(parents=True, exist_ok=True)
+    collected: list[Path] = []
+
+    def keep(src: Path, rename: str | None = None) -> None:
+        if src.is_file():
+            dest = evidence / (rename or src.name)
+            shutil.copy2(src, dest)
+            collected.append(dest)
+
+    for index, snapshot in enumerate(elf_snapshots, start=1):
+        keep(snapshot, f"variant-{index}-novavisor.elf")
+    preset_dir = settings.BUILD_DIR / settings.HV_PRESET
+    keep(preset_dir / "active_config.yml")
+    keep(preset_dir / "active_payloads.yml")
+    for dtb in sorted((preset_dir / "guest_dtb").glob("*.dtb")):
+        keep(dtb)
+    guest_cache = settings.REPO / "external" / "cache" / "guests" / name
+    for guest in manifest.get("guests", []):
+        binary = Path(guest["binary"])
+        keep(settings.DEMO_BUILD_DIR / name / binary.name)
+        keep(guest_cache / binary.name)
+        keep(guest_cache / f"{binary.stem}.elf")
+    if guest_cache.is_dir():
+        for stamp in sorted(guest_cache.glob("*.version")):
+            keep(stamp)
+
+    (evidence / "environment.txt").write_text("\n".join((
+        _first_line(["git", "-C", str(settings.REPO), "rev-parse", "HEAD"]),
+        _first_line([settings.QEMU, "--version"]),
+        _first_line(["aarch64-none-elf-gcc", "--version"]),
+    )) + "\n", encoding="utf-8")
+    (evidence / "sha256sums.txt").write_text("".join(
+        f"{hashlib.sha256(item.read_bytes()).hexdigest()}  {item.name}\n"
+        for item in collected
+    ), encoding="utf-8")
