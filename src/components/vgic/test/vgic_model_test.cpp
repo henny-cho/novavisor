@@ -155,6 +155,54 @@ TEST(VgicRedist, TyperEncodesFrameIdentity) {
   EXPECT_EQ(redist_read(c, kGicrTyperHi, 4, frame1).value, 1U);
 }
 
+TEST(VgicRedistFrame, DecodesStrideIntoVcpuAndOffset) {
+  const auto first = decode_redist_frame(0, 4);
+  EXPECT_TRUE(first.valid);
+  EXPECT_EQ(first.vcpu, 0);
+  EXPECT_EQ(first.offset, 0U);
+  EXPECT_EQ(first.id.number, 0U);
+  EXPECT_FALSE(first.id.last);
+
+  // Mid frame: register offset survives the stride division.
+  const auto mid = decode_redist_frame(2 * kGicrFrameSize + kGicrIsenabler0, 4);
+  EXPECT_TRUE(mid.valid);
+  EXPECT_EQ(mid.vcpu, 2);
+  EXPECT_EQ(mid.offset, kGicrIsenabler0);
+  EXPECT_EQ(mid.id.number, 2U);
+  EXPECT_FALSE(mid.id.last);
+}
+
+TEST(VgicRedistFrame, LastFlagTerminatesTheAffinityWalk) {
+  const auto last = decode_redist_frame(3 * kGicrFrameSize + kGicrTyper, 4);
+  EXPECT_TRUE(last.valid);
+  EXPECT_EQ(last.vcpu, 3);
+  EXPECT_EQ(last.offset, kGicrTyper);
+  EXPECT_TRUE(last.id.last);
+
+  // A single-vCPU VM has exactly one frame, and it is the last.
+  const auto only = decode_redist_frame(kGicrWaker, 1);
+  EXPECT_TRUE(only.valid);
+  EXPECT_EQ(only.vcpu, 0);
+  EXPECT_TRUE(only.id.last);
+}
+
+TEST(VgicRedistFrame, FramesPastTheVcpuCountAreUnmapped) {
+  EXPECT_FALSE(decode_redist_frame(kGicrFrameSize, 1).valid);
+  EXPECT_FALSE(decode_redist_frame(2 * kGicrFrameSize, 2).valid);
+  EXPECT_FALSE(decode_redist_frame(8 * kGicrFrameSize + kGicrCtlr, 2).valid);
+  EXPECT_FALSE(decode_redist_frame(0, 0).valid); // no vCPU owns any frame
+}
+
+TEST(VgicRedistFrame, SgiFrameBelongsToItsOwnRedistributor) {
+  // The SGI_base half sits inside the same stride: it must resolve to
+  // the same vCPU, at the SGI-relative offset the model expects.
+  const auto ref = decode_redist_frame(kGicrFrameSize + kGicrIspendr0, 2);
+  ASSERT_TRUE(ref.valid);
+  EXPECT_EQ(ref.vcpu, 1);
+  EXPECT_EQ(ref.offset, kGicrIspendr0);
+  EXPECT_GE(ref.offset, kGicrSgiFrame);
+}
+
 TEST(VgicRedist, EnableSetAndClearAreOneSided) {
   RedistState c{};
   EXPECT_TRUE(redist_write(c, kGicrIsenabler0, 4, 1U << 27U));

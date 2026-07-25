@@ -287,16 +287,21 @@ auto post_virq(std::size_t slot, std::uint32_t vintid) noexcept -> bool {
   if (slot >= g_count || affinity(slot) != cpu::id()) {
     return false; // foreign-affinity posts arrive through the smp cross-call
   }
-  const bool target_on = g_vcpus[slot].state != sched::State::kOff;
-  if (!target_on && vintid < vgic::kNumPrivate) {
+  if (vintid >= vgic::kNumPrivate) {
+    // SPI: VM-global state — the vGIC resolves the route with the
+    // pending update and the reevaluate fan-out wakes the routed
+    // target (which may be a different vCPU than `slot`).
+    return vgic::post_spi(vm_of(slot), vintid);
+  }
+  if (g_vcpus[slot].state == sched::State::kOff) {
     return false; // private state belongs to a powered-on vCPU
   }
-  if (!vgic::post(slot, vintid)) {
+  if (!vgic::post_private(slot, vintid)) {
     return false;
   }
   // Wake a blocked target only when the vGIC would actually signal it
   // — a pended-but-disabled INTID is not a wfi wake-up event.
-  if (target_on && g_vcpus[slot].state == sched::State::kBlocked && vgic::has_deliverable(slot)) {
+  if (g_vcpus[slot].state == sched::State::kBlocked && vgic::has_deliverable(slot)) {
     wake(slot);
   }
   return true;

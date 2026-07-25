@@ -51,11 +51,12 @@ std::size_t                            g_lr_count = 0;
 // One distributor view per VM — the SPI banks are VM-global state
 // (enable/pending/route shared by the VM's vCPUs). Two cores' guests
 // can MMIO their views concurrently and an SPI post can race a sibling
-// vCPU's MMIO — one lock serializes every distributor and redistributor
-// register-file RMW (MMIO write, post, refill).
+// vCPU's MMIO — a per-VM lock serializes that VM's distributor and
+// redistributor register-file RMWs (MMIO write, post, refill). No path
+// touches two VMs' banks, so one VM's MMIO burst never stalls another.
 std::array<DistState, kMaxGuests>                      g_dist;
 std::array<std::array<EoiToken, kNumSpis>, kMaxGuests> g_spi_tokens;
-sync::SpinLock                                         g_dist_lock;
+std::array<sync::SpinLock, kMaxGuests>                 g_vm_lock;
 
 [[nodiscard]] auto resident_here() noexcept -> std::size_t& {
   return g_resident[cpu::id()];
@@ -93,8 +94,8 @@ void flush(std::size_t index) noexcept {
 
   bool overflow = false;
   {
-    sync::Guard       guard{g_dist_lock}; // refill claims `pending` bits — races sibling-frame MMIO
     const std::size_t vm = vm_of(index);
+    sync::Guard       guard{g_vm_lock[vm]}; // refill claims `pending` bits — races sibling-frame MMIO
     overflow = refill(cpu, g_lr_count, &g_dist[vm], static_cast<std::uint32_t>(vcpu_of(index)), guest_table()[vm].vcpus,
                       &g_spi_tokens[vm]);
   }
@@ -119,27 +120,28 @@ void drain_eois(std::size_t index) noexcept {
     return;
   }
 
-  std::array<VirtualEoiCall, kMaxLrs> calls{};
-  std::size_t                         call_count = 0;
-  CpuState&                           cpu        = g_cpu[index];
+  // The hardware is the truth for the EoI'd slots: pull them into the
+  // shadow before the model consumes their tokens, then mirror the
+  // slots it emptied back out.
+  CpuState& cpu = g_cpu[index];
   for (std::size_t i = 0; i < g_lr_count && i < cpu.lr.size(); ++i) {
-    if ((eisr & (1ULL << i)) == 0U) {
-      continue;
+    if ((eisr & (1ULL << i)) != 0U) {
+      cpu.lr[i] = gic_virt::read_lr(i);
     }
-    cpu.lr[i]            = gic_virt::read_lr(i);
-    const EoiToken token = take_eoi_token(cpu, i);
-    if (token.valid()) {
-      calls[call_count++] = {
-          .slot          = index,
-          .virtual_intid = token.virtual_intid,
-          .token         = token,
-      };
-    }
-    cpu.lr[i] = 0;
-    gic_virt::write_lr(i, 0);
   }
-  for (std::size_t i = 0; i < call_count; ++i) {
-    cib::service<VirtualEoiService>(&calls[i]);
+  const EoiHarvest harvest = harvest_eois(cpu, eisr, g_lr_count);
+  for (std::size_t i = 0; i < g_lr_count && i < cpu.lr.size(); ++i) {
+    if ((harvest.cleared & (1ULL << i)) != 0U) {
+      gic_virt::write_lr(i, 0);
+    }
+  }
+  for (std::size_t i = 0; i < harvest.count; ++i) {
+    VirtualEoiCall call{
+        .slot          = index,
+        .virtual_intid = harvest.tokens[i].virtual_intid,
+        .token         = harvest.tokens[i],
+    };
+    cib::service<VirtualEoiService>(&call);
   }
 }
 
@@ -165,21 +167,14 @@ void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
   WriteResult       write{};
   bool              known = false;
   {
-    sync::Guard guard{g_dist_lock}; // SPI banks race post/refill across cores
+    sync::Guard guard{g_vm_lock[vm]}; // SPI banks race post/refill across cores
     if (call->write) {
       // SPIs holding a live EoI token must survive an ICPENDR1 clear;
       // the model enforces it, this glue only snapshots the token set
       // inside the same critical section.
-      std::uint32_t keep_pending = 0;
-      if (off == kGicdIcpendr1) {
-        for (std::size_t i = 0; i < kNumSpis; ++i) {
-          if (g_spi_tokens[vm][i].valid()) {
-            keep_pending |= 1U << i;
-          }
-        }
-      }
-      write = dist_write(dist, off, call->size, call->value, keep_pending);
-      known = write.known;
+      const std::uint32_t keep_pending = off == kGicdIcpendr1 ? pending_token_mask(g_spi_tokens[vm]) : 0U;
+      write                            = dist_write(dist, off, call->size, call->value, keep_pending);
+      known                            = write.known;
     } else {
       const MmioRead r = dist_read(dist, off, call->size);
       known            = r.known;
@@ -203,11 +198,10 @@ void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
   }
 }
 
-// A GICR access selects a frame by stride; the frame is the vCPU index
-// within the ACCESSING guest's VM. Frames past the VM's vcpu count are
-// RAZ/WI (the guest's TYPER walk stops at Last and never gets there).
+// The decoded frame is the vCPU index within the ACCESSING guest's VM;
+// unmapped frames complete RAZ/WI (the guest's TYPER walk stops at Last
+// and never reaches them).
 void redist_mmio(MmioCall* call, std::uint64_t off) noexcept {
-  const std::size_t frame    = off / kGicrFrameSize;
   const std::size_t resident = resident_here();
   if (resident == kNoResident) { // unreachable: a guest cannot trap before its first switch-in
     if (!call->write) {
@@ -216,24 +210,23 @@ void redist_mmio(MmioCall* call, std::uint64_t off) noexcept {
     log_raz_wi("GICR", off);
     return;
   }
-  const std::size_t      vm    = vm_of(resident);
-  const GuestDescriptor& guest = guest_table()[vm];
-  if (frame >= guest.vcpus) {
+  const std::size_t    vm    = vm_of(resident);
+  const RedistFrameRef frame = decode_redist_frame(off, guest_table()[vm].vcpus);
+  if (!frame.valid) {
     if (!call->write) {
       call->value = 0;
     }
     log_raz_wi("GICR", off);
     return;
   }
-  const std::size_t slot = slot_of(vm, frame);
-  const RedistId    id{.number = static_cast<std::uint32_t>(frame), .last = frame == guest.vcpus - 1U};
-  CpuState&         cpu    = g_cpu[slot];
-  const std::size_t in_off = off % kGicrFrameSize;
+  const std::size_t   slot   = slot_of(vm, frame.vcpu);
+  CpuState&           cpu    = g_cpu[slot];
+  const std::uint64_t in_off = frame.offset;
 
   if (call->write) {
     WriteResult write{};
     {
-      sync::Guard guard{g_dist_lock}; // sibling frames are cross-core writable
+      sync::Guard guard{g_vm_lock[vm]}; // sibling frames are cross-core writable
       write = redist_write(cpu.redist, in_off, call->size, call->value);
     }
     if (!write.known) {
@@ -247,8 +240,8 @@ void redist_mmio(MmioCall* call, std::uint64_t off) noexcept {
   }
   MmioRead r;
   {
-    sync::Guard guard{g_dist_lock}; // sibling frames are cross-core writable
-    r = redist_read(cpu.redist, in_off, call->size, id);
+    sync::Guard guard{g_vm_lock[vm]}; // sibling frames are cross-core writable
+    r = redist_read(cpu.redist, in_off, call->size, frame.id);
   }
   if (!r.known) {
     log_raz_wi("GICR", off);
@@ -280,7 +273,7 @@ void init() noexcept {
 
 void cpu_reset(std::size_t index) noexcept {
   {
-    sync::Guard guard{g_dist_lock}; // a sibling can MMIO this redistributor frame
+    sync::Guard guard{g_vm_lock[vm_of(index)]}; // a sibling can MMIO this redistributor frame
     g_cpu[index] = CpuState{};
   }
   g_hw[index] = HwBank{};
@@ -307,41 +300,43 @@ void cpu_restore(std::size_t index) noexcept {
   resident_here() = index;
 }
 
-auto post(std::size_t index, std::uint32_t vintid) noexcept -> bool {
-  if (vintid >= kMaxIntid) {
-    return false; // beyond the advertised INTID range
+auto post_private(std::size_t index, std::uint32_t vintid) noexcept -> bool {
+  if (vintid >= kNumPrivate) {
+    return false;
   }
-  std::size_t target = index;
   {
-    sync::Guard guard{g_dist_lock}; // pending RMW races sibling-frame MMIO
-    if (vintid < kNumPrivate) {
-      g_cpu[index].redist.pending |= 1U << vintid;
-    } else {
-      const std::size_t vm = vm_of(index);
-      g_dist[vm].spi_pending |= 1U << (vintid - kNumPrivate);
-      target = slot_of(vm, spi_target(g_dist[vm], vintid, guest_table()[vm].vcpus));
-    }
+    sync::Guard guard{g_vm_lock[vm_of(index)]}; // pending RMW races sibling-frame MMIO
+    g_cpu[index].redist.pending |= 1U << vintid;
   }
-  if (vintid < kNumPrivate) {
-    flush(index);
-  } else {
-    // The injector's earlier route snapshot may be stale. Re-read the
-    // route in the same critical section that publishes pending, then
-    // notify that current target after dropping the lock.
-    request_reevaluate(target);
-  }
+  flush(index);
   return true;
 }
 
-auto post_tracked(std::size_t index, std::uint32_t vintid, std::uint32_t physical_intid,
-                  std::uint64_t generation) noexcept -> bool {
-  if (vintid < kNumPrivate || vintid >= kMaxIntid || generation == 0U) {
+auto post_spi(std::size_t vm, std::uint32_t vintid) noexcept -> bool {
+  if (vintid < kNumPrivate || vintid >= kMaxIntid || vm >= guest_table().size()) {
     return false;
   }
-  std::size_t target = index;
+  std::size_t target = 0;
   {
-    sync::Guard       guard{g_dist_lock};
-    const std::size_t vm        = vm_of(index);
+    // Publish pending and read the route in one critical section — an
+    // injector-side route snapshot could go stale against a concurrent
+    // IROUTER write. Notify that current target after dropping the lock.
+    sync::Guard guard{g_vm_lock[vm]};
+    g_dist[vm].spi_pending |= 1U << (vintid - kNumPrivate);
+    target = slot_of(vm, spi_target(g_dist[vm], vintid, guest_table()[vm].vcpus));
+  }
+  request_reevaluate(target);
+  return true;
+}
+
+auto post_spi_tracked(std::size_t vm, std::uint32_t vintid, std::uint32_t physical_intid,
+                      std::uint64_t generation) noexcept -> bool {
+  if (vintid < kNumPrivate || vintid >= kMaxIntid || vm >= guest_table().size() || generation == 0U) {
+    return false;
+  }
+  std::size_t target = 0;
+  {
+    sync::Guard       guard{g_vm_lock[vm]};
     const std::size_t spi_index = vintid - kNumPrivate;
     EoiToken&         token     = g_spi_tokens[vm][spi_index];
     if (token.valid()) {
@@ -360,13 +355,8 @@ auto reevaluate(std::size_t index) noexcept -> bool {
   return has_deliverable(index);
 }
 
-auto spi_target_vcpu(std::size_t vm, std::uint32_t intid) noexcept -> std::size_t {
-  sync::Guard guard{g_dist_lock};
-  return spi_target(g_dist[vm], intid, guest_table()[vm].vcpus);
-}
-
 void vm_reset(std::size_t vm) noexcept {
-  sync::Guard guard{g_dist_lock};
+  sync::Guard guard{g_vm_lock[vm]};
   g_dist[vm]       = DistState{};
   g_spi_tokens[vm] = {};
 }
@@ -385,7 +375,7 @@ auto has_deliverable(std::size_t index) noexcept -> bool {
     }
   }
   const std::size_t vm = vm_of(index);
-  sync::Guard       guard{g_dist_lock};
+  sync::Guard       guard{g_vm_lock[vm]};
   return deliverable(cpu.redist) != 0U ||
          spi_deliverable(g_dist[vm], static_cast<std::uint32_t>(vcpu_of(index)), guest_table()[vm].vcpus) != 0U;
 }

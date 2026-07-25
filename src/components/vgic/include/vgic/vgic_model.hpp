@@ -32,6 +32,7 @@
 #include "nova/arch/gicv3_regs.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace nova::vgic {
@@ -116,6 +117,28 @@ struct RedistId {
 [[nodiscard]] constexpr auto redist_typer(RedistId id) noexcept -> std::uint64_t {
   return (static_cast<std::uint64_t>(id.number) << 32U) | (static_cast<std::uint64_t>(id.number) << 8U) |
          (id.last ? kGicrTyperLast : 0U);
+}
+
+struct RedistFrameRef {
+  bool          valid  = false;
+  std::size_t   vcpu   = 0; // frame index within the VM
+  std::uint64_t offset = 0; // offset within the frame
+  RedistId      id{};
+};
+
+// A GICR access selects a frame by stride; frames at or past the VM's
+// vcpu count are unmapped (RAZ/WI).
+[[nodiscard]] constexpr auto decode_redist_frame(std::uint64_t off, std::size_t vcpus) noexcept -> RedistFrameRef {
+  const auto frame = static_cast<std::size_t>(off / kGicrFrameSize);
+  if (frame >= vcpus) {
+    return {};
+  }
+  return {
+      .valid  = true,
+      .vcpu   = frame,
+      .offset = off % kGicrFrameSize,
+      .id     = {.number = static_cast<std::uint32_t>(frame), .last = frame == vcpus - 1U},
+  };
 }
 
 // GICR_WAKER bits.

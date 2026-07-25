@@ -16,7 +16,8 @@
 //     as the guest drains its LRs.
 //
 // core_vcpu drives residency (cpu_save/cpu_restore on switches,
-// cpu_reset on seed) and funnels vcpu::post_virq into post().
+// cpu_reset on seed) and funnels vcpu::post_virq into
+// post_private()/post_spi().
 
 #include "core_gic/core_gic.hpp"
 #include "trap_handler/mmio.hpp"
@@ -47,23 +48,28 @@ void cpu_reset(std::size_t index) noexcept;
 void cpu_save(std::size_t index) noexcept;
 void cpu_restore(std::size_t index) noexcept;
 
-// Mark an INTID pending for a VCPU and deliver what fits into its
-// list registers. A private INTID lands in the slot's redistributor;
-// an SPI lands in its VM's distributor bank. Its current route is
-// re-read atomically with the pending update, then that owner is
-// reevaluated. False beyond the advertised INTID range.
-[[nodiscard]] auto post(std::size_t index, std::uint32_t vintid) noexcept -> bool;
-[[nodiscard]] auto post_tracked(std::size_t index, std::uint32_t vintid, std::uint32_t physical_intid,
-                                std::uint64_t generation) noexcept -> bool;
+// Mark a private INTID (SGI/PPI) pending in `index`'s redistributor
+// and deliver what fits into its list registers. Runs on the owning
+// core (core_vcpu routes). False beyond the private range.
+[[nodiscard]] auto post_private(std::size_t index, std::uint32_t vintid) noexcept -> bool;
+
+// Mark an SPI pending in `vm`'s distributor bank. The current route
+// (GICD_IROUTER Aff0) is read atomically with the pending update, then
+// that owner is notified through the reevaluate fan-out — callable
+// from any core; injectors need no route pre-lookup. False outside the
+// advertised SPI range.
+[[nodiscard]] auto post_spi(std::size_t vm, std::uint32_t vintid) noexcept -> bool;
+
+// post_spi for a hardware-backed SPI: binds an EoI token (physical
+// INTID + device generation) so the guest's EOI can be forwarded to
+// the right device incarnation. A live token makes a re-post
+// idempotent for the same source and rejects a conflicting one.
+[[nodiscard]] auto post_spi_tracked(std::size_t vm, std::uint32_t vintid, std::uint32_t physical_intid,
+                                    std::uint64_t generation) noexcept -> bool;
 
 // Refill one owner-local target after a register-state change and
 // report whether it now has a deliverable interrupt.
 [[nodiscard]] auto reevaluate(std::size_t index) noexcept -> bool;
-
-// The vCPU index an SPI is routed to inside `vm` (GICD_IROUTER Aff0,
-// out-of-range routes fall back to vCPU 0). Injectors combine it with
-// slot_of(vm, ...) to pick the post target.
-[[nodiscard]] auto spi_target_vcpu(std::size_t vm, std::uint32_t intid) noexcept -> std::size_t;
 
 // Reset a VM's distributor bank (SPI state) to boot values — the VM
 // warm-reset path pairs this with per-vCPU cpu_reset.

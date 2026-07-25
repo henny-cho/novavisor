@@ -44,6 +44,39 @@ struct StreamBinding {
   [[nodiscard]] constexpr auto configured() const noexcept -> bool { return owner_vm != dma::kNoVm; }
 };
 
+// Per-VM stream lists derived once from the configured bindings: owner
+// assignment is fixed at build time while only state/generation mutate,
+// so every domain operation walks its own streams instead of rescanning
+// the whole stream table.
+template <std::size_t MaxStreams>
+struct StreamIndex {
+  std::array<std::array<std::uint16_t, MaxStreams>, kMaxGuests> sids{};
+  std::array<std::size_t, kMaxGuests>                           counts{};
+
+  [[nodiscard]] constexpr auto streams_of(std::size_t vm) const noexcept -> std::span<const std::uint16_t> {
+    if (vm >= kMaxGuests) {
+      return {};
+    }
+    return std::span<const std::uint16_t>{sids[vm].data(), counts[vm]};
+  }
+};
+
+// Unconfigured streams belong to no VM; an owner outside the guest table
+// cannot be indexed and is skipped.
+template <std::size_t MaxStreams>
+[[nodiscard]] constexpr auto build_stream_index(std::span<const StreamBinding> bindings) noexcept
+    -> StreamIndex<MaxStreams> {
+  StreamIndex<MaxStreams> index{};
+  for (std::size_t sid = 0; sid < bindings.size(); ++sid) {
+    const std::size_t vm = bindings[sid].owner_vm;
+    if (!bindings[sid].configured() || vm >= kMaxGuests || index.counts[vm] >= MaxStreams) {
+      continue;
+    }
+    index.sids[vm][index.counts[vm]++] = static_cast<std::uint16_t>(sid);
+  }
+  return index;
+}
+
 struct FaultNotice {
   std::size_t   owner_vm   = dma::kNoVm;
   std::uint32_t stream_id  = 0;
@@ -132,6 +165,21 @@ template <std::size_t Capacity, typename Quarantine>
 [[nodiscard]] constexpr auto attachment_matches(const StreamBinding& binding, std::uint64_t generation) noexcept
     -> bool {
   return binding.configured() && binding.state == DomainState::kAttached && binding.generation == generation;
+}
+
+// True when every stream of the VM can move to (or already sits at) the
+// requested generation — the all-or-nothing gate before any STE install.
+[[nodiscard]] constexpr auto can_attach_vm(std::span<const StreamBinding> bindings, std::span<const std::uint16_t> sids,
+                                           std::uint64_t generation) noexcept -> bool {
+  for (const std::uint16_t sid : sids) {
+    const StreamBinding& binding = bindings[sid];
+    const bool           ok      = binding.state == DomainState::kAttached ? attachment_matches(binding, generation)
+                                                                           : can_attach(binding, generation);
+    if (!ok) {
+      return false;
+    }
+  }
+  return true;
 }
 
 [[nodiscard]] constexpr auto mark_attached(StreamBinding& binding, std::uint64_t generation) noexcept -> bool {
