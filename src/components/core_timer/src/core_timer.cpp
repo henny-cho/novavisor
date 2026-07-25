@@ -7,6 +7,7 @@
 
 #include "core_timer/core_timer.hpp"
 
+#include "core_timer/legacy_slot_model.hpp"
 #include "core_vcpu/core_vcpu.hpp"
 #include "hal/cpu.hpp"
 #include "hal/timer.hpp"
@@ -22,20 +23,12 @@
 namespace nova {
 namespace {
 
-// One legacy one-shot per core (the slot itself lives in the per-core
-// soft_timer queue): owner/armed pair guards double-arming. Arming and
-// expiry both happen on the owner's core.
-struct LegacySlot {
-  std::size_t owner = 0;     // VCPU that armed the running one-shot
-  bool        armed = false; // guards owner and rejects double-arming
-};
-
-std::array<LegacySlot, cpu::kMaxCpus> g_legacy;
+std::array<core_timer::LegacySlot, cpu::kMaxCpus> g_legacy;
 
 // Legacy-slot expiry (runs in soft_timer's IRQ drain). False from
 // post_virq only when the owner exited meanwhile — nobody to notify.
 void on_timer_set_expiry(TrapContext* /*ctx*/, std::uint64_t owner) noexcept {
-  g_legacy[cpu::id()].armed = false;
+  core_timer::release(g_legacy[cpu::id()]);
   (void)vcpu::post_virq(static_cast<std::size_t>(owner), hyp_timer::kGuestTimerVintid);
 }
 
@@ -50,14 +43,12 @@ void core_timer_component::handle_hvc(HvcCall* call) noexcept {
   }
   call->handled = true;
 
-  LegacySlot& slot = g_legacy[cpu::id()];
-  if (slot.armed && slot.owner != vcpu::current_index()) {
+  core_timer::LegacySlot& slot = g_legacy[cpu::id()];
+  if (!core_timer::try_claim(slot, vcpu::current_index())) {
     call->ctx->x[0] = kSmcccNotSupported; // one-shot busy on behalf of another VCPU
     return;
   }
 
-  slot.owner = vcpu::current_index();
-  slot.armed = true;
   soft_timer::arm(soft_timer::kSlotLegacyTimer, hyp_timer::now() + call->ctx->x[1], &on_timer_set_expiry,
                   static_cast<std::uint64_t>(slot.owner));
   call->ctx->x[0] = 0; // SMCCC success

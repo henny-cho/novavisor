@@ -276,8 +276,12 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
   }
 }
 
-[[nodiscard]] inline auto dist_write(DistState& d, std::uint64_t off, std::uint32_t size, std::uint64_t value) noexcept
-    -> WriteResult {
+// `keep_pending` marks SPI bits an ICPENDR1 clear must not drop: an
+// SPI whose EoI token is still live is by construction not yet in any
+// LR (refill consumes the token), so losing its pending bit would lose
+// the interrupt and its EOI-driven rearm with it.
+[[nodiscard]] inline auto dist_write(DistState& d, std::uint64_t off, std::uint32_t size, std::uint64_t value,
+                                     std::uint32_t keep_pending = 0) noexcept -> WriteResult {
   if (off >= kGicdIpriorityrSpi && off + size <= kGicdIpriorityrEnd) {
     detail::prio_write(d.spi_prio, off - kGicdIpriorityrSpi, size, value);
     return {.known = true}; // priority orders delivery, never gates it
@@ -307,7 +311,7 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
     d.spi_pending |= word;
     return {.known = true, .delivery = true};
   case kGicdIcpendr1:
-    d.spi_pending &= ~word;
+    d.spi_pending = (d.spi_pending & ~word) | keep_pending;
     return {.known = true, .delivery = true};
   case kGicdIcfgr2:
   case kGicdIcfgr3:

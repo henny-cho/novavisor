@@ -173,12 +173,16 @@ else()
     nova_add_host_test(gic_sgi_test)       # affinity-aware SGI encoding
     nova_add_host_test(pci_test)           # requester IDs and ECAM layout
     nova_add_host_test(payload_test)       # embedded image metadata and checksum
+    nova_add_host_test(guest_descriptor_test) # guest window bounds check (HVC_PUTS guard)
 
     # Component tests (src/components/<name>/test/).
     nova_add_component_test(core_mmu stage2_descriptor_test) # Stage 2 descriptor encoding
     nova_add_component_test(core_mmu stage2_builder_test)    # Stage 2 identity-map builder
     nova_add_component_test(vgic vgic_model_test)            # GICD/GICR register model
     nova_add_component_test(vgic vgic_delivery_test)         # pending → LR multiplexing
+    nova_add_component_test(trap_handler elr_policy_test)    # per-class ELR advance matrix
+    nova_add_component_test(console_mux line_model_test)     # line assembly + focus cycling
+    nova_add_component_test(core_timer legacy_slot_model_test) # legacy one-shot claim policy
     nova_add_component_test(soft_timer timer_queue_test)     # deadline-slot queue
     nova_add_component_test(core_vcpu sched_model_test)      # scheduler pick/predicates
     nova_add_component_test(core_vcpu fp_model_test)         # lazy FP ownership

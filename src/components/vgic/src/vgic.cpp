@@ -160,15 +160,19 @@ void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
   {
     sync::Guard guard{g_dist_lock}; // SPI banks race post/refill across cores
     if (call->write) {
-      write = dist_write(dist, off, call->size, call->value);
-      known = write.known;
-      if (known && off == kGicdIcpendr1) {
+      // SPIs holding a live EoI token must survive an ICPENDR1 clear;
+      // the model enforces it, this glue only snapshots the token set
+      // inside the same critical section.
+      std::uint32_t keep_pending = 0;
+      if (off == kGicdIcpendr1) {
         for (std::size_t i = 0; i < kNumSpis; ++i) {
           if (g_spi_tokens[vm][i].valid()) {
-            dist.spi_pending |= 1U << i;
+            keep_pending |= 1U << i;
           }
         }
       }
+      write = dist_write(dist, off, call->size, call->value, keep_pending);
+      known = write.known;
     } else {
       const MmioRead r = dist_read(dist, off, call->size);
       known            = r.known;
