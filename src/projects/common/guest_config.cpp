@@ -9,7 +9,7 @@
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/payload.hpp"
-#include "nova_panic/nova_panic.hpp"
+#include "nova/panic.hpp"
 
 #include <array>
 #include <cstddef>

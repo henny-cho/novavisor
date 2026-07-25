@@ -5,6 +5,7 @@
 #include "board.hpp"
 #include "board_layout.h"
 #include "nova/abi/edu.h"
+#include "nova/abi/guest_layout.h"
 #include "nova/arch/pci.hpp"
 
 #include <cstdint>

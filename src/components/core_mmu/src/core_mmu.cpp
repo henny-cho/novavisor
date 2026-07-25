@@ -18,8 +18,8 @@
 #include "nova/abi/guest.hpp"
 #include "nova/abi/guest_layout.h"
 #include "nova/abi/payload.hpp"
+#include "nova/panic.hpp"
 #include "nova/range.hpp"
-#include "nova_panic/nova_panic.hpp"
 
 #include <array>
 #include <cstddef>

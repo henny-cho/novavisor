@@ -1,18 +1,12 @@
 #pragma once
 
 #include "hal/console.hpp"
+#include "nova/panic.hpp"
 
 #include <stdx/ct_string.hpp>
 #include <string_view>
 
 namespace nova {
-
-// Unconditionally halt the CPU. Used as the terminal action in all panic paths.
-[[noreturn]] inline void halt() noexcept {
-  while (true) {
-    asm volatile("wfi");
-  }
-}
 
 // Custom stdx panic handler for bare-metal.
 // On any CIB assertion failure (e.g. calling an uninitialized service),
