@@ -12,6 +12,7 @@
 
 #include "core_mmu/stage2_builder.hpp"
 #include "core_mmu/stage2_descriptor.hpp"
+#include "hal/cache.hpp"
 #include "hal/console.hpp"
 #include "hal/mem.hpp"
 #include "nova/abi/dma.hpp"
@@ -247,6 +248,9 @@ void init_and_activate() noexcept {
       if (payload::checksum32(copied) != guest.payload_checksum) {
         panic_payload(i);
       }
+      // The guest executes what was just written: clean to PoU and
+      // invalidate I-caches, the loader's half of the boot contract.
+      cache::sync_guest_code(guest.load_pa, static_cast<std::size_t>(guest.payload_size));
     }
     if (guest.dtb_size != 0) {
       std::memcpy(reinterpret_cast<void*>(guest.to_pa(guest.dtb_ipa)), guest.dtb, guest.dtb_size);
@@ -290,8 +294,14 @@ void switch_vm(std::size_t guest_index) noexcept {
 
 auto reload_guest_image(std::size_t guest_index) noexcept -> memory::RestoreStats {
   const GuestDescriptor& guest = guest_table()[guest_index];
-  return memory::restore_changed(reinterpret_cast<void*>(guest.load_pa), pristine_slot(guest_index),
-                                 static_cast<std::size_t>(guest.ipa_size));
+  const auto stats = memory::restore_changed(reinterpret_cast<void*>(guest.load_pa), pristine_slot(guest_index),
+                                             static_cast<std::size_t>(guest.ipa_size));
+  // The restored window contains the code the rebooted guest will
+  // execute. The whole window is synced — the sparse restore does not
+  // report which blocks it rewrote; narrow this only if warm-reset
+  // budgets ever demand it.
+  cache::sync_guest_code(guest.load_pa, static_cast<std::size_t>(guest.ipa_size));
+  return stats;
 }
 
 } // namespace mmu

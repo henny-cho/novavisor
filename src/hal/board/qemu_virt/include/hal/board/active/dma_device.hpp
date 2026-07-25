@@ -3,7 +3,7 @@
 // QEMU educational PCI DMA device access.
 
 #include "board.hpp"
-#include "board_layout.h"
+#include "hal/board/active/board_layout.h" /* search path: active board's layout */
 #include "nova/abi/edu.h"
 #include "nova/abi/guest_layout.h"
 #include "nova/arch/pci.hpp"

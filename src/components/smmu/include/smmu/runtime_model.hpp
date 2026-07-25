@@ -77,6 +77,10 @@ struct RuntimeLayout {
   std::uint8_t  event_log2       = 0;
 };
 
+// Queue and table walks: WB cacheable, inner shareable (QUEUE_SH/OC/IC
+// = TABLE_SH/OC/IC = ISH/WB/WB). Must stay attribute-identical to the
+// EL2 Stage-1 normal mapping so device and hypervisor views of the
+// rings and stream table are coherent on real silicon.
 inline constexpr std::uint32_t kCr1Cacheable = 0x0D75;
 inline constexpr std::uint32_t kCr2Protected = regs::kCr2Protected | regs::kCr2RecordSid;
 inline constexpr std::uint32_t kFaultIrqs    = regs::kIrqEvent | regs::kIrqGerror;

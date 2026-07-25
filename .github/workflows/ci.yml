@@ -70,6 +70,9 @@ jobs:
       - name: Build N1SDP payload profile
         run: scripts/task.sh firmware smoke
 
+      - name: Build QEMU TF-A chain profile
+        run: scripts/task.sh firmware qemu-smoke --profile-only
+
       - name: Lint
         # run-clang-tidy over the debug tree's compile database; the debug
         # objects are reused by the demo step below.
