@@ -47,9 +47,7 @@ inline void enable_ppi(std::uint32_t intid) noexcept {
 // it at the distributor. GICD state is system-wide and not serialized.
 inline auto enable_spi(std::uint32_t intid, std::size_t target_cpu, SpiTrigger trigger = SpiTrigger::kLevel) noexcept
     -> bool {
-  if (target_cpu >= board::active::kSmpCpus) {
-    return false;
-  }
+  // Bounds live in the driver (configure_spi checks the affinity table).
   return board::active::Gicv3::enable_spi(intid, static_cast<std::uint32_t>(target_cpu), trigger);
 }
 
@@ -59,9 +57,6 @@ inline auto disable_spi(std::uint32_t intid) noexcept -> bool {
 
 inline auto configure_spi(std::uint32_t intid, std::size_t target_cpu, SpiTrigger trigger = SpiTrigger::kLevel) noexcept
     -> bool {
-  if (target_cpu >= board::active::kSmpCpus) {
-    return false;
-  }
   return board::active::Gicv3::configure_spi(intid, static_cast<std::uint32_t>(target_cpu), trigger);
 }
 

@@ -439,9 +439,16 @@ void init() noexcept {
     fail_init("command queue timeout");
   }
   g_command_ready = true;
-  for (std::uint32_t sid = 0; sid < kStreamCount; ++sid) {
-    const std::array<CommandEntry, 1> invalidation{make_cfgi_ste(sid)};
-    if (!submit_commands(invalidation)) {
+  // Batched invalidation: the queue holds kCommandCount-1 commands plus
+  // the trailing CMD_SYNC, so all streams take a few sync round-trips
+  // instead of one per SID.
+  std::array<CommandEntry, kCommandCount - 1> invalidations{};
+  for (std::uint32_t sid = 0; sid < kStreamCount;) {
+    std::size_t batch = 0;
+    for (; batch < invalidations.size() && sid < kStreamCount; ++batch, ++sid) {
+      invalidations[batch] = make_cfgi_ste(sid);
+    }
+    if (!submit_commands(std::span{invalidations.data(), batch})) {
       fail_init("stream cache invalidation");
     }
   }
@@ -548,7 +555,7 @@ auto poll_events() noexcept -> std::size_t {
 }
 
 void handle_irq(IrqCall* call) noexcept {
-  if (!g_enabled) {
+  if (call->handled || !g_enabled) {
     return;
   }
   if (call->intid == hw::kEventIntid) {

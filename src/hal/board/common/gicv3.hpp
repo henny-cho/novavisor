@@ -4,6 +4,7 @@
 #include "nova/arch/gicv3_regs.h"
 #include "nova/arch/gicv3_spi.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -26,7 +27,7 @@ struct Gicv3 {
     return static_cast<std::uint32_t>(((affinity >> 32U) & 0xFFU) << 24U | (affinity & 0x00FFFFFFU));
   }
 
-  static auto redistributor_frame() noexcept -> std::uintptr_t {
+  static auto find_redistributor_frame() noexcept -> std::uintptr_t {
     const std::uint32_t affinity = typer_affinity(arch::cpu_affinity());
 
     std::uintptr_t frame = Config::kRedistributorBase;
@@ -42,6 +43,20 @@ struct Gicv3 {
       frame += NOVA_GICR_FRAME_SIZE;
     }
     __builtin_trap();
+  }
+
+  // The frame assignment is fixed hardware — resolve the MMIO walk once
+  // per core and serve later calls (enable_ppi runs several times per
+  // core during bring-up) from the cache. Frame 0 is never a valid
+  // redistributor base, so zero marks "unresolved".
+  static auto redistributor_frame() noexcept -> std::uintptr_t {
+    static std::array<std::uintptr_t, Config::kCpuAffinity.size()> frames{};
+
+    std::uintptr_t& cached = frames[arch::core_index()];
+    if (cached == 0U) {
+      cached = find_redistributor_frame();
+    }
+    return cached;
   }
 
   static void distributor_init() noexcept {
@@ -64,10 +79,30 @@ struct Gicv3 {
     *mmio32(redistributor_frame() + NOVA_GICR_ISENABLER0) = 1U << intid;
   }
 
-  static auto configure_spi(std::uint32_t intid, std::uint32_t core, arch::gicv3::SpiTrigger trigger) noexcept -> bool {
+  // GICD_TYPER is boot-constant hardware identification — read it once
+  // instead of on every SPI operation (the level-SPI rearm path issues
+  // two per guest EOI). Benign if two cores race the first read.
+  static auto distributor_typer() noexcept -> std::uint32_t {
+    static std::uint32_t typer = 0;
+    if (typer == 0U) {
+      typer = *mmio32(Config::kDistributorBase + NOVA_GICD_TYPER);
+    }
+    return typer;
+  }
+
+  // Validated register view for one SPI; `valid` is false when the
+  // INTID is out of range or unimplemented on this distributor.
+  static auto resolve_spi(std::uint32_t intid) noexcept -> arch::gicv3::SpiRegisters {
     const arch::gicv3::SpiRegisters registers = arch::gicv3::spi_registers(intid);
-    const std::uint32_t             typer     = *mmio32(Config::kDistributorBase + NOVA_GICD_TYPER);
-    if (!registers.valid || !arch::gicv3::spi_implemented(intid, typer) || core >= Config::kCpuAffinity.size()) {
+    if (!registers.valid || !arch::gicv3::spi_implemented(intid, distributor_typer())) {
+      return {};
+    }
+    return registers;
+  }
+
+  static auto configure_spi(std::uint32_t intid, std::uint32_t core, arch::gicv3::SpiTrigger trigger) noexcept -> bool {
+    const arch::gicv3::SpiRegisters registers = resolve_spi(intid);
+    if (!registers.valid || core >= Config::kCpuAffinity.size()) {
       return false;
     }
 
@@ -88,9 +123,8 @@ struct Gicv3 {
   }
 
   static auto mask_spi(std::uint32_t intid) noexcept -> bool {
-    const arch::gicv3::SpiRegisters registers = arch::gicv3::spi_registers(intid);
-    const std::uint32_t             typer     = *mmio32(Config::kDistributorBase + NOVA_GICD_TYPER);
-    if (!registers.valid || !arch::gicv3::spi_implemented(intid, typer)) {
+    const arch::gicv3::SpiRegisters registers = resolve_spi(intid);
+    if (!registers.valid) {
       return false;
     }
     *mmio32(Config::kDistributorBase + registers.disable_offset) = registers.bit;
@@ -99,9 +133,8 @@ struct Gicv3 {
   }
 
   static auto unmask_spi(std::uint32_t intid) noexcept -> bool {
-    const arch::gicv3::SpiRegisters registers = arch::gicv3::spi_registers(intid);
-    const std::uint32_t             typer     = *mmio32(Config::kDistributorBase + NOVA_GICD_TYPER);
-    if (!registers.valid || !arch::gicv3::spi_implemented(intid, typer)) {
+    const arch::gicv3::SpiRegisters registers = resolve_spi(intid);
+    if (!registers.valid) {
       return false;
     }
     *mmio32(Config::kDistributorBase + registers.enable_offset) = registers.bit;
@@ -110,9 +143,8 @@ struct Gicv3 {
   }
 
   static auto clear_pending_spi(std::uint32_t intid) noexcept -> bool {
-    const arch::gicv3::SpiRegisters registers = arch::gicv3::spi_registers(intid);
-    const std::uint32_t             typer     = *mmio32(Config::kDistributorBase + NOVA_GICD_TYPER);
-    if (!registers.valid || !arch::gicv3::spi_implemented(intid, typer)) {
+    const arch::gicv3::SpiRegisters registers = resolve_spi(intid);
+    if (!registers.valid) {
       return false;
     }
     *mmio32(Config::kDistributorBase + registers.clear_offset) = registers.bit;

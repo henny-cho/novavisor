@@ -15,14 +15,10 @@ namespace nova::cpu {
 
 inline constexpr std::size_t kMaxCpus = board::active::kSmpCpus;
 
+// Dense core index. Seeded into TPIDR_EL2 by the boot path (boot.S),
+// so this is one MRS — id() sits on every trap and scheduler path.
 [[nodiscard]] inline auto id() noexcept -> std::size_t {
-  const std::uint64_t affinity = arch::cpu_affinity();
-  for (std::size_t index = 0; index < board::active::kCpuAffinity.size(); ++index) {
-    if (board::active::kCpuAffinity[index] == affinity) {
-      return index;
-    }
-  }
-  __builtin_trap();
+  return arch::core_index();
 }
 
 } // namespace nova::cpu

@@ -61,20 +61,28 @@ void request_reevaluate(std::size_t slot) noexcept {
   }
 }
 
+// Refresh a resident vCPU's LR shadow from the live hardware registers
+// — the guest retires entries as it runs, so the hardware is the truth
+// while resident. Mutates the shadow; a no-op for non-resident vCPUs.
+void sync_resident_lrs(std::size_t index) noexcept {
+  if (index != resident_here()) {
+    return;
+  }
+  CpuState& cpu = g_cpu[index];
+  for (std::size_t i = 0; i < g_lr_count; ++i) {
+    cpu.lr[i] = gic_virt::read_lr(i);
+  }
+}
+
 // Push deliverable pending INTIDs of one VCPU into its list registers.
 // For the resident VCPU the hardware LRs are the live truth: sync them
-// into the shadow first (the guest retires entries as it runs), refill,
-// and write everything back. Overflow arms the underflow maintenance
-// IRQ so draining LRs pull the queue.
+// into the shadow first, refill, and write everything back. Overflow
+// arms the underflow maintenance IRQ so draining LRs pull the queue.
 void flush(std::size_t index) noexcept {
   CpuState&  cpu      = g_cpu[index];
   const bool resident = index == resident_here();
 
-  if (resident) {
-    for (std::size_t i = 0; i < g_lr_count; ++i) {
-      cpu.lr[i] = gic_virt::read_lr(i);
-    }
-  }
+  sync_resident_lrs(index);
 
   bool overflow = false;
   {
@@ -145,13 +153,15 @@ void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
     log_raz_wi("GICD", off);
     return;
   }
-  const std::size_t vm    = vm_of(slot);
-  DistState&        dist  = g_dist[vm];
+  const std::size_t vm   = vm_of(slot);
+  DistState&        dist = g_dist[vm];
+  WriteResult       write{};
   bool              known = false;
   {
     sync::Guard guard{g_dist_lock}; // SPI banks race post/refill across cores
     if (call->write) {
-      known = dist_write(dist, off, call->size, call->value);
+      write = dist_write(dist, off, call->size, call->value);
+      known = write.known;
       if (known && off == kGicdIcpendr1) {
         for (std::size_t i = 0; i < kNumSpis; ++i) {
           if (g_spi_tokens[vm][i].valid()) {
@@ -169,10 +179,13 @@ void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
     log_raz_wi("GICD", off);
     return;
   }
-  // Any distributor write can change deliverability or routing. Fan
-  // out after dropping the model lock; the SMP hook coalesces remote
-  // owner work and local targets refill immediately.
-  if (call->write) {
+  // Fan reevaluation out only for writes that change deliverability or
+  // routing — a Linux GICv3 probe issues ~100 cosmetic writes
+  // (priority/config/group), each of which would otherwise cost every
+  // vCPU of the VM a refill or a physical cross-core SGI. Fan out after
+  // dropping the model lock; the SMP hook coalesces remote owner work
+  // and local targets refill immediately.
+  if (write.delivery) {
     for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
       request_reevaluate(slot_of(vm, v));
     }
@@ -207,16 +220,18 @@ void redist_mmio(MmioCall* call, std::uint64_t off) noexcept {
   const std::size_t in_off = off % kGicrFrameSize;
 
   if (call->write) {
-    bool known = false;
+    WriteResult write{};
     {
       sync::Guard guard{g_dist_lock}; // sibling frames are cross-core writable
-      known = redist_write(cpu.redist, in_off, call->size, call->value);
+      write = redist_write(cpu.redist, in_off, call->size, call->value);
     }
-    if (!known) {
+    if (!write.known) {
       log_raz_wi("GICR", off);
       return;
     }
-    request_reevaluate(slot);
+    if (write.delivery) {
+      request_reevaluate(slot);
+    }
     return;
   }
   MmioRead r;
@@ -350,30 +365,22 @@ void vm_reset(std::size_t vm) noexcept {
 }
 
 auto has_deliverable(std::size_t index) noexcept -> bool {
+  // This is the wfi wake predicate — it runs on every guest wfi and on
+  // every post to a blocked target. A pending LR is real (HCR_EL2.TWI
+  // traps even a wfi that would complete immediately) and answers
+  // without touching the shared distributor bank, so judge the LR
+  // shadow first and take the lock only when it is empty.
+  sync_resident_lrs(index);
   CpuState& cpu = g_cpu[index];
-  if (index == resident_here()) {
-    // The live LRs are the truth for the resident VCPU (the guest
-    // retires entries as it runs) — refresh the shadow before judging.
-    // A pending LR here is real: HCR_EL2.TWI traps every wfi, even one
-    // that would complete immediately because of a pending wake event.
-    for (std::size_t i = 0; i < g_lr_count; ++i) {
-      cpu.lr[i] = gic_virt::read_lr(i);
-    }
-  }
-  const std::size_t vm = vm_of(index);
-  {
-    sync::Guard guard{g_dist_lock};
-    if (deliverable(cpu.redist) != 0U ||
-        spi_deliverable(g_dist[vm], static_cast<std::uint32_t>(vcpu_of(index)), guest_table()[vm].vcpus) != 0U) {
-      return true;
-    }
-  }
   for (std::size_t i = 0; i < g_lr_count; ++i) {
     if ((cpu.lr[i] & kLrStatePending) != 0U) {
       return true;
     }
   }
-  return false;
+  const std::size_t vm = vm_of(index);
+  sync::Guard       guard{g_dist_lock};
+  return deliverable(cpu.redist) != 0U ||
+         spi_deliverable(g_dist[vm], static_cast<std::uint32_t>(vcpu_of(index)), guest_table()[vm].vcpus) != 0U;
 }
 
 } // namespace nova::vgic
@@ -444,6 +451,9 @@ void vgic_component::handle_sysreg(SysregCall* call) noexcept {
 }
 
 void vgic_component::handle_irq(IrqCall* call) noexcept {
+  if (call->handled) {
+    return;
+  }
   if (call->intid != gic_virt::kMaintenanceIntid) {
     return;
   }

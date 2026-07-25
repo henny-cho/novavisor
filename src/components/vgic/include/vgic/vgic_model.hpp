@@ -198,6 +198,18 @@ struct MmioRead {
   std::uint64_t value = 0;
 };
 
+// Write outcome: `delivery` marks writes that can change what refill
+// would deliver or where (enable/pending/route) — the component fans
+// reevaluation out to the VM's vCPUs only for those. Priority, group,
+// config and active-state writes are stored or ignored without any
+// effect on the deliverable set.
+struct WriteResult {
+  bool known    = false;
+  bool delivery = false;
+
+  [[nodiscard]] constexpr explicit operator bool() const noexcept { return known; }
+};
+
 // --- Register emulation -------------------------------------------------------
 
 namespace detail {
@@ -265,45 +277,46 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
 }
 
 [[nodiscard]] inline auto dist_write(DistState& d, std::uint64_t off, std::uint32_t size, std::uint64_t value) noexcept
-    -> bool {
+    -> WriteResult {
   if (off >= kGicdIpriorityrSpi && off + size <= kGicdIpriorityrEnd) {
     detail::prio_write(d.spi_prio, off - kGicdIpriorityrSpi, size, value);
-    return true;
+    return {.known = true}; // priority orders delivery, never gates it
   }
   if (off >= kGicdIrouterSpi && off < kGicdIrouterEnd) {
     if ((off % 8U) == 0U) {
       d.spi_route[(off - kGicdIrouterSpi) / 8U] = static_cast<std::uint8_t>(value); // Aff0 only, IRM ignored
+      return {.known = true, .delivery = true};                                     // the SPI target moved
     }
-    return true;
+    return {.known = true}; // high word is WI in the flat topology
   }
   const auto word = static_cast<std::uint32_t>(value);
   switch (off) {
   case kGicdCtlr:
     d.ctlr = word;
-    return true;
+    return {.known = true};
   case kGicdIgroupr1:
     d.spi_group = word;
-    return true;
+    return {.known = true}; // stored for read-back, never gates delivery
   case kGicdIsenabler1:
     d.spi_enabled |= word; // write-1-to-set
-    return true;
+    return {.known = true, .delivery = true};
   case kGicdIcenabler1:
     d.spi_enabled &= ~word; // write-1-to-clear
-    return true;
+    return {.known = true, .delivery = true};
   case kGicdIspendr1:
     d.spi_pending |= word;
-    return true;
+    return {.known = true, .delivery = true};
   case kGicdIcpendr1:
     d.spi_pending &= ~word;
-    return true;
+    return {.known = true, .delivery = true};
   case kGicdIcfgr2:
   case kGicdIcfgr3:
   case kGicdIgrpmodr1:
   case kGicdIsactiver1:
   case kGicdIcactiver1:
-    return true; // accepted, ignored (fixed level/group, active state in LRs)
+    return {.known = true}; // accepted, ignored (fixed level/group, active state in LRs)
   default:
-    return false;
+    return {};
   }
 }
 
@@ -347,41 +360,41 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
 }
 
 [[nodiscard]] inline auto redist_write(RedistState& r, std::uint64_t off, std::uint32_t size,
-                                       std::uint64_t value) noexcept -> bool {
+                                       std::uint64_t value) noexcept -> WriteResult {
   if (off >= kGicrIpriorityr && off + size <= kGicrIpriorityEnd) {
     detail::prio_write(r.prio, off - kGicrIpriorityr, size, value);
-    return true;
+    return {.known = true}; // priority orders delivery, never gates it
   }
   const auto word = static_cast<std::uint32_t>(value);
   switch (off) {
   case kGicrCtlr:
-    return true; // no LPI support — WI
+    return {.known = true}; // no LPI support — WI
   case kGicrWaker:
     r.asleep = (word & kWakerProcessorSleep) != 0U;
-    return true;
+    return {.known = true};
   case kGicrIgroupr0:
     r.igroupr0 = word;
-    return true;
+    return {.known = true}; // stored for read-back, never gates delivery
   case kGicrIsenabler0:
     r.isenabler0 |= word; // write-1-to-set
-    return true;
+    return {.known = true, .delivery = true};
   case kGicrIcenabler0:
     r.isenabler0 &= ~word; // write-1-to-clear
-    return true;
+    return {.known = true, .delivery = true};
   case kGicrIspendr0:
     r.pending |= word;
-    return true;
+    return {.known = true, .delivery = true};
   case kGicrIcpendr0:
     r.pending &= ~word;
-    return true;
+    return {.known = true, .delivery = true};
   case kGicrIcfgr0:
   case kGicrIcfgr1:
   case kGicrIgrpmodr0:
   case kGicrIsactiver0:
   case kGicrIcactiver0:
-    return true; // accepted, ignored (fixed config/group, active state in LRs)
+    return {.known = true}; // accepted, ignored (fixed config/group, active state in LRs)
   default:
-    return false;
+    return {};
   }
 }
 

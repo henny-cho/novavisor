@@ -42,6 +42,9 @@ void on_timer_set_expiry(TrapContext* /*ctx*/, std::uint64_t owner) noexcept {
 } // namespace
 
 void core_timer_component::handle_hvc(HvcCall* call) noexcept {
+  if (call->handled) {
+    return;
+  }
   if (call->func_id != NOVA_HVC_FN_TIMER_SET) {
     return; // not ours — leave unclaimed for other subscribers
   }
@@ -75,6 +78,9 @@ void core_timer_component::handle_sysreg(SysregCall* call) noexcept {
 }
 
 void core_timer_component::handle_irq(IrqCall* call) noexcept {
+  if (call->handled) {
+    return;
+  }
   if (call->intid != hyp_timer::kGuestTimerVintid) {
     return; // not ours (CNTHP belongs to soft_timer)
   }

@@ -24,9 +24,20 @@ namespace {
 // arm/cancel/drain never cross cores.
 std::array<TimerQueue<kSlotCount>, cpu::kMaxCpus> g_queue;
 
+// The deadline last programmed into this core's CNTHP. Nearly every
+// trap re-runs reprogram() (the scheduler re-evaluates its slice), and
+// the earliest deadline rarely changes — matching values skip the
+// msr+isb pair entirely.
+std::array<std::uint64_t, cpu::kMaxCpus> g_programmed{}; // 0 ≠ kNoDeadline: first call always programs
+
 // Program this core's CNTHP to the earliest armed deadline, or park it.
 void reprogram() noexcept {
-  const std::uint64_t next = g_queue[cpu::id()].next_deadline();
+  const std::size_t   self = cpu::id();
+  const std::uint64_t next = g_queue[self].next_deadline();
+  if (next == g_programmed[self]) {
+    return; // hardware already matches (a met condition keeps re-firing — see header)
+  }
+  g_programmed[self] = next;
   if (next == kNoDeadline) {
     hyp_timer::stop();
   } else {
@@ -35,8 +46,13 @@ void reprogram() noexcept {
 }
 
 void drain_expired(TrapContext* ctx) noexcept {
+  // One counter read for the whole drain (now() carries an ISB): a
+  // deadline passing mid-drain is not lost — reprogram() arms it and
+  // the already-met level condition retriggers the PPI immediately.
+  TimerQueue<kSlotCount>&         queue = g_queue[cpu::id()];
   TimerQueue<kSlotCount>::Expired due;
-  while (g_queue[cpu::id()].pop_expired(hyp_timer::now(), due)) {
+  const std::uint64_t             now = hyp_timer::now();
+  while (queue.pop_expired(now, due)) {
     due.fn(ctx, due.arg);
   }
   reprogram();
@@ -63,6 +79,9 @@ void cancel(std::size_t slot) noexcept {
 namespace nova {
 
 void soft_timer_component::handle_irq(IrqCall* call) noexcept {
+  if (call->handled) {
+    return;
+  }
   if (call->intid != hyp_timer::kHypTimerIntid) {
     return; // not ours — leave unclaimed for other subscribers
   }

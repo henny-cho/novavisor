@@ -13,6 +13,7 @@
 #include "vgic/vgic_model.hpp"
 
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 
@@ -119,18 +120,30 @@ using EoiToken = CpuState::EoiToken;
 inline auto refill(CpuState& c, std::size_t lr_count, DistState* dist = nullptr, std::uint32_t vcpu = 0,
                    std::size_t vcpus = 1, std::array<EoiToken, kNumSpis>* spi_tokens = nullptr) noexcept -> bool {
   constexpr std::uint32_t kPriorityLimit = 0x100; // above every 8-bit priority
-  for (;;) {
-    std::uint32_t       best      = kMaxIntid;
-    std::uint32_t       best_prio = kPriorityLimit;
-    const std::uint32_t priv      = deliverable(c.redist);
-    const std::uint32_t spis      = dist != nullptr ? spi_deliverable(*dist, vcpu, vcpus) : 0U;
-    for (std::uint32_t id = 0; id < kMaxIntid; ++id) {
-      const bool spi  = id >= kNumPrivate;
-      const bool cand = ((spi ? spis >> (id - kNumPrivate) : priv >> id) & 1U) != 0U;
-      if (!cand || lr_holds(c, lr_count, id)) {
-        continue;
+
+  // The deliverable and in-flight sets are invariant across iterations
+  // except for the bits this loop itself consumes — compute both once
+  // (spi_deliverable walks all routes; lr_holds scans every LR) and
+  // track consumption locally instead of re-deriving them per INTID.
+  std::uint64_t inflight = 0;
+  for (std::size_t i = 0; i < lr_count; ++i) {
+    if (lr_in_flight(c.lr[i])) {
+      const std::uint32_t id = lr_vintid(c.lr[i]);
+      if (id < kMaxIntid) {
+        inflight |= 1ULL << id;
       }
-      const std::uint8_t prio = spi ? dist->spi_prio[id - kNumPrivate] : c.redist.prio[id];
+    }
+  }
+  const std::uint32_t priv       = deliverable(c.redist);
+  const std::uint32_t spis       = dist != nullptr ? spi_deliverable(*dist, vcpu, vcpus) : 0U;
+  std::uint64_t       candidates = ((static_cast<std::uint64_t>(spis) << kNumPrivate) | priv) & ~inflight;
+
+  for (;;) {
+    std::uint32_t best      = kMaxIntid;
+    std::uint32_t best_prio = kPriorityLimit;
+    for (std::uint64_t bits = candidates; bits != 0U; bits &= bits - 1U) {
+      const auto         id   = static_cast<std::uint32_t>(std::countr_zero(bits));
+      const std::uint8_t prio = id >= kNumPrivate ? dist->spi_prio[id - kNumPrivate] : c.redist.prio[id];
       if (prio < best_prio) {
         best      = id;
         best_prio = prio;
@@ -157,6 +170,7 @@ inline auto refill(CpuState& c, std::size_t lr_count, DistState* dist = nullptr,
     }
     c.lr_token[slot] = token;
     c.lr[slot]       = make_lr(best, static_cast<std::uint8_t>(best_prio), token.valid());
+    candidates &= ~(1ULL << best);
     if (best < kNumPrivate) {
       c.redist.pending &= ~(1U << best);
     } else {

@@ -128,6 +128,9 @@ void vuart_component::handle_vm_reset(VmResetCall* call) noexcept {
 }
 
 void vuart_component::handle_irq(IrqCall* call) noexcept {
+  if (call->handled) {
+    return;
+  }
   if (call->intid != vuart::kPhysicalUartSpi) {
     return;
   }

@@ -35,6 +35,10 @@ _start:
     cmp x0, x1
     b.ne .Lhang
 
+    // Publish the dense core index for cpu::id() — the boot PE is
+    // kCpuAffinity[0] by definition. TPIDR_EL2 is otherwise unused.
+    msr tpidr_el2, xzr
+
     // Set up stack pointer for EL2
     ldr x0, =__stack_top
     mov sp, x0
@@ -67,8 +71,10 @@ _start:
 .type   nova_secondary_entry, @function
 
 nova_secondary_entry:
-    // x0 = core index. Carve this core's stack out of the shared
+    // x0 = core index. Publish it for cpu::id() before anything else
+    // runs on this core, then carve the core's stack out of the shared
     // region: SP = __stack_top - index * stack size.
+    msr tpidr_el2, x0
     ldr x1, =__stack_top
     mov x2, #NOVA_BOARD_EL2_STACK_SIZE
     mul x2, x2, x0
