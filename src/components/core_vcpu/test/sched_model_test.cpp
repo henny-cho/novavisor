@@ -9,7 +9,6 @@
 
 namespace {
 
-using nova::sched::all_off;
 using nova::sched::pick_next;
 using nova::sched::slice_needed;
 using nova::sched::State;
@@ -43,13 +42,6 @@ TEST(SchedModel, PickConsidersCurrentLast) {
 TEST(SchedModel, PickReturnsSizeWhenNothingRunnable) {
   const std::array s{kBlocked, kOff, kBlocked, kOff};
   EXPECT_EQ(pick_next(s, 0), s.size());
-}
-
-TEST(SchedModel, AllOffOnlyWhenEveryVcpuRetired) {
-  const std::array done{kOff, kOff};
-  const std::array asleep{kOff, kBlocked};
-  EXPECT_TRUE(all_off(done));
-  EXPECT_FALSE(all_off(asleep)); // blocked VCPU still owed a wake-up
 }
 
 TEST(SchedModel, SliceNeededOnlyWithReadyCompetitor) {

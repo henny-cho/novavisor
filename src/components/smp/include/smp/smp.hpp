@@ -37,15 +37,6 @@ namespace nova::smp {
 
 using VmOwnerCall = void (*)(std::size_t vm, std::uint64_t a, std::uint64_t b, std::uint64_t c) noexcept;
 
-enum class CpuOnResult : std::uint8_t {
-  kSuccess,
-  kInvalid,
-  kDenied,
-  kAlreadyOn,
-  kOnPending,
-  kInternalFailure,
-};
-
 // Power on every secondary core and wait (bounded) for each to report
 // online. A core that fails to start is logged and skipped — the
 // system continues on the cores it has.
@@ -58,7 +49,9 @@ void start_secondaries() noexcept;
 // start_vm/reset_vm take a VM; the rest take a vCPU slot.
 [[nodiscard]] auto start_vm(std::size_t vm) noexcept -> bool;
 [[nodiscard]] auto post_virq(std::size_t slot, std::uint32_t vintid) noexcept -> bool;
-[[nodiscard]] auto cpu_on(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noexcept -> CpuOnResult;
+// Returns a PSCI status code (nova/abi/psci.h) so the emulated
+// CPU_ON can hand it straight back to the guest.
+[[nodiscard]] auto cpu_on(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noexcept -> std::int32_t;
 
 // Execute idempotent VM-level work on the boot vCPU's affinity core.
 // Remote calls are accepted into the cross-call mailbox.

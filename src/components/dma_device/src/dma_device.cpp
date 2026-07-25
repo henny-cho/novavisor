@@ -28,8 +28,11 @@ sync::SpinLock        g_lock;
 Registry<kMaxDevices> g_registry;
 bool                  g_registry_valid = false;
 
-[[nodiscard]] auto deadline_after_ms(std::uint64_t milliseconds) noexcept -> std::uint64_t {
-  return hyp_timer::now() + (hyp_timer::freq() / 1000U) * milliseconds;
+// dma::InterruptTrigger is the guest-shareable ABI spelling of the same
+// two GIC trigger modes as arch::gicv3::SpiTrigger; nova/abi must not
+// pull in an arch header, so bridge the two here.
+[[nodiscard]] constexpr auto to_spi_trigger(dma::InterruptTrigger trigger) noexcept -> gic::SpiTrigger {
+  return trigger == dma::InterruptTrigger::kLevel ? gic::SpiTrigger::kLevel : gic::SpiTrigger::kEdge;
 }
 
 [[nodiscard]] auto edu_drained() noexcept -> bool {
@@ -144,9 +147,8 @@ void reset_interrupt(dma::DeviceId device_id) noexcept {
   }
   reset_interrupt(device_id);
   const auto guests = guest_table();
-  const auto trigger =
-      interrupt->trigger == dma::InterruptTrigger::kLevel ? gic::SpiTrigger::kLevel : gic::SpiTrigger::kEdge;
-  return vm < guests.size() && gic::configure_spi(interrupt->physical_intid, guests[vm].cpu[0], trigger);
+  return vm < guests.size() &&
+         gic::configure_spi(interrupt->physical_intid, guests[vm].cpu[0], to_spi_trigger(interrupt->trigger));
 }
 
 void log_state(std::size_t vm, std::string_view state, std::uint64_t generation = 0) noexcept {
@@ -338,7 +340,7 @@ auto begin_quiesce(std::size_t vm) noexcept -> QuiesceResult {
         break;
       }
       entry.state              = State::kQuiescing;
-      entry.deadline           = deadline_after_ms(kTimeoutMs);
+      entry.deadline           = hyp_timer::deadline_after_ms(kTimeoutMs);
       entry.bus_master_blocked = false;
       device_ids[count++]      = entry.device_id;
       pending                  = true;

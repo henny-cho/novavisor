@@ -206,17 +206,4 @@ inline auto find_l3(Stage2Tables& t, std::uint64_t table_pa) noexcept -> Table* 
   return true;
 }
 
-// Convenience: 1:1 identity mapping.
-[[nodiscard]] inline auto map_identity_range(Stage2Tables& t, std::uint64_t ipa_base, std::uint64_t size,
-                                             std::uint64_t leaf_attrs) noexcept -> bool {
-  return map_range(t, ipa_base, ipa_base, size, leaf_attrs);
-}
-
-// Convenience: reset + identity-map a single range.
-[[nodiscard]] inline auto build_identity_map(Stage2Tables& t, std::uint64_t ipa_base, std::uint64_t size,
-                                             std::uint64_t leaf_attrs) noexcept -> bool {
-  init_tables(t);
-  return map_identity_range(t, ipa_base, size, leaf_attrs);
-}
-
 } // namespace nova::mmu

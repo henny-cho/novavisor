@@ -12,6 +12,7 @@
 #include "hal/timer.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/hvc_abi.h"
+#include "nova/abi/psci.h"
 #include "nova/arch/trap_context.hpp"
 #include "smp/quiesce_model.hpp"
 #include "smp/smp.hpp"
@@ -95,13 +96,12 @@ void finish_lifecycle(std::size_t vm) noexcept {
 }
 
 void arm_lifecycle_timeout(std::size_t vm) noexcept {
-  soft_timer::arm(soft_timer::kSlotLifecycle + vm, hyp_timer::now() + hyp_timer::freq() * kQuiesceTimeoutMs / 1000U,
+  soft_timer::arm(soft_timer::kSlotLifecycle + vm, hyp_timer::deadline_after_ms(kQuiesceTimeoutMs),
                   &on_lifecycle_timeout, vm);
 }
 
 void arm_dma_poll(std::size_t vm) noexcept {
-  soft_timer::arm(soft_timer::kSlotDmaDrain + vm, hyp_timer::now() + hyp_timer::freq() * kDmaPollMs / 1000U,
-                  &on_dma_drain, vm);
+  soft_timer::arm(soft_timer::kSlotDmaDrain + vm, hyp_timer::deadline_after_ms(kDmaPollMs), &on_dma_drain, vm);
 }
 
 void on_dma_drain(TrapContext* /*ctx*/, std::uint64_t arg) noexcept {
@@ -404,37 +404,39 @@ auto start_vm(std::size_t vm) noexcept -> bool {
   return true;
 }
 
-auto cpu_on(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noexcept -> CpuOnResult {
+auto cpu_on(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noexcept -> std::int32_t {
   if (!valid_slot(slot)) {
-    return CpuOnResult::kInvalid;
+    return PSCI_INVALID_PARAMETERS;
   }
   const std::size_t vm = vm_of(slot);
   if (lifecycle_blocks_start(vm)) {
-    return CpuOnResult::kDenied;
+    return PSCI_DENIED;
   }
   if (!vcpu::reserve_start(slot)) {
     switch (vcpu::power_state(slot)) {
     case vcpu::PowerState::kOn:
-      return CpuOnResult::kAlreadyOn;
+      return PSCI_ALREADY_ON;
     case vcpu::PowerState::kOnPending:
-      return CpuOnResult::kOnPending;
+      return PSCI_ON_PENDING;
     case vcpu::PowerState::kOff:
-      return CpuOnResult::kInternalFailure;
+      return PSCI_INTERNAL_FAILURE;
     }
   }
   if (lifecycle_blocks_start(vm)) {
     vcpu::cancel_start(slot);
-    return CpuOnResult::kDenied;
+    return PSCI_DENIED;
   }
   if (slot_cpu(slot) == cpu::id()) {
-    return vcpu::start_vcpu(slot, entry, context_id) ? CpuOnResult::kSuccess : CpuOnResult::kInvalid;
+    return vcpu::start_vcpu(slot, entry, context_id) ? PSCI_SUCCESS : PSCI_INVALID_PARAMETERS;
   }
+  // A queued start is "accepted": the caller observes the boot through
+  // its own synchronization, per SMP firmware convention.
   if (!enqueue(slot_cpu(slot),
                {.op = Op::kCpuOn, .idx = static_cast<std::uint32_t>(slot), .a = entry, .b = context_id})) {
     vcpu::cancel_start(slot);
-    return CpuOnResult::kInternalFailure;
+    return PSCI_INTERNAL_FAILURE;
   }
-  return CpuOnResult::kSuccess;
+  return PSCI_SUCCESS;
 }
 
 void stop_vm(std::size_t vm, TrapContext* live) noexcept {

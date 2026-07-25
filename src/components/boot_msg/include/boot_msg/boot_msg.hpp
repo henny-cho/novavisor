@@ -15,7 +15,7 @@
 namespace nova {
 namespace boot_msg_detail {
 
-constexpr std::string_view BANNER = "NovaVisor Booted! [CIB + ETL + std::span]\n";
+constexpr std::string_view BANNER = "NovaVisor booted\n";
 
 } // namespace boot_msg_detail
 

@@ -35,12 +35,8 @@ namespace device = dma_device::hw::device;
   return nullptr;
 }
 
-[[nodiscard]] auto deadline_after_ms(std::uint64_t milliseconds) noexcept -> std::uint64_t {
-  return hyp_timer::now() + (hyp_timer::freq() / 1000U) * milliseconds;
-}
-
 [[nodiscard]] auto wait_idle() noexcept -> bool {
-  const std::uint64_t deadline = deadline_after_ms(kTimeoutMs);
+  const std::uint64_t deadline = hyp_timer::deadline_after_ms(kTimeoutMs);
   while (device::dma_running()) {
     if (hyp_timer::now() >= deadline) {
       return false;
@@ -51,7 +47,7 @@ namespace device = dma_device::hw::device;
 }
 
 [[nodiscard]] auto wait_for_fault() noexcept -> bool {
-  const std::uint64_t deadline = deadline_after_ms(kTimeoutMs);
+  const std::uint64_t deadline = hyp_timer::deadline_after_ms(kTimeoutMs);
   for (;;) {
     if (smmu::poll_events() != 0U) {
       return true;

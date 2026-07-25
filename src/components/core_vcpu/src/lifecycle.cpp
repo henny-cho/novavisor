@@ -19,6 +19,7 @@
 #include "hal/timer.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/fmt.hpp"
+#include "nova/sync.hpp"
 #include "soft_timer/soft_timer.hpp"
 #include "vcpu_internal.hpp"
 #include "vgic/vgic.hpp"
@@ -48,17 +49,7 @@ std::array<bool, kMaxVcpus>         g_slot_valid{};
 namespace {
 
 void advance_vm_generation(std::size_t vm) noexcept {
-  std::uint64_t current = g_vm_generation[vm].load(std::memory_order_relaxed);
-  for (;;) {
-    std::uint64_t next = current + 1U;
-    if (next == 0) {
-      next = 1; // zero means no boot instance has existed
-    }
-    if (g_vm_generation[vm].compare_exchange_weak(current, next, std::memory_order_release,
-                                                  std::memory_order_relaxed)) {
-      return;
-    }
-  }
+  (void)sync::next_nonzero(g_vm_generation[vm]); // the new generation is read back via vm_generation()
 }
 
 // Reset a vCPU to a fresh execution context at `entry`. GP registers
@@ -112,20 +103,12 @@ void seed_boot(std::size_t slot) noexcept {
   reseed_owner_state(slot);
 }
 
-// True while any vCPU of `vm` has not retired.
-[[nodiscard]] auto vm_has_live(std::size_t vm) noexcept -> bool {
-  for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
-    if (published_power(slot_of(vm, v)) != PowerState::kOff) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// True while another slot of the VM is on or has a start reserved.
-// A pending target must exclude itself when validating that its VM is
-// already alive (CPU_ON) or entirely retired (cold VM_START).
-[[nodiscard]] auto vm_has_live_except(std::size_t vm, std::size_t except) noexcept -> bool {
+// True while a vCPU of `vm` is on or has a start reserved. `except`
+// names a slot to ignore: a pending target must exclude itself when
+// validating that its VM is already alive (CPU_ON) or entirely retired
+// (cold VM_START). kMaxVcpus is never a valid slot, so the default
+// considers every vCPU.
+[[nodiscard]] auto vm_has_live(std::size_t vm, std::size_t except = kMaxVcpus) noexcept -> bool {
   for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
     const std::size_t slot = slot_of(vm, v);
     if (slot != except && published_power(slot) != PowerState::kOff) {
@@ -181,7 +164,7 @@ void init() noexcept {
   publish_power(slot_of(0), PowerState::kOn);
   publish_cntvoff(0, hyp_timer::now());
   g_alive.store(1, std::memory_order_relaxed); // the boot guest's vcpu 0
-  g_slice_ticks = hyp_timer::freq() * kSliceMs / 1000U;
+  g_slice_ticks = hyp_timer::ms_to_ticks(kSliceMs);
   console_mux::set_liveness_probe(&vcpu_on); // focus cycling skips off VMs
   seed_fp_trap(true);                        // no owner yet — first FP use claims the file
 }
@@ -225,7 +208,7 @@ void cancel_start(std::size_t slot) noexcept {
 auto prepare_start_vm(std::size_t vm) noexcept -> std::uint64_t {
   const std::size_t slot = slot_of(vm);
   if (vm >= vm_of(g_count) || affinity(slot) != cpu::id() || g_vcpus[slot].state != sched::State::kOff ||
-      published_power(slot) != PowerState::kOnPending || vm_has_live_except(vm, slot)) {
+      published_power(slot) != PowerState::kOnPending || vm_has_live(vm, slot)) {
     cancel_start(slot);
     return 0; // foreign-affinity starts arrive through the smp cross-call
   }
@@ -242,7 +225,7 @@ auto publish_start_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool
   const std::size_t slot = slot_of(vm);
   if (vm >= vm_of(g_count) || generation == 0U || generation != vm_generation(vm) || affinity(slot) != cpu::id() ||
       g_vcpus[slot].state != sched::State::kOff || published_power(slot) != PowerState::kOnPending ||
-      vm_has_live_except(vm, slot)) {
+      vm_has_live(vm, slot)) {
     cancel_start(slot);
     return false;
   }
@@ -258,7 +241,7 @@ auto renew_preboot_generation(std::size_t vm) noexcept -> std::uint64_t {
   const std::size_t slot = slot_of(vm);
   if (g_scheduler_started || vm >= vm_of(g_count) || affinity(slot) != cpu::id() ||
       g_vcpus[slot].state != sched::State::kReady || published_power(slot) != PowerState::kOn ||
-      vm_has_live_except(vm, slot)) {
+      vm_has_live(vm, slot)) {
     return 0;
   }
 
@@ -274,7 +257,7 @@ auto start_vcpu(std::size_t slot, std::uint64_t entry, std::uint64_t context_id)
     return false;
   }
   if (affinity(slot) != cpu::id() || g_vcpus[slot].state != sched::State::kOff ||
-      published_power(slot) != PowerState::kOnPending || !vm_has_live_except(vm_of(slot), slot)) {
+      published_power(slot) != PowerState::kOnPending || !vm_has_live(vm_of(slot), slot)) {
     cancel_start(slot);
     return false; // the VM itself has retired — nothing to join
   }

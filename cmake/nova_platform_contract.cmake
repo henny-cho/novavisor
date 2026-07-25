@@ -36,10 +36,6 @@ function(nova_validate_platform_manifest)
         message(FATAL_ERROR
             "Project '${NOVA_PROJECT}' requires arch=${NOVA_PROJECT_ARCH}, board=${NOVA_PROJECT_BOARD}")
     endif()
-    if(NOT NOVA_BOARD_CPU STREQUAL NOVA_BOARD_REQUIRED_CPU)
-        message(FATAL_ERROR
-            "Board '${NOVA_BOARD}' requires CPU model '${NOVA_BOARD_REQUIRED_CPU}', got '${NOVA_BOARD_CPU}'")
-    endif()
     if(NOT NOVA_COMPONENTS)
         message(FATAL_ERROR "Project '${NOVA_PROJECT}' selected no components")
     endif()
@@ -54,7 +50,7 @@ function(nova_validate_platform_manifest)
                 message(FATAL_ERROR "Hardware board '${NOVA_BOARD}' requires ${variable}")
             endif()
         endforeach()
-        file(STRINGS "${NOVA_BOARD_INCLUDE_DIR}/board_layout.h" ram_base_line
+        file(STRINGS "${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/board_layout.h" ram_base_line
             REGEX "^#define[ \t]+NOVA_BOARD_RAM_BASE[ \t]+")
         if(NOT ram_base_line MATCHES
            "^#define[ \t]+NOVA_BOARD_RAM_BASE[ \t]+${NOVA_BOARD_BL33_BASE}([ \t]|$)")

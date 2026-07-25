@@ -39,9 +39,9 @@ void activate_cpu() noexcept;
 void switch_vm(std::size_t guest_index) noexcept;
 
 // Warm-reset support: init_and_activate() preserves every guest window
-// in the active board's pristine area; reload_guest_image() restores one exact window while
-// skipping unchanged blocks. The IVC shared page lies outside the
-// windows and is never touched.
+// in the active board's pristine area; reload_guest_image() restores one
+// exact window while skipping unchanged blocks. The IVC shared page lies
+// outside the windows and is never touched.
 [[nodiscard]] auto reload_guest_image(std::size_t guest_index) noexcept -> memory::RestoreStats;
 
 } // namespace nova::mmu

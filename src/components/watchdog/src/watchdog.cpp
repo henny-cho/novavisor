@@ -8,6 +8,7 @@
 #include "nova/abi/guest.hpp"
 #include "nova/abi/hvc_abi.h"
 #include "nova/arch/trap_context.hpp"
+#include "nova/sync.hpp"
 #include "smp/smp.hpp"
 #include "soft_timer/soft_timer.hpp"
 #include "watchdog/watchdog_model.hpp"
@@ -27,20 +28,6 @@ std::array<std::uint64_t, kMaxGuests>              g_armed_sequence{};
 std::array<std::atomic<std::uint64_t>, kMaxGuests> g_update_sequence{};
 
 void on_expiry(TrapContext* ctx, std::uint64_t vm) noexcept;
-
-[[nodiscard]] auto next_sequence(std::size_t vm) noexcept -> std::uint64_t {
-  std::uint64_t current = g_update_sequence[vm].load(std::memory_order_relaxed);
-  for (;;) {
-    std::uint64_t next = current + 1U;
-    if (next == 0) {
-      next = 1;
-    }
-    if (g_update_sequence[vm].compare_exchange_weak(current, next, std::memory_order_acq_rel,
-                                                    std::memory_order_relaxed)) {
-      return next;
-    }
-  }
-}
 
 void apply_local(std::size_t vm, std::uint64_t deadline, std::uint64_t generation, std::uint64_t sequence) noexcept {
   if (vm >= guest_table().size() ||
@@ -98,7 +85,7 @@ void watchdog_component::handle_hvc(HvcCall* call) noexcept {
     call->ctx->x[0] = kSmcccNotSupported;
     return;
   }
-  const std::uint64_t sequence = next_sequence(vm);
+  const std::uint64_t sequence = sync::next_nonzero(g_update_sequence[vm]);
   if (!smp::invoke_vm_owner(vm, &apply_local, plan.deadline, generation, sequence)) {
     call->ctx->x[0] = kSmcccNotSupported;
     return;
