@@ -69,6 +69,16 @@ DEMO_BUILD_DIR = BUILD_DIR / "demo"
 HV_PRESET = "aarch64-debug"
 HV_ELF = BUILD_DIR / HV_PRESET / "novavisor.elf"
 QEMU = "qemu-system-aarch64"
+# Single source of truth for the QEMU board model. scripts/task.sh run/debug
+# consume it via the `qemu-args` subcommand instead of copying the flags.
+QEMU_BOARD_ARGS = (
+    "-machine", "virt,virtualization=on,gic-version=3,iommu=smmuv3,highmem-ecam=off",
+    "-cpu", "cortex-a57",
+    "-smp", "2",  # must match NOVA_BOARD_SMP_CPUS (board_layout.h)
+    "-nographic",
+    "-nic", "none",
+    "-m", "1024",
+)
 FATAL_OUTPUT_PATTERNS = (
     r"\[smmu\] initialization failed(?::| error=)",
     r"\[smmu\] isolation failure:",
@@ -168,21 +178,45 @@ def run(cmd: list[str], **kw) -> None:
     subprocess.check_call(cmd, **kw)
 
 
+def _ensure_build_env() -> None:
+    # Make direct invocation work like the task.sh path: cross toolchain on
+    # PATH and CPM checkouts routed to the shared project-local cache.
+    toolchain_bin = REPO / ".toolchain" / "current" / "bin"
+    if toolchain_bin.is_dir() and str(toolchain_bin) not in os.environ["PATH"].split(os.pathsep):
+        os.environ["PATH"] = f"{toolchain_bin}{os.pathsep}{os.environ['PATH']}"
+    os.environ.setdefault("CPM_SOURCE_CACHE", str(REPO / "external" / "cache"))
+
+
+def _sync_active(src: Path, dest: Path) -> None:
+    # Copy only on content change so Ninja regenerates the guest DTBs
+    # exactly when the input differs — no CMake reconfigure involved.
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    content = src.read_bytes()
+    if not dest.exists() or dest.read_bytes() != content:
+        dest.write_bytes(content)
+
+
 def build_hypervisor(config: str | None = None, payloads: Path | None = None) -> Path:
-    # Always delegate to task.sh: a no-change Ninja rebuild is nearly free,
-    # while skipping on HV_ELF existence would verify against a stale binary
-    # after source edits. `config` (repo-relative guest config YAML) flows
-    # through --config; omitting it restores configs/default.yml, so one
-    # demo's config never leaks into the next.
-    cmd = [str(REPO / "scripts" / "task.sh"), "build"]
-    if config is not None:
-        cfg = REPO / config
-        if not cfg.exists():
-            sys.exit(f"demo_runner: guest config not found: {cfg}")
-        cmd += ["--config", str(cfg)]
-    if payloads is not None:
-        cmd += ["--payloads", str(payloads)]
-    run(cmd)
+    # A no-change Ninja rebuild is nearly free, while skipping on HV_ELF
+    # existence would verify against a stale binary after source edits.
+    # Omitting config/payloads restores the defaults, so one demo's
+    # choice never leaks into the next.
+    cfg = REPO / (config if config is not None else "configs/default.yml")
+    if not cfg.exists():
+        sys.exit(f"demo_runner: guest config not found: {cfg}")
+    payload_manifest = payloads if payloads is not None else REPO / "configs" / "payloads.yml"
+    if not payload_manifest.exists():
+        sys.exit(f"demo_runner: payload manifest not found: {payload_manifest}")
+
+    _ensure_build_env()
+    preset_dir = BUILD_DIR / HV_PRESET
+    _sync_active(cfg, preset_dir / "active_config.yml")
+    _sync_active(payload_manifest, preset_dir / "active_payloads.yml")
+    # Configure only on the first run; afterwards Ninja re-runs CMake by
+    # itself whenever a CMakeLists.txt changes.
+    if not (preset_dir / "build.ninja").exists():
+        run(["cmake", "--preset", HV_PRESET], cwd=REPO)
+    run(["cmake", "--build", "--preset", HV_PRESET], cwd=REPO)
     return HV_ELF
 
 
@@ -197,6 +231,7 @@ def manifest_config(manifest: dict) -> str | None:
 
 def build_demos() -> Path:
     # Configure once; rebuild is cheap.
+    _ensure_build_env()
     if not (DEMO_BUILD_DIR / "build.ninja").exists():
         DEMO_BUILD_DIR.mkdir(parents=True, exist_ok=True)
         run([
@@ -272,16 +307,7 @@ def prepare_payload_manifest(
 
 
 def build_qemu_cmd(elf: Path, demo_name: str, demo_build: Path, manifest: dict) -> list[str]:
-    cmd = [
-        QEMU,
-        "-machine", "virt,virtualization=on,gic-version=3,iommu=smmuv3,highmem-ecam=off",
-        "-cpu", "cortex-a57",
-        "-smp", "2",  # must match NOVA_BOARD_SMP_CPUS (board_layout.h)
-        "-nographic",
-        "-nic", "none",
-        "-m", "1024",
-        "-kernel", str(elf),
-    ]
+    cmd = [QEMU, *QEMU_BOARD_ARGS, "-kernel", str(elf)]
     devices = manifest.get("qemu_devices", [])
     if not isinstance(devices, list) or not all(isinstance(device, str) and device for device in devices):
         raise SystemExit(f"[demo_runner] {demo_name}: qemu_devices must be a list of non-empty strings")
@@ -847,6 +873,12 @@ def cmd_fetch(args) -> int:
     return subprocess.call(["bash", str(script)])
 
 
+def cmd_qemu_args(_args) -> int:
+    # Consumed by scripts/task.sh run/debug so the board model has one owner.
+    print(" ".join(QEMU_BOARD_ARGS))
+    return 0
+
+
 def cmd_list(_args) -> int:
     demos = iter_demos()
     if not demos:
@@ -1007,6 +1039,8 @@ def main() -> int:
     sub = p.add_subparsers(dest="subcommand", required=True)
     sub.add_parser("list", help="list demos and their enabled status").set_defaults(func=cmd_list)
     sub.add_parser("build", help="build in-tree demo guests").set_defaults(func=cmd_build)
+    sub.add_parser("qemu-args",
+                   help="print the QEMU board-model flags").set_defaults(func=cmd_qemu_args)
     # `type` resolves an ID or directory name to the demo name at parse time.
     demo_arg = dict(metavar="id|name", type=resolve_demo,
                     help="demo ID from `list` (e.g. 2) or directory name (e.g. 02_timer)")

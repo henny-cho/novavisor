@@ -41,7 +41,7 @@ print_usage() {
     echo "  objdump     Disassemble novavisor.elf (interleaved with source)"
     echo "  ci          Run the full CI pipeline (format check + build + lint + test + demo)"
     echo "  test        Build and run host GTest suite (x86_64, no toolchain)"
-    echo "  demo        Manage demo guests (list | build | fetch | run | verify | verify-repeat | verify-all | debug)"
+    echo "  demo        Manage demo guests (list | build | fetch | run | verify | verify-repeat | verify-all | debug | qemu-args)"
     echo ""
     echo "Options:"
     echo "  --release   Build in Release mode (default: Debug)"
@@ -100,6 +100,12 @@ _clang_tidy_runner() {
 # cache (hash-verified). Must be called before any cmake invocation.
 _setup_cpm_cache() {
     export CPM_SOURCE_CACHE="${WORK_DIR}/external/cache"
+}
+
+# The QEMU board model has one owner (the demo harness); query it so
+# run/debug never drift from what demo verification boots.
+_qemu_board_args() {
+    python3 "${WORK_DIR}/scripts/demo_runner.py" qemu-args
 }
 
 # Parse a --release flag from "$@" and echo the resulting BUILD_TYPE.
@@ -330,14 +336,9 @@ cmd_run() {
 
     echo "==> Running NovaVisor in QEMU: ${ELF}"
     echo "==> Press Ctrl-A then x to exit QEMU."
-    qemu-system-aarch64 \
-        -machine virt,virtualization=on,gic-version=3,iommu=smmuv3,highmem-ecam=off \
-        -cpu cortex-a57 \
-        -smp 2 \
-        -nographic \
-        -nic none \
-        -m 1024 \
-        -kernel "${ELF}"
+    local QEMU_ARGS
+    read -r -a QEMU_ARGS <<< "$(_qemu_board_args)"
+    qemu-system-aarch64 "${QEMU_ARGS[@]}" -kernel "${ELF}"
 }
 
 cmd_test() {
@@ -387,15 +388,9 @@ cmd_debug() {
     echo "==> Launching QEMU with GDB stub on :1234 (CPU halted)."
     echo "==> In another shell:  aarch64-none-elf-gdb ${ELF} -ex 'target remote :1234'"
     echo "==> Press Ctrl-A then x in QEMU to exit."
-    qemu-system-aarch64 \
-        -machine virt,virtualization=on,gic-version=3,iommu=smmuv3,highmem-ecam=off \
-        -cpu cortex-a57 \
-        -smp 2 \
-        -nographic \
-        -nic none \
-        -m 1024 \
-        -kernel "${ELF}" \
-        -s -S
+    local QEMU_ARGS
+    read -r -a QEMU_ARGS <<< "$(_qemu_board_args)"
+    qemu-system-aarch64 "${QEMU_ARGS[@]}" -kernel "${ELF}" -s -S
 }
 
 cmd_size() {
@@ -418,7 +413,7 @@ cmd_demo() {
     local sub="${1:-list}"
     shift || true
     case "${sub}" in
-        list|build|fetch|run|verify|verify-repeat|verify-all|debug)
+        list|build|fetch|run|verify|verify-repeat|verify-all|debug|qemu-args)
             # -u: unbuffered stdout so VS Code's background problem matcher
             # sees the ==> markers emitted by `demo debug` before QEMU
             # replaces the process and output sits in a 4K block buffer.
@@ -426,7 +421,7 @@ cmd_demo() {
             ;;
         *)
             echo "Error: unknown demo subcommand '${sub}'" >&2
-            echo "Usage: $0 demo {list|build|fetch|run|verify|verify-repeat|verify-all|debug} [options]" >&2
+            echo "Usage: $0 demo {list|build|fetch|run|verify|verify-repeat|verify-all|debug|qemu-args} [options]" >&2
             exit 2
             ;;
     esac
