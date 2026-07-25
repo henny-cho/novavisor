@@ -32,7 +32,6 @@ add_custom_command(
             ${CMAKE_CURRENT_SOURCE_DIR}/linker.ld.S -o ${NOVA_LINKER_SCRIPT}
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/linker.ld.S
             ${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/board_layout.h
-            ${NOVA_BOARD_INCLUDE_DIR}/board_layout.h
     COMMENT "Preprocessing hypervisor linker script"
 )
 add_custom_target(nova_arch_linker_script DEPENDS ${NOVA_LINKER_SCRIPT})

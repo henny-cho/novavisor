@@ -14,7 +14,6 @@
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchain-aarch64.cmake",
         "NOVA_ARCH": "aarch64",
         "NOVA_BOARD": "qemu_virt",
-        "NOVA_BOARD_CPU": "cortex-a57",
         "NOVA_PROJECT": "qemu_virt_arm64"
       }
     },
@@ -60,7 +59,6 @@
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchain-aarch64.cmake",
         "NOVA_ARCH": "aarch64",
         "NOVA_BOARD": "n1sdp",
-        "NOVA_BOARD_CPU": "neoverse-n1",
         "NOVA_PROJECT": "n1sdp_arm64"
       }
     },

@@ -25,6 +25,20 @@ constexpr std::array<std::uint64_t, 2> kFakeL2Pas{kFakeL2Pa, 0x0000'0000'0006'00
 constexpr std::size_t                          kPoolSize = 4;
 constexpr std::array<std::uint64_t, kPoolSize> kFakeL3Pas{0x2'0000ULL, 0x3'0000ULL, 0x4'0000ULL, 0x5'0000ULL};
 
+// Identity mapping is the shape most cases below exercise. The
+// hypervisor always states both addresses explicitly, so these
+// shorthands live here rather than in the builder header.
+[[nodiscard]] auto map_identity_range(Stage2Tables& t, std::uint64_t ipa_base, std::uint64_t size,
+                                      std::uint64_t leaf_attrs) noexcept -> bool {
+  return map_range(t, ipa_base, ipa_base, size, leaf_attrs);
+}
+
+[[nodiscard]] auto build_identity_map(Stage2Tables& t, std::uint64_t ipa_base, std::uint64_t size,
+                                      std::uint64_t leaf_attrs) noexcept -> bool {
+  init_tables(t);
+  return map_identity_range(t, ipa_base, size, leaf_attrs);
+}
+
 // Phase 5/6 guest layout.
 constexpr std::uint64_t kIpaBase = 0x5000'0000ULL;
 constexpr std::uint64_t kIpaSize = 0x0010'0000ULL; // 1 MiB = 256 pages

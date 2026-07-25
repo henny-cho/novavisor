@@ -42,7 +42,7 @@ void start_secondaries() noexcept {
       continue;
     }
 
-    const std::uint64_t deadline = hyp_timer::now() + hyp_timer::freq() * kOnlineWaitMs / 1000U;
+    const std::uint64_t deadline = hyp_timer::deadline_after_ms(kOnlineWaitMs);
     while (!g_online[i].load(std::memory_order_acquire) && hyp_timer::now() < deadline) {
       // secondary is booting
     }

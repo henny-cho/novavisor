@@ -11,8 +11,8 @@ SPEC = importlib.util.spec_from_file_location("yml2dtb", REPO / "tools/yml2dtb/y
 YML2DTB = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(YML2DTB)
 
-BOARD_LAYOUT = REPO / "src/hal/board/qemu_virt/include/board_layout.h"
-N1SDP_BOARD_LAYOUT = REPO / "src/hal/board/n1sdp/include/board_layout.h"
+BOARD_LAYOUT = REPO / "src/hal/board/qemu_virt/include/hal/board/active/board_layout.h"
+N1SDP_BOARD_LAYOUT = REPO / "src/hal/board/n1sdp/include/hal/board/active/board_layout.h"
 N1SDP_INVENTORY = REPO / "src/hal/board/n1sdp/device_inventory.yml"
 
 INVENTORY = """\

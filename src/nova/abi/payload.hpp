@@ -1,5 +1,13 @@
 #pragma once
 
+// nova/abi/payload.hpp
+//
+// Embedded guest-payload metadata and the CRC32 the loader validates it
+// with. Metadata mirrors, field for field, the record that
+// tools/payload_manifest.py emits into the generated guest_dtbs.S — the
+// static_asserts below pin that layout so a change on either side fails
+// the build instead of misreading the image at boot.
+
 #include "nova/range.hpp"
 
 #include <array>
@@ -26,8 +34,13 @@ struct Metadata {
 static_assert(sizeof(Metadata) == 64);
 static_assert(offsetof(Metadata, image) == 0);
 static_assert(offsetof(Metadata, dtb_start) == 8);
+static_assert(offsetof(Metadata, dtb_end) == 16);
 static_assert(offsetof(Metadata, load_pa) == 24);
+static_assert(offsetof(Metadata, entry) == 32);
+static_assert(offsetof(Metadata, memory_size) == 40);
+static_assert(offsetof(Metadata, image_size) == 48);
 static_assert(offsetof(Metadata, checksum) == 56);
+static_assert(offsetof(Metadata, reserved) == 60);
 
 [[nodiscard]] consteval auto make_crc32_table() -> std::array<std::uint32_t, 256> {
   std::array<std::uint32_t, 256> table{};

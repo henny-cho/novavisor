@@ -52,4 +52,21 @@ private:
   SpinLock& lock_;
 };
 
+// Advance a monotonic counter and return its new value, skipping zero on
+// wrap. Zero is reserved by the counters' readers to mean "never" (no
+// generation, no update yet), so it must never be handed out as a live
+// value. Contended increments retry; every caller gets a distinct value.
+[[nodiscard]] inline auto next_nonzero(std::atomic<std::uint64_t>& counter) noexcept -> std::uint64_t {
+  std::uint64_t current = counter.load(std::memory_order_relaxed);
+  for (;;) {
+    std::uint64_t next = current + 1U;
+    if (next == 0) {
+      next = 1;
+    }
+    if (counter.compare_exchange_weak(current, next, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+      return next;
+    }
+  }
+}
+
 } // namespace nova::sync

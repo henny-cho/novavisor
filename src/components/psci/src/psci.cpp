@@ -19,24 +19,6 @@ void log_power_event(const char* what) noexcept {
   console::write(what);
 }
 
-[[nodiscard]] auto cpu_on_return(smp::CpuOnResult result) noexcept -> std::uint64_t {
-  switch (result) {
-  case smp::CpuOnResult::kSuccess:
-    return PSCI_SUCCESS;
-  case smp::CpuOnResult::kInvalid:
-    return static_cast<std::uint64_t>(PSCI_INVALID_PARAMETERS);
-  case smp::CpuOnResult::kDenied:
-    return static_cast<std::uint64_t>(PSCI_DENIED);
-  case smp::CpuOnResult::kAlreadyOn:
-    return static_cast<std::uint64_t>(PSCI_ALREADY_ON);
-  case smp::CpuOnResult::kOnPending:
-    return static_cast<std::uint64_t>(PSCI_ON_PENDING);
-  case smp::CpuOnResult::kInternalFailure:
-    return static_cast<std::uint64_t>(PSCI_INTERNAL_FAILURE);
-  }
-  return static_cast<std::uint64_t>(PSCI_INTERNAL_FAILURE);
-}
-
 } // namespace
 
 void psci_component::handle_hvc(HvcCall* call) noexcept {
@@ -75,7 +57,7 @@ void psci_component::handle_hvc(HvcCall* call) noexcept {
     if (t == psci::kInvalidTarget || t >= guest_table()[vm].vcpus) {
       call->ctx->x[0] = static_cast<std::uint64_t>(PSCI_INVALID_PARAMETERS);
     } else {
-      call->ctx->x[0] = cpu_on_return(smp::cpu_on(slot_of(vm, t), call->ctx->x[2], call->ctx->x[3]));
+      call->ctx->x[0] = static_cast<std::uint64_t>(smp::cpu_on(slot_of(vm, t), call->ctx->x[2], call->ctx->x[3]));
     }
     return;
   }

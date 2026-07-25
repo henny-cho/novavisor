@@ -1,9 +1,9 @@
-set(common_project_dir ${CMAKE_SOURCE_DIR}/src/projects/common)
-
+# Full QEMU virt profile: the shared entry point plus this directory's
+# own nexus.hpp (17 components, SMP and device passthrough included).
 nova_add_guest_project(
-    MAIN ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
-    GUEST_CONFIG ${common_project_dir}/guest_config.cpp
+    MAIN ${NOVA_PROJECT_COMMON_DIR}/main.cpp
+    GUEST_CONFIG ${NOVA_PROJECT_COMMON_DIR}/guest_config.cpp
     INCLUDE_DIRS
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${common_project_dir}/include
+        ${NOVA_PROJECT_COMMON_DIR}/include
 )

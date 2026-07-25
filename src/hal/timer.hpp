@@ -59,6 +59,19 @@ inline void write_cntvoff(std::uint64_t offset) noexcept {
   return f;
 }
 
+// Milliseconds → counter ticks. Multiplying before dividing keeps the
+// sub-millisecond resolution of the counter; callers use timeouts far
+// below the 64-bit overflow point (freq() is tens of MHz).
+[[nodiscard]] inline auto ms_to_ticks(std::uint64_t ms) noexcept -> std::uint64_t {
+  return freq() * ms / 1000U;
+}
+
+// Absolute counter value `ms` milliseconds from now — the shape every
+// bounded wait and timer arm needs.
+[[nodiscard]] inline auto deadline_after_ms(std::uint64_t ms) noexcept -> std::uint64_t {
+  return now() + ms_to_ticks(ms);
+}
+
 // Arm the EL2 physical timer to fire (PPI kHypTimerIntid) at absolute
 // counter value `cval`. An already-passed cval fires immediately.
 inline void arm_at(std::uint64_t cval) noexcept {

@@ -34,9 +34,9 @@ namespace {
 // written into Table descriptors (VTTBR points at l1; l1→l2 and l2→l3
 // are populated by map_range).
 //
-// The L3 pool serves sub-2 MiB fragments only — the 1 MiB guest window
-// and the IVC shared page land in the same 2 MiB slot, so one pool
-// table suffices today; the second is headroom for window growth.
+// The L3 pool serves sub-2 MiB fragments only, one table per distinct
+// 2 MiB slot that needs page granularity: the guest window, the IVC
+// shared page, and one spare for a passed-through MMIO region.
 inline constexpr std::size_t kL2PoolSize = 2;
 inline constexpr std::size_t kL3PoolSize = 3;
 

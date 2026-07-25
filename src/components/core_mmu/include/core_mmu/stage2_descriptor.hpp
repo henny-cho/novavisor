@@ -87,8 +87,8 @@ inline constexpr std::uint64_t kAttrNormalRwx =
 // Normal memory, RW, Inner Shareable, cacheable, non-executable (data).
 inline constexpr std::uint64_t kAttrNormalRwData = kAttrNormalRwx | kXnBit;
 
-// Device-nGnRE, RW, non-executable. MMIO regions (Phase 8+ when we expose
-// emulated devices to guests).
+// Device-nGnRE, RW, non-executable. The attribute for MMIO regions
+// exposed to guests, emulated or passed through.
 inline constexpr std::uint64_t kAttrDeviceRw = (kMemAttrDevice_nGnRE << kMemAttrShift) |
                                                (kS2apReadWrite << kS2apShift) | (kShOuterShareable << kShShift) |
                                                kAfBit | kXnBit;
@@ -97,8 +97,8 @@ inline constexpr std::uint64_t kAttrDeviceRw = (kMemAttrDevice_nGnRE << kMemAttr
 
 // --- Builders ---------------------------------------------------------------
 //
-// These helpers build descriptor values; they do not write to memory. A
-// builder pass (Phase 5 next step) uses them to populate L1/L2/L3 tables.
+// These helpers build descriptor values; they do not write to memory.
+// stage2_builder.hpp uses them to populate the L1/L2/L3 tables.
 
 // Block descriptor, valid at L1 (1 GiB) or L2 (2 MiB). The caller is
 // responsible for ensuring output_pa is block-aligned for the level.

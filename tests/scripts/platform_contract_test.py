@@ -122,7 +122,6 @@ class PlatformContractTests(unittest.TestCase):
                 set(NOVA_ARCH "{arch}")
                 set(NOVA_BOARD "{board}")
                 set(NOVA_PROJECT "{project}")
-                set(NOVA_BOARD_CPU "test_cpu")
                 set(NOVA_ARCH_DIR "${{CMAKE_SOURCE_DIR}}/arch/${{NOVA_ARCH}}")
                 set(NOVA_BOARD_DIR "${{CMAKE_SOURCE_DIR}}/board/${{NOVA_BOARD}}")
                 set(NOVA_PROJECT_DIR "${{CMAKE_SOURCE_DIR}}/project/${{NOVA_PROJECT}}")
@@ -170,13 +169,6 @@ class PlatformContractTests(unittest.TestCase):
                 self.configure(expected)
                 if self.build.exists():
                     subprocess.run(["cmake", "-E", "remove_directory", str(self.build)])
-
-    def test_cpu_mismatch_is_rejected(self):
-        board_manifest = self.board / "board.cmake"
-        board_manifest.write_text(
-            board_manifest.read_text().replace("test_cpu", "different_cpu")
-        )
-        self.configure("requires CPU model")
 
     def test_missing_capability_component_is_rejected(self):
         self.write_project_manifest("gicv3;smmuv3;dma", "core_gic;vgic;smmu;dma_device")

@@ -1,3 +1,7 @@
+# Generator input for tools/yml2dtb: plain data, so the guest-visible
+# EDU values are restated here rather than included. They must match
+# NOVA_EDU_BAR0_IPA / NOVA_EDU_BAR0_SIZE / NOVA_EDU_SPI in
+# nova/abi/guest_layout.h, which the C++ device backend derives from.
 sid_bits: 8
 
 devices:
@@ -5,7 +9,7 @@ devices:
     device_id: 0
     compatible: "qemu,edu"
     streams: [0x10]
-    mmio: { base: 0x10000000, size: 0x00100000 }
-    interrupt: { intid: 37, trigger: level }
+    mmio: { base: 0x10000000, size: 0x00100000 } # NOVA_EDU_BAR0_IPA / _SIZE
+    interrupt: { intid: 37, trigger: level }     # NOVA_EDU_SPI
     coherent: true
     reset: quiesce

@@ -1,5 +1,9 @@
 # Shared executable pipeline for guest-hosting project profiles.
 
+# Sources every profile shares: the entry point and the guest-table
+# builder. A profile supplies only its own nexus.hpp.
+set(NOVA_PROJECT_COMMON_DIR ${CMAKE_CURRENT_LIST_DIR}/../src/projects/common)
+
 function(nova_add_guest_project)
     cmake_parse_arguments(ARG "" "MAIN;GUEST_CONFIG" "INCLUDE_DIRS" ${ARGN})
     if(NOT ARG_MAIN OR NOT ARG_GUEST_CONFIG)
@@ -21,7 +25,7 @@ function(nova_add_guest_project)
         COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/yml2dtb/yml2dtb.py
                 ${guest_config_file}
                 -o ${guest_dtb_dir}
-                --board-layout ${NOVA_BOARD_INCLUDE_DIR}/board_layout.h
+                --board-layout ${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/board_layout.h
                 --inventory ${NOVA_BOARD_DIR}/device_inventory.yml
                 --payloads ${guest_payload_file}
         DEPENDS ${guest_config_file}
@@ -29,7 +33,7 @@ function(nova_add_guest_project)
                 ${CMAKE_SOURCE_DIR}/tools/yml2dtb/yml2dtb.py
                 ${CMAKE_SOURCE_DIR}/src/nova/abi/guest_layout.h
                 ${CMAKE_SOURCE_DIR}/src/nova/arch/gicv3_regs.h
-                ${NOVA_BOARD_INCLUDE_DIR}/board_layout.h
+                ${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/board_layout.h
                 ${NOVA_BOARD_DIR}/device_inventory.yml
         COMMENT "Generating guest payload bundle"
     )
@@ -77,7 +81,7 @@ function(nova_add_guest_project)
     add_custom_command(TARGET novavisor.elf POST_BUILD
         COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/check_image_layout.py
                 --elf $<TARGET_FILE:novavisor.elf>
-                --board-layout ${NOVA_BOARD_INCLUDE_DIR}/board_layout.h
+                --board-layout ${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/board_layout.h
                 --readelf ${CMAKE_READELF}
                 --nm ${CMAKE_NM}
                 ${image_layout_args}
@@ -88,5 +92,18 @@ function(nova_add_guest_project)
                 $<TARGET_FILE:novavisor.elf> ${CMAKE_BINARY_DIR}/novavisor.bin
         BYPRODUCTS ${CMAKE_BINARY_DIR}/novavisor.bin
         COMMENT "Generating flat binary novavisor.bin"
+    )
+endfunction()
+
+# The minimal single-core GICv3 profile: every source, including the
+# nexus, comes from src/projects/common/minimal. Board-specific profiles
+# that need nothing more than the board selection reduce to this call.
+function(nova_add_minimal_guest_project)
+    nova_add_guest_project(
+        MAIN ${NOVA_PROJECT_COMMON_DIR}/main.cpp
+        GUEST_CONFIG ${NOVA_PROJECT_COMMON_DIR}/guest_config.cpp
+        INCLUDE_DIRS
+            ${NOVA_PROJECT_COMMON_DIR}/minimal
+            ${NOVA_PROJECT_COMMON_DIR}/include
     )
 endfunction()

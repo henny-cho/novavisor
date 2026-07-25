@@ -32,16 +32,6 @@ enum class State : std::uint8_t {
   return states.size();
 }
 
-// True when every VCPU has retired — the machine is done.
-[[nodiscard]] inline auto all_off(std::span<const State> states) noexcept -> bool {
-  for (const State s : states) {
-    if (s != State::kOff) {
-      return false;
-    }
-  }
-  return true;
-}
-
 // True when the resident VCPU has a runnable competitor — the
 // condition for arming the preemption time slice.
 [[nodiscard]] inline auto slice_needed(std::span<const State> states) noexcept -> bool {

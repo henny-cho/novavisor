@@ -32,7 +32,7 @@ auto misalign(const void* p) noexcept -> std::uintptr_t {
 
 extern "C" {
 
-auto memcpy(void* dst, const void* src, std::size_t n) noexcept -> void* { // NOLINT(readability-identifier-naming)
+auto memcpy(void* dst, const void* src, std::size_t n) noexcept -> void* {
   auto*       d = static_cast<unsigned char*>(dst);
   const auto* s = static_cast<const unsigned char*>(src);
 
@@ -84,7 +84,7 @@ auto memcpy(void* dst, const void* src, std::size_t n) noexcept -> void* { // NO
   return dst;
 }
 
-auto memmove(void* dst, const void* src, std::size_t n) noexcept -> void* { // NOLINT(readability-identifier-naming)
+auto memmove(void* dst, const void* src, std::size_t n) noexcept -> void* {
   auto*       d = static_cast<unsigned char*>(dst);
   const auto* s = static_cast<const unsigned char*>(src);
   if (d == s || n == 0) {
@@ -104,7 +104,7 @@ auto memmove(void* dst, const void* src, std::size_t n) noexcept -> void* { // N
   return dst;
 }
 
-auto memset(void* dst, int value, std::size_t n) noexcept -> void* { // NOLINT(readability-identifier-naming)
+auto memset(void* dst, int value, std::size_t n) noexcept -> void* {
   auto*         d    = static_cast<unsigned char*>(dst);
   const auto    byte = static_cast<unsigned char>(value);
   std::uint64_t word = 0x0101'0101'0101'0101ULL * byte;
@@ -125,7 +125,7 @@ auto memset(void* dst, int value, std::size_t n) noexcept -> void* { // NOLINT(r
   return dst;
 }
 
-auto memcmp(const void* lhs, const void* rhs, std::size_t n) noexcept -> int { // NOLINT(readability-identifier-naming)
+auto memcmp(const void* lhs, const void* rhs, std::size_t n) noexcept -> int {
   // Byte loop: newlib's memcmp uses SIMD registers. Callers here are
   // short string_view compares, so no aligned fast lane is worth it.
   const auto* a = static_cast<const unsigned char*>(lhs);
@@ -138,7 +138,7 @@ auto memcmp(const void* lhs, const void* rhs, std::size_t n) noexcept -> int { /
   return 0;
 }
 
-auto strlen(const char* s) noexcept -> std::size_t { // NOLINT(readability-identifier-naming)
+auto strlen(const char* s) noexcept -> std::size_t {
   const char* p = s;
   while (*p != '\0') {
     ++p;

@@ -29,11 +29,18 @@ find_program(CMAKE_NM aarch64-none-elf-nm HINTS "${TOOLCHAIN_BIN_DIR}" REQUIRED)
 # -f{function,data}-sections gives --gc-sections per-symbol granularity;
 # linker.ld keeps mandatory sections via KEEP(.text.boot/.text.vec) and
 # matches the split names with *(.text*)/*(.data*) wildcards.
-# The active preset must select the board CPU explicitly. A toolchain
-# default could silently compile a new board with the previous board's ISA.
-list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES NOVA_BOARD_CPU)
-if(NOT DEFINED NOVA_BOARD_CPU OR NOT NOVA_BOARD_CPU MATCHES "^[A-Za-z0-9_.+-]+$")
-    message(FATAL_ERROR "NOVA_BOARD_CPU must be selected by the board preset")
+# -mcpu must name the selected board's core: a toolchain default could
+# silently compile a new board with the previous board's ISA. The board
+# manifest is the single source — read it here (the toolchain file runs
+# before the project, so NOVA_BOARD_REQUIRED_CPU is not yet in scope) and
+# let an explicit -DNOVA_BOARD_CPU override for experiments.
+list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES NOVA_BOARD NOVA_BOARD_CPU)
+if(NOT DEFINED NOVA_BOARD_CPU AND DEFINED NOVA_BOARD)
+    include("${CMAKE_CURRENT_LIST_DIR}/../src/hal/board/${NOVA_BOARD}/board.cmake" OPTIONAL)
+    set(NOVA_BOARD_CPU "${NOVA_BOARD_REQUIRED_CPU}")
+endif()
+if(NOT NOVA_BOARD_CPU MATCHES "^[A-Za-z0-9_.+-]+$")
+    message(FATAL_ERROR "NOVA_BOARD_CPU could not be resolved for board '${NOVA_BOARD}'")
 endif()
 
 set(COMMON_FLAGS "-mcpu=${NOVA_BOARD_CPU} -mstrict-align -ffunction-sections -fdata-sections")
