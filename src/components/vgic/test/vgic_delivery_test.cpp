@@ -7,7 +7,11 @@
 
 #include "vgic/vgic_delivery.hpp"
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <gtest/gtest.h>
+#include <span>
 
 using namespace nova::vgic;
 
@@ -206,4 +210,136 @@ TEST(VgicSpiRefill, MovesTrackedLevelTokenIntoEoiMaintenanceLr) {
   EXPECT_EQ(completed.physical_intid, 37U);
   EXPECT_EQ(completed.generation, 4U);
   EXPECT_FALSE(take_eoi_token(c, 0).valid());
+}
+
+// ---------------------------------------------------------------------------
+// Token-protected pending mask
+// ---------------------------------------------------------------------------
+
+TEST(VgicPendingTokenMask, EmptyTokenBankProtectsNothing) {
+  const std::array<EoiToken, kNumSpis> tokens{};
+  EXPECT_EQ(pending_token_mask(tokens), 0U);
+  EXPECT_EQ(pending_token_mask(std::span<const EoiToken>{}), 0U);
+}
+
+TEST(VgicPendingTokenMask, MarksOnlyLiveTokens) {
+  std::array<EoiToken, kNumSpis> tokens{};
+  tokens[0]  = {.virtual_intid = 32, .physical_intid = 32, .generation = 1};
+  tokens[5]  = {.virtual_intid = 37, .physical_intid = 37, .generation = 2};
+  tokens[31] = {.virtual_intid = 63, .physical_intid = 63, .generation = 3};
+  // A zero generation is not a token, whatever the intids say.
+  tokens[7] = {.virtual_intid = 39, .physical_intid = 39, .generation = 0};
+
+  EXPECT_EQ(pending_token_mask(tokens), (1U << 0U) | (1U << 5U) | (1U << 31U));
+}
+
+TEST(VgicPendingTokenMask, FullTokenBankProtectsEveryBit) {
+  std::array<EoiToken, kNumSpis> tokens{};
+  for (std::uint32_t i = 0; i < kNumSpis; ++i) {
+    tokens[i] = {.virtual_intid = kNumPrivate + i, .physical_intid = kNumPrivate + i, .generation = 1};
+  }
+  EXPECT_EQ(pending_token_mask(tokens), ~0U);
+}
+
+// ---------------------------------------------------------------------------
+// EoI harvest
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A resident vCPU with `count` in-flight LRs, each carrying a token.
+auto make_tracked_cpu(std::size_t count) -> CpuState {
+  CpuState c{};
+  for (std::size_t i = 0; i < count; ++i) {
+    const auto intid = static_cast<std::uint32_t>(kNumPrivate + i);
+    c.lr[i]          = make_lr(intid, 0x40, true);
+    c.lr_token[i]    = {.virtual_intid = intid, .physical_intid = intid, .generation = i + 1};
+  }
+  return c;
+}
+
+} // namespace
+
+TEST(VgicHarvestEois, HarvestsOnlyTheEisrMarkedSlots) {
+  CpuState   c       = make_tracked_cpu(kLrs);
+  const auto harvest = harvest_eois(c, 0b0101U, kLrs);
+
+  ASSERT_EQ(harvest.count, 2);
+  EXPECT_EQ(harvest.tokens[0].virtual_intid, kNumPrivate);
+  EXPECT_EQ(harvest.tokens[1].virtual_intid, kNumPrivate + 2);
+  EXPECT_EQ(harvest.cleared, 0b0101U);
+
+  // Marked slots are emptied in the shadow and their tokens consumed;
+  // the untouched slots keep both.
+  EXPECT_EQ(c.lr[0], 0U);
+  EXPECT_EQ(c.lr[2], 0U);
+  EXPECT_FALSE(c.lr_token[0].valid());
+  EXPECT_FALSE(c.lr_token[2].valid());
+  EXPECT_TRUE(lr_in_flight(c.lr[1]));
+  EXPECT_TRUE(c.lr_token[1].valid());
+  EXPECT_TRUE(lr_in_flight(c.lr[3]));
+  EXPECT_TRUE(c.lr_token[3].valid());
+}
+
+TEST(VgicHarvestEois, UntrackedSlotIsClearedWithoutAToken) {
+  CpuState c    = make_tracked_cpu(2);
+  c.lr_token[1] = {}; // an untracked (guest-only) interrupt
+
+  const auto harvest = harvest_eois(c, 0b11U, kLrs);
+  ASSERT_EQ(harvest.count, 1);
+  EXPECT_EQ(harvest.tokens[0].virtual_intid, kNumPrivate);
+  EXPECT_EQ(harvest.cleared, 0b11U); // both slots freed regardless
+  EXPECT_EQ(c.lr[1], 0U);
+}
+
+TEST(VgicHarvestEois, IdleEisrLeavesTheShadowUntouched) {
+  CpuState   c       = make_tracked_cpu(kLrs);
+  const auto before  = c;
+  const auto harvest = harvest_eois(c, 0U, kLrs);
+
+  EXPECT_EQ(harvest.count, 0);
+  EXPECT_EQ(harvest.cleared, 0U);
+  EXPECT_EQ(c.lr, before.lr);
+  EXPECT_TRUE(c.lr_token[0].valid());
+}
+
+TEST(VgicHarvestEois, IgnoresBitsBeyondTheImplementedLrCount) {
+  CpuState c = make_tracked_cpu(kMaxLrs);
+  // EISR bits for slots the implementation does not have must not
+  // consume the shadow entries sitting at those indices.
+  const auto harvest = harvest_eois(c, ~0ULL, kLrs);
+
+  EXPECT_EQ(harvest.count, kLrs);
+  EXPECT_EQ(harvest.cleared, (1ULL << kLrs) - 1U);
+  EXPECT_TRUE(lr_in_flight(c.lr[kLrs]));
+  EXPECT_TRUE(c.lr_token[kLrs].valid());
+}
+
+TEST(VgicHarvestEois, LrCountIsClampedToTheShadowSize) {
+  CpuState   c       = make_tracked_cpu(kMaxLrs);
+  const auto harvest = harvest_eois(c, ~0ULL, kMaxLrs + 8);
+
+  EXPECT_EQ(harvest.count, kMaxLrs);
+  EXPECT_EQ(harvest.cleared, (1ULL << kMaxLrs) - 1U);
+}
+
+TEST(VgicHarvestEois, HarvestedSlotIsReusableByTheNextRefill) {
+  CpuState                       c{};
+  DistState                      d{};
+  std::array<EoiToken, kNumSpis> tokens{};
+  d.spi_enabled = 1U << 5U;
+  d.spi_pending = 1U << 5U;
+  tokens[5]     = {.virtual_intid = 37, .physical_intid = 37, .generation = 4};
+  ASSERT_FALSE(refill(c, kLrs, &d, 0, 1, &tokens));
+  ASSERT_EQ(lr_vintid(c.lr[0]), 37U);
+
+  const auto harvest = harvest_eois(c, 0b1U, kLrs);
+  ASSERT_EQ(harvest.count, 1);
+  EXPECT_EQ(harvest.tokens[0].generation, 4U);
+
+  // The freed slot takes the next candidate.
+  d.spi_pending = 1U << 5U;
+  EXPECT_FALSE(refill(c, kLrs, &d, 0, 1, &tokens));
+  EXPECT_EQ(lr_vintid(c.lr[0]), 37U);
+  EXPECT_FALSE(c.lr_token[0].valid()); // token already consumed by the harvest
 }

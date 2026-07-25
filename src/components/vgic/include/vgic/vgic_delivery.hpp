@@ -16,6 +16,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace nova::vgic {
 
@@ -73,6 +74,44 @@ using EoiToken = CpuState::EoiToken;
   const EoiToken token = cpu.lr_token[slot];
   cpu.lr_token[slot]   = {};
   return token;
+}
+
+// ISPENDR-word mask of SPIs holding a live EoI token: these must
+// survive a guest ICPENDR1 clear (the token still owes a device EOI).
+[[nodiscard]] constexpr auto pending_token_mask(std::span<const EoiToken> spi_tokens) noexcept -> std::uint32_t {
+  std::uint32_t mask = 0;
+  for (std::size_t i = 0; i < spi_tokens.size(); ++i) {
+    mask |= (spi_tokens[i].valid() ? 1U : 0U) << i;
+  }
+  return mask;
+}
+
+// Harvest EoI'd list registers from the shadow after the caller synced
+// hardware into it: EISR bit i marks LR i as invalid-with-EOI. Consumes
+// the slot's token (valid ones are emitted) and zeroes the shadow LR.
+// `cleared` reports which slots were emptied so the glue can zero the
+// hardware copies.
+struct EoiHarvest {
+  std::array<EoiToken, kMaxLrs> tokens{};
+  std::size_t                   count   = 0;
+  std::uint64_t                 cleared = 0;
+};
+
+[[nodiscard]] constexpr auto harvest_eois(CpuState& cpu, std::uint64_t eisr, std::size_t lr_count) noexcept
+    -> EoiHarvest {
+  EoiHarvest harvest{};
+  for (std::size_t i = 0; i < lr_count && i < cpu.lr.size(); ++i) {
+    if ((eisr & (1ULL << i)) == 0U) {
+      continue;
+    }
+    const EoiToken token = take_eoi_token(cpu, i);
+    if (token.valid()) {
+      harvest.tokens[harvest.count++] = token;
+    }
+    cpu.lr[i] = 0;
+    harvest.cleared |= 1ULL << i;
+  }
+  return harvest;
 }
 
 // --- Delivery -----------------------------------------------------------------

@@ -1,7 +1,9 @@
 #include "smmu/domain_model.hpp"
 
 #include <array>
+#include <cstddef>
 #include <gtest/gtest.h>
+#include <utility>
 
 namespace {
 
@@ -115,6 +117,115 @@ TEST(SmmuDomain, RejectsInvalidOrConflictingBinding) {
   EXPECT_TRUE(configure_binding(binding, 0, kGuests.size()));
   EXPECT_FALSE(configure_binding(binding, 0, kGuests.size()));
   EXPECT_FALSE(configure_binding(binding, 1, kGuests.size()));
+}
+
+// --- Per-VM stream index ----------------------------------------------------
+
+constexpr std::size_t kTestStreams = 8;
+
+// Bindings owned as configured by the policy: stream ids are sparse and
+// interleaved between the two VMs, the rest stay unconfigured.
+[[nodiscard]] auto make_bindings() -> std::array<StreamBinding, kTestStreams> {
+  std::array<StreamBinding, kTestStreams> bindings{};
+  for (const auto& [sid, vm] : std::array<std::pair<std::size_t, std::size_t>, 4>{{{1, 1}, {2, 0}, {5, 1}, {7, 0}}}) {
+    EXPECT_TRUE(configure_binding(bindings[sid], vm, kMaxGuests));
+  }
+  return bindings;
+}
+
+TEST(SmmuStreamIndex, GroupsSparseStreamsByOwner) {
+  const auto bindings = make_bindings();
+  const auto index    = build_stream_index<kTestStreams>(bindings);
+
+  const auto vm0 = index.streams_of(0);
+  ASSERT_EQ(vm0.size(), 2);
+  EXPECT_EQ(vm0[0], 2);
+  EXPECT_EQ(vm0[1], 7);
+
+  const auto vm1 = index.streams_of(1);
+  ASSERT_EQ(vm1.size(), 2);
+  EXPECT_EQ(vm1[0], 1);
+  EXPECT_EQ(vm1[1], 5);
+
+  // Unconfigured streams belong to nobody.
+  EXPECT_TRUE(index.streams_of(2).empty());
+  EXPECT_TRUE(index.streams_of(kMaxGuests - 1).empty());
+}
+
+TEST(SmmuStreamIndex, IgnoresUnownedAndOutOfRangeEntries) {
+  std::array<StreamBinding, kTestStreams> bindings{};
+  bindings[0].owner_vm = kMaxGuests;     // owner past the guest table
+  bindings[1].owner_vm = kMaxGuests + 3; // ditto
+  ASSERT_TRUE(configure_binding(bindings[3], 0, kMaxGuests));
+
+  const auto index = build_stream_index<kTestStreams>(bindings);
+  ASSERT_EQ(index.streams_of(0).size(), 1);
+  EXPECT_EQ(index.streams_of(0)[0], 3);
+  for (std::size_t vm = 1; vm < kMaxGuests; ++vm) {
+    EXPECT_TRUE(index.streams_of(vm).empty());
+  }
+}
+
+TEST(SmmuStreamIndex, OutOfRangeVmHasNoStreams) {
+  const auto index = build_stream_index<kTestStreams>(make_bindings());
+  EXPECT_TRUE(index.streams_of(kMaxGuests).empty());
+  EXPECT_TRUE(index.streams_of(dma::kNoVm).empty());
+}
+
+TEST(SmmuAttachGate, AcceptsFreshDomain) {
+  const auto bindings = make_bindings();
+  const auto index    = build_stream_index<kTestStreams>(bindings);
+  EXPECT_TRUE(can_attach_vm(bindings, index.streams_of(0), 1));
+  EXPECT_TRUE(can_attach_vm(bindings, index.streams_of(1), 1));
+}
+
+TEST(SmmuAttachGate, EmptyStreamListIsTriviallyAttachable) {
+  const auto bindings = make_bindings();
+  const auto index    = build_stream_index<kTestStreams>(bindings);
+  EXPECT_TRUE(can_attach_vm(bindings, index.streams_of(2), 1));
+}
+
+TEST(SmmuAttachGate, AllOrNothingAcrossTheDomain) {
+  auto       bindings = make_bindings();
+  const auto index    = build_stream_index<kTestStreams>(bindings);
+
+  // A single quarantined stream blocks the whole domain at the old
+  // generation, and only a newer one lets it back in.
+  ASSERT_TRUE(mark_attached(bindings[2], 1));
+  ASSERT_TRUE(mark_quarantined(bindings[2]));
+  EXPECT_FALSE(can_attach_vm(bindings, index.streams_of(0), 1));
+  EXPECT_TRUE(can_attach_vm(bindings, index.streams_of(0), 2));
+  EXPECT_TRUE(can_attach_vm(bindings, index.streams_of(1), 1)); // the other VM is untouched
+}
+
+TEST(SmmuAttachGate, GenerationMustAdvancePastTheBinding) {
+  auto       bindings = make_bindings();
+  const auto index    = build_stream_index<kTestStreams>(bindings);
+  ASSERT_TRUE(mark_attached(bindings[7], 3));
+  ASSERT_TRUE(mark_detached(bindings[7]));
+
+  EXPECT_FALSE(can_attach_vm(bindings, index.streams_of(0), 3)); // replay of the retired generation
+  EXPECT_TRUE(can_attach_vm(bindings, index.streams_of(0), 4));
+}
+
+TEST(SmmuAttachGate, AttachedDomainIsIdempotentOnlyAtItsGeneration) {
+  auto       bindings = make_bindings();
+  const auto index    = build_stream_index<kTestStreams>(bindings);
+  ASSERT_TRUE(mark_attached(bindings[2], 5));
+  ASSERT_TRUE(mark_attached(bindings[7], 5));
+
+  EXPECT_TRUE(can_attach_vm(bindings, index.streams_of(0), 5)); // retry of the same attach
+  EXPECT_FALSE(can_attach_vm(bindings, index.streams_of(0), 6));
+  EXPECT_FALSE(can_attach_vm(bindings, index.streams_of(0), 4));
+}
+
+TEST(SmmuAttachGate, PartiallyAttachedDomainNeedsTheSameGeneration) {
+  auto       bindings = make_bindings();
+  const auto index    = build_stream_index<kTestStreams>(bindings);
+  ASSERT_TRUE(mark_attached(bindings[2], 5)); // one stream installed, one still detached
+
+  EXPECT_TRUE(can_attach_vm(bindings, index.streams_of(0), 5)); // resumes the interrupted attach
+  EXPECT_FALSE(can_attach_vm(bindings, index.streams_of(0), 6));
 }
 
 } // namespace

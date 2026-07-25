@@ -120,27 +120,28 @@ void drain_eois(std::size_t index) noexcept {
     return;
   }
 
-  std::array<VirtualEoiCall, kMaxLrs> calls{};
-  std::size_t                         call_count = 0;
-  CpuState&                           cpu        = g_cpu[index];
+  // The hardware is the truth for the EoI'd slots: pull them into the
+  // shadow before the model consumes their tokens, then mirror the
+  // slots it emptied back out.
+  CpuState& cpu = g_cpu[index];
   for (std::size_t i = 0; i < g_lr_count && i < cpu.lr.size(); ++i) {
-    if ((eisr & (1ULL << i)) == 0U) {
-      continue;
+    if ((eisr & (1ULL << i)) != 0U) {
+      cpu.lr[i] = gic_virt::read_lr(i);
     }
-    cpu.lr[i]            = gic_virt::read_lr(i);
-    const EoiToken token = take_eoi_token(cpu, i);
-    if (token.valid()) {
-      calls[call_count++] = {
-          .slot          = index,
-          .virtual_intid = token.virtual_intid,
-          .token         = token,
-      };
-    }
-    cpu.lr[i] = 0;
-    gic_virt::write_lr(i, 0);
   }
-  for (std::size_t i = 0; i < call_count; ++i) {
-    cib::service<VirtualEoiService>(&calls[i]);
+  const EoiHarvest harvest = harvest_eois(cpu, eisr, g_lr_count);
+  for (std::size_t i = 0; i < g_lr_count && i < cpu.lr.size(); ++i) {
+    if ((harvest.cleared & (1ULL << i)) != 0U) {
+      gic_virt::write_lr(i, 0);
+    }
+  }
+  for (std::size_t i = 0; i < harvest.count; ++i) {
+    VirtualEoiCall call{
+        .slot          = index,
+        .virtual_intid = harvest.tokens[i].virtual_intid,
+        .token         = harvest.tokens[i],
+    };
+    cib::service<VirtualEoiService>(&call);
   }
 }
 
@@ -171,16 +172,9 @@ void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
       // SPIs holding a live EoI token must survive an ICPENDR1 clear;
       // the model enforces it, this glue only snapshots the token set
       // inside the same critical section.
-      std::uint32_t keep_pending = 0;
-      if (off == kGicdIcpendr1) {
-        for (std::size_t i = 0; i < kNumSpis; ++i) {
-          if (g_spi_tokens[vm][i].valid()) {
-            keep_pending |= 1U << i;
-          }
-        }
-      }
-      write = dist_write(dist, off, call->size, call->value, keep_pending);
-      known = write.known;
+      const std::uint32_t keep_pending = off == kGicdIcpendr1 ? pending_token_mask(g_spi_tokens[vm]) : 0U;
+      write                            = dist_write(dist, off, call->size, call->value, keep_pending);
+      known                            = write.known;
     } else {
       const MmioRead r = dist_read(dist, off, call->size);
       known            = r.known;
@@ -204,11 +198,10 @@ void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
   }
 }
 
-// A GICR access selects a frame by stride; the frame is the vCPU index
-// within the ACCESSING guest's VM. Frames past the VM's vcpu count are
-// RAZ/WI (the guest's TYPER walk stops at Last and never gets there).
+// The decoded frame is the vCPU index within the ACCESSING guest's VM;
+// unmapped frames complete RAZ/WI (the guest's TYPER walk stops at Last
+// and never reaches them).
 void redist_mmio(MmioCall* call, std::uint64_t off) noexcept {
-  const std::size_t frame    = off / kGicrFrameSize;
   const std::size_t resident = resident_here();
   if (resident == kNoResident) { // unreachable: a guest cannot trap before its first switch-in
     if (!call->write) {
@@ -217,19 +210,18 @@ void redist_mmio(MmioCall* call, std::uint64_t off) noexcept {
     log_raz_wi("GICR", off);
     return;
   }
-  const std::size_t      vm    = vm_of(resident);
-  const GuestDescriptor& guest = guest_table()[vm];
-  if (frame >= guest.vcpus) {
+  const std::size_t    vm    = vm_of(resident);
+  const RedistFrameRef frame = decode_redist_frame(off, guest_table()[vm].vcpus);
+  if (!frame.valid) {
     if (!call->write) {
       call->value = 0;
     }
     log_raz_wi("GICR", off);
     return;
   }
-  const std::size_t slot = slot_of(vm, frame);
-  const RedistId    id{.number = static_cast<std::uint32_t>(frame), .last = frame == guest.vcpus - 1U};
-  CpuState&         cpu    = g_cpu[slot];
-  const std::size_t in_off = off % kGicrFrameSize;
+  const std::size_t   slot   = slot_of(vm, frame.vcpu);
+  CpuState&           cpu    = g_cpu[slot];
+  const std::uint64_t in_off = frame.offset;
 
   if (call->write) {
     WriteResult write{};
@@ -249,7 +241,7 @@ void redist_mmio(MmioCall* call, std::uint64_t off) noexcept {
   MmioRead r;
   {
     sync::Guard guard{g_vm_lock[vm]}; // sibling frames are cross-core writable
-    r = redist_read(cpu.redist, in_off, call->size, id);
+    r = redist_read(cpu.redist, in_off, call->size, frame.id);
   }
   if (!r.known) {
     log_raz_wi("GICR", off);

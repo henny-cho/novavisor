@@ -63,6 +63,9 @@ alignas(mmu::k4KiB) std::array<DmaTableSet, kMaxGuests> g_dma_tables{};
 
 std::array<TranslationContext, kMaxGuests> g_contexts{};
 std::array<StreamBinding, kStreamCount>    g_bindings{};
+// Owner assignment is fixed at init, so the per-VM stream lists are built
+// once and every domain operation walks only its own streams.
+StreamIndex<kStreamCount> g_vm_streams{};
 // Serializes domain state AND the command queue producer: every
 // submit_commands caller (attach/detach/quarantine) already holds it,
 // and init() runs single-core before guests exist. A submit outside
@@ -187,6 +190,7 @@ std::uint32_t  g_audit_events  = 0;
 
   g_contexts.fill(TranslationContext{});
   g_bindings.fill(StreamBinding{});
+  g_vm_streams = {};
   for (std::size_t vm = 0; vm < guests.size(); ++vm) {
     DmaTableSet& set = g_dma_tables[vm];
 
@@ -225,6 +229,7 @@ std::uint32_t  g_audit_events  = 0;
     }
     g_stream_table[assignment.stream_id] = make_abort_ste();
   }
+  g_vm_streams = build_stream_index<kStreamCount>(g_bindings);
   hw::publish_memory();
   return true;
 }
@@ -253,9 +258,9 @@ std::uint32_t  g_audit_events  = 0;
 }
 
 [[nodiscard]] auto quarantine_vm_locked(std::size_t vm) noexcept -> bool {
-  for (std::size_t sid = 0; sid < g_bindings.size(); ++sid) {
+  for (const std::uint16_t sid : g_vm_streams.streams_of(vm)) {
     StreamBinding& binding = g_bindings[sid];
-    if (binding.owner_vm != vm || binding.state == DomainState::kQuarantined) {
+    if (binding.state == DomainState::kQuarantined) {
       continue;
     }
     if (binding.state == DomainState::kAttached &&
@@ -481,21 +486,12 @@ auto attach_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
     return false;
   }
 
-  for (const StreamBinding& binding : g_bindings) {
-    if (binding.owner_vm != vm) {
-      continue;
-    }
-    if (binding.state == DomainState::kAttached) {
-      if (!attachment_matches(binding, generation)) {
-        return false;
-      }
-    } else if (!can_attach(binding, generation)) {
-      return false;
-    }
+  if (!can_attach_vm(g_bindings, g_vm_streams.streams_of(vm), generation)) {
+    return false;
   }
-  for (std::uint32_t sid = 0; sid < g_bindings.size(); ++sid) {
+  for (const std::uint16_t sid : g_vm_streams.streams_of(vm)) {
     StreamBinding& binding = g_bindings[sid];
-    if (binding.owner_vm != vm || binding.state == DomainState::kAttached) {
+    if (binding.state == DomainState::kAttached) {
       continue;
     }
     if (!install_stream(sid, g_contexts[vm]) || !mark_attached(binding, generation)) {
@@ -511,9 +507,9 @@ auto detach_vm(std::size_t vm) noexcept -> bool {
     return false;
   }
 
-  for (std::uint32_t sid = 0; sid < g_bindings.size(); ++sid) {
+  for (const std::uint16_t sid : g_vm_streams.streams_of(vm)) {
     StreamBinding& binding = g_bindings[sid];
-    if (binding.owner_vm != vm || binding.state != DomainState::kAttached) {
+    if (binding.state != DomainState::kAttached) {
       continue;
     }
     if (!abort_stream(sid, g_contexts[vm].vmid) || !mark_detached(binding)) {
