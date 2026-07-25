@@ -70,7 +70,8 @@ def read_layout(path: Path, board_layout: Path) -> dict[str, int | str]:
     values |= read_defines(board_layout, [
         "NOVA_BOARD_SMP_CPUS", "NOVA_BOARD_RAM_BASE", "NOVA_BOARD_RAM_SIZE",
         "NOVA_BOARD_PHYS_RAM_BASE", "NOVA_BOARD_PHYS_RAM_SIZE",
-        "NOVA_BOARD_GUEST_PA_BASE", "NOVA_BOARD_IVC_SHM_PA",
+        "NOVA_BOARD_GUEST_PA_BASE", "NOVA_BOARD_GUEST_PA_SIZE",
+        "NOVA_BOARD_IVC_SHM_PA",
         "NOVA_BOARD_PRISTINE_PA",
         "NOVA_BOARD_UART0_BASE", "NOVA_BOARD_UART0_INTID",
         "NOVA_BOARD_GICD_BASE", "NOVA_BOARD_GICR_BASE",
@@ -397,7 +398,9 @@ def load_config(path: Path, layout: dict[str, int], inventory: dict) -> tuple[li
 
     # PA windows pack from the IPA base with Block-aligned starts —
     # the same cursor rule guest_config.cpp applies at boot. The whole
-    # packed region must stay below the IVC page.
+    # packed region must stay inside the board's guest PA region; where
+    # that region sits relative to the IVC page is a per-board choice,
+    # and collisions are caught by the physical-range check below.
     align = layout["NOVA_GUEST_PA_ALIGN"]
     load_pa = layout["NOVA_BOARD_GUEST_PA_BASE"]
     parsed = []
@@ -424,9 +427,11 @@ def load_config(path: Path, layout: dict[str, int], inventory: dict) -> tuple[li
         if size < layout["NOVA_GUEST_IPA_SIZE"] or size % MIB:
             sys.exit(f"yml2dtb: {name}: memory_size {size:#x} must be a MiB "
                      f"multiple >= {layout['NOVA_GUEST_IPA_SIZE']:#x} (linker window)")
-        if load_pa + size > layout["NOVA_BOARD_IVC_SHM_PA"]:
-            sys.exit(f"yml2dtb: {name}: window {load_pa:#x}+{size:#x} overlaps "
-                     f"the IVC page at {layout['NOVA_BOARD_IVC_SHM_PA']:#x}")
+        window_end = (layout["NOVA_BOARD_GUEST_PA_BASE"] +
+                      layout["NOVA_BOARD_GUEST_PA_SIZE"])
+        if load_pa + size > window_end:
+            sys.exit(f"yml2dtb: {name}: window {load_pa:#x}+{size:#x} exceeds "
+                     f"the guest PA region ending at {window_end:#x}")
         parsed.append({"name": name, "memory_size": size, "vcpus": vcpus,
                        "uart": uart, "bootargs": bootargs, "cores": cores,
                        "autostart": autostart, "load_pa": load_pa,

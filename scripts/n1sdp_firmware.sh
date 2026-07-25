@@ -17,7 +17,6 @@ PAYLOAD="$(realpath "$1")"
 OUTPUT_DIR="${2:-${WORK_DIR}/build/n1sdp-firmware}"
 mkdir -p "${OUTPUT_DIR}"
 OUTPUT_DIR="$(cd "${OUTPUT_DIR}" && pwd -P)"
-SOURCE_DIR="${WORK_DIR}/external/cache/firmware/arm-trusted-firmware-${N1SDP_TFA_VERSION}"
 BUILD_BASE="${OUTPUT_DIR}/tf-a-build"
 
 if [[ ! -f "${PAYLOAD}" ]]; then
@@ -29,17 +28,10 @@ if ! command -v aarch64-none-elf-gcc >/dev/null 2>&1; then
     exit 1
 fi
 
-mkdir -p "$(dirname "${SOURCE_DIR}")"
-if [[ ! -d "${SOURCE_DIR}/.git" ]]; then
-    git clone --filter=blob:none --no-checkout \
-        https://github.com/ARM-software/arm-trusted-firmware.git "${SOURCE_DIR}"
-fi
-git -C "${SOURCE_DIR}" fetch --depth=1 origin "${N1SDP_TFA_COMMIT}"
-git -C "${SOURCE_DIR}" checkout --detach "${N1SDP_TFA_COMMIT}"
-if [[ "$(git -C "${SOURCE_DIR}" rev-parse HEAD)" != "${N1SDP_TFA_COMMIT}" ]]; then
-    echo "Error: Trusted Firmware-A revision verification failed" >&2
-    exit 1
-fi
+# shellcheck source=lib/tfa.sh disable=SC1091
+source "${WORK_DIR}/scripts/lib/tfa.sh"
+tfa_prepare_source
+SOURCE_DIR="${TFA_SOURCE_DIR}"
 
 make -C "${SOURCE_DIR}" \
     BUILD_BASE="${BUILD_BASE}" \

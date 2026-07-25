@@ -49,6 +49,18 @@
       }
     },
     {
+      "name": "aarch64-qemu-tfa-release",
+      "displayName": "QEMU TF-A Chain Release",
+      "description": "BL33 image for the real TF-A chain on QEMU virt (firmware handoff smoke)",
+      "inherits": "aarch64-base",
+      "binaryDir": "${sourceDir}/build/aarch64-qemu-tfa-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NOVA_BOARD": "qemu_tfa",
+        "NOVA_PROJECT": "qemu_tfa_arm64"
+      }
+    },
+    {
       "name": "aarch64-n1sdp-release",
       "displayName": "N1SDP AArch64 Release",
       "description": "Neoverse N1 SDP BL33 image with embedded guest payload",
@@ -85,6 +97,10 @@
     {
       "name": "aarch64-minimal-release",
       "configurePreset": "aarch64-minimal-release"
+    },
+    {
+      "name": "aarch64-qemu-tfa-release",
+      "configurePreset": "aarch64-qemu-tfa-release"
     },
     {
       "name": "aarch64-n1sdp-release",

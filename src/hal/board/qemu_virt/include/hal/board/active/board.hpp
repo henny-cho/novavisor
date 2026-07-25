@@ -3,8 +3,13 @@
 // C++ view of the QEMU virt memory map. board_layout.h is the single
 // source (it must stay preprocessor-only for the linker script); this
 // header just gives its values typed names.
+//
+// The layout is included through the search path, not relative to this
+// file, so a board that shares the virt machine but not its memory map
+// (qemu_tfa) can forward to this header while its own include dir
+// supplies the layout.
 
-#include "board_layout.h"
+#include "hal/board/active/board_layout.h"
 
 #include <array>
 #include <cstddef>

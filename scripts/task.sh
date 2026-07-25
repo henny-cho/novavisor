@@ -390,25 +390,49 @@ cmd_demo() {
     esac
 }
 
+# Embedded platform-smoke profile for a firmware-chained board: demo 01
+# as the payload manifest, built into the given preset. load-pa is the
+# board's guest PA base.
+firmware_build_profile() {
+    local preset="$1" load_pa="$2" manifest="$3"
+    cmd_demo build
+    python3 "${WORK_DIR}/tools/payload_manifest.py" \
+        --binary "${BUILD_ROOT}/demo/01_hello/hello.bin" \
+        --output "${manifest}" \
+        --name platform-smoke \
+        --load-pa "${load_pa}" \
+        --entry 0x50000000 \
+        --memory-size 0x00100000
+    cmd_build --preset "${preset}" \
+        --config "${WORK_DIR}/configs/platform-smoke.yml" \
+        --payloads "${manifest}"
+}
+
 cmd_firmware() {
     local sub="${1:-}"
     shift || true
     case "${sub}" in
         smoke)
-            # N1SDP payload-profile smoke: package demo 01 as the BL33
-            # payload manifest and build the n1sdp release profile with it.
+            # N1SDP payload-profile smoke (compile/link only — no board).
             # Mirrors the remote CI step so local ci == remote ci.
-            cmd_demo build
-            python3 "${WORK_DIR}/tools/payload_manifest.py" \
-                --binary "${BUILD_ROOT}/demo/01_hello/hello.bin" \
-                --output "${BUILD_ROOT}/n1sdp-payloads.yml" \
-                --name platform-smoke \
-                --load-pa 0x80000000 \
-                --entry 0x50000000 \
-                --memory-size 0x00100000
-            cmd_build --preset aarch64-n1sdp-release \
-                --config "${WORK_DIR}/configs/platform-smoke.yml" \
-                --payloads "${BUILD_ROOT}/n1sdp-payloads.yml"
+            firmware_build_profile aarch64-n1sdp-release 0x80000000 \
+                "${BUILD_ROOT}/n1sdp-payloads.yml"
+            ;;
+        qemu-smoke)
+            # Real TF-A chain (BL1→BL31→BL33) on QEMU virt. Verifies the
+            # firmware handoff contract — EL2 entry, PSCI SMC conduit —
+            # without a board. `--profile-only` compiles just the BL33
+            # profile (the CI-parity step, no TF-A source or network);
+            # `--build-only` additionally packages flash.bin but skips
+            # the QEMU run.
+            firmware_build_profile aarch64-qemu-tfa-release 0x50000000 \
+                "${BUILD_ROOT}/qemu-tfa-payloads.yml"
+            if [[ "${1:-}" == "--profile-only" ]]; then
+                return 0
+            fi
+            "${WORK_DIR}/scripts/qemu_tfa_smoke.sh" \
+                "${BUILD_ROOT}/aarch64-qemu-tfa-release/novavisor.bin" \
+                "${BUILD_ROOT}/qemu-tfa-firmware" "$@"
             ;;
         fip)
             # Full TF-A FIP package for the board (pinned via lib/versions.sh).
@@ -416,7 +440,7 @@ cmd_firmware() {
             ;;
         *)
             echo "Error: unknown firmware subcommand '${sub}'" >&2
-            echo "Usage: $0 firmware {smoke | fip <novavisor.bin> [output-dir]}" >&2
+            echo "Usage: $0 firmware {smoke | qemu-smoke [--build-only] | fip <novavisor.bin> [output-dir]}" >&2
             exit 2
             ;;
     esac
@@ -447,6 +471,7 @@ cmd_ci() {
     # remote pass (minimal platform + N1SDP payload smoke).
     cmd_build --preset aarch64-minimal-release
     cmd_firmware smoke
+    cmd_firmware qemu-smoke --profile-only
 
     cmd_lint
     cmd_test
