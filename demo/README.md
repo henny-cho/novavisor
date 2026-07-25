@@ -204,9 +204,9 @@ For Phases 8+ that reference real OSes (Zephyr, Linux), add a `fetch.sh` in the 
 
 `scripts/demo_runner.py` does the following:
 
-1. Build the hypervisor (`scripts/task.sh build`).
+1. Build the hypervisor by driving the CMake preset directly, after content-syncing the manifest's `config`/payload selection into the preset's `active_config.yml` / `active_payloads.yml`.
 2. Build all custom demo guests (`cmake --build build/demo`).
-3. Construct a QEMU command with the hypervisor ELF as `-kernel` and each manifest guest as a separate `-device loader,file=...,addr=...,force-raw=on`.
+3. Construct a QEMU command with the hypervisor ELF as `-kernel` and each manifest guest as a separate `-device loader,file=...,addr=...,force-raw=on` (skipped in `payload_mode: embedded`, where the guests travel inside the ELF).
 4. Spawn QEMU via `pexpect`, stream stdout to the console, and assert each `expect.pattern` appears within `within_seconds`.
 5. Terminate QEMU on success (all patterns matched) or failure (timeout / EOF).
 

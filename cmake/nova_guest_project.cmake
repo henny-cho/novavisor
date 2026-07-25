@@ -70,7 +70,7 @@ function(nova_add_guest_project)
         LINK_DEPENDS ${NOVA_LINKER_SCRIPT})
 
     add_custom_command(TARGET novavisor.elf POST_BUILD
-        COMMAND ${CMAKE_SOURCE_DIR}/scripts/check_fp_free.sh ${CMAKE_OBJDUMP}
+        COMMAND ${CMAKE_SOURCE_DIR}/tools/check_fp_free.sh ${CMAKE_OBJDUMP}
                 $<TARGET_FILE:novavisor.elf>
         COMMENT "Checking novavisor.elf is FP/SIMD-free"
     )

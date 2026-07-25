@@ -412,7 +412,7 @@ cmd_firmware() {
             ;;
         fip)
             # Full TF-A FIP package for the board (pinned via lib/versions.sh).
-            "${WORK_DIR}/scripts/build_n1sdp_firmware.sh" "$@"
+            "${WORK_DIR}/scripts/n1sdp_firmware.sh" "$@"
             ;;
         *)
             echo "Error: unknown firmware subcommand '${sub}'" >&2

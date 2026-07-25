@@ -90,7 +90,14 @@
                 "07_lifecycle",
                 "08_smp_pingpong",
                 "09_guest_smp",
-                "10_console_mux"
+                "10_console_mux",
+                "11_configurable",
+                "12_zephyr",
+                "13_linux",
+                "14_mixed_recovery",
+                "15_dma_isolation",
+                "16_edu_passthrough",
+                "17_edu_dma"
             ],
             "default": "01_hello"
         }
