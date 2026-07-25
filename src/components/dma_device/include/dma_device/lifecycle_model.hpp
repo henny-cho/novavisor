@@ -28,6 +28,77 @@ struct Entry {
   bool          bus_master_blocked = true;
 };
 
+// --- Lifecycle walk classification (pure, host-testable) ---------------------
+//
+// Every quiesce/resume walk visits the VM's entries and reacts to each
+// state; these verdicts ARE the transition table, extracted so the
+// component's locked walks reduce to classify → act and the matrix is
+// testable without hardware.
+
+enum class ScanAction : std::uint8_t {
+  kSkip,    // not this walk's concern (unavailable, or already at the target)
+  kFail,    // the VM must fail closed
+  kPending, // not ready yet — retry through the poll path
+  kCollect, // act on this device in this walk
+};
+
+// begin_quiesce: only kActive entries start a new quiesce. kPending
+// here means "already mid-quiesce — keep walking and converge through
+// complete_quiesce"; a mid-resume entry is a protocol break.
+[[nodiscard]] constexpr auto classify_begin_quiesce(State s) noexcept -> ScanAction {
+  switch (s) {
+  case State::kUnavailable:
+  case State::kQuiesced:
+    return ScanAction::kSkip;
+  case State::kQuiescing:
+  case State::kDetaching:
+    return ScanAction::kPending;
+  case State::kActive:
+    return ScanAction::kCollect;
+  case State::kFailed:
+  case State::kResuming:
+    return ScanAction::kFail;
+  }
+  return ScanAction::kFail;
+}
+
+// complete_quiesce / poll_quiesce: only a fully bus-master-blocked
+// kQuiescing entry advances; kFailed fails closed; anything else means
+// the walk ran ahead of the state machine.
+[[nodiscard]] constexpr auto classify_quiescing(State s, bool bus_master_blocked) noexcept -> ScanAction {
+  switch (s) {
+  case State::kUnavailable:
+  case State::kQuiesced:
+    return ScanAction::kSkip;
+  case State::kQuiescing:
+    return bus_master_blocked ? ScanAction::kCollect : ScanAction::kPending;
+  case State::kDetaching:
+  case State::kResuming:
+  case State::kActive:
+    return ScanAction::kPending;
+  case State::kFailed:
+    return ScanAction::kFail;
+  }
+  return ScanAction::kFail;
+}
+
+// resume_vm: only a fully quiesced VM may adopt a new generation.
+[[nodiscard]] constexpr auto classify_resume(State s) noexcept -> ScanAction {
+  switch (s) {
+  case State::kUnavailable:
+    return ScanAction::kSkip;
+  case State::kQuiesced:
+    return ScanAction::kCollect;
+  case State::kQuiescing:
+  case State::kDetaching:
+  case State::kResuming:
+  case State::kActive:
+  case State::kFailed:
+    return ScanAction::kFail;
+  }
+  return ScanAction::kFail;
+}
+
 template <std::size_t Capacity>
 class Registry {
 public:

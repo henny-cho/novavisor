@@ -3,7 +3,7 @@
 // components/core_vcpu/include/core_vcpu/sched_model.hpp
 //
 // Pure scheduler core — VCPU run states and the pick/predicate logic,
-// host-testable. core_vcpu.cpp owns the hardware glue (frame swap, EL1
+// host-testable. sched.cpp owns the hardware glue (frame swap, EL1
 // bank, vGIC residency, Stage 2 retarget) around these decisions.
 
 #include <cstddef>
