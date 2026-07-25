@@ -54,8 +54,8 @@ struct soft_timer_component {
   static void handle_irq(IrqCall* call) noexcept;
 
   // Touches the redistributor core_gic_component::INIT wakes, and
-  // expects CNTHP disarmed by core_timer_component::INIT — list
-  // soft_timer after both in the project's cib::components<>.
+  // expects CNTHP disarmed by core_timer_component::INIT — the project
+  // nexus orders it after both.
   constexpr static auto INIT = flow::action<"soft_timer_init">([]() noexcept { soft_timer::init(); });
 
   constexpr static auto config =

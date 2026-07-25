@@ -12,7 +12,7 @@
 #include "hal/cpu.hpp"
 #include "hal/timer.hpp"
 #include "nova/abi/hvc_abi.h"
-#include "nova/arch/data_abort.hpp" // esr::kSrtZeroReg
+#include "nova/arch/esr.hpp"
 #include "nova/arch/trap_context.hpp"
 #include "soft_timer/soft_timer.hpp"
 
@@ -29,7 +29,7 @@ std::array<core_timer::LegacySlot, cpu::kMaxCpus> g_legacy;
 // post_virq only when the owner exited meanwhile — nobody to notify.
 void on_timer_set_expiry(TrapContext* /*ctx*/, std::uint64_t owner) noexcept {
   core_timer::release(g_legacy[cpu::id()]);
-  (void)vcpu::post_virq(static_cast<std::size_t>(owner), hyp_timer::kGuestTimerVintid);
+  (void)vcpu::post_virq(static_cast<std::size_t>(owner), kGuestTimerVintid);
 }
 
 } // namespace
@@ -72,7 +72,7 @@ void core_timer_component::handle_irq(IrqCall* call) noexcept {
   if (call->handled) {
     return;
   }
-  if (call->intid != hyp_timer::kGuestTimerVintid) {
+  if (call->intid != kGuestTimerVintid) {
     return; // not ours (CNTHP belongs to soft_timer)
   }
   call->handled = true;
@@ -83,7 +83,7 @@ void core_timer_component::handle_irq(IrqCall* call) noexcept {
   // assertion, then reflect the PPI as its virtual counterpart; the
   // guest clears IMASK when it re-arms CNTV_CTL.
   hyp_timer::mask_guest_virtual_timer();
-  (void)vcpu::post_virq(vcpu::current_index(), hyp_timer::kGuestTimerVintid);
+  (void)vcpu::post_virq(vcpu::current_index(), kGuestTimerVintid);
 }
 
 } // namespace nova

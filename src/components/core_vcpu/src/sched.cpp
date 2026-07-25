@@ -2,7 +2,7 @@
 //
 // VCPU scheduler. A switch swaps the live EL2 trap frame with the
 // target's saved TrapContext, moves the EL1 sysreg bank
-// (hal/arch/aarch64/el1_context.hpp) and the vGIC CPU-interface state,
+// (hal/vcpu_context.hpp) and the vGIC CPU-interface state,
 // and retargets VTTBR_EL2 — the common vec.S restore path then resumes
 // the new guest. Pick/predicate decisions live in sched_model.hpp
 // (pure, host-tested); this file is the hardware glue.
@@ -17,7 +17,6 @@
 #include "core_gic/core_gic.hpp"
 #include "core_mmu/core_mmu.hpp"
 #include "core_vcpu/core_vcpu.hpp"
-#include "hal/arch/aarch64/cpu.hpp"
 #include "hal/console.hpp"
 #include "hal/cpu.hpp"
 #include "hal/timer.hpp"
@@ -114,7 +113,7 @@ void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
   arch::write_el1_bank(next.el1);
   vgic::cpu_restore(next_idx);
   mmu::switch_vm(vm_of(next_idx));
-  arch::write_vmpidr(vcpu_of(next_idx));
+  cpu::write_vmpidr(vcpu_of(next_idx));
   hyp_timer::write_cntvoff(cntvoff(vm_of(next_idx)));
 
   // Lazy FP: the register file stays put — only the trap follows the
@@ -223,7 +222,7 @@ auto current_index() noexcept -> std::size_t {
       CpuSched& cs = me();
       Vcpu&     v  = g_vcpus[next];
       mmu::switch_vm(vm_of(next));
-      arch::write_vmpidr(vcpu_of(next));
+      cpu::write_vmpidr(vcpu_of(next));
       hyp_timer::write_cntvoff(cntvoff(vm_of(next)));
       arch::write_el1_bank(v.el1);
       vgic::cpu_restore(next);

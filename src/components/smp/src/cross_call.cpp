@@ -10,7 +10,7 @@
 #include "hal/cpu.hpp"
 #include "hal/gic.hpp"
 #include "nova/abi/guest.hpp"
-#include "nova/arch/data_abort.hpp" // esr::kSrtZeroReg
+#include "nova/arch/esr.hpp"
 #include "nova/arch/trap_context.hpp"
 #include "nova/sync.hpp"
 #include "smp/smp.hpp"
@@ -95,6 +95,10 @@ void reevaluate_virq(std::size_t slot) noexcept {
 } // namespace nova::smp
 
 namespace nova {
+
+void smp_component::handle_virq_reevaluate(VirqReevaluateCall* call) noexcept {
+  smp::reevaluate_virq(call->slot);
+}
 
 void smp_component::handle_sysreg(SysregCall* call) noexcept {
   if (!call->sysreg.write || !esr::is_icc_sgi1r(call->sysreg)) {

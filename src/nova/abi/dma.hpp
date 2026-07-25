@@ -77,6 +77,10 @@ struct PhysicalRange {
   std::uint64_t size = 0;
 };
 
+// Defined by the active project. Physical ranges no assigned device may
+// ever reach: hypervisor memory plus the board's reserved windows.
+auto protected_pa_table() noexcept -> std::span<const PhysicalRange>;
+
 struct PolicyLimits {
   std::uint8_t                   sid_bits = 0;
   std::span<const PhysicalRange> protected_pa{};

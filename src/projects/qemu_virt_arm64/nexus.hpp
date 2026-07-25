@@ -2,24 +2,22 @@
 
 // NovaVisor QEMU virt AArch64 Project Composition
 //
-// This file is the single assembly point for the QEMU virt ARM64 target.
-// It declares which components are active for this target by listing them
-// in cib::components<...> inside the project config struct.
+// The single assembly point for the QEMU virt ARM64 target: it names
+// the 17 active components in cib::components<...>, and boot_order_
+// component below declares the one RuntimeStart chain they run in.
+// cib::top<nova_project> wires everything at compile time (BSS is
+// already cleared by hal/arch/aarch64/boot.S before any C++ runs;
+// EarlyRuntimeInit has no actions).
 //
-// cib::top<nova_project> wires them all together at compile time
-// (BSS is already cleared by hal/arch/aarch64/boot.S before any C++
-// runs; EarlyRuntimeInit currently has no actions):
-//   - RuntimeStart      ← core_mmu_component  (Stage 2 MMU activate)
-//                         core_gic_component  (GICv3 + vIRQ interface)
-//                         vgic_component      (GICD/GICR emulation, LRs)
-//                         core_timer_component (CNTVOFF/CNTHP setup)
-//                         soft_timer_component (CNTHP deadline slots)
-//                         boot_msg_component  (UART boot banner)
-//   - MainLoop          ← core_vcpu_component (ERET to EL1, [[noreturn]])
+// Boot order is a composition concern, not a peer-component one — a
+// component cannot know which siblings a given project composes. Every
+// RuntimeStart edge therefore lives here in one readable chain rather
+// than scattered across the components that happen to need an
+// ordering; the components only publish their own INIT action.
 //
-// components/idle/ is not composed (nor built): Phase 5 replaced the
-// WFI idle loop with EL1 guest execution. Phase 11 may reintroduce it
-// as a watchdog fallback.
+// Beyond RuntimeStart, MainLoop is claimed by core_vcpu_component
+// (ERET to EL1, [[noreturn]]); the remaining components contribute
+// only trap/IRQ service handlers, which need no ordering.
 
 #include "boot_msg/boot_msg.hpp"
 #include "core_gic/core_gic.hpp"
@@ -43,12 +41,33 @@
 
 namespace nova {
 
+// The project's RuntimeStart order, as one linear chain. topo_sort
+// imposes no order without edges, so every dependency in this profile
+// is spelled out here:
+//   - core_mmu first: Stage 2 must be live before anything maps.
+//   - core_gic before smmu/vgic/core_timer/soft_timer/vuart: they all
+//     program distributor or redistributor frames it wakes.
+//   - core_timer before soft_timer: CNTHP must be disarmed first.
+//   - vgic and core_vcpu before dma_device: it registers vIRQ backends.
+//   - dma_device before dma_probe: the probe drives a configured device.
+//   - dma_probe before boot_msg: the demo harness expects probe output
+//     ahead of the banner.
+//   - smp last: a secondary touches shared state the instant CPU_ON
+//     lands, so every other init must have completed.
+struct boot_order_component {
+  constexpr static auto config = cib::config(cib::extend<cib::RuntimeStart>(
+      core_mmu_component::INIT >> core_gic_component::INIT >> smmu_component::INIT >> vgic_component::INIT >>
+      core_timer_component::INIT >> soft_timer_component::INIT >> core_vcpu_component::INIT >> vuart_component::INIT >>
+      dma_device_component::INIT >> dma_probe_component::INIT >> boot_msg_component::PRINT_BOOT_MSG >>
+      smp_component::INIT));
+};
+
 struct nova_project {
   constexpr static auto config =
       cib::components<core_mmu_component, core_gic_component, vgic_component, core_timer_component,
                       soft_timer_component, boot_msg_component, trap_handler_component, demo_hvc_component,
                       ivc_component, psci_component, watchdog_component, smmu_component, dma_device_component,
-                      dma_probe_component, smp_component, vuart_component, core_vcpu_component>;
+                      dma_probe_component, smp_component, vuart_component, core_vcpu_component, boot_order_component>;
 };
 
 // nova_top is the concrete cib::top instantiation for this target.

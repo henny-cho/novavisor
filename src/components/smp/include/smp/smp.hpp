@@ -4,9 +4,9 @@
 //
 // Physical secondary-core bring-up and the cross-core call path.
 //
-// Bring-up (RuntimeStart, primary, ordered after every other init
-// action — secondaries must observe fully initialized shared state):
-// powers each secondary on through the firmware PSCI SMC conduit,
+// Bring-up (RuntimeStart, primary, ordered by the project nexus after
+// every other init action — secondaries must observe fully initialized
+// shared state): powers each secondary on through the PSCI SMC conduit,
 // targeting nova_secondary_entry (boot.S) with the core index as
 // context id. The secondary initializes its banked hardware (GICR,
 // ICC/ICH, timers) on its own stack and enters its scheduler idle.
@@ -20,14 +20,9 @@
 // executes them locally in its IRQ drain. This component therefore
 // owns HVC_VM_START (core_vcpu keeps the local start_vm/post_virq).
 
-#include "boot_msg/boot_msg.hpp"
 #include "core_gic/core_gic.hpp"
-#include "core_mmu/core_mmu.hpp"
-#include "core_timer/core_timer.hpp"
 #include "core_vcpu/core_vcpu.hpp"
-#include "dma_device/dma_device.hpp"
 #include "smmu/smmu.hpp"
-#include "soft_timer/soft_timer.hpp"
 #include "trap_handler/guest_fault.hpp"
 #include "trap_handler/hvc.hpp"
 #include "trap_handler/sysreg.hpp"
@@ -107,21 +102,23 @@ struct smp_component {
   // affinity-routed — the guest's own IPIs cross physical cores here.
   static void handle_sysreg(SysregCall* call) noexcept;
 
+  // Routes a vgic reevaluation request to the slot's owning core. Wired
+  // at compile time, so it is live before the first guest runs — no
+  // window in which a posted vIRQ wake could be dropped.
+  static void handle_virq_reevaluate(VirqReevaluateCall* call) noexcept;
+
   constexpr static auto INIT = flow::action<"smp_start_secondaries">([]() noexcept { smp::start_secondaries(); });
 
-  // Explicit flow edges: a secondary begins touching shared state
-  // (GIC frames, VM table, timer queues) the moment CPU_ON lands, so
-  // every other RuntimeStart action must have completed first. The
-  // chain also pins the boot order the other inits relied on
-  // implicitly (topo_sort gives no order without edges).
+  // A secondary begins touching shared state (GIC frames, VM table,
+  // timer queues) the moment CPU_ON lands, so this action must run
+  // last in RuntimeStart. That constraint is expressed by the project
+  // nexus, which owns the whole boot chain.
   constexpr static auto config = cib::config(
-      cib::extend<cib::RuntimeStart>(core_mmu_component::INIT >> core_gic_component::INIT >> smmu_component::INIT >>
-                                     vgic_component::INIT >> core_timer_component::INIT >> soft_timer_component::INIT >>
-                                     core_vcpu_component::INIT >> boot_msg_component::PRINT_BOOT_MSG >> *INIT),
-      cib::extend<HvcService>(&smp_component::handle_hvc),
+      cib::extend<cib::RuntimeStart>(*INIT), cib::extend<HvcService>(&smp_component::handle_hvc),
       cib::extend<GuestFaultService>(&smp_component::handle_guest_fault),
       cib::extend<DmaFaultService>(&smp_component::handle_dma_fault),
-      cib::extend<IrqService>(&smp_component::handle_irq), cib::extend<SysregService>(&smp_component::handle_sysreg));
+      cib::extend<IrqService>(&smp_component::handle_irq), cib::extend<SysregService>(&smp_component::handle_sysreg),
+      cib::extend<VirqReevaluateService>(&smp_component::handle_virq_reevaluate));
 };
 
 } // namespace nova

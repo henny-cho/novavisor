@@ -1,7 +1,6 @@
 #include "smmu/smmu.hpp"
 
 #include "core_mmu/stage2_builder.hpp"
-#include "hal/board/active/board.hpp"
 #include "hal/console.hpp"
 #include "hal/gic.hpp"
 #include "hal/smmu.hpp"
@@ -178,16 +177,10 @@ std::uint32_t  g_audit_events  = 0;
     return false;
   }
 
-  // Same packing rule as core_mmu's snapshot layout — the protected
-  // range must cover exactly what the pristine copies occupy. Window
-  // sizes were already bounds-checked against the board reservation by
-  // core_mmu (RuntimeStart runs it first), so the sum cannot overflow.
-  const std::uint64_t pristine_size = pristine_span(guests);
-  const std::array    protected_pa{
-      dma::PhysicalRange{.base = 0, .size = NOVA_GUEST_IPA_BASE},
-      dma::PhysicalRange{.base = board::active::kIvcShmPa, .size = NOVA_IVC_SHM_SIZE},
-      dma::PhysicalRange{.base = board::active::kGuestPristinePa, .size = pristine_size},
-  };
+  // The project owns which physical ranges are off-limits to DMA; it
+  // builds them from the same board reservations and snapshot packing
+  // rule core_mmu bounds-checks (RuntimeStart runs core_mmu first).
+  const auto protected_pa = dma::protected_pa_table();
   if (!dma::validate_policy(assignments, devices, guests, {.sid_bits = kSidBits, .protected_pa = protected_pa}).ok()) {
     return false;
   }

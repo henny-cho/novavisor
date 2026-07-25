@@ -16,6 +16,7 @@
 #include "smp/quiesce_model.hpp"
 #include "smp/smp.hpp"
 #include "smp_internal.hpp"
+#include "soft_timer/soft_timer.hpp"
 
 #include <array>
 #include <atomic>

@@ -3,24 +3,20 @@
 // hal/timer.hpp
 //
 // Generic-timer facade for the hypervisor (ARMv8 architectural timers —
-// no board specifics; PPI INTIDs follow the standard SBSA assignment
-// QEMU virt uses).
+// no board specifics; PPI INTIDs follow the standard SBSA assignment).
 //
 // The hypervisor owns the EL2 physical timer (CNTHP). Guests keep
 // unrestricted access to the virtual counter/timer (CNTV; CNTVOFF is
 // per-VM, rewritten on switch-in) and read-only access to the physical
 // counter; programming the EL1 physical timer traps to EL2.
 
-#include "nova/abi/hvc_abi.h"
-
 #include <cstdint>
 
 namespace nova::hyp_timer {
 
-// Standard generic-timer PPIs. The guest-visible one is fixed by the
-// ABI contract — physical PPI 27 and the injected vINTID coincide.
-inline constexpr std::uint32_t kHypTimerIntid    = 26;                // CNTHP — EL2 physical timer
-inline constexpr std::uint32_t kGuestTimerVintid = NOVA_TIMER_VINTID; // CNTV
+// The EL2 physical timer's PPI. The guest-visible CNTV PPI belongs to
+// the guest-timer contract (components/core_timer).
+inline constexpr std::uint32_t kHypTimerIntid = 26; // CNTHP
 
 // CNTHCTL_EL2 (HCR_EL2.E2H = 0):
 //   EL1PCTEN (bit 0) = 1 → EL1/EL0 may read the physical counter

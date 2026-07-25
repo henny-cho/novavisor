@@ -21,13 +21,20 @@
 #include "core_gic/core_gic.hpp"
 #include "hal/gic.hpp"
 #include "hal/timer.hpp"
+#include "nova/abi/hvc_abi.h"
 #include "trap_handler/hvc.hpp"
 #include "trap_handler/sysreg.hpp"
 
 #include <cib/top.hpp>
+#include <cstdint>
 #include <flow/flow.hpp>
 
 namespace nova {
+
+// The guest's virtual-timer INTID. Fixed by the ABI contract: the
+// physical CNTV PPI and the injected vINTID coincide, so the native
+// and legacy (soft_timer) paths deliver the same interrupt.
+inline constexpr std::uint32_t kGuestTimerVintid = NOVA_TIMER_VINTID;
 
 struct core_timer_component {
   static void handle_hvc(HvcCall* call) noexcept;
@@ -36,14 +43,11 @@ struct core_timer_component {
 
   constexpr static auto INIT = flow::action<"core_timer_init">([]() noexcept {
     hyp_timer::init();
-    gic::enable_ppi(hyp_timer::kGuestTimerVintid); // physical CNTV PPI (native guest timers)
+    gic::enable_ppi(kGuestTimerVintid); // physical CNTV PPI (native guest timers)
   });
 
-  // INIT touches the redistributor that core_gic_component::INIT wakes:
-  // list core_timer after core_gic in the project's cib::components<> so
-  // the RuntimeStart flow keeps that order. (An explicit `>>` edge is
-  // not expressible here — GCC rejects cross-TU lambda action pointers
-  // as template arguments.)
+  // INIT touches the redistributor that core_gic_component::INIT wakes,
+  // so it must run after it — the project nexus owns that edge.
   constexpr static auto config =
       cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<HvcService>(&core_timer_component::handle_hvc),
                   cib::extend<IrqService>(&core_timer_component::handle_irq),

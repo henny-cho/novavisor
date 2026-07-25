@@ -37,6 +37,13 @@ static_assert(kAffinity[0][0] == 0, "the boot guest belongs to the primary core"
 std::array<GuestDescriptor, kMaxGuests> g_table{};
 std::size_t                             g_count = 0;
 
+// DMA-protected physical ranges, filled once the guest table is known
+// (the pristine span depends on the configured window sizes). Zero
+// count until then, so an early reader sees no claims rather than a
+// half-built table.
+std::array<dma::PhysicalRange, 3> g_protected_pa{};
+std::size_t                       g_protected_pa_count = 0;
+
 [[noreturn]] void panic_guest_config(std::size_t index) noexcept {
   console::write("[NOVA PANIC] embedded guest DTB ");
   console::write_dec64(index);
@@ -94,6 +101,16 @@ void init_guest_table() noexcept {
     load_pa = align_up_pa(load_pa + info.mem_size);
   }
   g_count = count;
+
+  // Everything below the guest window is hypervisor text/data; the IVC
+  // page and the pristine snapshots are EL2-private reservations. The
+  // pristine span uses the same packing rule as the snapshot copies.
+  g_protected_pa = {
+      dma::PhysicalRange{.base = 0, .size = NOVA_GUEST_IPA_BASE},
+      dma::PhysicalRange{.base = board::active::kIvcShmPa, .size = NOVA_IVC_SHM_SIZE},
+      dma::PhysicalRange{.base = board::active::kGuestPristinePa, .size = pristine_span(guest_table())},
+  };
+  g_protected_pa_count = g_protected_pa.size();
 }
 
 } // namespace project
@@ -120,6 +137,10 @@ auto dma::device_interrupt_table() noexcept -> std::span<const dma::DeviceInterr
 
 auto dma::device_capability_table() noexcept -> std::span<const dma::DeviceCapability> {
   return generated::kDeviceCapabilities;
+}
+
+auto dma::protected_pa_table() noexcept -> std::span<const dma::PhysicalRange> {
+  return {g_protected_pa.data(), g_protected_pa_count};
 }
 
 } // namespace nova

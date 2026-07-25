@@ -1,12 +1,21 @@
 #pragma once
 
-#include "hal/mem.hpp"
+// nova/mem_model.hpp
+//
+// Pure memory-restore model. No hardware or board dependencies, so it
+// is safe to include in host-side GTest builds; hal/mem.hpp layers the
+// AArch64 implementation on top of the same result type.
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
 
 namespace nova::memory {
+
+struct RestoreStats {
+  std::size_t examined_bytes = 0;
+  std::size_t written_bytes  = 0;
+};
 
 // Host-testable model of the 16-byte restore granularity used by the
 // AArch64 implementation. A changed word restores its whole block.

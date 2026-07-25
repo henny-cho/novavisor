@@ -12,7 +12,8 @@
 #include "hal/gic.hpp"
 #include "hal/gic_virt.hpp"
 #include "nova/abi/guest.hpp"
-#include "nova/arch/data_abort.hpp" // esr::kSrtZeroReg
+#include "nova/abi/guest_layout.h"
+#include "nova/arch/esr.hpp"
 #include "nova/sync.hpp"
 #include "vgic/vgic_delivery.hpp"
 
@@ -33,6 +34,12 @@ struct HwBank {
 // first switch-in).
 inline constexpr std::size_t kNoResident = ~std::size_t{0};
 
+// Emulated GIC frames. The guest-platform contract fixes these IPAs
+// (independent of where the board's physical GIC sits); Stage 2 leaves
+// them unmapped on purpose so accesses trap into handle_mmio.
+inline constexpr std::uint64_t kGicdIpaBase = NOVA_GICD_IPA_BASE;
+inline constexpr std::uint64_t kGicrIpaBase = NOVA_GICR_IPA_BASE;
+
 // Per-vCPU state (flat slot-indexed), touched only by the owning core
 // (core_vcpu routes); the residency scalar is per-core — ICH_* is
 // banked per PE.
@@ -49,16 +56,16 @@ std::size_t                            g_lr_count = 0;
 std::array<DistState, kMaxGuests>                      g_dist;
 std::array<std::array<EoiToken, kNumSpis>, kMaxGuests> g_spi_tokens;
 sync::SpinLock                                         g_dist_lock;
-ReevaluateHook                                         g_reevaluate_hook = nullptr;
 
 [[nodiscard]] auto resident_here() noexcept -> std::size_t& {
   return g_resident[cpu::id()];
 }
 
+// Announce that `slot`'s deliverable set changed. Subscribers route the
+// refill to the slot's owning core; with none composed this is a no-op.
 void request_reevaluate(std::size_t slot) noexcept {
-  if (g_reevaluate_hook != nullptr) {
-    g_reevaluate_hook(slot);
-  }
+  VirqReevaluateCall call{.slot = slot};
+  cib::service<VirqReevaluateService>(&call);
 }
 
 // Refresh a resident vCPU's LR shadow from the live hardware registers
@@ -259,10 +266,6 @@ void init_cpu() noexcept {
   gic::enable_ppi(gic_virt::kMaintenanceIntid);
 }
 
-void set_reevaluate_hook(ReevaluateHook hook) noexcept {
-  g_reevaluate_hook = hook;
-}
-
 void init() noexcept {
   init_cpu();
   g_lr_count = gic_virt::lr_count(); // boot-immutable (homogeneous cores)
@@ -392,15 +395,14 @@ auto has_deliverable(std::size_t index) noexcept -> bool {
 namespace nova {
 
 void vgic_component::handle_mmio(MmioCall* call) noexcept {
-  if (call->ipa >= gic_virt::kGicdIpaBase && call->ipa < gic_virt::kGicdIpaBase + vgic::kGicdFrameSize) {
+  if (call->ipa >= vgic::kGicdIpaBase && call->ipa < vgic::kGicdIpaBase + vgic::kGicdFrameSize) {
     call->handled = true;
-    vgic::dist_mmio(call, call->ipa - gic_virt::kGicdIpaBase);
+    vgic::dist_mmio(call, call->ipa - vgic::kGicdIpaBase);
     return;
   }
-  if (call->ipa >= gic_virt::kGicrIpaBase &&
-      call->ipa < gic_virt::kGicrIpaBase + kMaxVcpusPerVm * vgic::kGicrFrameSize) {
+  if (call->ipa >= vgic::kGicrIpaBase && call->ipa < vgic::kGicrIpaBase + kMaxVcpusPerVm * vgic::kGicrFrameSize) {
     call->handled = true;
-    vgic::redist_mmio(call, call->ipa - gic_virt::kGicrIpaBase);
+    vgic::redist_mmio(call, call->ipa - vgic::kGicrIpaBase);
   }
 }
 

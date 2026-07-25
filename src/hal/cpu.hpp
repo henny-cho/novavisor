@@ -10,6 +10,7 @@
 #include "hal/board/active/board.hpp"
 
 #include <cstddef>
+#include <cstdint>
 
 namespace nova::cpu {
 
@@ -19,6 +20,18 @@ inline constexpr std::size_t kMaxCpus = board::active::kSmpCpus;
 // so this is one MRS — id() sits on every trap and scheduler path.
 [[nodiscard]] inline auto id() noexcept -> std::size_t {
   return arch::core_index();
+}
+
+// The MPIDR a guest reads at EL1 — per-vCPU, installed on switch-in.
+inline void write_vmpidr(std::uint64_t vcpu) noexcept {
+  arch::write_vmpidr(vcpu);
+}
+
+// The hypervisor's outbound firmware conduit (SMCCC over SMC). The
+// guest-facing PSCI emulation uses HVC and does not come through here.
+[[nodiscard]] inline auto smc_call(std::uint64_t fid, std::uint64_t a1, std::uint64_t a2, std::uint64_t a3) noexcept
+    -> std::uint64_t {
+  return arch::smc_call(fid, a1, a2, a3);
 }
 
 } // namespace nova::cpu

@@ -2,7 +2,6 @@
 
 #include "core_vcpu/core_vcpu.hpp"
 #include "nova/abi/dma.hpp"
-#include "smmu/smmu.hpp"
 #include "vgic/vgic.hpp"
 
 #include <cib/top.hpp>
@@ -42,9 +41,10 @@ struct dma_device_component {
 
   constexpr static auto INIT = flow::action<"dma_device_init">([]() noexcept { dma_device::init(); });
 
+  // Registers vIRQ backends, so it needs vgic and core_vcpu up first —
+  // an ordering the project nexus declares.
   constexpr static auto config =
-      cib::config(cib::extend<cib::RuntimeStart>(vgic_component::INIT >> core_vcpu_component::INIT >> *INIT),
-                  cib::extend<IrqService>(&dma_device_component::handle_irq),
+      cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<IrqService>(&dma_device_component::handle_irq),
                   cib::extend<VirtualEoiService>(&dma_device_component::handle_virtual_eoi));
 };
 
