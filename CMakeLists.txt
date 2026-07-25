@@ -202,6 +202,7 @@ else()
     nova_add_component_test(smmu runtime_model_test)         # runtime capabilities and layout
     nova_add_component_test(smmu command_model_test)         # command entry encoding
     nova_add_component_test(smmu domain_model_test)          # guest DMA context lifecycle
+    nova_add_component_test(smmu hw_driver_test)             # register protocol vs. fake device
     nova_add_component_test(smmu dma_table_model_test)       # DMA-only Stage-2 mappings
     target_include_directories(dma_table_model_test PRIVATE
         ${CMAKE_SOURCE_DIR}/src/components/core_mmu/include)

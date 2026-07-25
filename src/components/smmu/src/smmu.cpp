@@ -15,7 +15,7 @@
 #include "smmu/dma_table_model.hpp"
 #include "smmu/domain_model.hpp"
 #include "smmu/fault_model.hpp"
-#include "smmu/queue_model.hpp"
+#include "smmu/hw_driver.hpp"
 #include "smmu/runtime_model.hpp"
 #include "smmu/ste_model.hpp"
 
@@ -56,6 +56,15 @@ struct FaultBatch {
   std::size_t                            processed = 0;
 };
 
+// Binds the templated register protocol to the board's SMMU frame.
+struct HalHw {
+  [[nodiscard]] static auto read32(std::uint32_t offset) noexcept -> std::uint32_t { return hw::read32(offset); }
+  static void               write32(std::uint32_t offset, std::uint32_t value) noexcept { hw::write32(offset, value); }
+  static void               write64(std::uint32_t offset, std::uint64_t value) noexcept { hw::write64(offset, value); }
+  static void               publish_memory() noexcept { hw::publish_memory(); }
+  static void               acquire_memory() noexcept { hw::acquire_memory(); }
+};
+
 alignas(kStreamTableAlign) std::array<StreamTableEntry, kStreamCount> g_stream_table{};
 alignas(kCommandQueueAlign) std::array<CommandEntry, kCommandCount> g_command_queue{};
 alignas(kEventQueueAlign) std::array<EventRecord, kEventCount> g_event_queue{};
@@ -67,47 +76,21 @@ std::array<StreamBinding, kStreamCount>    g_bindings{};
 // once and every domain operation walks only its own streams.
 StreamIndex<kStreamCount> g_vm_streams{};
 // Serializes domain state AND the command queue producer: every
-// submit_commands caller (attach/detach/quarantine) already holds it,
+// g_commands.submit caller (attach/detach/quarantine) already holds it,
 // and init() runs single-core before guests exist. A submit outside
-// this lock would corrupt g_command_prod silently.
+// this lock would corrupt the ring producer silently.
 sync::SpinLock g_domain_lock;
 sync::SpinLock g_event_lock;
 std::size_t    g_context_count = 0;
-bool           g_command_ready = false;
 bool           g_enabled       = false;
-std::uint32_t  g_command_prod  = 0;
 std::uint32_t  g_event_cons    = 0;
 std::uint32_t  g_audit_events  = 0;
 
-[[nodiscard]] auto wait_for(std::uint32_t offset, std::uint32_t expected) noexcept -> bool {
-  for (std::uint32_t poll = 0; poll < kPollLimit; ++poll) {
-    if (hw::read32(offset) == expected) {
-      return true;
-    }
-  }
-  return false;
-}
-
-[[nodiscard]] auto write_synced(std::uint32_t offset, std::uint32_t ack_offset, std::uint32_t value) noexcept -> bool {
-  hw::write32(offset, value);
-  return wait_for(ack_offset, value);
-}
-
-[[nodiscard]] auto block_bypass() noexcept -> bool {
-  for (std::uint32_t poll = 0; poll < kPollLimit; ++poll) {
-    const std::uint32_t current = hw::read32(regs::kGbpa);
-    if ((current & regs::kGbpaUpdate) == 0U) {
-      hw::write32(regs::kGbpa, current | regs::kGbpaUpdate | regs::kGbpaAbort);
-      for (std::uint32_t update_poll = 0; update_poll < kPollLimit; ++update_poll) {
-        if ((hw::read32(regs::kGbpa) & regs::kGbpaUpdate) == 0U) {
-          return true;
-        }
-      }
-      return false;
-    }
-  }
-  return false;
-}
+CommandRing<HalHw> g_commands{
+    .entries      = g_command_queue,
+    .log2_entries = kCommandQueueLog2,
+    .poll_limit   = kPollLimit,
+};
 
 [[noreturn]] void fail_init(RuntimeError error, std::uint32_t idr0, std::uint32_t idr1, std::uint32_t idr5) noexcept {
   fmt::HexBuf idr0_text{};
@@ -129,47 +112,28 @@ std::uint32_t  g_audit_events  = 0;
   halt();
 }
 
-[[nodiscard]] auto wait_for_commands() noexcept -> bool {
-  const std::uint32_t pointer_mask = (std::uint32_t{1} << (kCommandQueueLog2 + 1U)) - 1U;
-  for (std::uint32_t poll = 0; poll < kPollLimit; ++poll) {
-    const std::uint32_t consumer = hw::read32(regs::kCmdqCons);
-    if ((consumer & regs::kCmdqConsErrorMask) != 0U) {
-      return false;
-    }
-    if ((consumer & pointer_mask) == g_command_prod) {
-      hw::acquire_memory();
-      return true;
-    }
+// Init diagnostics for every register step of the bring-up sequence.
+[[nodiscard]] constexpr auto bring_up_reason(BringUpStep step) noexcept -> std::string_view {
+  switch (step) {
+  case BringUpStep::kNone:
+    return "none"sv;
+  case BringUpStep::kGbpa:
+    return "GBPA timeout"sv;
+  case BringUpStep::kDisable:
+    return "disable timeout"sv;
+  case BringUpStep::kCommandQueue:
+    return "command queue timeout"sv;
+  case BringUpStep::kStreamInvalidation:
+    return "stream cache invalidation"sv;
+  case BringUpStep::kTlbInvalidation:
+    return "translation cache invalidation"sv;
+  case BringUpStep::kEventQueue:
+    return "event queue timeout"sv;
+  case BringUpStep::kIrqEnable:
+  case BringUpStep::kEnable:
+    return "enable timeout"sv;
   }
-  return false;
-}
-
-[[nodiscard]] auto submit_commands(std::span<const CommandEntry> commands) noexcept -> bool {
-  if (!g_command_ready || commands.size() + 1U > kCommandCount || !wait_for_commands()) {
-    return false;
-  }
-
-  const std::uint32_t pointer_mask = (std::uint32_t{1} << (kCommandQueueLog2 + 1U)) - 1U;
-  QueueState          queue{
-               .log2_entries = kCommandQueueLog2,
-               .producer     = g_command_prod,
-               .consumer     = hw::read32(regs::kCmdqCons) & pointer_mask,
-  };
-  for (const CommandEntry& command : commands) {
-    g_command_queue[queue.producer_index()] = command;
-    if (!queue.try_produce()) {
-      return false;
-    }
-  }
-  g_command_queue[queue.producer_index()] = make_command_sync();
-  if (!queue.try_produce()) {
-    return false;
-  }
-
-  hw::publish_memory();
-  g_command_prod = queue.producer;
-  hw::write32(regs::kCmdqProd, g_command_prod);
-  return wait_for_commands();
+  return "unknown"sv;
 }
 
 [[nodiscard]] auto build_dma_contexts(const Capabilities& caps) noexcept -> bool {
@@ -238,7 +202,7 @@ std::uint32_t  g_audit_events  = 0;
   g_stream_table[stream_id][0] = make_abort_ste()[0];
   hw::publish_memory();
   const std::array commands{make_cfgi_ste(stream_id), make_tlbi_s12_vmall(vmid)};
-  return submit_commands(commands);
+  return g_commands.submit(commands);
 }
 
 [[nodiscard]] auto install_stream(std::uint32_t stream_id, const TranslationContext& context) noexcept -> bool {
@@ -254,7 +218,7 @@ std::uint32_t  g_audit_events  = 0;
   hw::publish_memory();
 
   const std::array commands{make_cfgi_ste(stream_id), make_tlbi_s12_vmall(context.vmid)};
-  return submit_commands(commands);
+  return g_commands.submit(commands);
 }
 
 [[nodiscard]] auto quarantine_vm_locked(std::size_t vm) noexcept -> bool {
@@ -324,36 +288,23 @@ void log_fault(const DecodedEvent& event) noexcept {
 }
 
 [[nodiscard]] auto drain_event_queue() noexcept -> FaultBatch {
-  FaultBatch batch{};
-  QueueState queue{
-      .log2_entries = kEventQueueLog2,
-      .producer     = hw::read32(regs::kEvtqProd),
-      .consumer     = g_event_cons,
-  };
-  if (!queue.consistent()) {
+  FaultBatch       batch{};
+  const DrainStats stats =
+      drain_events<HalHw>(g_event_queue, kEventQueueLog2, g_event_cons, [&batch](const EventRecord& record) noexcept {
+        const DecodedEvent event = decode_event(record);
+        log_fault(event);
+        if (requires_quarantine(event) && batch.count < batch.stream_ids.size()) {
+          batch.stream_ids[batch.count++] = event.stream_id;
+        }
+      });
+  if (stats.corrupt) {
     console::write("[smmu] corrupt event queue pointers\n");
     return batch;
   }
-
-  hw::acquire_memory();
-  while (!queue.empty()) {
-    const DecodedEvent event = decode_event(g_event_queue[queue.consumer_index()]);
-    ++batch.processed;
-    log_fault(event);
-    if (requires_quarantine(event) && batch.count < batch.stream_ids.size()) {
-      batch.stream_ids[batch.count++] = event.stream_id;
-    }
-    if (!queue.try_consume()) {
-      break;
-    }
-  }
-
-  if (event_overflow_pending(queue)) {
+  if (stats.overflow) {
     console::write("[smmu] event queue overflow\n");
-    acknowledge_event_overflow(queue);
   }
-  g_event_cons = queue.consumer;
-  hw::write32(regs::kEvtqCons, g_event_cons);
+  batch.processed = stats.processed;
   return batch;
 }
 
@@ -390,11 +341,8 @@ void init() noexcept {
     fail_init("device unavailable");
   }
 
-  if (!block_bypass()) {
-    fail_init("GBPA timeout");
-  }
-  if (!write_synced(regs::kIrqCtrl, regs::kIrqAck, 0) || !write_synced(regs::kCr0, regs::kCr0Ack, 0)) {
-    fail_init("disable timeout");
+  if (const BringUpStep step = shut_down<HalHw>(kPollLimit); step != BringUpStep::kNone) {
+    fail_init(bring_up_reason(step));
   }
 
   const RuntimeLayout layout{
@@ -414,66 +362,29 @@ void init() noexcept {
   g_stream_table.fill(StreamTableEntry{});
   g_command_queue.fill(CommandEntry{});
   g_event_queue.fill(EventRecord{});
-  g_command_ready = false;
-  g_enabled       = false;
-  g_command_prod  = 0;
-  g_event_cons    = 0;
-  g_audit_events  = 0;
+  g_commands.ready    = false;
+  g_commands.producer = 0;
+  g_enabled           = false;
+  g_event_cons        = 0;
+  g_audit_events      = 0;
   if (!build_dma_contexts(caps)) {
     fail_init("DMA contexts");
   }
   hw::publish_memory();
 
-  hw::write32(regs::kCr1, kCr1Cacheable);
-  hw::write32(regs::kCr2, kCr2Protected);
-  hw::write64(regs::kStrtabBase, stream_table_base(layout.stream_table_pa));
-  hw::write32(regs::kStrtabBaseCfg, stream_table_config(kSidBits));
-  hw::write64(regs::kCmdqBase, queue_base(layout.command_queue_pa, kCommandQueueLog2));
-  hw::write32(regs::kCmdqProd, 0);
-  hw::write32(regs::kCmdqCons, 0);
-
-  std::uint32_t enables = regs::kCr0CmdqEnable;
-  if (!write_synced(regs::kCr0, regs::kCr0Ack, enables)) {
-    fail_init("command queue timeout");
-  }
-  g_command_ready = true;
-  // Batched invalidation: the queue holds kCommandCount-1 commands plus
-  // the trailing CMD_SYNC, so all streams take a few sync round-trips
-  // instead of one per SID.
-  std::array<CommandEntry, kCommandCount - 1> invalidations{};
-  for (std::uint32_t sid = 0; sid < kStreamCount;) {
-    std::size_t batch = 0;
-    for (; batch < invalidations.size() && sid < kStreamCount; ++batch, ++sid) {
-      invalidations[batch] = make_cfgi_ste(sid);
-    }
-    if (!submit_commands(std::span{invalidations.data(), batch})) {
-      fail_init("stream cache invalidation");
-    }
-  }
-  const std::array<CommandEntry, 1> initial_tlb_invalidation{make_tlbi_nsnh_all()};
-  if (!submit_commands(initial_tlb_invalidation)) {
-    fail_init("translation cache invalidation");
+  if (const BringUpStep step = bring_up_translation(g_commands, layout, static_cast<std::uint32_t>(kStreamCount));
+      step != BringUpStep::kNone) {
+    fail_init(bring_up_reason(step));
   }
 
-  hw::write64(regs::kEvtqBase, queue_base(layout.event_queue_pa, kEventQueueLog2));
-  hw::write32(regs::kEvtqProd, 0);
-  hw::write32(regs::kEvtqCons, 0);
-  enables |= regs::kCr0EvtqEnable;
-  if (!write_synced(regs::kCr0, regs::kCr0Ack, enables) || !write_synced(regs::kIrqCtrl, regs::kIrqAck, 0)) {
-    fail_init("event queue timeout");
-  }
-
-  const std::uint32_t stale_error = hw::read32(regs::kGerror);
-  hw::write32(regs::kGerrorN, stale_error);
   if (!gic::enable_spi(hw::kEventIntid, 0, gic::SpiTrigger::kEdge) ||
       !gic::enable_spi(hw::kCommandIntid, 0, gic::SpiTrigger::kEdge) ||
       !gic::enable_spi(hw::kErrorIntid, 0, gic::SpiTrigger::kEdge)) {
     fail_init("interrupt routing");
   }
 
-  if (!write_synced(regs::kIrqCtrl, regs::kIrqAck, kFaultIrqs) ||
-      !write_synced(regs::kCr0, regs::kCr0Ack, kEnabledCr0)) {
-    fail_init("enable timeout");
+  if (const BringUpStep step = enable_faults<HalHw>(kPollLimit); step != BringUpStep::kNone) {
+    fail_init(bring_up_reason(step));
   }
 
   g_enabled = true;
@@ -482,7 +393,7 @@ void init() noexcept {
 
 auto attach_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
   sync::Guard guard{g_domain_lock};
-  if (!g_command_ready || vm >= g_context_count || generation == 0U) {
+  if (!g_commands.ready || vm >= g_context_count || generation == 0U) {
     return false;
   }
 
@@ -503,7 +414,7 @@ auto attach_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
 
 auto detach_vm(std::size_t vm) noexcept -> bool {
   sync::Guard guard{g_domain_lock};
-  if (!g_command_ready || vm >= g_context_count) {
+  if (!g_commands.ready || vm >= g_context_count) {
     return false;
   }
 
@@ -521,7 +432,7 @@ auto detach_vm(std::size_t vm) noexcept -> bool {
 
 auto quarantine_vm(std::size_t vm) noexcept -> bool {
   sync::Guard guard{g_domain_lock};
-  if (!g_command_ready || vm >= g_context_count) {
+  if (!g_commands.ready || vm >= g_context_count) {
     return false;
   }
   if (!quarantine_vm_locked(vm)) {
