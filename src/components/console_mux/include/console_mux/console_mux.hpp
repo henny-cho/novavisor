@@ -34,6 +34,10 @@ void guest_putc(std::size_t slot, char c) noexcept;
 // otherwise be lost when the vCPU retires).
 void flush(std::size_t slot) noexcept;
 
+// Drop the VM's buffered partial lines on warm reset — the caller
+// guarantees the VM is quiesced, so no slot writer is live.
+void vm_reset(std::size_t vm) noexcept;
+
 // Focus cycling skips VMs whose boot vCPU is off; the scheduler owns
 // that state, so it injects the predicate here (keeps this component
 // passive with no scheduler dependency). Unset means "all live".

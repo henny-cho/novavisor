@@ -459,6 +459,19 @@ void wake(std::size_t index) noexcept {
   reschedule_slice(); // the resident VCPU just gained a competitor
 }
 
+// Drop every per-VM device model before a (re)boot: the vGIC SPI bank
+// directly (a declared dependency of this component), the VM's console
+// line buffers, and — through VmResetService — any emulated device
+// (vuart RX FIFO/masks) without this file naming it.
+namespace {
+void reset_vm_devices(std::size_t vm) noexcept {
+  vgic::vm_reset(vm); // SPI banks are VM-global — per-vCPU cpu_reset misses them
+  console_mux::vm_reset(vm);
+  VmResetCall call{.vm = vm};
+  cib::service<VmResetService>(&call);
+}
+} // namespace
+
 auto reserve_start(std::size_t slot) noexcept -> bool {
   if (!valid_slot(slot)) {
     return false;
@@ -489,7 +502,7 @@ auto prepare_start_vm(std::size_t vm) noexcept -> std::uint64_t {
     cancel_start(slot);
     return 0; // foreign-affinity starts arrive through the smp cross-call
   }
-  vgic::vm_reset(vm); // SPI banks are VM-global — per-vCPU cpu_reset misses them
+  reset_vm_devices(vm);
   soft_timer::cancel(soft_timer::kSlotWatchdog + vm);
   publish_cntvoff(vm, hyp_timer::now());
   seed_boot(slot);
@@ -522,7 +535,7 @@ auto renew_preboot_generation(std::size_t vm) noexcept -> std::uint64_t {
     return 0;
   }
 
-  vgic::vm_reset(vm);
+  reset_vm_devices(vm);
   publish_cntvoff(vm, hyp_timer::now());
   seed_boot(slot);
   advance_vm_generation(vm);
@@ -608,7 +621,7 @@ auto prepare_reset_quiesced_vm(std::size_t vm) noexcept -> std::uint64_t {
                                   fmt::to_dec64(restored.written_bytes, written_text), "/"sv,
                                   fmt::to_dec64(restored.examined_bytes, examined_text), " bytes in "sv,
                                   fmt::to_dec64(restore_ms, elapsed_text), " ms\n"sv});
-  vgic::vm_reset(vm); // SPI banks are VM-global — per-vCPU cpu_reset misses them
+  reset_vm_devices(vm);
   publish_cntvoff(vm, hyp_timer::now());
   seed_boot(slot);
   soft_timer::cancel(soft_timer::kSlotWatchdog + vm); // the reboot re-opts in with its next heartbeat

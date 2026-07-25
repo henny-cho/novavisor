@@ -137,7 +137,14 @@ void log_raz_wi(const char* frame, std::uint64_t off) noexcept {
 }
 
 void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
-  const std::size_t slot  = resident_here();
+  const std::size_t slot = resident_here();
+  if (slot == kNoResident) { // unreachable: a guest cannot trap before its first switch-in
+    if (!call->write) {
+      call->value = 0;
+    }
+    log_raz_wi("GICD", off);
+    return;
+  }
   const std::size_t vm    = vm_of(slot);
   DistState&        dist  = g_dist[vm];
   bool              known = false;
@@ -176,8 +183,16 @@ void dist_mmio(MmioCall* call, std::uint64_t off) noexcept {
 // within the ACCESSING guest's VM. Frames past the VM's vcpu count are
 // RAZ/WI (the guest's TYPER walk stops at Last and never gets there).
 void redist_mmio(MmioCall* call, std::uint64_t off) noexcept {
-  const std::size_t      frame = off / kGicrFrameSize;
-  const std::size_t      vm    = vm_of(resident_here());
+  const std::size_t frame    = off / kGicrFrameSize;
+  const std::size_t resident = resident_here();
+  if (resident == kNoResident) { // unreachable: a guest cannot trap before its first switch-in
+    if (!call->write) {
+      call->value = 0;
+    }
+    log_raz_wi("GICR", off);
+    return;
+  }
+  const std::size_t      vm    = vm_of(resident);
   const GuestDescriptor& guest = guest_table()[vm];
   if (frame >= guest.vcpus) {
     if (!call->write) {

@@ -144,7 +144,7 @@ void validate_payloads(std::span<const GuestDescriptor> guests) noexcept {
       panic_reservation(i);
     }
   }
-  if (pristine_offset(guests, guests.size() - 1) + guests.back().ipa_size > board::active::kPristineSize) {
+  if (pristine_span(guests) > board::active::kPristineSize) {
     panic_reservation(guests.size() - 1);
   }
 

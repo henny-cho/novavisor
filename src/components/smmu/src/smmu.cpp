@@ -64,14 +64,18 @@ alignas(mmu::k4KiB) std::array<DmaTableSet, kMaxGuests> g_dma_tables{};
 
 std::array<TranslationContext, kMaxGuests> g_contexts{};
 std::array<StreamBinding, kStreamCount>    g_bindings{};
-sync::SpinLock                             g_domain_lock;
-sync::SpinLock                             g_event_lock;
-std::size_t                                g_context_count = 0;
-bool                                       g_command_ready = false;
-bool                                       g_enabled       = false;
-std::uint32_t                              g_command_prod  = 0;
-std::uint32_t                              g_event_cons    = 0;
-std::uint32_t                              g_audit_events  = 0;
+// Serializes domain state AND the command queue producer: every
+// submit_commands caller (attach/detach/quarantine) already holds it,
+// and init() runs single-core before guests exist. A submit outside
+// this lock would corrupt g_command_prod silently.
+sync::SpinLock g_domain_lock;
+sync::SpinLock g_event_lock;
+std::size_t    g_context_count = 0;
+bool           g_command_ready = false;
+bool           g_enabled       = false;
+std::uint32_t  g_command_prod  = 0;
+std::uint32_t  g_event_cons    = 0;
+std::uint32_t  g_audit_events  = 0;
 
 [[nodiscard]] auto wait_for(std::uint32_t offset, std::uint32_t expected) noexcept -> bool {
   for (std::uint32_t poll = 0; poll < kPollLimit; ++poll) {
@@ -174,14 +178,12 @@ std::uint32_t                              g_audit_events  = 0;
     return false;
   }
 
-  std::uint64_t pristine_size = 0;
-  for (const GuestDescriptor& guest : guests) {
-    if (pristine_size > UINT64_MAX - guest.ipa_size) {
-      return false;
-    }
-    pristine_size += guest.ipa_size;
-  }
-  const std::array protected_pa{
+  // Same packing rule as core_mmu's snapshot layout — the protected
+  // range must cover exactly what the pristine copies occupy. Window
+  // sizes were already bounds-checked against the board reservation by
+  // core_mmu (RuntimeStart runs it first), so the sum cannot overflow.
+  const std::uint64_t pristine_size = pristine_span(guests);
+  const std::array    protected_pa{
       dma::PhysicalRange{.base = 0, .size = NOVA_GUEST_IPA_BASE},
       dma::PhysicalRange{.base = board::active::kIvcShmPa, .size = NOVA_IVC_SHM_SIZE},
       dma::PhysicalRange{.base = board::active::kGuestPristinePa, .size = pristine_size},

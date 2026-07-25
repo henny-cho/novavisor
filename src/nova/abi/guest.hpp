@@ -99,6 +99,21 @@ struct GuestDescriptor {
   }
 };
 
+// Total bytes the pristine snapshot area spans for `guests`, packed
+// with the same align_up_pa rule as the live windows. Consumers: the
+// core_mmu reservation check and the SMMU's DMA-protected range —
+// both must see the exact layout the snapshot copies use.
+[[nodiscard]] constexpr auto pristine_span(std::span<const GuestDescriptor> guests) noexcept -> std::uint64_t {
+  std::uint64_t end = 0;
+  for (std::size_t i = 0; i < guests.size(); ++i) {
+    end += guests[i].ipa_size;
+    if (i + 1 < guests.size()) {
+      end = align_up_pa(end);
+    }
+  }
+  return end;
+}
+
 // Defined by the active project (projects/*/guest_config.cpp). Never
 // empty, at most kMaxGuests entries; entry [0] is the boot guest
 // (vcpu 0 on core 0), further entries start off and are launched via

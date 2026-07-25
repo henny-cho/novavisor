@@ -253,45 +253,48 @@ void fail_vm(std::size_t vm, const char* reason) noexcept {
 
 } // namespace
 
+// Probe and configure one device. Runs unlocked at boot: init is
+// single-core, and prepare_interrupt programs the GIC — hardware MMIO
+// must not sit under the registry spinlock.
+[[nodiscard]] auto probe_device(dma::DeviceId device_id, std::size_t owner_vm) noexcept -> State {
+  if (!backend_present(device_id)) {
+    return backend_known(device_id) ? State::kUnavailable : State::kFailed;
+  }
+  if (backend_for(device_id)->reset_capability == dma::ResetCapability::kNone) {
+    console::write("[dma] device has no safe reset capability\n");
+    return State::kFailed;
+  }
+  if (!backend_configure(device_id)) {
+    console::write("[dma] device configuration failed\n");
+    return State::kFailed;
+  }
+  if (!prepare_interrupt(device_id, owner_vm)) {
+    console::write("[dma] interrupt configuration failed\n");
+    return State::kFailed;
+  }
+  return State::kQuiesced;
+}
+
 void init() noexcept {
   const BackendPolicyCheck policy =
       validate_backend_policy(dma::assignment_table(), dma::device_capability_table(), kBackends, kMaxDevices);
-  if (!policy.ok()) {
-    g_registry_valid = false;
-    console::write("[dma] backend policy configuration failed\n");
-    return;
-  }
+  bool valid = policy.ok();
   {
-    sync::Guard guard{g_lock};
-    g_registry_valid = g_registry.load(dma::assignment_table());
-    if (!g_registry_valid) {
-      console::write("[dma] device registry configuration failed\n");
-      return;
-    }
+    sync::Guard guard{g_lock}; // every registry mutation takes the lock, init included
+    valid            = valid && g_registry.load(dma::assignment_table());
+    g_registry_valid = valid;
+  }
+  if (!valid) {
+    console::write(policy.ok() ? "[dma] device registry configuration failed\n"
+                               : "[dma] backend policy configuration failed\n");
+    return;
   }
 
   for (Entry& entry : g_registry.entries()) {
-    if (!backend_present(entry.device_id)) {
-      entry.state = backend_known(entry.device_id) ? State::kUnavailable : State::kFailed;
-      continue;
-    }
-    if (backend_for(entry.device_id)->reset_capability == dma::ResetCapability::kNone) {
-      console::write("[dma] device has no safe reset capability\n");
-      entry.state = State::kFailed;
-      continue;
-    }
-    if (!backend_configure(entry.device_id)) {
-      console::write("[dma] device configuration failed\n");
-      entry.state = State::kFailed;
-      continue;
-    }
-    if (!prepare_interrupt(entry.device_id, entry.owner_vm)) {
-      console::write("[dma] interrupt configuration failed\n");
-      entry.state = State::kFailed;
-      continue;
-    }
-    entry.state              = State::kQuiesced;
-    entry.bus_master_blocked = true;
+    const State probed = probe_device(entry.device_id, entry.owner_vm);
+    sync::Guard guard{g_lock};
+    entry.state              = probed;
+    entry.bus_master_blocked = probed == State::kQuiesced;
   }
 }
 

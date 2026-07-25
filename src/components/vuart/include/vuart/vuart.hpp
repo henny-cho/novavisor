@@ -19,9 +19,11 @@
 // spinlock serializes it.
 
 #include "core_gic/core_gic.hpp"
+#include "core_vcpu/core_vcpu.hpp"
 #include "trap_handler/mmio.hpp"
 
 #include <cib/top.hpp>
+#include <cstddef>
 #include <flow/flow.hpp>
 
 namespace nova::vuart {
@@ -29,6 +31,10 @@ namespace nova::vuart {
 // Physical bring-up: unmask the console RX interrupt and route the
 // UART SPI to the primary core (the single input consumer).
 void init() noexcept;
+
+// Drop the VM's emulated UART state (RX FIFO, IMSC) so a rebooted
+// guest never inherits the previous instance's bytes or masks.
+void vm_reset(std::size_t vm) noexcept;
 
 } // namespace nova::vuart
 
@@ -41,6 +47,9 @@ struct vuart_component {
   // Claims the physical UART SPI: drain RX, route by focus, inject.
   static void handle_irq(IrqCall* call) noexcept;
 
+  // VM warm reset / cold re-start: drop the per-VM UART model.
+  static void handle_vm_reset(VmResetCall* call) noexcept;
+
   constexpr static auto INIT = flow::action<"vuart_init">([]() noexcept { vuart::init(); });
 
   // Explicit flow edge: enable_spi programs the distributor, so the
@@ -48,7 +57,8 @@ struct vuart_component {
   // guaranteed along >> edges).
   constexpr static auto config = cib::config(cib::extend<cib::RuntimeStart>(core_gic_component::INIT >> *INIT),
                                              cib::extend<MmioService>(&vuart_component::handle_mmio),
-                                             cib::extend<IrqService>(&vuart_component::handle_irq));
+                                             cib::extend<IrqService>(&vuart_component::handle_irq),
+                                             cib::extend<VmResetService>(&vuart_component::handle_vm_reset));
 };
 
 } // namespace nova
