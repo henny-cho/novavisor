@@ -1,9 +1,5 @@
 #pragma once
 
-#include "boot_msg/boot_msg.hpp"
-#include "core_vcpu/core_vcpu.hpp"
-#include "dma_device/dma_device.hpp"
-#include "smmu/smmu.hpp"
 #include "trap_handler/hvc.hpp"
 
 #include <cib/top.hpp>
@@ -25,9 +21,11 @@ struct dma_probe_component {
 
   static void handle_hvc(HvcCall* call) noexcept;
 
-  constexpr static auto config = cib::config(
-      cib::extend<cib::RuntimeStart>(dma_device_component::INIT >> *INIT >> boot_msg_component::PRINT_BOOT_MSG),
-      cib::extend<HvcService>(&dma_probe_component::handle_hvc));
+  // Runs after dma_device (it drives a configured device) and before
+  // the boot banner (the demo harness expects probe output first). The
+  // project nexus places it accordingly.
+  constexpr static auto config =
+      cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<HvcService>(&dma_probe_component::handle_hvc));
 };
 
 } // namespace nova

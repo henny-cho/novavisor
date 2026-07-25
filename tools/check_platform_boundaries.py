@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject board-specific references from reusable source trees."""
+"""Reject board-specific references and facade bypasses from reusable trees."""
 
 from __future__ import annotations
 
@@ -11,12 +11,27 @@ GENERIC_TREES = (
     Path("src/nova"),
     Path("src/components"),
     Path("src/hal/arch"),
+    Path("src/hal/board/common"),
     Path("tools"),
 )
 
+# Components compose against hal facades, nova/*, and DEPS'd peers only.
+# Reaching into a board or arch tree directly ties the component to one
+# platform and is what the hal/*.hpp facades exist to prevent.
+COMPONENT_TREE = Path("src/components")
+FORBIDDEN_COMPONENT_INCLUDES = ('#include "hal/board/', '#include "hal/arch/')
 
-def find_violations(root: Path) -> list[tuple[Path, int, str]]:
-    violations: list[tuple[Path, int, str]] = []
+
+def _source_files(base: Path) -> list[Path]:
+    return [
+        path
+        for path in sorted(base.rglob("*"))
+        if path.suffix in SOURCE_SUFFIXES and path.name != Path(__file__).name
+    ]
+
+
+def find_violations(root: Path) -> list[tuple[Path, int, str, str]]:
+    violations: list[tuple[Path, int, str, str]] = []
     board_root = root / "src" / "hal" / "board"
     board_names: set[str] = set()
     if board_root.exists():
@@ -29,15 +44,34 @@ def find_violations(root: Path) -> list[tuple[Path, int, str]]:
         base = root / tree
         if not base.exists():
             continue
-        for path in sorted(base.rglob("*")):
-            if path.suffix not in SOURCE_SUFFIXES or path.name == Path(__file__).name:
-                continue
+        for path in _source_files(base):
             for line_number, line in enumerate(
                 path.read_text(errors="replace").splitlines(), start=1
             ):
                 if any(board_name in line for board_name in board_names):
                     violations.append(
-                        (path.relative_to(root), line_number, line.strip())
+                        (
+                            path.relative_to(root),
+                            line_number,
+                            line.strip(),
+                            "board-specific reference",
+                        )
+                    )
+
+    base = root / COMPONENT_TREE
+    if base.exists():
+        for path in _source_files(base):
+            for line_number, line in enumerate(
+                path.read_text(errors="replace").splitlines(), start=1
+            ):
+                if line.lstrip().startswith(FORBIDDEN_COMPONENT_INCLUDES):
+                    violations.append(
+                        (
+                            path.relative_to(root),
+                            line_number,
+                            line.strip(),
+                            "component bypasses a hal facade",
+                        )
                     )
     return violations
 
@@ -50,8 +84,8 @@ def main() -> int:
     args = parser.parse_args()
 
     violations = find_violations(args.root.resolve())
-    for path, line_number, line in violations:
-        print(f"{path}:{line_number}: board-specific reference: {line}")
+    for path, line_number, line, reason in violations:
+        print(f"{path}:{line_number}: {reason}: {line}")
     if violations:
         print(f"platform boundary check failed: {len(violations)} violation(s)")
         return 1

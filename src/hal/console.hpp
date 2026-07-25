@@ -92,6 +92,9 @@ inline void write_dec64(std::uint64_t v) noexcept {
   return board::active::Uart::try_read();
 }
 
+// The active board's console SPI — the INTID rx_irq_enable() arms.
+inline constexpr std::uint32_t kRxIntid = board::active::kUartIntid;
+
 // Unmask the console's RX interrupt at the device. GIC routing of the
 // UART SPI stays with the caller (hal/gic.hpp enable_spi).
 inline void rx_irq_enable() noexcept {

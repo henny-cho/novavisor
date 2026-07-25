@@ -34,9 +34,10 @@ struct smmu_component {
 
   static void handle_irq(IrqCall* call) noexcept { smmu::handle_irq(call); }
 
-  constexpr static auto config =
-      cib::config(cib::exports<DmaFaultService>, cib::extend<cib::RuntimeStart>(core_gic_component::INIT >> *INIT),
-                  cib::extend<IrqService>(&smmu_component::handle_irq));
+  // init() routes the SMMU event SPIs, so the physical GIC bring-up
+  // must have run first — the project nexus orders it.
+  constexpr static auto config = cib::config(cib::exports<DmaFaultService>, cib::extend<cib::RuntimeStart>(*INIT),
+                                             cib::extend<IrqService>(&smmu_component::handle_irq));
 };
 
 } // namespace nova

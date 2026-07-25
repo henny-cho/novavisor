@@ -12,8 +12,8 @@
 
 #include "core_mmu/stage2_builder.hpp"
 #include "core_mmu/stage2_descriptor.hpp"
-#include "hal/board/active/board.hpp"
 #include "hal/console.hpp"
+#include "hal/mem.hpp"
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/guest_layout.h"
@@ -109,7 +109,7 @@ auto pristine_offset(std::span<const GuestDescriptor> guests, std::size_t index)
 }
 
 auto pristine_slot(std::size_t index) noexcept -> void* {
-  return reinterpret_cast<void*>(board::active::kGuestPristinePa + pristine_offset(guest_table(), index));
+  return reinterpret_cast<void*>(memory::kGuestPristinePa + pristine_offset(guest_table(), index));
 }
 
 [[noreturn]] void panic_stage2(std::size_t guest_index) noexcept {
@@ -137,14 +137,14 @@ void validate_payloads(std::span<const GuestDescriptor> guests) noexcept {
   // Fail early when the packed windows or their pristine snapshots
   // outgrow the board's reserved regions — the copies below would
   // otherwise silently clobber whatever lies beyond.
-  const std::uint64_t window_limit = board::active::kGuestPaBase + board::active::kGuestPaSize;
+  const std::uint64_t window_limit = memory::kGuestPaBase + memory::kGuestPaSize;
   for (std::size_t i = 0; i < guests.size(); ++i) {
-    if (!range_well_formed(guests[i].load_pa, guests[i].ipa_size) || guests[i].load_pa < board::active::kGuestPaBase ||
+    if (!range_well_formed(guests[i].load_pa, guests[i].ipa_size) || guests[i].load_pa < memory::kGuestPaBase ||
         guests[i].load_pa + guests[i].ipa_size > window_limit) {
       panic_reservation(i);
     }
   }
-  if (pristine_span(guests) > board::active::kPristineSize) {
+  if (pristine_span(guests) > memory::kPristineSize) {
     panic_reservation(guests.size() - 1);
   }
 
@@ -196,8 +196,7 @@ void build_guest_tables(std::size_t index, const GuestDescriptor& guest) noexcep
   mmu::init_tables(tables);
 
   if (!mmu::map_range(tables, guest.ipa_base, guest.load_pa, guest.ipa_size, mmu::desc::kAttrNormalRwx) ||
-      !mmu::map_range(tables, NOVA_IVC_SHM_IPA, board::active::kIvcShmPa, NOVA_IVC_SHM_SIZE,
-                      mmu::desc::kAttrNormalRwData)) {
+      !mmu::map_range(tables, NOVA_IVC_SHM_IPA, memory::kIvcShmPa, NOVA_IVC_SHM_SIZE, mmu::desc::kAttrNormalRwData)) {
     panic_stage2(index);
   }
   for (const dma::DeviceRegion& region : dma::device_region_table()) {

@@ -8,6 +8,7 @@
 #include "nova/abi/hvc_abi.h"
 #include "nova/arch/trap_context.hpp"
 #include "nova_panic/nova_panic.hpp"
+#include "smmu/smmu.hpp"
 
 #include <array>
 #include <cstddef>

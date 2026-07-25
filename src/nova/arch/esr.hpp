@@ -72,6 +72,11 @@ inline constexpr std::uint64_t kIssMask    = 0x01FF'FFFFU;
 inline constexpr std::uint64_t kHvcImmMask = 0xFFFFU;
 inline constexpr std::uint64_t kWfxTiWfe   = 1ULL << 0U; // WFx ISS.TI bit 0: 0 = WFI, 1 = WFE
 
+// The zero-register encoding shared by every trapped-transfer-register
+// field (data-abort SRT and MSR/MRS Rt alike): reads discard, writes
+// read as zero.
+inline constexpr std::uint32_t kSrtZeroReg = 31U;
+
 // Extract the Exception Class from ESR_EL2.
 [[nodiscard]] inline auto get_ec(std::uint64_t esr) noexcept -> ExceptionClass {
   return static_cast<ExceptionClass>((esr >> kEcShift) & kEcMask);

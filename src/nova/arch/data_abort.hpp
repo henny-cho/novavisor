@@ -13,8 +13,10 @@
 // decoded; ISV must be 1 for SAS/SSE/SRT/SF to be meaningful (single
 // general-purpose-register load/store without writeback).
 //
-// This header has no dependencies beyond <cstdint> and is safe to
-// include in host-side GTest builds.
+// Depends only on esr.hpp (shared ISS decode constants) and <cstdint>,
+// so it stays safe to include in host-side GTest builds.
+
+#include "nova/arch/esr.hpp"
 
 #include <cstdint>
 
@@ -30,7 +32,6 @@ inline constexpr std::uint64_t kDaSfBit    = 1ULL << 15U; // 64-bit register wid
 inline constexpr std::uint64_t kDaS1ptwBit = 1ULL << 7U;  // fault on a Stage 1 walk
 inline constexpr std::uint64_t kDaWnrBit   = 1ULL << 6U;  // write, not read
 inline constexpr std::uint64_t kDaDfscMask = 0x3FU;       // fault status code
-inline constexpr std::uint32_t kSrtZeroReg = 31U;         // SRT 31 = xzr/wzr
 
 // DFSC 0b0001LL = Translation fault, level LL (0..3) — the only faults
 // the MMIO path emulates (an unmapped IPA on purpose).

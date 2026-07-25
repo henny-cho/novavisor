@@ -9,6 +9,7 @@
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/sync.hpp"
+#include "smmu/smmu.hpp"
 
 #include <array>
 #include <cstddef>

@@ -6,6 +6,8 @@
 
 #include "smp/smp.hpp"
 
+#include "core_mmu/core_mmu.hpp"
+#include "core_timer/core_timer.hpp"
 #include "hal/console.hpp"
 #include "hal/cpu.hpp"
 #include "hal/gic.hpp"
@@ -13,6 +15,8 @@
 #include "nova/abi/guest.hpp"
 #include "nova/abi/psci.h"
 #include "smp_internal.hpp"
+#include "soft_timer/soft_timer.hpp"
+#include "vgic/vgic.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -26,12 +30,11 @@ namespace nova::smp {
 void start_secondaries() noexcept {
   const auto entry = reinterpret_cast<std::uint64_t>(&nova_secondary_entry);
 
-  vgic::set_reevaluate_hook(&reevaluate_virq);
   g_online[0].store(true, std::memory_order_release);
   gic::enable_ppi(kCrossCallSgi); // the primary receives cross-calls too
 
   for (std::size_t i = 1; i < cpu::kMaxCpus; ++i) {
-    const std::uint64_t ret = arch::smc_call(PSCI_FN_CPU_ON | PSCI_FN_SMC64, i, entry, i);
+    const std::uint64_t ret = cpu::smc_call(PSCI_FN_CPU_ON | PSCI_FN_SMC64, i, entry, i);
     if (ret != PSCI_SUCCESS) {
       console::write("[smp] core ");
       console::write_dec64(i);
@@ -71,13 +74,13 @@ void start_secondaries() noexcept {
 extern "C" [[noreturn]] void novavisor_secondary(std::uint64_t cpu_index) noexcept {
   using namespace nova;
 
-  gic::init_cpu();                               // redistributor + ICC
-  vgic::init_cpu();                              // ICH + maintenance PPI
-  hyp_timer::init();                             // CNTHCTL/CNTVOFF/CNTHP
-  soft_timer::init();                            // CNTHP PPI enable
-  gic::enable_ppi(hyp_timer::kGuestTimerVintid); // native guest CNTV
-  gic::enable_ppi(smp::kCrossCallSgi);           // cross-call mailbox
-  mmu::activate_cpu();                           // VTCR/HCR — Stage 2 for this PE
+  gic::init_cpu();                     // redistributor + ICC
+  vgic::init_cpu();                    // ICH + maintenance PPI
+  hyp_timer::init();                   // CNTHCTL/CNTVOFF/CNTHP
+  soft_timer::init();                  // CNTHP PPI enable
+  gic::enable_ppi(kGuestTimerVintid);  // native guest CNTV
+  gic::enable_ppi(smp::kCrossCallSgi); // cross-call mailbox
+  mmu::activate_cpu();                 // VTCR/HCR — Stage 2 for this PE
 
   console::write("[smp] core ");
   console::write_dec64(cpu_index);

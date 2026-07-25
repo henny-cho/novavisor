@@ -52,13 +52,12 @@ struct vuart_component {
 
   constexpr static auto INIT = flow::action<"vuart_init">([]() noexcept { vuart::init(); });
 
-  // Explicit flow edge: enable_spi programs the distributor, so the
-  // physical GIC bring-up must have run (RuntimeStart order is only
-  // guaranteed along >> edges).
-  constexpr static auto config = cib::config(cib::extend<cib::RuntimeStart>(core_gic_component::INIT >> *INIT),
-                                             cib::extend<MmioService>(&vuart_component::handle_mmio),
-                                             cib::extend<IrqService>(&vuart_component::handle_irq),
-                                             cib::extend<VmResetService>(&vuart_component::handle_vm_reset));
+  // enable_spi programs the distributor, so the physical GIC bring-up
+  // must have run first — the project nexus orders it.
+  constexpr static auto config =
+      cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<MmioService>(&vuart_component::handle_mmio),
+                  cib::extend<IrqService>(&vuart_component::handle_irq),
+                  cib::extend<VmResetService>(&vuart_component::handle_vm_reset));
 };
 
 } // namespace nova

@@ -30,8 +30,6 @@
 
 namespace nova::vgic {
 
-using ReevaluateHook = void (*)(std::size_t slot) noexcept;
-
 // Cold boot (primary): per-core bring-up plus the shared LR count and
 // residency table. Discovers the implemented LR count and clears the
 // list registers (their reset state is UNKNOWN).
@@ -40,10 +38,6 @@ void init() noexcept;
 // Per-core half only — ICH_* and the maintenance PPI are banked per
 // PE. Secondaries run this on themselves (smp bring-up).
 void init_cpu() noexcept;
-
-// Install the cross-core owner routing hook after SMP is initialized.
-// The hook is boot-immutable before any guest can issue MMIO writes.
-void set_reevaluate_hook(ReevaluateHook hook) noexcept;
 
 // Reset one VCPU's virtual interrupt state to boot values (seed time).
 void cpu_reset(std::size_t index) noexcept;
@@ -94,6 +88,17 @@ struct VirtualEoiCall {
 
 struct VirtualEoiService : public callback::service<VirtualEoiCall*> {};
 
+// A vCPU's deliverable set may have changed and its LRs need refilling.
+// Wired at compile time rather than through a runtime hook, so a posted
+// vIRQ can never be dropped in a pre-installation window. With no
+// subscriber (the minimal profile) the dispatch is a no-op — the vCPU
+// refills on its next switch-in.
+struct VirqReevaluateCall {
+  std::size_t slot = 0;
+};
+
+struct VirqReevaluateService : public callback::service<VirqReevaluateCall*> {};
+
 struct vgic_component {
   // Claims the GICD/GICR frame IPAs.
   static void handle_mmio(MmioCall* call) noexcept;
@@ -109,10 +114,10 @@ struct vgic_component {
 
   constexpr static auto INIT = flow::action<"vgic_init">([]() noexcept { vgic::init(); });
 
-  constexpr static auto config = cib::config(cib::exports<VirtualEoiService>, cib::extend<cib::RuntimeStart>(*INIT),
-                                             cib::extend<MmioService>(&vgic_component::handle_mmio),
-                                             cib::extend<IrqService>(&vgic_component::handle_irq),
-                                             cib::extend<SysregService>(&vgic_component::handle_sysreg));
+  constexpr static auto config = cib::config(
+      cib::exports<VirtualEoiService, VirqReevaluateService>, cib::extend<cib::RuntimeStart>(*INIT),
+      cib::extend<MmioService>(&vgic_component::handle_mmio), cib::extend<IrqService>(&vgic_component::handle_irq),
+      cib::extend<SysregService>(&vgic_component::handle_sysreg));
 };
 
 } // namespace nova

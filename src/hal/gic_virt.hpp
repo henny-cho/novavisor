@@ -10,7 +10,6 @@
 // hardware.
 
 #include "hal/arch/aarch64/gic_ich.hpp"
-#include "nova/abi/guest_layout.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -19,12 +18,6 @@ namespace nova::gic_virt {
 
 // vGIC maintenance interrupt (standard SBSA PPI assignment).
 inline constexpr std::uint32_t kMaintenanceIntid = 25;
-
-// Emulated GIC frames — the guest-platform contract fixes the IPAs
-// (they equal this board's physical addresses); the IPAs are left
-// unmapped in Stage 2 on purpose (accesses trap into vgic).
-inline constexpr std::uint64_t kGicdIpaBase = NOVA_GICD_IPA_BASE;
-inline constexpr std::uint64_t kGicrIpaBase = NOVA_GICR_IPA_BASE;
 
 // ICH_HCR_EL2 / ICH_VMCR_EL2 values banked per VCPU by vgic. The base
 // value keeps SGI-generation writes trapping (vSGI routing) alongside

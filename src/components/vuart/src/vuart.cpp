@@ -8,7 +8,6 @@
 
 #include "console_mux/console_mux.hpp"
 #include "core_vcpu/core_vcpu.hpp"
-#include "hal/board/active/board.hpp"
 #include "hal/console.hpp"
 #include "hal/gic.hpp"
 #include "nova/abi/guest.hpp"
@@ -26,7 +25,7 @@ namespace nova::vuart {
 namespace {
 
 inline constexpr std::uint32_t kUartSpi         = NOVA_VUART_SPI;
-inline constexpr std::uint32_t kPhysicalUartSpi = board::active::kUartIntid;
+inline constexpr std::uint32_t kPhysicalUartSpi = console::kRxIntid;
 
 // Per-VM UART state. RX injection (primary core) races guest MMIO
 // (owner core) — the lock covers every model mutation.

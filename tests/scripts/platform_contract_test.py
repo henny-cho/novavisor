@@ -24,14 +24,41 @@ class PlatformBoundaryTests(unittest.TestCase):
             board = root / "src" / "hal" / "board" / "qemu_virt"
             board.mkdir(parents=True)
             (board / "board.cmake").write_text("")
-            source = root / "src" / "components" / "sample" / "sample.cpp"
+            source = root / "src" / "nova" / "sample.hpp"
             source.parent.mkdir(parents=True)
-            source.write_text('#include "hal/board/qemu_virt/board.hpp"\n')
+            source.write_text("constexpr int kBase = qemu_virt::kBase;\n")
 
             violations = BOUNDARIES.find_violations(root)
 
         self.assertEqual(len(violations), 1)
         self.assertEqual(violations[0][:2], (source.relative_to(root), 1))
+        self.assertEqual(violations[0][3], "board-specific reference")
+
+    def test_component_bypassing_a_hal_facade_is_rejected(self):
+        # Components may include hal/*.hpp facades, nova/*, and DEPS'd
+        # peers — never a board or arch tree directly.
+        for include in ('#include "hal/board/active/board.hpp"',
+                        '#include "hal/arch/aarch64/cpu.hpp"'):
+            with self.subTest(include=include), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "src" / "components" / "sample" / "sample.cpp"
+                source.parent.mkdir(parents=True)
+                source.write_text(f"{include}\n")
+
+                violations = BOUNDARIES.find_violations(root)
+
+                self.assertEqual(len(violations), 1)
+                self.assertEqual(violations[0][:2], (source.relative_to(root), 1))
+                self.assertEqual(violations[0][3], "component bypasses a hal facade")
+
+    def test_hal_facade_may_include_a_board_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src" / "hal" / "console.hpp"
+            source.parent.mkdir(parents=True)
+            source.write_text('#include "hal/board/active/uart.hpp"\n')
+
+            self.assertEqual(BOUNDARIES.find_violations(root), [])
 
 
 class PlatformContractTests(unittest.TestCase):
