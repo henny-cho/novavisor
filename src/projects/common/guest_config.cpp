@@ -18,10 +18,14 @@
 
 // One generated record per configured guest. The binary pointer is null
 // when the external loader compatibility mode is selected.
+// Both symbols are emitted as assembly labels by the payload generator, so
+// their spelling is a link-time contract rather than a naming choice.
+// NOLINTBEGIN(readability-identifier-naming)
 extern "C" {
 extern const nova::payload::Metadata g_guest_payloads[];
 extern const std::uint32_t           g_guest_payload_count;
 }
+// NOLINTEND(readability-identifier-naming)
 
 namespace nova {
 namespace {

@@ -19,6 +19,7 @@ Checks: >-
     -cppcoreguidelines-owning-memory,
     -cppcoreguidelines-no-malloc,
     -performance-no-int-to-ptr,
+    readability-identifier-naming,
     -readability-identifier-length
 # Diagnostics only for NovaVisor's own headers — third-party (external/cache,
 # toolchain sysroot) is out of scope and would drown real findings.
@@ -31,3 +32,78 @@ HeaderFilterRegex: '/src/(components|hal|nova|projects)/'
 CheckOptions:
   - key:             cert-err58-cpp.ExceptionsAreAllowed
     value:           '0'
+  # --- naming: types ---
+  # The cib composition layer is exempt: `<name>_component` registration
+  # structs, the `nova_project` component list and its `nova_top` alias
+  # mirror the framework's own spelling, so they stay lower_case.
+  - key:             readability-identifier-naming.ClassCase
+    value:           CamelCase
+  - key:             readability-identifier-naming.StructCase
+    value:           CamelCase
+  - key:             readability-identifier-naming.StructIgnoredRegexp
+    value:           '^(nova_project|[a-z0-9_]+_component)$'
+  - key:             readability-identifier-naming.UnionCase
+    value:           CamelCase
+  - key:             readability-identifier-naming.EnumCase
+    value:           CamelCase
+  - key:             readability-identifier-naming.TypeAliasCase
+    value:           CamelCase
+  - key:             readability-identifier-naming.TypeAliasIgnoredRegexp
+    value:           '^nova_top$'
+  - key:             readability-identifier-naming.TypedefCase
+    value:           CamelCase
+  - key:             readability-identifier-naming.TemplateParameterCase
+    value:           CamelCase
+  # --- naming: enumerators ---
+  - key:             readability-identifier-naming.EnumConstantCase
+    value:           CamelCase
+  - key:             readability-identifier-naming.EnumConstantPrefix
+    value:           'k'
+  # --- naming: functions ---
+  - key:             readability-identifier-naming.FunctionCase
+    value:           lower_case
+  - key:             readability-identifier-naming.MethodCase
+    value:           lower_case
+  # --- naming: variables ---
+  - key:             readability-identifier-naming.VariableCase
+    value:           lower_case
+  - key:             readability-identifier-naming.ParameterCase
+    value:           lower_case
+  - key:             readability-identifier-naming.PublicMemberCase
+    value:           lower_case
+  - key:             readability-identifier-naming.ProtectedMemberCase
+    value:           lower_case
+  - key:             readability-identifier-naming.ProtectedMemberSuffix
+    value:           '_'
+  - key:             readability-identifier-naming.PrivateMemberCase
+    value:           lower_case
+  - key:             readability-identifier-naming.PrivateMemberSuffix
+    value:           '_'
+  - key:             readability-identifier-naming.GlobalVariableCase
+    value:           lower_case
+  - key:             readability-identifier-naming.GlobalVariablePrefix
+    value:           'g_'
+  # --- naming: constants ---
+  - key:             readability-identifier-naming.GlobalConstantCase
+    value:           CamelCase
+  - key:             readability-identifier-naming.GlobalConstantPrefix
+    value:           'k'
+  - key:             readability-identifier-naming.ConstexprVariableCase
+    value:           CamelCase
+  - key:             readability-identifier-naming.ConstexprVariablePrefix
+    value:           'k'
+  # cib looks up the `config` member by name, and flow actions /
+  # extension points are SCREAMING_CASE per the framework's convention.
+  - key:             readability-identifier-naming.ConstexprVariableIgnoredRegexp
+    value:           '^(config|[A-Z][A-Z0-9_]+)$'
+  - key:             readability-identifier-naming.StaticConstantCase
+    value:           CamelCase
+  - key:             readability-identifier-naming.StaticConstantPrefix
+    value:           'k'
+  - key:             readability-identifier-naming.ClassConstantCase
+    value:           CamelCase
+  - key:             readability-identifier-naming.ClassConstantPrefix
+    value:           'k'
+  # --- naming: namespaces ---
+  - key:             readability-identifier-naming.NamespaceCase
+    value:           lower_case

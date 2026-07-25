@@ -46,7 +46,7 @@ struct TableSet {
   std::array<mmu::Table, kL3PoolSize> l3_pool;
 };
 
-alignas(mmu::k4KiB) std::array<TableSet, kMaxGuests> stage2_sets;
+alignas(mmu::k4KiB) std::array<TableSet, kMaxGuests> g_stage2_sets;
 
 // VTTBR_EL2 value per guest, precomputed at build time for the switch
 // path. Index parallels guest_table().
@@ -180,7 +180,7 @@ void validate_payloads(std::span<const GuestDescriptor> guests) noexcept {
 // Populate one guest's table set: its window (IPA → PA slot) plus the
 // IVC shared page (same IPA in every VM, RW non-executable).
 void build_guest_tables(std::size_t index, const GuestDescriptor& guest) noexcept {
-  TableSet& set = stage2_sets[index];
+  TableSet& set = g_stage2_sets[index];
 
   std::array<std::uint64_t, kL2PoolSize> l2_pas{};
   for (std::size_t i = 0; i < kL2PoolSize; ++i) {

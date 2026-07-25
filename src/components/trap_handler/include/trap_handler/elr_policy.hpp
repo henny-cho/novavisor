@@ -28,30 +28,30 @@ enum class ElrAdvance : std::uint8_t {
 
 [[nodiscard]] constexpr auto elr_policy(esr::ExceptionClass ec) noexcept -> ElrAdvance {
   switch (ec) {
-  case esr::ExceptionClass::HVC_AA64:
+  case esr::ExceptionClass::kHvcAa64:
     // ELR_EL2 already points to the instruction AFTER the HVC — an
     // advance here would make the guest skip its next instruction.
     return ElrAdvance::kNone;
 
   // Second PSCI conduit (HCR_EL2.TSC). Unlike HVC, ELR points AT the
   // trapped smc — step over it before the shared HVC fan-out.
-  case esr::ExceptionClass::SMC_AA64:
+  case esr::ExceptionClass::kSmcAa64:
   // Step over the wfi/wfe so the guest resumes after it, whether the
   // handler returns immediately or parks the vCPU first.
-  case esr::ExceptionClass::WFx:
+  case esr::ExceptionClass::kWfx:
     return ElrAdvance::kBeforeDispatch;
 
-  case esr::ExceptionClass::FP_SIMD:
+  case esr::ExceptionClass::kFpSimd:
     // Once the handler has made FP access legal, returning re-executes
     // the trapped instruction successfully.
     return ElrAdvance::kNever;
 
-  case esr::ExceptionClass::MSR_MRS:
+  case esr::ExceptionClass::kMsrMrs:
     // Advance only after successful emulation, so fault diagnostics
     // retain the offending MSR/MRS.
     return ElrAdvance::kOnClaim;
 
-  case esr::ExceptionClass::DATA_ABORT_LOWER:
+  case esr::ExceptionClass::kDataAbortLower:
     // The MMIO decode knows the instruction length and whether the
     // access was emulated at all — it advances, or faults the guest.
     return ElrAdvance::kPerHandler;

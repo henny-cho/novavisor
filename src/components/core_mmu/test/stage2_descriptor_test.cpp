@@ -80,7 +80,7 @@ TEST(Stage2Desc, NormalRwDataPresetIsXn) {
 }
 
 TEST(Stage2Desc, DeviceRwPreset) {
-  EXPECT_EQ(mem_attr(desc::kAttrDeviceRw), desc::kMemAttrDevice_nGnRE);
+  EXPECT_EQ(mem_attr(desc::kAttrDeviceRw), desc::kMemAttrDeviceNGnRE);
   EXPECT_EQ(s2ap(desc::kAttrDeviceRw), desc::kS2apReadWrite);
   EXPECT_EQ(shareability(desc::kAttrDeviceRw), desc::kShOuterShareable);
   EXPECT_TRUE(access_flag(desc::kAttrDeviceRw));

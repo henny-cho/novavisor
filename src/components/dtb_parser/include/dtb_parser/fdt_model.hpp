@@ -50,6 +50,11 @@ using Bytes = std::span<const std::uint8_t>;
   return (static_cast<std::uint64_t>(be32(b, off)) << 32U) | be32(b, off + 4);
 }
 
+// Structure-block payloads are padded up to a 4-byte boundary.
+[[nodiscard]] constexpr auto pad4(std::size_t n) noexcept -> std::size_t {
+  return (n + 3) & ~std::size_t{3};
+}
+
 // Validated view: structs/strings sub-spans of a well-formed header.
 struct View {
   bool  ok = false;
@@ -92,7 +97,6 @@ struct View {
 // Offset of the token following the one at `off`, or structs.size()
 // (a natural loop terminator) when the token is malformed.
 [[nodiscard]] constexpr auto skip_token(Bytes structs, std::size_t off) noexcept -> std::size_t {
-  constexpr auto pad4 = [](std::size_t n) { return (n + 3) & ~std::size_t{3}; };
   switch (be32(structs, off)) {
   case kTokBeginNode: {
     const std::string_view name = read_string(structs, off + 4);
