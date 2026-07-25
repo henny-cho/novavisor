@@ -8,7 +8,7 @@
 
 #include "dispatch.hpp"
 #include "hal/console.hpp"
-#include "nova_panic/nova_panic.hpp"
+#include "nova/panic.hpp"
 #include "trap_handler/guest_fault.hpp"
 #include "trap_handler/mmio.hpp"
 #include "trap_handler/trap_handler.hpp"

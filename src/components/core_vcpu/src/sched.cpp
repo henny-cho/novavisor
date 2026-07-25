@@ -22,7 +22,7 @@
 #include "hal/timer.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/hvc_abi.h"
-#include "nova_panic/nova_panic.hpp"
+#include "nova/panic.hpp"
 #include "soft_timer/soft_timer.hpp"
 #include "vcpu_internal.hpp"
 #include "vgic/vgic.hpp"

@@ -1,6 +1,6 @@
 #include "demo_hvc.h"
+#include "edu_el1.h"
 #include "gic_el1.h"
-#include "nova/abi/edu.h"
 
 #include <stdint.h>
 

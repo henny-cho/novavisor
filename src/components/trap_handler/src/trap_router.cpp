@@ -12,7 +12,7 @@
 #include "nova/arch/esr.hpp"
 #include "nova/arch/sysreg_trap.hpp"
 #include "nova/arch/trap_context.hpp"
-#include "nova_panic/nova_panic.hpp"
+#include "nova/panic.hpp"
 #include "trap_handler/elr_policy.hpp"
 #include "trap_handler/fp_simd.hpp"
 #include "trap_handler/sysreg.hpp"
