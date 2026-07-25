@@ -12,6 +12,7 @@
 //                          primary before CPU_ON was issued.
 
 #include "hal/board/active/board_layout.h"
+#include "nova/arch/mpidr.h"
 
 .global _start
 .section .text.boot
@@ -28,7 +29,7 @@ _start:
     // Park any core that is not the board's boot PE. Compare all four
     // affinity levels so a second cluster's Aff0=0 cannot enter twice.
     mrs x0, mpidr_el1
-    ldr x1, =0x000000FF00FFFFFF
+    ldr x1, =NOVA_MPIDR_AFFINITY_MASK
     and x0, x0, x1
     ldr x1, =NOVA_BOARD_BOOT_MPIDR
     cmp x0, x1

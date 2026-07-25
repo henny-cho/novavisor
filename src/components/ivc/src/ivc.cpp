@@ -18,12 +18,18 @@ void ivc_component::handle_hvc(HvcCall* call) noexcept {
   call->handled = true;
 
   // Self-ringing is allowed (the pending vIRQ is taken right after
-  // ERET); posting to an off or out-of-range VM is the caller's error.
+  // ERET); posting to an off VM is the caller's error. The target is
+  // guest-controlled: range-check it before the slot arithmetic, whose
+  // multiplication would otherwise wrap a huge value back into range.
   // The post is affinity-routed — a target on another core gets it
   // through that core's cross-call mailbox. The doorbell rings the
   // target VM's boot vCPU.
   const auto target = static_cast<std::size_t>(call->ctx->x[1]);
-  call->ctx->x[0]   = smp::post_virq(slot_of(target), NOVA_IVC_DOORBELL_VINTID) ? 0 : kSmcccNotSupported;
+  if (target >= guest_table().size()) {
+    call->ctx->x[0] = kSmcccNotSupported;
+    return;
+  }
+  call->ctx->x[0] = smp::post_virq(slot_of(target), NOVA_IVC_DOORBELL_VINTID) ? 0 : kSmcccNotSupported;
 }
 
 } // namespace nova

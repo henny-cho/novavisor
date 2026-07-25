@@ -26,6 +26,16 @@
 
 namespace nova::mmu {
 
+// --- Stage 2 walk geometry (single source) -----------------------------------
+//
+// The CPU's VTCR_EL2 and the SMMU's Stage-2 STE fields must encode the
+// identical geometry: both walk the tables map_range builds.
+
+inline constexpr std::uint64_t kStage2T0sz      = 25;   // 39-bit IPA
+inline constexpr std::uint64_t kStage2Sl0       = 0b01; // walk starts at L1
+inline constexpr std::uint64_t kStage2Granule4k = 0b00;
+inline constexpr std::uint64_t kStage2Pa40      = 0b010; // 40-bit PA size
+
 namespace desc {
 
 // --- Type field (bits 1:0) ---------------------------------------------------

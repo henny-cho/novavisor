@@ -168,6 +168,16 @@ void init() noexcept;
 
 namespace nova {
 
+// Fired on every VM cold-start seed and warm reset, after the guest is
+// fully quiesced. Emulated per-VM devices subscribe to drop the previous
+// instance's state (RX FIFOs, interrupt masks) so a rebooted guest never
+// inherits it — and adding a device never requires editing core_vcpu.
+struct VmResetCall {
+  std::size_t vm = 0;
+};
+
+struct VmResetService : public callback::service<VmResetCall*> {};
+
 struct core_vcpu_component {
   // Claims HVC_YIELD (HVC_VM_START belongs to smp — affinity routing).
   static void handle_hvc(HvcCall* call) noexcept;
@@ -183,10 +193,11 @@ struct core_vcpu_component {
   constexpr static auto INIT  = flow::action<"core_vcpu_init">([]() noexcept { vcpu::init(); });
   constexpr static auto ENTER = flow::action<"core_vcpu_enter">([]() noexcept { vcpu::enter_cpu(); });
 
-  constexpr static auto config = cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<cib::MainLoop>(*ENTER),
-                                             cib::extend<HvcService>(&core_vcpu_component::handle_hvc),
-                                             cib::extend<WfxService>(&core_vcpu_component::handle_wfx),
-                                             cib::extend<FpSimdService>(&core_vcpu_component::handle_fp_simd));
+  constexpr static auto config =
+      cib::config(cib::exports<VmResetService>, cib::extend<cib::RuntimeStart>(*INIT),
+                  cib::extend<cib::MainLoop>(*ENTER), cib::extend<HvcService>(&core_vcpu_component::handle_hvc),
+                  cib::extend<WfxService>(&core_vcpu_component::handle_wfx),
+                  cib::extend<FpSimdService>(&core_vcpu_component::handle_fp_simd));
 };
 
 } // namespace nova

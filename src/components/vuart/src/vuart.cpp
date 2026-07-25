@@ -70,6 +70,14 @@ void init() noexcept {
   console::write("vuart: PL011 emulation active, host RX -> focus VM\n");
 }
 
+void vm_reset(std::size_t vm) noexcept {
+  if (vm >= kMaxGuests) {
+    return;
+  }
+  sync::Guard guard{g_lock};
+  g_uart[vm] = UartState{};
+}
+
 } // namespace nova::vuart
 
 namespace nova {
@@ -113,6 +121,10 @@ void vuart_component::handle_mmio(MmioCall* call) noexcept {
   if (raise) {
     vuart::post_rx(vm);
   }
+}
+
+void vuart_component::handle_vm_reset(VmResetCall* call) noexcept {
+  vuart::vm_reset(call->vm);
 }
 
 void vuart_component::handle_irq(IrqCall* call) noexcept {

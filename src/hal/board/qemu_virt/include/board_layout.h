@@ -23,8 +23,10 @@
 #define NOVA_BOARD_PHYS_RAM_BASE 0x40000000
 #define NOVA_BOARD_PHYS_RAM_SIZE 0x40000000 /* QEMU -m 1024 */
 #define NOVA_BOARD_GUEST_PA_BASE 0x50000000
+#define NOVA_BOARD_GUEST_PA_SIZE 0x10000000 /* windows end at the IVC page */
 #define NOVA_BOARD_IVC_SHM_PA    0x60000000
 #define NOVA_BOARD_PRISTINE_PA   0x60100000
+#define NOVA_BOARD_PRISTINE_SIZE 0x0FF00000 /* up to the end of physical RAM */
 
 /* Guest CPU node exposed by the generated DT. */
 #define NOVA_BOARD_GUEST_CPU_COMPATIBLE "arm,cortex-a57"

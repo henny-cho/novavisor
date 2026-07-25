@@ -71,27 +71,49 @@ void flush(std::size_t slot) noexcept {
   }
 }
 
+void vm_reset(std::size_t vm) noexcept {
+  if (vm >= kMaxGuests) {
+    return;
+  }
+  for (std::size_t v = 0; v < kMaxVcpusPerVm; ++v) {
+    g_line[slot_of(vm, v)].len = 0;
+  }
+}
+
 void set_liveness_probe(LivenessProbe probe) noexcept {
   g_live = probe;
 }
 
-auto input_route(char c) noexcept -> std::size_t {
-  if (c != kFocusByte) {
-    return g_focus;
-  }
-  // Cycle to the next VM that both carries a vuart and still runs its
-  // boot vCPU — input to anything else would land in a void.
+// A focus target must carry a vuart and still run its boot vCPU —
+// input to anything else would land in a void the guest can never read.
+[[nodiscard]] auto focus_valid(std::size_t vm) noexcept -> bool {
+  return vm < guest_table().size() && guest_table()[vm].uart == UartKind::kVuart &&
+         (g_live == nullptr || g_live(slot_of(vm)));
+}
+
+// Next valid focus after `from`; `from` itself when nothing qualifies.
+[[nodiscard]] auto next_focus(std::size_t from) noexcept -> std::size_t {
   const std::size_t count = guest_table().size();
   for (std::size_t i = 1; i <= count; ++i) {
-    const std::size_t vm = (g_focus + i) % count;
-    if (guest_table()[vm].uart == UartKind::kVuart && (g_live == nullptr || g_live(slot_of(vm)))) {
-      g_focus = vm;
-      break;
+    const std::size_t vm = (from + i) % count;
+    if (focus_valid(vm)) {
+      return vm;
     }
   }
-  console::write("[mux] focus vm");
-  console::write_dec64(g_focus);
-  console::write("\n");
+  return from;
+}
+
+auto input_route(char c) noexcept -> std::size_t {
+  if (c != kFocusByte) {
+    // The boot default (VM 0) may not carry a vuart, and the focused VM
+    // may have died since — re-route instead of feeding a void.
+    if (!focus_valid(g_focus)) {
+      g_focus = next_focus(g_focus);
+    }
+    return g_focus;
+  }
+  g_focus = next_focus(g_focus);
+  console::line("[mux] focus vm", console::Dec{g_focus}, "\n");
   return kSwitched;
 }
 

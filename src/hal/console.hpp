@@ -9,9 +9,9 @@
 #include "nova/fmt.hpp"
 #include "nova/sync.hpp"
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 namespace nova::console {
@@ -31,12 +31,46 @@ inline void write(const char* str) noexcept {
 }
 
 // Emit one logical line from preformatted fragments under one lock.
-template <std::size_t N>
-inline void write_parts(const std::array<std::string_view, N>& parts) noexcept {
+inline void write_parts(std::span<const std::string_view> parts) noexcept {
   sync::Guard guard{g_lock};
   for (const std::string_view part : parts) {
     board::active::Uart::write(part);
   }
+}
+
+// Typed integer fragments for line(): formatted while the lock is held,
+// so a line mixing text and numbers still leaves the UART atomically.
+struct Dec {
+  std::uint64_t v;
+};
+struct Hex {
+  std::uint64_t v;
+};
+
+namespace detail {
+inline void put(std::string_view sv) noexcept {
+  board::active::Uart::write(sv);
+}
+inline void put(const char* str) noexcept {
+  board::active::Uart::write(str);
+}
+inline void put(Dec d) noexcept {
+  fmt::DecBuf buf{};
+  board::active::Uart::write(fmt::to_dec64(d.v, buf));
+}
+inline void put(Hex h) noexcept {
+  fmt::HexBuf buf{};
+  board::active::Uart::write(fmt::to_hex64(h.v, buf));
+}
+} // namespace detail
+
+// One logical line from mixed fragments (string_view/const char*/Dec/
+// Hex) under one lock — multi-call sequences splice under SMP; this
+// cannot.
+template <typename... Parts>
+inline void line(Parts... parts) noexcept {
+  sync::Guard guard{g_lock};
+  (detail::put(parts), ...);
 }
 
 // 16 zero-padded lowercase hex digits, no "0x" prefix.

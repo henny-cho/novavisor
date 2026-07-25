@@ -67,9 +67,9 @@ void handle_putc(TrapContext* ctx) noexcept {
 // is flushed first so nothing the guest printed is lost.
 void handle_exit(TrapContext* ctx) noexcept {
   console_mux::flush(vcpu::current_index());
-  console::write("demo_exit code=");
-  console::write_dec64(ctx->x[1]);
-  console::write("\n");
+  // One atomic line: the verification harness greps for it, so another
+  // core's log must never splice into it.
+  console::line("demo_exit code=", console::Dec{ctx->x[1]}, "\n");
   smp::stop_vm(vm_of(vcpu::current_index()), ctx);
 }
 

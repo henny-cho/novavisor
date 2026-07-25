@@ -33,11 +33,21 @@ public:
     std::uint64_t arg = 0;
   };
 
+  // Out-of-range slots are ignored: callers compute base + offset
+  // indices, and Release builds carry no libstdc++ bounds assertions —
+  // an off-by-one must not corrupt adjacent state silently.
   void arm(std::size_t slot, std::uint64_t deadline, Callback fn, std::uint64_t arg) noexcept {
+    if (slot >= N) {
+      return;
+    }
     slots_[slot] = Slot{.deadline = deadline, .fn = fn, .arg = arg, .armed = true};
   }
 
-  void cancel(std::size_t slot) noexcept { slots_[slot].armed = false; }
+  void cancel(std::size_t slot) noexcept {
+    if (slot < N) {
+      slots_[slot].armed = false;
+    }
+  }
 
   // Earliest armed deadline; kNoDeadline when nothing is armed.
   [[nodiscard]] auto next_deadline() const noexcept -> std::uint64_t {

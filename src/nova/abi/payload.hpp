@@ -1,5 +1,7 @@
 #pragma once
 
+#include "nova/range.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -60,24 +62,16 @@ struct Layout {
   std::uint32_t  checksum   = 0;
 };
 
-[[nodiscard]] constexpr auto range_valid(std::uint64_t base, std::uint64_t size) noexcept -> bool {
-  return size != 0 && base <= ~std::uint64_t{0} - size;
-}
-
-[[nodiscard]] constexpr auto ranges_overlap(std::uint64_t lhs_base, std::uint64_t lhs_size, std::uint64_t rhs_base,
-                                            std::uint64_t rhs_size) noexcept -> bool {
-  return lhs_base < rhs_base + rhs_size && rhs_base < lhs_base + lhs_size;
-}
-
 [[nodiscard]] constexpr auto layout_valid(const Layout& layout) noexcept -> bool {
   if (layout.image_size == 0) {
     return layout.source == 0 && layout.checksum == 0;
   }
-  if (layout.source == 0 || layout.load_pa % kLoadAlignment != 0 || !range_valid(layout.source, layout.image_size) ||
-      !range_valid(layout.load_pa, layout.image_size) || !range_valid(layout.ipa_base, layout.ipa_size) ||
-      layout.image_size > layout.ipa_size || layout.entry < layout.ipa_base ||
-      layout.entry >= layout.ipa_base + layout.ipa_size || layout.dtb_ipa < layout.ipa_base ||
-      layout.dtb_ipa > layout.ipa_base + layout.ipa_size || layout.image_size > layout.dtb_ipa - layout.ipa_base ||
+  if (layout.source == 0 || layout.load_pa % kLoadAlignment != 0 ||
+      !range_well_formed(layout.source, layout.image_size) || !range_well_formed(layout.load_pa, layout.image_size) ||
+      !range_well_formed(layout.ipa_base, layout.ipa_size) || layout.image_size > layout.ipa_size ||
+      layout.entry < layout.ipa_base || layout.entry >= layout.ipa_base + layout.ipa_size ||
+      layout.dtb_ipa < layout.ipa_base || layout.dtb_ipa > layout.ipa_base + layout.ipa_size ||
+      layout.image_size > layout.dtb_ipa - layout.ipa_base ||
       ranges_overlap(layout.source, layout.image_size, layout.load_pa, layout.image_size)) {
     return false;
   }

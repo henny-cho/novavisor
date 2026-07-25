@@ -3,6 +3,8 @@
 // Stage-2-only stream table entry encoding for the initial DMA path.
 // Stage-1 context descriptors are intentionally outside this encoder.
 
+#include "core_mmu/stage2_descriptor.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -36,12 +38,14 @@ inline constexpr std::uint64_t kRecordFault        = 1ULL << 58U;
 inline constexpr std::uint64_t kS2ttbMask          = 0x000F'FFFF'FFFF'FFF0ULL;
 inline constexpr std::uint64_t kPa40Mask           = 0x0000'00FF'FFFF'FFFFULL;
 
-inline constexpr std::uint64_t kT0sz           = 25;   // 39-bit IPA
-inline constexpr std::uint64_t kSl0            = 0b01; // L1 root
+// Walk geometry comes from the shared Stage 2 definition: the SMMU
+// walks the same tables the CPU's VTCR_EL2 describes.
+inline constexpr std::uint64_t kT0sz           = mmu::kStage2T0sz;
+inline constexpr std::uint64_t kSl0            = mmu::kStage2Sl0;
 inline constexpr std::uint64_t kWriteBack      = 0b11;
 inline constexpr std::uint64_t kInnerShareable = 0b11;
-inline constexpr std::uint64_t kGranule4k      = 0b00;
-inline constexpr std::uint64_t kPhysicalSize40 = 0b010;
+inline constexpr std::uint64_t kGranule4k      = mmu::kStage2Granule4k;
+inline constexpr std::uint64_t kPhysicalSize40 = mmu::kStage2Pa40;
 
 } // namespace ste
 
