@@ -470,40 +470,6 @@ class DemoRunnerVerificationTest(unittest.TestCase):
         self.assertNotIn(discarded, stderr.getvalue())
         self.assertIn("recent-tail", stderr.getvalue())
 
-    def test_restore_metric_parser_handles_chunk_boundaries(self):
-        capture = demo_runner.OutputCapture(None)
-        capture.write("[core_vcpu] VM 2 resto")
-        capture.write("red 8192/67108864 bytes in 23")
-        capture.write(" ms\r\n")
-
-        self.assertEqual(capture.restore_metrics, [
-            demo_runner.RestoreMetric(
-                vm=2,
-                written_bytes=8192,
-                examined_bytes=67108864,
-                elapsed_ms=23,
-            ),
-        ])
-
-    def test_restore_metrics_keep_unterminated_last_line_and_recent_records(self):
-        capture = demo_runner.OutputCapture(None)
-        for vm in range(35):
-            terminator = "\n" if vm < 34 else ""
-            capture.write(
-                f"[core_vcpu] VM {vm} restored {vm}/{vm + 1} bytes in {vm + 2} ms"
-                f"{terminator}"
-            )
-        capture.finish_metrics()
-
-        self.assertEqual(len(capture.restore_metrics), 32)
-        self.assertEqual(capture.restore_metrics[0].vm, 3)
-        self.assertEqual(capture.restore_metrics[-1], demo_runner.RestoreMetric(
-            vm=34,
-            written_bytes=34,
-            examined_bytes=35,
-            elapsed_ms=36,
-        ))
-
     def test_repeat_runs_all_attempts_and_records_elapsed_time(self):
         clock = FakeClock()
         outcomes = [
@@ -613,12 +579,6 @@ class DemoRunnerVerificationTest(unittest.TestCase):
                 "succeeded": True,
                 "error": "",
             })
-            self.assertEqual(diagnostics["restore_metrics"], [{
-                "vm": 1,
-                "written_bytes": 4096,
-                "examined_bytes": 134217728,
-                "elapsed_ms": 17,
-            }])
 
     def test_timeout_and_cleanup_interrupt_share_console_and_diagnostics(self):
         class TimeoutChild(FakeChild):
