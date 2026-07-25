@@ -232,3 +232,37 @@ TEST(VgicSgi1r, NonzeroAffinityOrRangeSelectsNobody) {
   EXPECT_EQ(sgi1r_targets((1ULL << 48U) | 1U, 0, 2), 0U); // Aff3
   EXPECT_EQ(sgi1r_targets((1ULL << 44U) | 1U, 0, 2), 0U); // RS
 }
+
+// ---------------------------------------------------------------------------
+// Delivery-effect classification (gates the component's reevaluate fan-out)
+// ---------------------------------------------------------------------------
+
+TEST(VgicDist, DeliveryEffectOnlyForEnablePendingRoute) {
+  DistState d{};
+  EXPECT_TRUE(dist_write(d, kGicdIsenabler1, 4, 1U).delivery);
+  EXPECT_TRUE(dist_write(d, kGicdIcenabler1, 4, 1U).delivery);
+  EXPECT_TRUE(dist_write(d, kGicdIspendr1, 4, 1U).delivery);
+  EXPECT_TRUE(dist_write(d, kGicdIcpendr1, 4, 1U).delivery);
+  EXPECT_TRUE(dist_write(d, kGicdIrouterSpi, 8, 1U).delivery); // aligned low word: route moves
+
+  EXPECT_FALSE(dist_write(d, kGicdIrouterSpi + 4U, 4, 1U).delivery); // high word is WI
+  EXPECT_FALSE(dist_write(d, kGicdCtlr, 4, 1U).delivery);
+  EXPECT_FALSE(dist_write(d, kGicdIgroupr1, 4, ~0U).delivery);
+  EXPECT_FALSE(dist_write(d, kGicdIpriorityrSpi, 4, 0x20U).delivery);
+  EXPECT_FALSE(dist_write(d, kGicdIcfgr2, 4, ~0U).delivery);
+  EXPECT_FALSE(dist_write(d, kGicdIsactiver1, 4, ~0U).delivery);
+  EXPECT_FALSE(dist_write(d, 0xF000, 4, 1U).delivery); // unknown: no effect at all
+}
+
+TEST(VgicRedist, DeliveryEffectOnlyForEnableAndPending) {
+  RedistState r{};
+  EXPECT_TRUE(redist_write(r, kGicrIsenabler0, 4, 1U).delivery);
+  EXPECT_TRUE(redist_write(r, kGicrIcenabler0, 4, 1U).delivery);
+  EXPECT_TRUE(redist_write(r, kGicrIspendr0, 4, 1U).delivery);
+  EXPECT_TRUE(redist_write(r, kGicrIcpendr0, 4, 1U).delivery);
+
+  EXPECT_FALSE(redist_write(r, kGicrWaker, 4, 0U).delivery);
+  EXPECT_FALSE(redist_write(r, kGicrIgroupr0, 4, ~0U).delivery);
+  EXPECT_FALSE(redist_write(r, kGicrIpriorityr, 4, 0x20U).delivery);
+  EXPECT_FALSE(redist_write(r, kGicrIcfgr1, 4, ~0U).delivery);
+}

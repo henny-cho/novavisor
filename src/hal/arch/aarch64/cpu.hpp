@@ -6,6 +6,7 @@
 
 #include "nova/arch/mpidr.h"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace nova::arch {
@@ -16,6 +17,16 @@ namespace nova::arch {
   std::uint64_t mpidr = 0;
   __asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
   return mpidr & std::uint64_t{NOVA_MPIDR_AFFINITY_MASK};
+}
+
+// Dense per-core index, seeded by the boot path (boot.S writes each
+// core's kCpuAffinity position into TPIDR_EL2 before any C++ runs —
+// the register is otherwise unused at EL2). One MRS replaces the MPIDR
+// mask + affinity-table scan on every hot-path cpu::id() call.
+[[nodiscard]] inline auto core_index() noexcept -> std::size_t {
+  std::uint64_t index = 0;
+  __asm__ volatile("mrs %0, tpidr_el2" : "=r"(index));
+  return static_cast<std::size_t>(index);
 }
 
 // The MPIDR value the guest reads at EL1. Per-vCPU: written on every
