@@ -47,7 +47,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .toolchain
-          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/versions.sh') }}
+          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/lib/versions.sh') }}
 
       - name: Cache ccache
         uses: actions/cache@v6

@@ -867,6 +867,19 @@ def cmd_build(_args) -> int:
 def cmd_fetch(args) -> int:
     # Delegate to the demo's own fetch.sh (pinned versions, idempotent
     # caching into external/cache/guests/<demo>/ live there).
+    if args.all:
+        # Every enabled demo with an external image recipe — the single
+        # source for what CI must fetch before verify-all.
+        names = [name for name, mf in iter_demos()
+                 if mf.get("enabled", False) and (DEMO_DIR / name / "fetch.sh").exists()]
+        for name in names:
+            rc = subprocess.call(["bash", str(DEMO_DIR / name / "fetch.sh")])
+            if rc != 0:
+                return rc
+        print(f"[demo_runner] fetched {len(names)} demo image set(s).")
+        return 0
+    if args.name is None:
+        sys.exit("demo_runner: fetch requires a demo id/name or --all")
     script = DEMO_DIR / args.name / "fetch.sh"
     if not script.exists():
         sys.exit(f"demo_runner: '{args.name}' has no fetch.sh (in-tree guests build via cmake)")
@@ -1045,7 +1058,9 @@ def main() -> int:
     demo_arg = dict(metavar="id|name", type=resolve_demo,
                     help="demo ID from `list` (e.g. 2) or directory name (e.g. 02_timer)")
     p_fetch = sub.add_parser("fetch", help="populate the external image cache for a demo")
-    p_fetch.add_argument("name", **demo_arg)
+    p_fetch.add_argument("name", nargs="?", **demo_arg)
+    p_fetch.add_argument("--all", action="store_true",
+                         help="fetch every enabled demo that has a fetch.sh")
     p_fetch.set_defaults(func=cmd_fetch)
     p_run = sub.add_parser("run", help="launch a demo interactively")
     p_run.add_argument("name", **demo_arg)

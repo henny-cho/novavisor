@@ -18,8 +18,8 @@ WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOLCHAIN_DIR="${WORK_DIR}/.toolchain"
 
 # Exports TOOLCHAIN_URL / TOOLCHAIN_TAR / TOOLCHAIN_EXTRACT_NAME used below.
-# shellcheck source=versions.sh disable=SC1091
-source "${WORK_DIR}/scripts/versions.sh"
+# shellcheck source=lib/versions.sh disable=SC1091
+source "${WORK_DIR}/scripts/lib/versions.sh"
 EXTRACT_DIR="${TOOLCHAIN_DIR}/${TOOLCHAIN_EXTRACT_NAME}"
 
 CI_MODE=0

@@ -35,7 +35,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y cmake ninja-build
-          source scripts/versions.sh
+          source scripts/lib/versions.sh
           pipx install "clang-format==${CLANG_FORMAT_VERSION}"
 
       - name: Check formatting
@@ -74,7 +74,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .toolchain
-          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/versions.sh') }}
+          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/lib/versions.sh') }}
 
       - name: Cache external guest images
         # Built once per fetch recipe (pinned tag / overlay); a hit lets

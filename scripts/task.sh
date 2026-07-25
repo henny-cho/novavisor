@@ -10,8 +10,8 @@ WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_ROOT="${WORK_DIR}/build"
 
 # Pinned tool versions (CLANG_FORMAT_VERSION, toolchain).
-# shellcheck source=versions.sh disable=SC1091
-source "${WORK_DIR}/scripts/versions.sh"
+# shellcheck source=lib/versions.sh disable=SC1091
+source "${WORK_DIR}/scripts/lib/versions.sh"
 
 # Resolve a CMake preset's binaryDir. Presets use ${sourceDir}/build/<name>,
 # so this is a simple mapping — kept as a function so callers never hardcode
@@ -42,6 +42,7 @@ print_usage() {
     echo "  ci          Run the full CI pipeline (format check + build + lint + test + demo)"
     echo "  test        Build and run host GTest suite (x86_64, no toolchain)"
     echo "  demo        Manage demo guests (list | build | fetch | run | verify | verify-repeat | verify-all | debug | qemu-args)"
+    echo "  firmware    N1SDP firmware tasks (smoke | fip <novavisor.bin> [output-dir])"
     echo ""
     echo "Options:"
     echo "  --release   Build in Release mode (default: Debug)"
@@ -118,81 +119,38 @@ _parse_build_type() {
     echo "${type}"
 }
 
-# Parse a `--config <file>` option from "$@" and echo the file (empty
-# when absent). Callers: local CONFIG; CONFIG=$(_parse_config "$@")
-_parse_config() {
-    local expect=0
-    for arg in "$@"; do
-        if [[ ${expect} -eq 1 ]]; then
-            echo "${arg}"
+# Extract the value of `--<flag> <value>` from "$@" (empty when absent).
+# Callers: local CONFIG; CONFIG=$(_opt --config "$@")
+_opt() {
+    local flag="$1"
+    shift
+    while (($#)); do
+        if [[ "$1" == "${flag}" ]]; then
+            if [[ $# -lt 2 ]]; then
+                echo "Error: ${flag} requires an argument" >&2
+                exit 2
+            fi
+            echo "$2"
             return 0
         fi
-        [[ "${arg}" == "--config" ]] && expect=1
+        shift
     done
-    if [[ ${expect} -eq 1 ]]; then
-        echo "Error: --config requires a file argument" >&2
-        exit 2
-    fi
 }
 
-_parse_payloads() {
-    local expect=0
-    for arg in "$@"; do
-        if [[ ${expect} -eq 1 ]]; then
-            echo "${arg}"
-            return 0
-        fi
-        [[ "${arg}" == "--payloads" ]] && expect=1
-    done
-    if [[ ${expect} -eq 1 ]]; then
-        echo "Error: --payloads requires a file argument" >&2
-        exit 2
-    fi
-}
-
-_parse_preset() {
-    local expect=0
-    for arg in "$@"; do
-        if [[ ${expect} -eq 1 ]]; then
-            echo "${arg}"
-            return 0
-        fi
-        [[ "${arg}" == "--preset" ]] && expect=1
-    done
-    if [[ ${expect} -eq 1 ]]; then
-        echo "Error: --preset requires a name" >&2
-        exit 2
-    fi
-}
-
-# Point the build tree at a guest config (default: configs/default.yml).
-# Copies only on content change, so Ninja regenerates the guest DTBs
-# exactly when the config differs — no CMake reconfigure involved (the
-# DTB pipeline DEPENDS on active_config.yml). Omitting --config always
-# restores the default, so a config never lingers across builds.
-_sync_config() {
-    local preset_dir="$1"
-    local config="${2:-${WORK_DIR}/configs/default.yml}"
-    if [ ! -f "${config}" ]; then
-        echo "Error: guest config not found: ${config}" >&2
+# Point the build tree at an input file (falls back to the default when
+# unset). Copies only on content change, so Ninja regenerates the guest
+# DTBs exactly when the input differs — no CMake reconfigure involved (the
+# DTB pipeline DEPENDS on the active_* file). Omitting the option always
+# restores the default, so a choice never lingers across builds.
+_sync_active() {
+    local preset_dir="$1" src="${2:-$3}" dest_name="$4"
+    if [ ! -f "${src}" ]; then
+        echo "Error: ${dest_name} source not found: ${src}" >&2
         exit 1
     fi
     mkdir -p "${preset_dir}"
-    if ! cmp -s "${config}" "${preset_dir}/active_config.yml"; then
-        cp "${config}" "${preset_dir}/active_config.yml"
-    fi
-}
-
-_sync_payloads() {
-    local preset_dir="$1"
-    local payloads="${2:-${WORK_DIR}/configs/payloads.yml}"
-    if [ ! -f "${payloads}" ]; then
-        echo "Error: payload manifest not found: ${payloads}" >&2
-        exit 1
-    fi
-    mkdir -p "${preset_dir}"
-    if ! cmp -s "${payloads}" "${preset_dir}/active_payloads.yml"; then
-        cp "${payloads}" "${preset_dir}/active_payloads.yml"
+    if ! cmp -s "${src}" "${preset_dir}/${dest_name}"; then
+        cp "${src}" "${preset_dir}/${dest_name}"
     fi
 }
 
@@ -218,15 +176,17 @@ cmd_build() {
     local PRESET="aarch64-debug"
     [[ "${BUILD_TYPE}" == "Release" ]] && PRESET="aarch64-release"
     local SELECTED_PRESET
-    SELECTED_PRESET=$(_parse_preset "$@")
+    SELECTED_PRESET=$(_opt --preset "$@")
     [[ -n "${SELECTED_PRESET}" ]] && PRESET="${SELECTED_PRESET}"
 
     local CONFIG
-    CONFIG=$(_parse_config "$@")
-    _sync_config "$(_preset_dir "${PRESET}")" "${CONFIG}"
+    CONFIG=$(_opt --config "$@")
+    _sync_active "$(_preset_dir "${PRESET}")" "${CONFIG}" \
+        "${WORK_DIR}/configs/default.yml" active_config.yml
     local PAYLOADS
-    PAYLOADS=$(_parse_payloads "$@")
-    _sync_payloads "$(_preset_dir "${PRESET}")" "${PAYLOADS}"
+    PAYLOADS=$(_opt --payloads "$@")
+    _sync_active "$(_preset_dir "${PRESET}")" "${PAYLOADS}" \
+        "${WORK_DIR}/configs/payloads.yml" active_payloads.yml
 
     # Configure only on the first run; afterwards Ninja re-runs CMake by
     # itself whenever a CMakeLists.txt changes, so repeat builds stay fast.
@@ -245,6 +205,17 @@ cmd_clean() {
     echo "Clean complete."
 }
 
+# The clang-format pin lives in lib/versions.sh but pre-commit re-pins it
+# in .pre-commit-config.yaml; a silent mismatch would let hooks and CI
+# format with different majors.
+_check_pins() {
+    if ! grep -q "rev: v${CLANG_FORMAT_VERSION}$" "${WORK_DIR}/.pre-commit-config.yaml"; then
+        echo "Error: .pre-commit-config.yaml clang-format rev != v${CLANG_FORMAT_VERSION}" >&2
+        echo "Update the mirrors-clang-format rev to match lib/versions.sh." >&2
+        exit 1
+    fi
+}
+
 cmd_format() {
     local CHECK_ONLY=0
     for arg in "$@"; do
@@ -255,6 +226,7 @@ cmd_format() {
     fmt="$(_clang_format)"
 
     if [[ ${CHECK_ONLY} -eq 1 ]]; then
+        _check_pins
         echo "==> Checking clang-format compliance (${fmt})..."
         local violations
         violations=$(_find_sources | xargs -0 -r "${fmt}" --dry-run --Werror 2>&1 || true)
@@ -299,18 +271,9 @@ cmd_lint() {
     mapfile -t EXTRA_ARGS < "${BUILD_DIR}/clang_tidy_extra_args.txt"
     local TIDY_SOURCE_RE="^${WORK_DIR}/src/(components|hal|nova|projects)/.*\\.cpp\$"
     local TIDY_COUNT
-    TIDY_COUNT=$(python3 - "${BUILD_DIR}/compile_commands.json" "${TIDY_SOURCE_RE}" <<'PY'
-import json
-import pathlib
-import re
-import sys
-
-database = json.loads(pathlib.Path(sys.argv[1]).read_text())
-source_pattern = re.compile(sys.argv[2])
-files = {entry["file"] for entry in database if source_pattern.match(entry["file"])}
-print(len(files))
-PY
-    )
+    TIDY_COUNT=$(python3 -c 'import json, re, sys
+print(len({e["file"] for e in json.load(open(sys.argv[1])) if re.match(sys.argv[2], e["file"])}))' \
+        "${BUILD_DIR}/compile_commands.json" "${TIDY_SOURCE_RE}")
     if [ "${TIDY_COUNT}" -eq 0 ]; then
         echo "Error: clang-tidy selected 0 source files" >&2
         exit 1
@@ -370,7 +333,7 @@ _resolve_elf() {
     local PRESET="aarch64-debug"
     [[ "${BUILD_TYPE}" == "Release" ]] && PRESET="aarch64-release"
     local SELECTED_PRESET
-    SELECTED_PRESET=$(_parse_preset "$@")
+    SELECTED_PRESET=$(_opt --preset "$@")
     [[ -n "${SELECTED_PRESET}" ]] && PRESET="${SELECTED_PRESET}"
 
     local ELF
@@ -427,6 +390,38 @@ cmd_demo() {
     esac
 }
 
+cmd_firmware() {
+    local sub="${1:-}"
+    shift || true
+    case "${sub}" in
+        smoke)
+            # N1SDP payload-profile smoke: package demo 01 as the BL33
+            # payload manifest and build the n1sdp release profile with it.
+            # Mirrors the remote CI step so local ci == remote ci.
+            cmd_demo build
+            python3 "${WORK_DIR}/tools/payload_manifest.py" \
+                --binary "${BUILD_ROOT}/demo/01_hello/hello.bin" \
+                --output "${BUILD_ROOT}/n1sdp-payloads.yml" \
+                --name platform-smoke \
+                --load-pa 0x80000000 \
+                --entry 0x50000000 \
+                --memory-size 0x00100000
+            cmd_build --preset aarch64-n1sdp-release \
+                --config "${WORK_DIR}/configs/platform-smoke.yml" \
+                --payloads "${BUILD_ROOT}/n1sdp-payloads.yml"
+            ;;
+        fip)
+            # Full TF-A FIP package for the board (pinned via lib/versions.sh).
+            "${WORK_DIR}/scripts/build_n1sdp_firmware.sh" "$@"
+            ;;
+        *)
+            echo "Error: unknown firmware subcommand '${sub}'" >&2
+            echo "Usage: $0 firmware {smoke | fip <novavisor.bin> [output-dir]}" >&2
+            exit 2
+            ;;
+    esac
+}
+
 cmd_ci() {
     echo "==> Running Local CI Pipeline..."
     # Format check runs in parallel with release build (pure-CPU vs I/O).
@@ -447,6 +442,11 @@ cmd_ci() {
         echo "==> CI aborted: build failed" >&2
         exit 1
     fi
+
+    # Profile builds mirror the remote CI lanes so a local pass predicts a
+    # remote pass (minimal platform + N1SDP payload smoke).
+    cmd_build --preset aarch64-minimal-release
+    cmd_firmware smoke
 
     cmd_lint
     cmd_test
@@ -480,6 +480,7 @@ case "${SUBCOMMAND}" in
     objdump)   cmd_objdump "$@" ;;
     test)      cmd_test    "$@" ;;
     demo)      cmd_demo    "$@" ;;
+    firmware)  cmd_firmware "$@" ;;
     ci)        cmd_ci      "$@" ;;
     -h|--help) print_usage ;;
     *)
