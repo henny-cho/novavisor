@@ -174,6 +174,7 @@ else()
     nova_add_host_test(pci_test)           # requester IDs and ECAM layout
     nova_add_host_test(payload_test)       # embedded image metadata and checksum
     nova_add_host_test(guest_descriptor_test) # guest window bounds check (HVC_PUTS guard)
+    nova_add_host_test(el2_stage1_test)       # EL2 Stage-1 identity map + W^X
 
     # Component tests (src/components/<name>/test/).
     nova_add_component_test(core_mmu stage2_descriptor_test) # Stage 2 descriptor encoding

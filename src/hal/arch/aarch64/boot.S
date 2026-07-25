@@ -11,6 +11,7 @@
 //                          all shared state were initialized by the
 //                          primary before CPU_ON was issued.
 
+#include "hal/arch/aarch64/stage1_regs.h"
 #include "hal/board/active/board_layout.h"
 #include "nova/arch/mpidr.h"
 
@@ -39,6 +40,11 @@ _start:
     // kCpuAffinity[0] by definition. TPIDR_EL2 is otherwise unused.
     msr tpidr_el2, xzr
 
+    // Discard whatever firmware left in the cache hierarchy before any
+    // RAM state EL2 relies on is written with the MMU still off — a
+    // stale dirty line evicting later would silently clobber it.
+    bl  nova_dcache_inv_all
+
     // Set up stack pointer for EL2
     ldr x0, =__stack_top
     mov sp, x0
@@ -60,6 +66,11 @@ _start:
     str xzr, [x0], #8
     b 1b
 2:
+    // Build the EL2 Stage-1 identity map and enable MMU + caches.
+    // Must follow BSS zeroing (the tables live there) and precede
+    // everything else: from here on EL2 runs cacheable and W^X.
+    bl nova_el2_mmu_init
+
     // Branch to C++ main entry
     bl novavisor_main
 
@@ -72,14 +83,30 @@ _start:
 
 nova_secondary_entry:
     // x0 = core index. Publish it for cpu::id() before anything else
-    // runs on this core, then carve the core's stack out of the shared
-    // region: SP = __stack_top - index * stack size.
+    // runs on this core.
     msr tpidr_el2, x0
+    mov x9, x0
+
+    // Enable this core's Stage-1 regime before touching the stack or
+    // any shared data: reading a runtime-set global here would be a
+    // non-cacheable access racing the primary's cached writes, so the
+    // root symbol and register values are link/compile-time constants.
+    // PSCI hands the core over with its local caches invalidated; the
+    // table walk itself is cacheable and therefore coherent.
+    ldr x0, =nova_el2_l1_root
+    ldr x1, =NOVA_EL2_TCR
+    ldr x2, =NOVA_EL2_MAIR
+    ldr x3, =NOVA_EL2_SCTLR
+    bl  nova_el2_stage1_enable
+
+    // Carve the core's stack out of the shared region:
+    // SP = __stack_top - index * stack size.
     ldr x1, =__stack_top
     mov x2, #NOVA_BOARD_EL2_STACK_SIZE
-    mul x2, x2, x0
+    mul x2, x2, x9
     sub x1, x1, x2
     mov sp, x1
+    mov x0, x9
 
     ldr x1, =_vector_table
     msr vbar_el2, x1

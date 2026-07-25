@@ -15,16 +15,23 @@ MEMORY
 
 SECTIONS
 {
+    /* The EL2 Stage-1 map (el2_mmu.cpp) applies W^X per section range:
+     * .text RX, .rodata RO, everything after XN. The range boundaries
+     * must therefore be page-aligned. */
     .text : {
+         __text_start = .;
          KEEP(*(.text.boot))   /* boot.S: _start entry point, must be first */
          . = ALIGN(2048);      /* VBAR_EL2 requires 2^11-byte alignment */
          KEEP(*(.text.vec))    /* vec.S: EL2 exception vector table */
          *(.text*)
+         . = ALIGN(4096);
+         __text_end = .;
     } > RAM
 
     .rodata : {
-        . = ALIGN(8);
         *(.rodata*)
+        . = ALIGN(4096);
+        __rodata_end = .;
     } > RAM
 
     .data : {

@@ -6,6 +6,7 @@ add_library(nova_arch OBJECT
     mmu.S
     vcpu_enter.S
     fp.S
+    el2_mmu.cpp
     mem.cpp
 )
 target_include_directories(nova_arch PUBLIC
