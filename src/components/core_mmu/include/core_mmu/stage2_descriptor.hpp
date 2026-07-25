@@ -48,10 +48,10 @@ inline constexpr std::uint64_t kTypePage    = 0b11ULL; // valid only at L3
 
 // --- Lower attributes (bits 11:2) --- Stage 2 specific ---
 
-inline constexpr std::uint64_t kMemAttrShift        = 2;
-inline constexpr std::uint64_t kMemAttrMask         = 0xFULL << kMemAttrShift;
-inline constexpr std::uint64_t kMemAttrNormalWB     = 0xFULL; // Outer+Inner WB cacheable RA WA
-inline constexpr std::uint64_t kMemAttrDevice_nGnRE = 0x1ULL;
+inline constexpr std::uint64_t kMemAttrShift       = 2;
+inline constexpr std::uint64_t kMemAttrMask        = 0xFULL << kMemAttrShift;
+inline constexpr std::uint64_t kMemAttrNormalWB    = 0xFULL; // Outer+Inner WB cacheable RA WA
+inline constexpr std::uint64_t kMemAttrDeviceNGnRE = 0x1ULL;
 
 inline constexpr std::uint64_t kS2apShift     = 6;
 inline constexpr std::uint64_t kS2apMask      = 0b11ULL << kS2apShift;
@@ -89,9 +89,8 @@ inline constexpr std::uint64_t kAttrNormalRwData = kAttrNormalRwx | kXnBit;
 
 // Device-nGnRE, RW, non-executable. The attribute for MMIO regions
 // exposed to guests, emulated or passed through.
-inline constexpr std::uint64_t kAttrDeviceRw = (kMemAttrDevice_nGnRE << kMemAttrShift) |
-                                               (kS2apReadWrite << kS2apShift) | (kShOuterShareable << kShShift) |
-                                               kAfBit | kXnBit;
+inline constexpr std::uint64_t kAttrDeviceRw = (kMemAttrDeviceNGnRE << kMemAttrShift) | (kS2apReadWrite << kS2apShift) |
+                                               (kShOuterShareable << kShShift) | kAfBit | kXnBit;
 
 } // namespace desc
 

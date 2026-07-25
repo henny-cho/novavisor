@@ -243,7 +243,7 @@ TEST_F(IdentityMapFixture, TwoDisjointRangesShareTables) {
   EXPECT_EQ(descriptor_type(l2[128]), desc::kTypeTable); // first range: pages
   EXPECT_EQ(descriptor_type(l2[132]), desc::kTypeBlock); // second range: block
   EXPECT_TRUE(execute_never(l2[132]));                   // device attrs preserved
-  EXPECT_EQ(mem_attr(l2[132]), desc::kMemAttrDevice_nGnRE);
+  EXPECT_EQ(mem_attr(l2[132]), desc::kMemAttrDeviceNGnRE);
   // First range untouched by the second call.
   EXPECT_EQ(output_addr(pool[0][0]), kIpaBase);
 }
@@ -257,7 +257,7 @@ TEST_F(IdentityMapFixture, MapsDeviceBarInASeparateL1Region) {
   const Table& device_l2  = l2_pool[1];
   Table* const page_table = detail::find_l3(tables, output_addr(device_l2[l2_index(0x1000'0000ULL)]));
   ASSERT_NE(page_table, nullptr);
-  EXPECT_EQ(mem_attr((*page_table)[0]), desc::kMemAttrDevice_nGnRE);
+  EXPECT_EQ(mem_attr((*page_table)[0]), desc::kMemAttrDeviceNGnRE);
   EXPECT_TRUE(execute_never((*page_table)[0]));
 }
 

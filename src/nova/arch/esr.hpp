@@ -22,28 +22,28 @@ namespace nova::esr {
 // Exception Class (EC) values — ESR_EL2 bits 31:26.
 // Only the classes relevant to a Type-1 AArch64 hypervisor are listed.
 enum class ExceptionClass : std::uint8_t {
-  UNKNOWN            = 0x00, // Unknown reason
-  WFx                = 0x01, // WFI/WFE instruction trapped
-  FP_SIMD            = 0x07, // FP/SIMD access trapped (CPTR_EL2.TFP)
-  SVC_AA64           = 0x15, // SVC from AArch64 EL1
-  HVC_AA64           = 0x16, // HVC from AArch64 EL1  ← primary gate for guests
-  SMC_AA64           = 0x17, // SMC from AArch64 EL1
-  MSR_MRS            = 0x18, // MSR/MRS/System instruction trapped
-  SVE                = 0x19, // SVE instruction trapped
-  INST_ABORT_LOWER   = 0x20, // Instruction Abort from lower EL (EL1/EL0)
-  INST_ABORT_CURRENT = 0x21, // Instruction Abort from current EL (EL2)
-  PC_ALIGN           = 0x22, // PC Alignment Fault
-  DATA_ABORT_LOWER   = 0x24, // Data Abort from lower EL  ← MMIO trap path
-  DATA_ABORT_CURRENT = 0x25, // Data Abort from current EL
-  SP_ALIGN           = 0x26, // SP Alignment Fault
-  SERROR             = 0x2F, // SError Interrupt
-  BRKPT_LOWER        = 0x30, // Breakpoint from lower EL
-  BRKPT_CURRENT      = 0x31, // Breakpoint from current EL
-  SOFTSTEP_LOWER     = 0x32, // Software Step from lower EL
-  SOFTSTEP_CURRENT   = 0x33, // Software Step from current EL
-  WATCHPT_LOWER      = 0x34, // Watchpoint from lower EL
-  WATCHPT_CURRENT    = 0x35, // Watchpoint from current EL
-  BRK                = 0x3C, // BRK instruction
+  kUnknown          = 0x00, // Unknown reason
+  kWfx              = 0x01, // WFI/WFE instruction trapped
+  kFpSimd           = 0x07, // FP/SIMD access trapped (CPTR_EL2.TFP)
+  kSvcAa64          = 0x15, // SVC from AArch64 EL1
+  kHvcAa64          = 0x16, // HVC from AArch64 EL1  ← primary gate for guests
+  kSmcAa64          = 0x17, // SMC from AArch64 EL1
+  kMsrMrs           = 0x18, // MSR/MRS/System instruction trapped
+  kSve              = 0x19, // SVE instruction trapped
+  kInstAbortLower   = 0x20, // Instruction Abort from lower EL (EL1/EL0)
+  kInstAbortCurrent = 0x21, // Instruction Abort from current EL (EL2)
+  kPcAlign          = 0x22, // PC Alignment Fault
+  kDataAbortLower   = 0x24, // Data Abort from lower EL  ← MMIO trap path
+  kDataAbortCurrent = 0x25, // Data Abort from current EL
+  kSpAlign          = 0x26, // SP Alignment Fault
+  kSerror           = 0x2F, // SError Interrupt
+  kBrkptLower       = 0x30, // Breakpoint from lower EL
+  kBrkptCurrent     = 0x31, // Breakpoint from current EL
+  kSoftstepLower    = 0x32, // Software Step from lower EL
+  kSoftstepCurrent  = 0x33, // Software Step from current EL
+  kWatchptLower     = 0x34, // Watchpoint from lower EL
+  kWatchptCurrent   = 0x35, // Watchpoint from current EL
+  kBrk              = 0x3C, // BRK instruction
 };
 
 // A synchronous exception taken through the lower-EL vector belongs to
@@ -52,12 +52,12 @@ enum class ExceptionClass : std::uint8_t {
 // this policy is consulted.
 [[nodiscard]] constexpr auto is_lower_sync_guest_fault(ExceptionClass ec) noexcept -> bool {
   switch (ec) {
-  case ExceptionClass::INST_ABORT_CURRENT:
-  case ExceptionClass::DATA_ABORT_CURRENT:
-  case ExceptionClass::BRKPT_CURRENT:
-  case ExceptionClass::SOFTSTEP_CURRENT:
-  case ExceptionClass::WATCHPT_CURRENT:
-  case ExceptionClass::SERROR:
+  case ExceptionClass::kInstAbortCurrent:
+  case ExceptionClass::kDataAbortCurrent:
+  case ExceptionClass::kBrkptCurrent:
+  case ExceptionClass::kSoftstepCurrent:
+  case ExceptionClass::kWatchptCurrent:
+  case ExceptionClass::kSerror:
     return false;
   default:
     return true;

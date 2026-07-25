@@ -24,17 +24,17 @@ namespace {
 
 // Function IDs from the ABI header shared with the guest-side stubs.
 enum : std::uint16_t {
-  HVC_PUTS = NOVA_HVC_FN_PUTS,
-  HVC_PUTC = NOVA_HVC_FN_PUTC,
-  HVC_EXIT = NOVA_HVC_FN_EXIT,
+  kHvcPuts = NOVA_HVC_FN_PUTS,
+  kHvcPutc = NOVA_HVC_FN_PUTC,
+  kHvcExit = NOVA_HVC_FN_EXIT,
 };
 
-// Upper bound on bytes we will copy out of guest memory for HVC_PUTS.
+// Upper bound on bytes we will copy out of guest memory for kHvcPuts.
 // Guards against a runaway guest request; real apps should fit well
 // under this.
 constexpr std::size_t kMaxPutsLen = 1024;
 
-// HVC_PUTS: x1 = guest IPA of byte buffer, x2 = length.
+// kHvcPuts: x1 = guest IPA of byte buffer, x2 = length.
 // The IPA is translated to its backing PA through the calling guest's
 // descriptor (EL2 runs with a flat physical view). Phase 8+ MMIO-trap
 // guests will need a richer IPA-to-EL2-VA translation helper.
@@ -61,7 +61,7 @@ void handle_putc(TrapContext* ctx) noexcept {
   console_mux::guest_putc(vcpu::current_index(), static_cast<char>(ctx->x[1] & 0xFFU));
 }
 
-// HVC_EXIT: x1 = exit code. Emits the manifest-expected "demo_exit
+// kHvcExit: x1 = exit code. Emits the manifest-expected "demo_exit
 // code=N" line, then retires the whole VM through its owner lifecycle.
 // The line stays untagged (harness contract); a buffered partial line
 // is flushed first so nothing the guest printed is lost.
@@ -80,15 +80,15 @@ void demo_hvc_component::handle_hvc(HvcCall* call) noexcept {
     return;
   }
   switch (call->func_id) {
-  case HVC_PUTS:
+  case kHvcPuts:
     call->handled = true;
     handle_puts(call->ctx);
     return;
-  case HVC_PUTC:
+  case kHvcPutc:
     call->handled = true;
     handle_putc(call->ctx);
     return;
-  case HVC_EXIT:
+  case kHvcExit:
     call->handled = true;
     handle_exit(call->ctx);
     return;

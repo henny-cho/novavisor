@@ -15,13 +15,13 @@
 namespace nova {
 namespace boot_msg_detail {
 
-constexpr std::string_view BANNER = "NovaVisor booted\n";
+constexpr std::string_view kBanner = "NovaVisor booted\n";
 
 } // namespace boot_msg_detail
 
 struct boot_msg_component {
   constexpr static auto PRINT_BOOT_MSG =
-      flow::action<"boot_msg">([]() noexcept { console::write(boot_msg_detail::BANNER); });
+      flow::action<"boot_msg">([]() noexcept { console::write(boot_msg_detail::kBanner); });
 
   constexpr static auto config = cib::config(cib::extend<cib::RuntimeStart>(*PRINT_BOOT_MSG));
 };

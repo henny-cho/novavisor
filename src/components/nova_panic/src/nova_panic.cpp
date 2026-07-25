@@ -10,9 +10,10 @@
 namespace stdx {
 // Specialize the panic_handler variable template for the default (empty)
 // template argument list. This replaces the no-op default_panic_handler
-// with our UART-based halt implementation.
+// with our UART-based halt implementation. The name is stdx's, so the
+// project's g_ prefix for globals cannot apply.
 template <>
-inline auto panic_handler<> = nova::NovaPanicHandler{};
+inline auto panic_handler<> = nova::NovaPanicHandler{}; // NOLINT(readability-identifier-naming)
 } // namespace stdx
 
 namespace std {

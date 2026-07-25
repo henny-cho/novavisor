@@ -34,7 +34,7 @@ void dispatch_hvc(TrapContext* ctx) noexcept {
   // Shared with the SMC conduit, which the router has already stepped
   // over; an HVC needs no advance at all. Handlers that halt (HVC_EXIT)
   // never return through this path anyway.
-  static_assert(trap::elr_policy(esr::ExceptionClass::HVC_AA64) == trap::ElrAdvance::kNone);
+  static_assert(trap::elr_policy(esr::ExceptionClass::kHvcAa64) == trap::ElrAdvance::kNone);
   HvcCall call{.ctx = ctx, .func_id = static_cast<std::uint32_t>(ctx->x[0]), .handled = false};
   cib::service<HvcService>(&call);
 
@@ -47,7 +47,7 @@ void dispatch_hvc(TrapContext* ctx) noexcept {
 }
 
 void dispatch_wfx(TrapContext* ctx) noexcept {
-  static_assert(trap::elr_policy(esr::ExceptionClass::WFx) == trap::ElrAdvance::kBeforeDispatch);
+  static_assert(trap::elr_policy(esr::ExceptionClass::kWfx) == trap::ElrAdvance::kBeforeDispatch);
   WfxCall call{.ctx = ctx, .is_wfe = (ctx->esr & esr::kWfxTiWfe) != 0, .handled = false};
   cib::service<WfxService>(&call);
 
@@ -57,7 +57,7 @@ void dispatch_wfx(TrapContext* ctx) noexcept {
 }
 
 void dispatch_fp_simd(TrapContext* ctx) noexcept {
-  static_assert(trap::elr_policy(esr::ExceptionClass::FP_SIMD) == trap::ElrAdvance::kNever);
+  static_assert(trap::elr_policy(esr::ExceptionClass::kFpSimd) == trap::ElrAdvance::kNever);
   FpSimdCall call{.ctx = ctx, .handled = false};
   cib::service<FpSimdService>(&call);
 
@@ -82,7 +82,7 @@ void dispatch_sysreg(TrapContext* ctx) noexcept {
 
   // ELR points AT the trapped MSR/MRS. Advance only after successful
   // emulation so fault diagnostics retain the offending instruction.
-  static_assert(trap::elr_policy(esr::ExceptionClass::MSR_MRS) == trap::ElrAdvance::kOnClaim);
+  static_assert(trap::elr_policy(esr::ExceptionClass::kMsrMrs) == trap::ElrAdvance::kOnClaim);
   ctx->elr += 4;
 }
 
@@ -101,26 +101,26 @@ void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
   }
 
   switch (ec) {
-  case esr::ExceptionClass::HVC_AA64:
-  case esr::ExceptionClass::SMC_AA64:
+  case esr::ExceptionClass::kHvcAa64:
+  case esr::ExceptionClass::kSmcAa64:
     // Both SMCCC conduits fan out to the same subscribers (SMC is the
     // second PSCI conduit via HCR_EL2.TSC; no EL3 on this board).
     dispatch_hvc(ctx);
     return;
 
-  case esr::ExceptionClass::WFx:
+  case esr::ExceptionClass::kWfx:
     dispatch_wfx(ctx);
     return;
 
-  case esr::ExceptionClass::FP_SIMD:
+  case esr::ExceptionClass::kFpSimd:
     dispatch_fp_simd(ctx);
     return;
 
-  case esr::ExceptionClass::MSR_MRS:
+  case esr::ExceptionClass::kMsrMrs:
     dispatch_sysreg(ctx);
     return;
 
-  case esr::ExceptionClass::DATA_ABORT_LOWER:
+  case esr::ExceptionClass::kDataAbortLower:
     trap::dispatch_data_abort(ctx);
     return;
 
