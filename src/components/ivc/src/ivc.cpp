@@ -12,6 +12,9 @@
 namespace nova {
 
 void ivc_component::handle_hvc(HvcCall* call) noexcept {
+  if (call->handled) {
+    return;
+  }
   if (call->func_id != NOVA_HVC_FN_IVC_DOORBELL) {
     return; // not ours — leave unclaimed for other subscribers
   }

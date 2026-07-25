@@ -40,6 +40,9 @@ void log_power_event(const char* what) noexcept {
 } // namespace
 
 void psci_component::handle_hvc(HvcCall* call) noexcept {
+  if (call->handled) {
+    return;
+  }
   const psci::Verdict v = psci::dispatch(call->func_id, call->ctx->x[1]);
   if (!v.claimed) {
     return; // not ours — leave unclaimed for other subscribers

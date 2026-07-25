@@ -40,6 +40,17 @@ inline void set_fp_trap(bool trap) noexcept {
   __asm__ volatile("msr cptr_el2, %0\n\tisb" ::"r"(v));
 }
 
+// Same, without the trailing ISB — for the guest switch-in path only,
+// where the following ERET is context-synchronizing. Never use this
+// when EL2 code touches FP right afterwards (bank swaps need the
+// synchronous set_fp_trap).
+inline void set_fp_trap_before_eret(bool trap) noexcept {
+  std::uint64_t v = 0;
+  __asm__ volatile("mrs %0, cptr_el2" : "=r"(v));
+  v = trap ? (v | kCptrTfp) : (v & ~kCptrTfp);
+  __asm__ volatile("msr cptr_el2, %0" ::"r"(v));
+}
+
 } // namespace nova::arch
 
 // hal/arch/aarch64/fp.S — the only code in the EL2 image allowed to

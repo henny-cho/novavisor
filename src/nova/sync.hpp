@@ -20,7 +20,9 @@ public:
   void lock() noexcept {
     const std::uint32_t ticket = next_.fetch_add(1, std::memory_order_relaxed);
     while (serving_.load(std::memory_order_acquire) != ticket) {
-      // spin — FIFO turn is coming
+#if defined(__aarch64__)
+      __asm__ volatile("yield"); // spin — FIFO turn is coming
+#endif
     }
   }
 
@@ -30,8 +32,10 @@ public:
   }
 
 private:
-  std::atomic<std::uint32_t> next_{0};
-  std::atomic<std::uint32_t> serving_{0};
+  // Separate cache lines: every waiter polls serving_, so a ticket
+  // grab (fetch_add on next_) must not invalidate the polled line.
+  alignas(64) std::atomic<std::uint32_t> next_{0};
+  alignas(64) std::atomic<std::uint32_t> serving_{0};
 };
 
 // Scoped ownership for the common lock-around-a-block shape.

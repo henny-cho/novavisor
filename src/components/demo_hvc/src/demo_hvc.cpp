@@ -76,6 +76,9 @@ void handle_exit(TrapContext* ctx) noexcept {
 } // namespace
 
 void demo_hvc_component::handle_hvc(HvcCall* call) noexcept {
+  if (call->handled) {
+    return;
+  }
   switch (call->func_id) {
   case HVC_PUTS:
     call->handled = true;

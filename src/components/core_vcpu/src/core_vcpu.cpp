@@ -73,11 +73,13 @@ inline constexpr std::uint64_t kSliceMs = 10;
 // after every local guest retired.
 inline constexpr std::size_t kNoVcpu = ~std::size_t{0};
 
-// Per-core scheduler state: the resident VCPU and the ownership of
-// this core's FP register file.
+// Per-core scheduler state: the resident VCPU, the ownership of this
+// core's FP register file, and a mirror of the last CPTR_EL2.TFP value
+// written so the switch path can skip the common no-change case.
 struct CpuSched {
   std::size_t   current = kNoVcpu;
   fp::Ownership fp;
+  bool          fp_trap = false; // meaningless until seed_fp_trap runs on this core
 };
 
 std::array<Vcpu, kMaxVcpus>          g_vcpus;
@@ -123,14 +125,37 @@ std::atomic<std::size_t> g_lifecycle_transitions{0};
   return g_sched[cpu::id()];
 }
 
+// Every FP-trap write funnels through these so the per-core mirror
+// stays truthful. seed writes unconditionally (boot and idle entry —
+// hardware may hold anything); the switch path skips a matching value
+// and lets the ERET synchronize the change.
+void seed_fp_trap(bool trap) noexcept {
+  arch::set_fp_trap(trap);
+  me().fp_trap = trap;
+}
+
+void switch_fp_trap(bool trap) noexcept {
+  CpuSched& cs = me();
+  if (cs.fp_trap != trap) {
+    arch::set_fp_trap_before_eret(trap);
+    cs.fp_trap = trap;
+  }
+}
+
+// Boot-time caches of guest_table() facts the scheduler consults on
+// every trap — the table is boot-immutable and the accessor is an
+// out-of-line call (no LTO).
+std::array<std::uint8_t, kMaxVcpus> g_affinity{};
+std::array<bool, kMaxVcpus>         g_slot_valid{};
+
 [[nodiscard]] auto affinity(std::size_t slot) noexcept -> std::size_t {
-  return guest_table()[vm_of(slot)].cpu[vcpu_of(slot)];
+  return g_affinity[slot];
 }
 
 // Slots past a VM's vcpu count exist in the arrays but are never
 // seeded, started, or picked — they stay kOff for the machine's life.
 [[nodiscard]] auto valid_slot(std::size_t slot) noexcept -> bool {
-  return slot < g_count && vcpu_of(slot) < guest_table()[vm_of(slot)].vcpus;
+  return slot < g_count && g_slot_valid[slot];
 }
 
 void publish_power(std::size_t slot, PowerState state) noexcept {
@@ -167,10 +192,10 @@ void advance_vm_generation(std::size_t vm) noexcept {
 // are masked as kOff, so the pure scheduler model needs no affinity
 // notion.
 auto states() noexcept -> std::array<sched::State, kMaxVcpus> {
-  const std::size_t                   self = cpu::id();
+  const auto                          self = static_cast<std::uint8_t>(cpu::id());
   std::array<sched::State, kMaxVcpus> s{};
   for (std::size_t i = 0; i < g_count; ++i) {
-    s[i] = affinity(i) == self ? g_vcpus[i].state : sched::State::kOff;
+    s[i] = g_affinity[i] == self ? g_vcpus[i].state : sched::State::kOff;
   }
   return s;
 }
@@ -265,8 +290,9 @@ void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
 
   // Lazy FP: the register file stays put — only the trap follows the
   // resident. A non-owner claims it through the EC 0x07 path on first
-  // use; the owner keeps running untrapped.
-  arch::set_fp_trap(cs.fp.trap_needed(next_idx));
+  // use; the owner keeps running untrapped. The common no-change case
+  // skips the CPTR write; the ERET synchronizes an actual change.
+  switch_fp_trap(cs.fp.trap_needed(next_idx));
 
   next.state = sched::State::kRunning;
   cs.current = next_idx;
@@ -372,6 +398,10 @@ void init() noexcept {
   const auto        guests = guest_table();
   const std::size_t vms    = guests.size() <= kMaxGuests ? guests.size() : kMaxGuests; // core_mmu panicked if over
   g_count                  = vms * kMaxVcpusPerVm;
+  for (std::size_t i = 0; i < g_count; ++i) {
+    g_affinity[i]   = guests[vm_of(i)].cpu[vcpu_of(i)];
+    g_slot_valid[i] = vcpu_of(i) < guests[vm_of(i)].vcpus;
+  }
   for (std::size_t i = 0; i < kMaxVcpus; ++i) {
     g_published_state[i].store(PowerState::kOff, std::memory_order_relaxed);
   }
@@ -391,7 +421,7 @@ void init() noexcept {
   g_alive.store(1, std::memory_order_relaxed); // the boot guest's vcpu 0
   g_slice_ticks = hyp_timer::freq() * kSliceMs / 1000U;
   console_mux::set_liveness_probe(&vcpu_on); // focus cycling skips off VMs
-  arch::set_fp_trap(true);                   // no owner yet — first FP use claims the file
+  seed_fp_trap(true);                        // no owner yet — first FP use claims the file
 }
 
 [[noreturn]] void enter_cpu() noexcept {
@@ -411,7 +441,7 @@ void init() noexcept {
       hyp_timer::write_cntvoff(cntvoff(vm_of(next)));
       arch::write_el1_bank(v.el1);
       vgic::cpu_restore(next);
-      arch::set_fp_trap(cs.fp.trap_needed(next));
+      seed_fp_trap(cs.fp.trap_needed(next)); // unconditional: a secondary's CPTR is untouched until here
       v.state    = sched::State::kRunning;
       cs.current = next;
       reschedule_slice();
@@ -690,7 +720,7 @@ void core_vcpu_component::handle_fp_simd(FpSimdCall* call) noexcept {
 
   // Make FP access legal first (ISB inside) — the bank moves below run
   // at EL2 and would self-trap otherwise.
-  arch::set_fp_trap(false);
+  vcpu::seed_fp_trap(false);
 
   const std::size_t cur  = vcpu::current_index();
   const std::size_t prev = vcpu::g_sched[cpu::id()].fp.claim(cur);

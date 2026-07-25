@@ -82,6 +82,9 @@ void on_expiry(TrapContext* ctx, std::uint64_t vm) noexcept {
 } // namespace
 
 void watchdog_component::handle_hvc(HvcCall* call) noexcept {
+  if (call->handled) {
+    return;
+  }
   if (call->func_id != NOVA_HVC_FN_HEARTBEAT) {
     return; // not ours — leave unclaimed for other subscribers
   }

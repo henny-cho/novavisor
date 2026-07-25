@@ -474,6 +474,9 @@ auto start_dma(dma::DeviceId device_id, std::size_t vm, std::uint64_t generation
 namespace nova {
 
 void dma_device_component::handle_irq(IrqCall* call) noexcept {
+  if (call->handled) {
+    return;
+  }
   const dma::DeviceInterrupt* interrupt = dma_device::interrupt_for_physical(call->intid);
   if (interrupt == nullptr) {
     return;

@@ -13,6 +13,10 @@
 //       x0 = VTTBR_EL2 value of the target guest
 //     VM switch on the trap path. No TLB maintenance: entries are
 //     VMID-tagged and the static tables never change after build.
+//     No ISB either: VTTBR affects only EL1&0 translation, which EL2
+//     code never uses, and the ERET back into the guest is itself
+//     context-synchronizing (same contract as VMPIDR/CNTVOFF on the
+//     switch path).
 //
 // Activation barrier ordering (ARM ARM D5.10.1 "TLB maintenance
 // requirements"):
@@ -52,6 +56,5 @@ nova_stage2_activate:
 
 nova_stage2_switch:
     msr     vttbr_el2, x0
-    isb
     ret
 .size nova_stage2_switch, . - nova_stage2_switch

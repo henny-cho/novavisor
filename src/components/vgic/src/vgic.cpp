@@ -451,6 +451,9 @@ void vgic_component::handle_sysreg(SysregCall* call) noexcept {
 }
 
 void vgic_component::handle_irq(IrqCall* call) noexcept {
+  if (call->handled) {
+    return;
+  }
   if (call->intid != gic_virt::kMaintenanceIntid) {
     return;
   }

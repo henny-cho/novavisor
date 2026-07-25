@@ -191,6 +191,9 @@ auto inject_runtime_fault(std::size_t vm, std::uint64_t generation) noexcept -> 
 namespace nova {
 
 void dma_probe_component::handle_hvc(HvcCall* call) noexcept {
+  if (call->handled) {
+    return;
+  }
   if (call->func_id != NOVA_HVC_FN_DMA_FAULT_INJECT) {
     return;
   }

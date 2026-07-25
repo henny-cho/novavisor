@@ -259,8 +259,9 @@ struct BeginLifecycleResult {
     return {};
   }
 
-  std::uint32_t live_mask = 0;
-  for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
+  const std::size_t vcpus     = guest_table()[vm].vcpus;
+  std::uint32_t     live_mask = 0;
+  for (std::size_t v = 0; v < vcpus; ++v) {
     if (vcpu::vcpu_on(slot_of(vm, v))) {
       live_mask |= std::uint32_t{1} << v;
     }
@@ -287,7 +288,7 @@ struct BeginLifecycleResult {
 
   // Validate every foreign owner before sending anything. Once one
   // quiesce command is visible, cancellation may stop only part of a VM.
-  for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
+  for (std::size_t v = 0; v < vcpus; ++v) {
     if ((live_mask & (std::uint32_t{1} << v)) == 0U) {
       continue;
     }
@@ -314,7 +315,7 @@ struct BeginLifecycleResult {
 
   arm_lifecycle_timeout(vm);
 
-  for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
+  for (std::size_t v = 0; v < vcpus; ++v) {
     if ((live_mask & (std::uint32_t{1} << v)) == 0U) {
       continue;
     }
@@ -331,7 +332,7 @@ struct BeginLifecycleResult {
   }
 
   bool schedule_required = false;
-  for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
+  for (std::size_t v = 0; v < vcpus; ++v) {
     if ((live_mask & (std::uint32_t{1} << v)) == 0U) {
       continue;
     }
@@ -390,7 +391,8 @@ void on_lifecycle_timeout(TrapContext* /*ctx*/, std::uint64_t arg) noexcept {
     console::write("\n");
 
     const std::uint32_t pending = tracker.pending_mask();
-    for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
+    const std::size_t   vcpus   = guest_table()[vm].vcpus;
+    for (std::size_t v = 0; v < vcpus; ++v) {
       if ((pending & (std::uint32_t{1} << v)) == 0U) {
         continue;
       }
@@ -419,8 +421,10 @@ void on_lifecycle_timeout(TrapContext* /*ctx*/, std::uint64_t arg) noexcept {
     console::write(" lifecycle timed out — isolated, pending mask 0x");
     console::write_hex64(tracker.pending_mask());
     console::write("\n");
-    for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
-      if ((tracker.pending_mask() & (std::uint32_t{1} << v)) != 0U) {
+    const std::uint32_t pending = tracker.pending_mask();
+    const std::size_t   vcpus   = guest_table()[vm].vcpus;
+    for (std::size_t v = 0; v < vcpus; ++v) {
+      if ((pending & (std::uint32_t{1} << v)) != 0U) {
         vcpu::cancel_start(slot_of(vm, v));
       }
     }
@@ -626,8 +630,9 @@ void cpu_off(std::size_t slot, TrapContext* live) noexcept {
   bool              other_live = false;
   bool              retired    = false;
   {
-    sync::Guard guard{g_power_lock[vm]};
-    for (std::size_t v = 0; v < guest_table()[vm].vcpus; ++v) {
+    sync::Guard       guard{g_power_lock[vm]};
+    const std::size_t vcpus = guest_table()[vm].vcpus;
+    for (std::size_t v = 0; v < vcpus; ++v) {
       const std::size_t sibling = slot_of(vm, v);
       if (sibling != slot && vcpu::vcpu_on(sibling)) {
         other_live = true;
@@ -760,21 +765,27 @@ void smp_component::handle_sysreg(SysregCall* call) noexcept {
 }
 
 void smp_component::handle_irq(IrqCall* call) noexcept {
+  if (call->handled) {
+    return;
+  }
   if (call->intid != smp::kCrossCallSgi) {
     return;
   }
   call->handled = true;
 
   // Copy the batch out first — executing under the lock would deadlock
-  // against a sender targeting this core from another IRQ path.
+  // against a sender targeting this core from another IRQ path. Only
+  // the occupied entries move (typically one), not the whole box.
   smp::Mailbox&                                   box = smp::g_mail[cpu::id()];
-  std::array<smp::Request, smp::kMailboxCapacity> batch{};
+  std::array<smp::Request, smp::kMailboxCapacity> batch;
   std::size_t                                     n = 0;
   {
     sync::Guard guard{box.lock};
     n         = box.count;
     box.count = 0;
-    batch     = box.req;
+    for (std::size_t i = 0; i < n; ++i) {
+      batch[i] = box.req[i];
+    }
   }
   bool schedule_required = false;
   for (std::size_t i = 0; i < n; ++i) {
