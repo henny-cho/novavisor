@@ -518,8 +518,7 @@ void dma_device_component::handle_irq(IrqCall* call) noexcept {
   if (vm == dma::kNoVm) {
     return;
   }
-  const std::size_t target_vcpu = vgic::spi_target_vcpu(vm, interrupt->virtual_intid);
-  if (!vgic::post_tracked(slot_of(vm, target_vcpu), interrupt->virtual_intid, interrupt->physical_intid, generation)) {
+  if (!vgic::post_spi_tracked(vm, interrupt->virtual_intid, interrupt->physical_intid, generation)) {
     dma_device::fail_vm(vm, "virtual interrupt post");
   }
 }

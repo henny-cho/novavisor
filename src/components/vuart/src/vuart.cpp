@@ -13,7 +13,6 @@
 #include "nova/abi/guest.hpp"
 #include "nova/abi/guest_layout.h"
 #include "nova/sync.hpp"
-#include "smp/smp.hpp"
 #include "vgic/vgic.hpp"
 #include "vuart/vuart_model.hpp"
 
@@ -28,15 +27,15 @@ inline constexpr std::uint32_t kUartSpi         = NOVA_VUART_SPI;
 inline constexpr std::uint32_t kPhysicalUartSpi = console::kRxIntid;
 
 // Per-VM UART state. RX injection (primary core) races guest MMIO
-// (owner core) — the lock covers every model mutation.
-std::array<UartState, kMaxGuests> g_uart;
-sync::SpinLock                    g_lock;
+// (owner core) — a per-VM lock covers every model mutation.
+std::array<UartState, kMaxGuests>      g_uart;
+std::array<sync::SpinLock, kMaxGuests> g_lock;
 
-// Deliver the RX level as a vIRQ edge: IROUTER picks the vCPU, smp
-// carries it across cores when the target lives elsewhere.
+// Deliver the RX level as a vIRQ edge: the vGIC resolves IROUTER with
+// the pending update and its reevaluate fan-out reaches the routed
+// vCPU's core — no route pre-lookup or mailbox hop here.
 void post_rx(std::size_t vm) noexcept {
-  const std::size_t target = vgic::spi_target_vcpu(vm, kUartSpi);
-  (void)smp::post_virq(slot_of(vm, target), kUartSpi);
+  (void)vgic::post_spi(vm, kUartSpi);
 }
 
 // Push one host byte into a VM's RX FIFO; post on the mask-gated
@@ -44,7 +43,7 @@ void post_rx(std::size_t vm) noexcept {
 void inject(std::size_t vm, std::uint8_t byte) noexcept {
   bool raise = false;
   {
-    sync::Guard guard{g_lock};
+    sync::Guard guard{g_lock[vm]};
     UartState&  u   = g_uart[vm];
     const bool  was = mis(u) != 0U;
     (void)rx_push(u, byte);
@@ -73,7 +72,7 @@ void vm_reset(std::size_t vm) noexcept {
   if (vm >= kMaxGuests) {
     return;
   }
-  sync::Guard guard{g_lock};
+  sync::Guard guard{g_lock[vm]};
   g_uart[vm] = UartState{};
 }
 
@@ -97,7 +96,7 @@ void vuart_component::handle_mmio(MmioCall* call) noexcept {
   bool                raise = false;
   vuart::WriteEffect  effect{};
   {
-    sync::Guard       guard{vuart::g_lock};
+    sync::Guard       guard{vuart::g_lock[vm]};
     vuart::UartState& u = vuart::g_uart[vm];
     if (call->write) {
       const bool was = vuart::mis(u) != 0U;
