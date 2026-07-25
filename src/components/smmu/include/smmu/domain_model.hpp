@@ -4,6 +4,7 @@
 
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
+#include "nova/range.hpp"
 
 #include <array>
 #include <cstddef>
@@ -98,7 +99,7 @@ template <std::size_t Capacity, typename Quarantine>
     if ((context.root_pa & ~0x0000'00FF'FFFF'FFFFULL) != 0U) {
       return ContextError::kRootOutOfRange;
     }
-    if (!dma::range_well_formed(guests[i].load_pa, guests[i].ipa_size) ||
+    if (!range_well_formed(guests[i].load_pa, guests[i].ipa_size) ||
         guests[i].load_pa + guests[i].ipa_size - 1U > 0x0000'00FF'FFFF'FFFFULL) {
       return ContextError::kGuestPaOutOfRange;
     }

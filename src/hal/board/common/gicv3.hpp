@@ -1,5 +1,6 @@
 #pragma once
 
+#include "hal/arch/aarch64/cpu.hpp"
 #include "nova/arch/gicv3_regs.h"
 #include "nova/arch/gicv3_spi.hpp"
 
@@ -19,10 +20,14 @@ struct Gicv3 {
     }
   }
 
+  // GICR_TYPER packs Aff3 into bits 31:24 of the high word, while the
+  // MPIDR/IROUTER representation keeps Aff3 at bits 39:32.
+  static constexpr auto typer_affinity(std::uint64_t affinity) noexcept -> std::uint32_t {
+    return static_cast<std::uint32_t>(((affinity >> 32U) & 0xFFU) << 24U | (affinity & 0x00FFFFFFU));
+  }
+
   static auto redistributor_frame() noexcept -> std::uintptr_t {
-    std::uint64_t mpidr = 0;
-    __asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
-    const auto affinity = static_cast<std::uint32_t>(((mpidr >> 32U) & 0xFFU) << 24U | (mpidr & 0x00FFFFFFU));
+    const std::uint32_t affinity = typer_affinity(arch::cpu_affinity());
 
     std::uintptr_t frame = Config::kRedistributorBase;
     for (std::size_t index = 0; index < Config::kCpuAffinity.size(); ++index) {

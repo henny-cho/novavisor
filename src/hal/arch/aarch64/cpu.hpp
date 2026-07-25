@@ -4,6 +4,8 @@
 //
 // Per-core identity and the SMC conduit — pure architecture.
 
+#include "nova/arch/mpidr.h"
+
 #include <cstdint>
 
 namespace nova::arch {
@@ -13,7 +15,7 @@ namespace nova::arch {
 [[nodiscard]] inline auto cpu_affinity() noexcept -> std::uint64_t {
   std::uint64_t mpidr = 0;
   __asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
-  return mpidr & 0x000000FF00FFFFFFULL;
+  return mpidr & std::uint64_t{NOVA_MPIDR_AFFINITY_MASK};
 }
 
 // The MPIDR value the guest reads at EL1. Per-vCPU: written on every

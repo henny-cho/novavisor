@@ -190,6 +190,8 @@ else()
     nova_add_component_test(vuart vuart_model_test)          # PL011 register model
     nova_add_component_test(dtb_parser fdt_model_test)       # FDT walker + guest extraction
     nova_add_component_test(smmu ste_model_test)             # Stage-2-only STE encoding
+    target_include_directories(ste_model_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/components/core_mmu/include)
     nova_add_component_test(smmu queue_model_test)           # CMDQ/EVTQ phase transitions
     nova_add_component_test(smmu fault_model_test)           # SID/address fault records
     nova_add_component_test(smmu runtime_model_test)         # runtime capabilities and layout

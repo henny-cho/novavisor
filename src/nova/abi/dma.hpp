@@ -3,6 +3,7 @@
 // Static DMA ownership shared by board policy and the SMMU component.
 
 #include "nova/abi/guest.hpp"
+#include "nova/range.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -142,20 +143,8 @@ struct AccessDecision {
   return owner;
 }
 
-[[nodiscard]] constexpr auto range_well_formed(std::uint64_t base, std::uint64_t size) noexcept -> bool {
-  return size != 0 && base <= std::numeric_limits<std::uint64_t>::max() - (size - 1U);
-}
-
 [[nodiscard]] constexpr auto guest_range_valid(std::uint64_t base, std::uint64_t size) noexcept -> bool {
   return range_well_formed(base, size) && (base % kPageSize) == 0 && (size % kPageSize) == 0;
-}
-
-[[nodiscard]] constexpr auto ranges_overlap(std::uint64_t lhs_base, std::uint64_t lhs_size, std::uint64_t rhs_base,
-                                            std::uint64_t rhs_size) noexcept -> bool {
-  if (lhs_size == 0 || rhs_size == 0) {
-    return false;
-  }
-  return lhs_base <= rhs_base ? rhs_base - lhs_base < lhs_size : lhs_base - rhs_base < rhs_size;
 }
 
 [[nodiscard]] constexpr auto validate_policy(std::span<const Assignment>      assignments,

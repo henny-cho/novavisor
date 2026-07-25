@@ -9,8 +9,11 @@ add_library(nova_arch OBJECT
     mem.cpp
 )
 target_include_directories(nova_arch PUBLIC
-    ${CMAKE_SOURCE_DIR}/src
-    ${NOVA_BOARD_INCLUDE_DIR})
+    ${CMAKE_SOURCE_DIR}/src)
+# nova_board carries the board include dirs; nova_warnings applies the
+# project's mandatory C++ flags (-Werror, -fno-rtti/-fno-exceptions) to
+# mem.cpp — the TU implementing the mem* libcalls must not be exempt.
+target_link_libraries(nova_arch PUBLIC nova_board PRIVATE nova_warnings)
 
 # mem.cpp implements the mem* libcalls themselves: -fno-builtin keeps
 # GCC from recognizing the loops and emitting recursive libcalls.

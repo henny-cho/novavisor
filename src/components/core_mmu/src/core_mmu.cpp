@@ -18,6 +18,7 @@
 #include "nova/abi/guest.hpp"
 #include "nova/abi/guest_layout.h"
 #include "nova/abi/payload.hpp"
+#include "nova/range.hpp"
 #include "nova_panic/nova_panic.hpp"
 
 #include <array>
@@ -68,8 +69,9 @@ std::array<std::uint64_t, kMaxGuests> g_vttbr{};
 // tables. With T0SZ=24 the VTTBR alignment check raises an Address size
 // fault (level 1) whenever the linker happens to place an L1 on a 4 KiB
 // but not 8 KiB boundary.
-inline constexpr std::uint64_t kVtcrEl2 = (25ULL) | (0b01ULL << 6U) | (0b11ULL << 8U) | (0b11ULL << 10U) |
-                                          (0b11ULL << 12U) | (0b010ULL << 16U) | (1ULL << 31U);
+inline constexpr std::uint64_t kVtcrEl2 = mmu::kStage2T0sz | (mmu::kStage2Sl0 << 6U) | (0b11ULL << 8U) |
+                                          (0b11ULL << 10U) | (0b11ULL << 12U) | (mmu::kStage2Granule4k << 14U) |
+                                          (mmu::kStage2Pa40 << 16U) | (1ULL << 31U);
 
 // HCR_EL2:  VM=1  (Stage 2 translation enable, bit 0)
 //           FMO=1 (route physical FIQ to EL2, bit 3)
@@ -95,15 +97,19 @@ inline constexpr std::uint64_t kHcrEl2 =
 inline constexpr std::uint64_t kVttbrVmidShift = 48U;
 
 // Pristine slot backing guest `index` — EL2's flat view of the PAs
-// reserved in nova/abi/guest_layout.h. Windows may differ in size per
-// guest, so slots pack at the running sum of the preceding windows.
-auto pristine_slot(std::size_t index) noexcept -> void* {
-  const auto    guests = guest_table();
+// reserved by the board layout. Slots pack with the same alignment
+// rule as the live guest windows (align_up_pa), so both layouts stay
+// one algorithm.
+auto pristine_offset(std::span<const GuestDescriptor> guests, std::size_t index) noexcept -> std::uint64_t {
   std::uint64_t offset = 0;
   for (std::size_t i = 0; i < index; ++i) {
-    offset += guests[i].ipa_size;
+    offset = align_up_pa(offset + guests[i].ipa_size);
   }
-  return reinterpret_cast<void*>(board::active::kGuestPristinePa + offset);
+  return offset;
+}
+
+auto pristine_slot(std::size_t index) noexcept -> void* {
+  return reinterpret_cast<void*>(board::active::kGuestPristinePa + pristine_offset(guest_table(), index));
 }
 
 [[noreturn]] void panic_stage2(std::size_t guest_index) noexcept {
@@ -120,7 +126,28 @@ auto pristine_slot(std::size_t index) noexcept -> void* {
   halt();
 }
 
+[[noreturn]] void panic_reservation(std::size_t guest_index) noexcept {
+  console::write("[NOVA PANIC] guest window exceeds board reservation at guest ");
+  console::write_dec64(guest_index);
+  console::write("\n");
+  halt();
+}
+
 void validate_payloads(std::span<const GuestDescriptor> guests) noexcept {
+  // Fail early when the packed windows or their pristine snapshots
+  // outgrow the board's reserved regions — the copies below would
+  // otherwise silently clobber whatever lies beyond.
+  const std::uint64_t window_limit = board::active::kGuestPaBase + board::active::kGuestPaSize;
+  for (std::size_t i = 0; i < guests.size(); ++i) {
+    if (!range_well_formed(guests[i].load_pa, guests[i].ipa_size) || guests[i].load_pa < board::active::kGuestPaBase ||
+        guests[i].load_pa + guests[i].ipa_size > window_limit) {
+      panic_reservation(i);
+    }
+  }
+  if (pristine_offset(guests, guests.size() - 1) + guests.back().ipa_size > board::active::kPristineSize) {
+    panic_reservation(guests.size() - 1);
+  }
+
   for (std::size_t i = 0; i < guests.size(); ++i) {
     const GuestDescriptor& guest = guests[i];
     const payload::Layout  layout{
@@ -143,7 +170,7 @@ void validate_payloads(std::span<const GuestDescriptor> guests) noexcept {
       }
     }
     for (std::size_t other = 0; other < i; ++other) {
-      if (payload::ranges_overlap(guest.load_pa, guest.ipa_size, guests[other].load_pa, guests[other].ipa_size)) {
+      if (ranges_overlap(guest.load_pa, guest.ipa_size, guests[other].load_pa, guests[other].ipa_size)) {
         panic_payload(i);
       }
     }

@@ -11,12 +11,21 @@
 // and each project links exactly one TU that defines it
 // (projects/*/guest_config.cpp).
 
+#include "nova/abi/guest_layout.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 
 namespace nova {
+
+// Guest PA windows pack at NOVA_GUEST_PA_ALIGN: window i+1 starts at
+// the aligned end of window i. The live PA packing (projects/common)
+// and the pristine snapshot layout (core_mmu) share this single rule.
+[[nodiscard]] constexpr auto align_up_pa(std::uint64_t addr) noexcept -> std::uint64_t {
+  return (addr + NOVA_GUEST_PA_ALIGN - 1) & ~static_cast<std::uint64_t>(NOVA_GUEST_PA_ALIGN - 1);
+}
 
 // Compile-time upper bound on guest_table() entries — sizes the static
 // per-VM backing stores (Stage 2 table sets, restart budget).

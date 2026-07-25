@@ -2,6 +2,7 @@
 
 // Guest table construction shared by AArch64 board profiles.
 
+#include "nova/abi/guest.hpp"
 #include "nova/abi/guest_layout.h"
 
 #include <cstddef>
@@ -14,11 +15,6 @@ namespace nova::project {
 // against) the same window; only the backing PA slot differs.
 inline constexpr std::uint64_t kGuestIpaBase = NOVA_GUEST_IPA_BASE;
 inline constexpr std::uint64_t kGuestIpaSize = NOVA_GUEST_IPA_SIZE;
-
-// Guest PA windows pack from the active board's guest base.
-[[nodiscard]] constexpr auto align_up_pa(std::uint64_t addr) noexcept -> std::uint64_t {
-  return (addr + NOVA_GUEST_PA_ALIGN - 1) & ~static_cast<std::uint64_t>(NOVA_GUEST_PA_ALIGN - 1);
-}
 
 // EL1 entry PC. The demo's linker.ld places .text.start at IPA base.
 inline constexpr std::uint64_t kGuestEntry = kGuestIpaBase;
