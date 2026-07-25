@@ -1,0 +1,54 @@
+# Shared setup for every job that cross-builds and runs QEMU demos:
+# the four caches plus host packages + ARM toolchain. Keeping the cache
+# definitions here means cpm/toolchain/guests/ccache keys cannot drift
+# between ci.yml and soak.yml.
+name: Setup target build environment
+description: Restore caches and install the cross toolchain (setup_env.sh --ci)
+inputs:
+  guests:
+    description: Also restore the external guest image cache
+    default: "false"
+  ccache-prefix:
+    description: Namespace for the ccache cache key
+    default: "ccache"
+runs:
+  using: composite
+  steps:
+    - name: Cache CPM packages
+      uses: actions/cache@v6
+      with:
+        # Guest images live under external/cache too but have their own
+        # cache entry (different lifecycle: fetch.sh pins, not CPM pins).
+        path: |
+          external/cache
+          !external/cache/guests
+        key: cpm-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake') }}
+        restore-keys: cpm-
+
+    - name: Cache ARM toolchain
+      # setup_env.sh skips the ~700 MB download when the extracted
+      # toolchain is already present.
+      uses: actions/cache@v6
+      with:
+        path: .toolchain
+        key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/lib/versions.sh') }}
+
+    - name: Cache external guest images
+      # Built once per fetch recipe (pinned tag / overlay); a hit lets
+      # fetch.sh exit on its version stamp with zero network access.
+      if: inputs.guests == 'true'
+      uses: actions/cache@v6
+      with:
+        path: external/cache/guests
+        key: guests-${{ hashFiles('demo/*/fetch.sh', 'demo/*/novavisor.overlay', 'demo/12_zephyr/app/**') }}
+
+    - name: Cache ccache
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/ccache
+        key: ${{ inputs.ccache-prefix }}-${{ github.sha }}
+        restore-keys: ${{ inputs.ccache-prefix }}-
+
+    - name: Install dependencies and ARM toolchain
+      run: ./scripts/setup_env.sh --ci
+      shell: bash

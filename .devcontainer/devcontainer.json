@@ -4,7 +4,7 @@
   "name": "NovaVisor DevContainer",
   "build": {
     "dockerfile": "Dockerfile",
-    // Repo root as context so the Dockerfile can COPY scripts/versions.sh.
+    // Repo root as context so the Dockerfile can COPY scripts/lib/versions.sh.
     "context": ".."
   },
   "remoteUser": "vscode",

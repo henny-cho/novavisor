@@ -49,7 +49,7 @@ if(CMAKE_CROSSCOMPILING)
     # the hypervisor, and any use clobbers lazily-switched guest FP state.
     # Directory-wide (not per-target) so every cross TU is covered; .S files
     # are exempt — the FP bank save/restore itself is hand-written asm.
-    # Enforced post-link by scripts/check_fp_free.sh on novavisor.elf.
+    # Enforced post-link by tools/check_fp_free.sh on novavisor.elf.
     add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-mgeneral-regs-only>)
 endif()
 

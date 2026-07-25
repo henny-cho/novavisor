@@ -35,7 +35,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y cmake ninja-build
-          source scripts/versions.sh
+          source scripts/lib/versions.sh
           pipx install "clang-format==${CLANG_FORMAT_VERSION}"
 
       - name: Check formatting
@@ -46,7 +46,7 @@ jobs:
 
   # Cross lane: Release build, clang-tidy, and QEMU demo verification.
   target:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container:
       image: ubuntu:26.04
     defaults:
@@ -57,65 +57,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Cache CPM packages
-        uses: actions/cache@v6
+      - uses: ./.github/actions/setup-target
         with:
-          # Guest images live under external/cache too but have their own
-          # cache entry (different lifecycle: fetch.sh pins, not CPM pins).
-          path: |
-            external/cache
-            !external/cache/guests
-          key: cpm-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake') }}
-          restore-keys: cpm-
-
-      - name: Cache ARM toolchain
-        # setup_env.sh skips the ~700 MB download when the extracted
-        # toolchain is already present.
-        uses: actions/cache@v6
-        with:
-          path: .toolchain
-          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/versions.sh') }}
-
-      - name: Cache external guest images
-        # Built once per fetch recipe (pinned tag / overlay); a hit lets
-        # fetch.sh exit on its version stamp with zero network access.
-        uses: actions/cache@v6
-        with:
-          path: external/cache/guests
-          key: guests-${{ hashFiles('demo/*/fetch.sh', 'demo/*/novavisor.overlay', 'demo/12_zephyr/app/**') }}
-
-      - name: Cache ccache
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/ccache
-          key: ccache-${{ github.sha }}
-          restore-keys: ccache-
-
-      - name: Install dependencies and ARM toolchain
-        run: ./scripts/setup_env.sh --ci
+          guests: "true"
 
       - name: Build (Release)
         run: scripts/task.sh build --release
 
       - name: Build minimal platform profile
-        run: |
-          cmake --preset aarch64-minimal-release
-          cmake --build --preset aarch64-minimal-release
+        run: scripts/task.sh build --preset aarch64-minimal-release
 
       - name: Build N1SDP payload profile
-        run: |
-          scripts/task.sh demo build
-          python3 tools/payload_manifest.py \
-            --binary build/demo/01_hello/hello.bin \
-            --output build/n1sdp-payloads.yml \
-            --name platform-smoke \
-            --load-pa 0x80000000 \
-            --entry 0x50000000 \
-            --memory-size 0x00100000
-          scripts/task.sh build \
-            --preset aarch64-n1sdp-release \
-            --config configs/platform-smoke.yml \
-            --payloads build/n1sdp-payloads.yml
+        run: scripts/task.sh firmware smoke
 
       - name: Lint
         # run-clang-tidy over the debug tree's compile database; the debug
@@ -125,10 +78,8 @@ jobs:
       - name: Fetch external guest images
         # Idempotent: no-op on a guest-cache hit, source build on a miss
         # (the workspaces themselves are disposable and never cached).
-        run: |
-          scripts/task.sh demo fetch 12
-          scripts/task.sh demo fetch 13
-          scripts/task.sh demo fetch 14
+        # The demo list is derived from the manifests (enabled + fetch.sh).
+        run: scripts/task.sh demo fetch --all
 
       - name: Demo verification (enabled demos only)
         # Each completed phase flips its demo's `enabled` flag to true,

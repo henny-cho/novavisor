@@ -81,7 +81,7 @@ aarch64-none-elf-gdb build/aarch64-debug/novavisor.elf -ex 'target remote :1234'
 Prerequisites:
 
 - Install the recommended extensions when VS Code prompts (`ms-vscode.cpptools`, `ms-vscode.cmake-tools`).
-- Toolchain must be available via Method A (devcontainer) **or** Method B (`./scripts/setup_env.sh`). `scripts/aarch64-gdb.sh` resolves the GDB binary against both layouts.
+- Toolchain must be available via Method A (devcontainer) **or** Method B (`./scripts/setup_env.sh`). `scripts/aarch64_gdb.sh` resolves the GDB binary against both layouts.
 - Linux / macOS / WSL only — the `postDebugTask` uses `pkill` to tear down QEMU.
 - The GDB stub uses port `1234`; run at most one debug session per host to avoid collisions.
 

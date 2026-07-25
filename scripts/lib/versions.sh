@@ -40,3 +40,7 @@ export CLANG_TIDY_VERSION="20"
 
 # QEMU 9.2 is the first virt machine that exposes a nested SMMUv3 by default.
 export QEMU_MIN_VERSION="9.2.0"
+
+# Trusted Firmware-A pin for the N1SDP FIP package (task.sh firmware fip).
+export N1SDP_TFA_VERSION="v2.15.0"
+export N1SDP_TFA_COMMIT="da738d5eae93af342fdc4995dd3c05acb4c9d757"

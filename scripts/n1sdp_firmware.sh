@@ -2,8 +2,8 @@
 set -euo pipefail
 
 WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# shellcheck source=firmware_versions.sh disable=SC1091
-source "${WORK_DIR}/scripts/firmware_versions.sh"
+# shellcheck source=lib/versions.sh disable=SC1091
+source "${WORK_DIR}/scripts/lib/versions.sh"
 if [[ -d "${WORK_DIR}/.toolchain/current/bin" ]]; then
     export PATH="${WORK_DIR}/.toolchain/current/bin:${PATH}"
 fi

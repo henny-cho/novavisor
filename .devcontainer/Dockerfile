@@ -40,7 +40,7 @@ RUN su - ${USERNAME} -c "pipx ensurepath && pipx install pre-commit"
 # versions.sh reads `uname -m` and picks the matching linux-x86_64 or
 # linux-aarch64 tarball — so the same Dockerfile produces native toolchains
 # whether the image is built on amd64 or arm64 hosts (no QEMU emulation).
-COPY scripts/versions.sh /tmp/versions.sh
+COPY scripts/lib/versions.sh /tmp/versions.sh
 # bash (not sh/dash) — versions.sh uses ${VAR,,} parameter expansion.
 RUN bash -c '. /tmp/versions.sh \
     && mkdir -p ${TOOLCHAIN_DIR} \
