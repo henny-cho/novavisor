@@ -13,6 +13,7 @@
 #include "nova/arch/sysreg_trap.hpp"
 #include "nova/arch/trap_context.hpp"
 #include "nova_panic/nova_panic.hpp"
+#include "trap_handler/elr_policy.hpp"
 #include "trap_handler/fp_simd.hpp"
 #include "trap_handler/sysreg.hpp"
 #include "trap_handler/trap_handler.hpp"
@@ -30,10 +31,10 @@ void dispatch_hvc(TrapContext* ctx) noexcept {
   // instruction's own immediate (ESR_EL2.ISS) is conventionally 0 and
   // is NOT the function selector.
   //
-  // ELR_EL2 already points to the instruction AFTER the HVC per
-  // ARM ARM §D1.11 — do NOT advance it here or the guest will skip
-  // the next instruction on return. Handlers that halt (HVC_EXIT)
+  // Shared with the SMC conduit, which the router has already stepped
+  // over; an HVC needs no advance at all. Handlers that halt (HVC_EXIT)
   // never return through this path anyway.
+  static_assert(trap::elr_policy(esr::ExceptionClass::HVC_AA64) == trap::ElrAdvance::kNone);
   HvcCall call{.ctx = ctx, .func_id = static_cast<std::uint32_t>(ctx->x[0]), .handled = false};
   cib::service<HvcService>(&call);
 
@@ -46,11 +47,7 @@ void dispatch_hvc(TrapContext* ctx) noexcept {
 }
 
 void dispatch_wfx(TrapContext* ctx) noexcept {
-  // Unlike HVC, ELR still points AT the trapped instruction — advance
-  // past it so the guest resumes after the wfi/wfe when it returns
-  // (immediately, or on wake after being parked).
-  ctx->elr += 4;
-
+  static_assert(trap::elr_policy(esr::ExceptionClass::WFx) == trap::ElrAdvance::kBeforeDispatch);
   WfxCall call{.ctx = ctx, .is_wfe = (ctx->esr & esr::kWfxTiWfe) != 0, .handled = false};
   cib::service<WfxService>(&call);
 
@@ -60,8 +57,7 @@ void dispatch_wfx(TrapContext* ctx) noexcept {
 }
 
 void dispatch_fp_simd(TrapContext* ctx) noexcept {
-  // ELR stays AT the trapped instruction: once the handler has made FP
-  // access legal, returning re-executes it successfully.
+  static_assert(trap::elr_policy(esr::ExceptionClass::FP_SIMD) == trap::ElrAdvance::kNever);
   FpSimdCall call{.ctx = ctx, .handled = false};
   cib::service<FpSimdService>(&call);
 
@@ -86,6 +82,7 @@ void dispatch_sysreg(TrapContext* ctx) noexcept {
 
   // ELR points AT the trapped MSR/MRS. Advance only after successful
   // emulation so fault diagnostics retain the offending instruction.
+  static_assert(trap::elr_policy(esr::ExceptionClass::MSR_MRS) == trap::ElrAdvance::kOnClaim);
   ctx->elr += 4;
 }
 
@@ -96,16 +93,18 @@ void dispatch_sysreg(TrapContext* ctx) noexcept {
 // exceptions are isolated through GuestFaultService.
 void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
   const auto ec = esr::get_ec(ctx->esr);
+
+  // Classes whose ELR must be stepped over before their handler runs
+  // (trap_handler/elr_policy.hpp owns the full matrix).
+  if (trap::elr_policy(ec) == trap::ElrAdvance::kBeforeDispatch) {
+    ctx->elr += 4;
+  }
+
   switch (ec) {
   case esr::ExceptionClass::HVC_AA64:
-    dispatch_hvc(ctx);
-    return;
-
   case esr::ExceptionClass::SMC_AA64:
-    // Second PSCI conduit (HCR_EL2.TSC; no EL3 on this board). Unlike
-    // HVC, ELR points AT the trapped smc — advance it before the shared
-    // fan-out so the guest resumes after the instruction on return.
-    ctx->elr += 4;
+    // Both SMCCC conduits fan out to the same subscribers (SMC is the
+    // second PSCI conduit via HCR_EL2.TSC; no EL3 on this board).
     dispatch_hvc(ctx);
     return;
 

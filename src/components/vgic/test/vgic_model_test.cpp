@@ -266,3 +266,17 @@ TEST(VgicRedist, DeliveryEffectOnlyForEnableAndPending) {
   EXPECT_FALSE(redist_write(r, kGicrIpriorityr, 4, 0x20U).delivery);
   EXPECT_FALSE(redist_write(r, kGicrIcfgr1, 4, ~0U).delivery);
 }
+
+TEST(VgicDist, IcpendrClearKeepsTokenProtectedSpis) {
+  DistState d{};
+  ASSERT_TRUE(dist_write(d, kGicdIspendr1, 4, 0b0111U));
+
+  // Bits 0 and 2 carry live EoI tokens (not yet in any LR): a full
+  // clear may drop only the unprotected bit 1.
+  EXPECT_TRUE(dist_write(d, kGicdIcpendr1, 4, ~0U, /*keep_pending=*/0b0101U));
+  EXPECT_EQ(d.spi_pending, 0b0101U);
+
+  // Without protection the clear behaves architecturally.
+  EXPECT_TRUE(dist_write(d, kGicdIcpendr1, 4, 0b0001U));
+  EXPECT_EQ(d.spi_pending, 0b0100U);
+}
