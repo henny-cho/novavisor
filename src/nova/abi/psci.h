@@ -3,8 +3,11 @@
  * PSCI function IDs and return codes (Arm DEN0022, SMCCC DEN0028) — the
  * single source shared by the hypervisor's PSCI implementation
  * (components/psci) and the guest-side stubs (demo/common/include/
- * guest_psci.h). Conduit is HVC: this board has no EL3, so SMC from
- * EL1 is UNDEFINED.
+ * guest_psci.h). The guest conduit is HVC; a guest SMC is trapped
+ * (HCR_EL2.TSC) into the same dispatch, so guest firmware calls never
+ * reach EL3 even where it exists — a board may boot the hypervisor as
+ * a firmware payload and the hypervisor itself may call EL3 PSCI over
+ * SMC for its own physical power control.
  *
  * Plain #defines only: this header must survive the assembler and the
  * C/C++ compilers alike.

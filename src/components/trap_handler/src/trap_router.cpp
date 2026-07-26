@@ -29,6 +29,26 @@ namespace nova {
 
 namespace {
 
+// A guest can call any function ID as fast as it likes, so an
+// unconditional log line per call lets one VM flood the shared console
+// (Linux probes some IDs on every context switch). Report each ID once.
+std::array<std::uint32_t, 8> g_unknown_reported{};
+
+void report_unknown_hvc(std::uint32_t func_id) noexcept {
+  for (const std::uint32_t seen : g_unknown_reported) {
+    if (seen == func_id) {
+      return;
+    }
+  }
+  for (std::uint32_t& slot : g_unknown_reported) {
+    if (slot == 0U) {
+      slot = func_id;
+      break;
+    }
+  }
+  console::line("[trap_handler] unknown HVC func_id=0x", console::Hex{func_id}, " — SMCCC NOT_SUPPORTED\n");
+}
+
 void dispatch_hvc(TrapContext* ctx) noexcept {
   // SMCCC: the function ID lives in x0 (bits 31:0); the `hvc #imm16`
   // instruction's own immediate (ESR_EL2.ISS) is conventionally 0 and
@@ -42,10 +62,13 @@ void dispatch_hvc(TrapContext* ctx) noexcept {
   cib::service<HvcService>(&call);
 
   if (!call.handled) {
-    console::write("[trap_handler] unknown HVC func_id=0x");
-    console::write_hex64(call.func_id);
-    console::write(" — returning SMCCC NOT_SUPPORTED\n");
+    // SMCCC fast calls return in x0–x3; leaving x1–x3 with the guest's
+    // arguments violates the convention a caller may rely on.
     ctx->x[0] = kSmcccNotSupported;
+    ctx->x[1] = 0;
+    ctx->x[2] = 0;
+    ctx->x[3] = 0;
+    report_unknown_hvc(call.func_id);
   }
 }
 
@@ -106,8 +129,8 @@ void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
   switch (ec) {
   case esr::ExceptionClass::kHvcAa64:
   case esr::ExceptionClass::kSmcAa64:
-    // Both SMCCC conduits fan out to the same subscribers (SMC is the
-    // second PSCI conduit via HCR_EL2.TSC; no EL3 on this board).
+    // Both SMCCC conduits fan out to the same subscribers — HCR_EL2.TSC
+    // traps the guest's SMC so it never reaches firmware at EL3.
     dispatch_hvc(ctx);
     return;
 

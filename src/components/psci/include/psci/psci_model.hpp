@@ -13,6 +13,7 @@
 // answer NOT_SUPPORTED instead of leaking "unknown HVC" warnings.
 
 #include "nova/abi/psci.h"
+#include "psci/smccc_model.hpp"
 
 #include <cstdint>
 
@@ -84,11 +85,16 @@ inline constexpr std::uint64_t kInvalidTarget = ~std::uint64_t{0};
   case PSCI_FN_VERSION:
     v.ret = PSCI_VERSION_1_1;
     return v;
-  case PSCI_FN_FEATURES:
-    v.ret = (in_range(static_cast<std::uint32_t>(arg)) && is_implemented(static_cast<std::uint32_t>(arg)))
-                ? PSCI_SUCCESS
-                : static_cast<std::uint64_t>(PSCI_NOT_SUPPORTED);
+  case PSCI_FN_FEATURES: {
+    // PSCI_FEATURES also answers for the SMCCC Arch range — guest Linux
+    // gates all of SMCCC 1.1 on PSCI_FEATURES(SMCCC_VERSION), and a
+    // NOT_SUPPORTED there disables its firmware mitigations entirely.
+    const auto queried = static_cast<std::uint32_t>(arg);
+    const bool present =
+        (in_range(queried) && is_implemented(queried)) || (smccc::in_range(queried) && smccc::is_implemented(queried));
+    v.ret = present ? PSCI_SUCCESS : static_cast<std::uint64_t>(PSCI_NOT_SUPPORTED);
     return v;
+  }
   case PSCI_FN_CPU_ON:
     v.action = Action::kCpuOn;
     return v;

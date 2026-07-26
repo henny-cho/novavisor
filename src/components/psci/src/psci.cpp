@@ -7,6 +7,7 @@
 #include "nova/abi/guest.hpp"
 #include "nova/arch/trap_context.hpp"
 #include "psci/psci_model.hpp"
+#include "psci/smccc_model.hpp"
 #include "smp/smp.hpp"
 #include "vgic/vgic.hpp"
 
@@ -25,6 +26,14 @@ void psci_component::handle_hvc(HvcCall* call) noexcept {
   if (call->handled) {
     return;
   }
+  // The SMCCC Arch service shares this subscriber: same conduit, same
+  // guest-facing firmware interface, and PSCI_FEATURES answers for both.
+  if (const smccc::Verdict a = smccc::dispatch(call->func_id, call->ctx->x[1]); a.claimed) {
+    call->handled   = true;
+    call->ctx->x[0] = a.ret;
+    return;
+  }
+
   const psci::Verdict v = psci::dispatch(call->func_id, call->ctx->x[1]);
   if (!v.claimed) {
     return; // not ours — leave unclaimed for other subscribers

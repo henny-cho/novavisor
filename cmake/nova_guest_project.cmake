@@ -19,6 +19,14 @@ function(nova_add_guest_project)
         file(COPY_FILE ${CMAKE_SOURCE_DIR}/configs/payloads.yml ${guest_payload_file})
     endif()
     set(guest_dtb_dir ${CMAKE_BINARY_DIR}/guest_dtb)
+    # The DT may only promise what the composition serves: guest-facing
+    # PSCI routes through smp (VM power + DMA quiesce), so a profile
+    # without it gets a DT with no psci node and no psci enable-method.
+    if("psci" IN_LIST NOVA_COMPONENTS)
+        set(nova_dtb_psci_flag "")
+    else()
+        set(nova_dtb_psci_flag "--no-psci")
+    endif()
     add_custom_command(
         OUTPUT ${guest_dtb_dir}/guest_dtbs.S
                ${guest_dtb_dir}/device_policy.hpp
@@ -28,6 +36,7 @@ function(nova_add_guest_project)
                 --board-layout ${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/board_layout.h
                 --inventory ${NOVA_BOARD_DIR}/device_inventory.yml
                 --payloads ${guest_payload_file}
+                ${nova_dtb_psci_flag}
         DEPENDS ${guest_config_file}
                 ${guest_payload_file}
                 ${CMAKE_SOURCE_DIR}/tools/yml2dtb/yml2dtb.py

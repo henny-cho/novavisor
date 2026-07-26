@@ -4,6 +4,14 @@
 // No SMP, no device passthrough, no vuart — a single core running the
 // boot guest. Boot order lives in boot_order_component below, the same
 // way the full profile declares it.
+//
+// No psci here, and that is a contract, not an omission: guest-facing
+// PSCI power control routes through smp, which owns the DMA quiesce
+// steps of VM power (dma_device + smmu). Pulling that whole stack into
+// a single-core profile would drag in device isolation this profile
+// deliberately excludes. The generated guest DT therefore omits its
+// psci node for this composition (NOVA_PROJECT_SERVES_PSCI), so a
+// guest never probes an interface nobody serves.
 
 #include "boot_msg/boot_msg.hpp"
 #include "core_gic/core_gic.hpp"
