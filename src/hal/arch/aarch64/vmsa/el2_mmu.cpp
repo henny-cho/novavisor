@@ -1,4 +1,4 @@
-// hal/arch/aarch64/el2_mmu.cpp
+// hal/arch/aarch64/vmsa/el2_mmu.cpp
 //
 // EL2 Stage-1 identity map construction and activation.
 //
@@ -23,7 +23,7 @@
 // nova_el2_stage1_enable, so no pre-MMU stack or data access exists on
 // that path at all.
 
-#include "hal/arch/aarch64/stage1_tables.hpp"
+#include "hal/arch/aarch64/vmsa/stage1_tables.hpp"
 #include "hal/board/active/board_layout.h"
 #include "hal/board/active/uart.hpp"
 

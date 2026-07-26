@@ -9,7 +9,7 @@
 // (hal/gic_virt.hpp) so only the vgic component sees it.
 
 #include "hal/arch/aarch64/cpu.hpp"
-#include "hal/arch/aarch64/gic_icc.hpp"
+#include "hal/arch/aarch64/gic/icc.hpp"
 #include "hal/board/active/gicv3.hpp"
 #include "nova/panic.hpp"
 

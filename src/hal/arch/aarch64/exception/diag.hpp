@@ -1,6 +1,6 @@
 #pragma once
 
-// hal/arch/aarch64/diag.hpp
+// hal/arch/aarch64/exception/diag.hpp
 //
 // EL2 state snapshot for fatal-trap dumps — the registers a serial log
 // needs to attribute a first failure without a debugger: the stage-2

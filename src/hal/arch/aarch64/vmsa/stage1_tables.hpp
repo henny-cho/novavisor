@@ -1,6 +1,6 @@
 #pragma once
 
-// hal/arch/aarch64/stage1_tables.hpp
+// hal/arch/aarch64/vmsa/stage1_tables.hpp
 //
 // EL2 Stage-1 identity page tables for ARMv8-A, 4KB granule.
 // Header-only, no privileged instructions — host-testable.
@@ -23,7 +23,7 @@
 //   [47:12] output address
 //   [54]    XN         execute-never
 
-#include "hal/arch/aarch64/stage1_regs.h"
+#include "hal/arch/aarch64/vmsa/stage1_regs.h"
 
 #include <array>
 #include <cstdint>

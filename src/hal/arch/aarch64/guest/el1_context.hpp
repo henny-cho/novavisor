@@ -1,6 +1,6 @@
 #pragma once
 
-// hal/arch/aarch64/el1_context.hpp
+// hal/arch/aarch64/guest/el1_context.hpp
 //
 // EL1 system-register bank — the save/restore mechanism for guest state
 // that lives outside the trap frame. Scheduling policy (when to switch)

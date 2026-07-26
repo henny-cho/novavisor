@@ -1,4 +1,4 @@
-// hal/arch/aarch64/mmu.S
+// hal/arch/aarch64/vmsa/mmu.S
 //
 // MMU primitives: EL2's own Stage-1 regime (called from boot paths)
 // and Stage 2 (called from components/core_mmu/src/core_mmu.cpp).

@@ -1,6 +1,6 @@
 #pragma once
 
-// hal/arch/aarch64/fp.hpp
+// hal/arch/aarch64/guest/fp.hpp
 //
 // FP/SIMD register bank + CPTR_EL2.TFP control — the mechanism behind
 // lazy guest FP switching. The hardware FP register file belongs to at
@@ -57,7 +57,7 @@ inline void set_fp_trap_before_eret(bool trap) noexcept {
 
 } // namespace nova::arch
 
-// hal/arch/aarch64/fp.S — the only code in the EL2 image allowed to
+// hal/arch/aarch64/guest/fp.S — the only code in the EL2 image allowed to
 // touch FP registers. CPTR_EL2.TFP must be clear when these run.
 extern "C" void nova_fp_save(nova::arch::FpBank* bank) noexcept;
 extern "C" void nova_fp_restore(const nova::arch::FpBank* bank) noexcept;

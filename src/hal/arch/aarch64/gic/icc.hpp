@@ -1,6 +1,6 @@
 #pragma once
 
-// hal/arch/aarch64/gic_icc.hpp
+// hal/arch/aarch64/gic/icc.hpp
 //
 // GICv3 physical CPU interface (ICC_* system registers) — pure
 // architecture, no board dependency. System registers are written with

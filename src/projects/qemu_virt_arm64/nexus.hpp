@@ -6,7 +6,7 @@
 // the 17 active components in cib::components<...>, and boot_order_
 // component below declares the one RuntimeStart chain they run in.
 // cib::top<nova_project> wires everything at compile time (BSS is
-// already cleared by hal/arch/aarch64/boot.S before any C++ runs;
+// already cleared by hal/arch/aarch64/boot/boot.S before any C++ runs;
 // EarlyRuntimeInit has no actions).
 //
 // Boot order is a composition concern, not a peer-component one — a

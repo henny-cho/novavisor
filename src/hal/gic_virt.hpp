@@ -9,7 +9,7 @@
 // this facade only moves raw values between that model and the
 // hardware.
 
-#include "hal/arch/aarch64/gic_ich.hpp"
+#include "hal/arch/aarch64/gic/ich.hpp"
 
 #include <cstddef>
 #include <cstdint>

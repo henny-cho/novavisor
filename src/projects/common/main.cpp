@@ -1,6 +1,6 @@
 // NovaVisor bare-metal entry point, shared by every project profile.
 // The composition it boots is whichever nexus.hpp the project puts on
-// the include path (BSS is cleared in hal/arch/aarch64/boot.S; the rest
+// the include path (BSS is cleared in hal/arch/aarch64/boot/boot.S; the rest
 // is orchestrated by cib::top<nova_project>):
 //   1. RuntimeStart → the project's init chain (Stage 2, GIC, timers,
 //                     …), ending with the boot banner.

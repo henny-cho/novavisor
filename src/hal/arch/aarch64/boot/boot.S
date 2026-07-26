@@ -11,7 +11,7 @@
 //                          all shared state were initialized by the
 //                          primary before CPU_ON was issued.
 
-#include "hal/arch/aarch64/stage1_regs.h"
+#include "hal/arch/aarch64/vmsa/stage1_regs.h"
 #include "hal/board/active/board_layout.h"
 #include "nova/arch/mpidr.h"
 

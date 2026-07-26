@@ -1,4 +1,4 @@
-// hal/arch/aarch64/fp.S
+// hal/arch/aarch64/guest/fp.S
 //
 // FP/SIMD register bank save/restore — the ONLY code in the EL2 image
 // permitted to touch the FP register file (tools/check_fp_free.sh

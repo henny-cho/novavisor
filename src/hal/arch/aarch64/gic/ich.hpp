@@ -1,6 +1,6 @@
 #pragma once
 
-// hal/arch/aarch64/gic_ich.hpp
+// hal/arch/aarch64/gic/ich.hpp
 //
 // GICv3 EL2 virtual CPU interface (ICH_* system registers) — pure
 // architecture, no board dependency. This is the hardware half of

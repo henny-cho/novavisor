@@ -1,24 +1,27 @@
 # Low-level boot + vector table for ARMv8-A EL2. The selected
 # architecture exports the canonical target consumed by the project.
 add_library(nova_arch OBJECT
-    boot.S
-    vec.S
-    mmu.S
-    vcpu_enter.S
-    fp.S
-    el2_mmu.cpp
-    mem.cpp
+    boot/boot.S
+    exception/vec.S
+    vmsa/mmu.S
+    vmsa/el2_mmu.cpp
+    guest/vcpu_enter.S
+    guest/fp.S
+    lib/string.cpp
+    lib/restore.cpp
 )
 target_include_directories(nova_arch PUBLIC
     ${CMAKE_SOURCE_DIR}/src)
 # nova_board carries the board include dirs; nova_warnings applies the
 # project's mandatory C++ flags (-Werror, -fno-rtti/-fno-exceptions) to
-# mem.cpp — the TU implementing the mem* libcalls must not be exempt.
+# the C++ TUs here — the ones implementing the mem* libcalls must not
+# be exempt.
 target_link_libraries(nova_arch PUBLIC nova_board PRIVATE nova_warnings)
 
-# mem.cpp implements the mem* libcalls themselves: -fno-builtin keeps
-# GCC from recognizing the loops and emitting recursive libcalls.
-set_source_files_properties(mem.cpp PROPERTIES COMPILE_OPTIONS "-fno-builtin")
+# string.cpp implements the mem* libcalls themselves: -fno-builtin keeps
+# GCC from recognizing the loops and emitting recursive libcalls. Scoped
+# to that one TU so no other source silently loses builtin lowering.
+set_source_files_properties(lib/string.cpp PROPERTIES COMPILE_OPTIONS "-fno-builtin")
 
 # The linker script is preprocessed from a template so the RAM window
 # comes from the board's board_layout.h (same lds.S pattern as
@@ -30,8 +33,8 @@ add_custom_command(
     COMMAND ${CMAKE_C_COMPILER} -E -P -x c
             -I${NOVA_BOARD_INCLUDE_DIR}
             -I${CMAKE_SOURCE_DIR}/src
-            ${CMAKE_CURRENT_SOURCE_DIR}/linker.ld.S -o ${NOVA_LINKER_SCRIPT}
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/linker.ld.S
+            ${CMAKE_CURRENT_SOURCE_DIR}/boot/linker.ld.S -o ${NOVA_LINKER_SCRIPT}
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/boot/linker.ld.S
             ${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/board_layout.h
     COMMENT "Preprocessing hypervisor linker script"
 )

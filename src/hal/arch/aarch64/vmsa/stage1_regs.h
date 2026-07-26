@@ -1,4 +1,4 @@
-/* hal/arch/aarch64/stage1_regs.h
+/* hal/arch/aarch64/vmsa/stage1_regs.h
  *
  * EL2 Stage-1 translation register values — the single source shared
  * by boot.S (secondary entry enables the MMU before any C++ or stack

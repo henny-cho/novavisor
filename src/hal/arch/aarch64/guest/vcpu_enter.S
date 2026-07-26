@@ -1,4 +1,4 @@
-// hal/arch/aarch64/vcpu_enter.S
+// hal/arch/aarch64/guest/vcpu_enter.S
 //
 // One-way transition from EL2 into an EL1 guest.
 //
