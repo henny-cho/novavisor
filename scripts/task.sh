@@ -9,6 +9,12 @@ set -euo pipefail
 WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_ROOT="${WORK_DIR}/build"
 
+# Source trees clang-tidy diagnoses, as a regex alternation. Single source
+# for both the translation-unit filter and -header-filter in cmd_lint.
+# .clang-tidy repeats it for editors; tests/scripts/lint_scope_test.py keeps
+# the two identical and every named tree real.
+NOVA_LINT_TREES="components|hal|nova|projects"
+
 # Pinned tool versions (CLANG_FORMAT_VERSION, toolchain).
 # shellcheck source=lib/versions.sh disable=SC1091
 source "${WORK_DIR}/scripts/lib/versions.sh"
@@ -269,7 +275,17 @@ cmd_lint() {
     # to aarch64-none-elf and injects GCC's implicit include dirs.
     local EXTRA_ARGS=()
     mapfile -t EXTRA_ARGS < "${BUILD_DIR}/clang_tidy_extra_args.txt"
-    local TIDY_SOURCE_RE="^${WORK_DIR}/src/(components|hal|nova|projects)/.*\\.cpp\$"
+    # -header-filter has no equivalent of the empty-selection guard below, so
+    # a tree that moved away would silently drop every header diagnostic
+    # under it while lint still reports success.
+    local tree
+    for tree in ${NOVA_LINT_TREES//|/ }; do
+        if [ ! -d "${WORK_DIR}/src/${tree}" ]; then
+            echo "Error: lint scope names src/${tree}, which does not exist" >&2
+            exit 1
+        fi
+    done
+    local TIDY_SOURCE_RE="^${WORK_DIR}/src/(${NOVA_LINT_TREES})/.*\\.cpp\$"
     local TIDY_COUNT
     TIDY_COUNT=$(python3 -c 'import json, re, sys
 print(len({e["file"] for e in json.load(open(sys.argv[1])) if re.match(sys.argv[2], e["file"])}))' \
@@ -285,7 +301,7 @@ print(len({e["file"] for e in json.load(open(sys.argv[1])) if re.match(sys.argv[
     # honors HeaderFilterRegex from .clang-tidy — relying on the config file
     # silently skips all header diagnostics on newer versions.
     "${tidy_runner}" -quiet -p "${BUILD_DIR}" "${EXTRA_ARGS[@]}" \
-        '-header-filter=/src/(components|hal|nova|projects)/' \
+        "-header-filter=/src/(${NOVA_LINT_TREES})/" \
         "${TIDY_SOURCE_RE}"
     echo "Linting complete."
 }
