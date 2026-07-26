@@ -24,7 +24,8 @@ Checks: >-
 # Diagnostics only for NovaVisor's own headers — third-party (external/cache,
 # toolchain sysroot) is out of scope and would drown real findings.
 # NOTE: clang-tidy 19+ ignores HeaderFilterRegex from this file; task.sh lint
-# passes the same regex via -header-filter. Keep the two in sync.
+# builds the same regex from NOVA_LINT_TREES and passes it via -header-filter.
+# tests/scripts/lint_scope_test.py fails if the two drift apart.
 WarningsAsErrors: '*'
 HeaderFilterRegex: '/src/(components|hal|nova|projects)/'
 

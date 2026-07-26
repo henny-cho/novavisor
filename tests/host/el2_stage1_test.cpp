@@ -4,7 +4,7 @@
 // attribute placement, overlap/pool-exhaustion rejection, and the
 // translation register values shared with boot.S.
 
-#include "hal/arch/aarch64/stage1_tables.hpp"
+#include "hal/arch/aarch64/vmsa/stage1_tables.hpp"
 
 #include <cstdint>
 #include <gtest/gtest.h>

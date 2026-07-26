@@ -5,11 +5,11 @@
 // EL2 virtual CPU interface facade (ICH_*) — consumed by the vgic
 // component only; physical-side components bind through hal/gic.hpp
 // and never see these symbols. LR bit encoding and injection policy
-// live in the pure model (components/vgic/include/vgic_model.hpp);
+// live in the pure model (the vgic component);
 // this facade only moves raw values between that model and the
 // hardware.
 
-#include "hal/arch/aarch64/gic_ich.hpp"
+#include "hal/arch/aarch64/gic/ich.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -33,7 +33,7 @@ inline void init() noexcept {
 }
 
 // Raw ICH_VTR_EL2 — vgic caches it and derives the emulated ICC_CTLR
-// view and the banked VMCR reset value (nova/arch/gicv3_vtr.hpp).
+// view and the banked VMCR reset value (nova/arch/gicv3/vtr.hpp).
 inline auto vtr() noexcept -> std::uint64_t {
   return arch::gicv3::read_vtr();
 }

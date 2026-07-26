@@ -15,8 +15,46 @@ SPEC.loader.exec_module(BOUNDARIES)
 
 
 class PlatformBoundaryTests(unittest.TestCase):
+    def test_repository_scan_targets_all_exist(self):
+        # Guards every assertion below: the checker searches fixed paths,
+        # so a renamed tree would empty the scan instead of failing it.
+        self.assertEqual(BOUNDARIES.missing_scan_targets(REPO), [])
+
     def test_repository_has_no_board_reverse_dependency(self):
         self.assertEqual(BOUNDARIES.find_violations(REPO), [])
+
+    def _complete_layout(self, root: Path):
+        for tree in (*BOUNDARIES.GENERIC_TREES, BOUNDARIES.COMPONENT_TREE):
+            (root / tree).mkdir(parents=True, exist_ok=True)
+        board = root / BOUNDARIES.BOARD_ROOT / "sample_board"
+        board.mkdir(parents=True)
+        (board / "board.cmake").write_text("")
+
+    def test_renamed_tree_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._complete_layout(root)
+            self.assertEqual(BOUNDARIES.missing_scan_targets(root), [])
+
+            moved = root / BOUNDARIES.COMPONENT_TREE
+            moved.rename(moved.with_name("modules"))
+
+            self.assertIn(
+                str(BOUNDARIES.COMPONENT_TREE), BOUNDARIES.missing_scan_targets(root)
+            )
+
+    def test_board_root_without_boards_is_reported(self):
+        # An empty board set makes the board-name scan compare every line
+        # against nothing, which no source can ever fail.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._complete_layout(root)
+            (root / BOUNDARIES.BOARD_ROOT / "sample_board" / "board.cmake").unlink()
+
+            self.assertEqual(
+                BOUNDARIES.missing_scan_targets(root),
+                [f"{BOUNDARIES.BOARD_ROOT}/<board>/board.cmake"],
+            )
 
     def test_board_reference_in_generic_tree_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -36,9 +74,10 @@ class PlatformBoundaryTests(unittest.TestCase):
 
     def test_component_bypassing_a_hal_facade_is_rejected(self):
         # Components may include hal/*.hpp facades, nova/*, and DEPS'd
-        # peers — never a board or arch tree directly.
+        # peers — never a board, arch or driver tree directly.
         for include in ('#include "hal/board/active/board.hpp"',
-                        '#include "hal/arch/aarch64/cpu.hpp"'):
+                        '#include "hal/arch/aarch64/cpu.hpp"',
+                        '#include "hal/drivers/pl011.hpp"'):
             with self.subTest(include=include), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 source = root / "src" / "components" / "sample" / "sample.cpp"

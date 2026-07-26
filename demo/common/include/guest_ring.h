@@ -1,7 +1,7 @@
 /* demo/common/include/guest_ring.h
  *
  * Guest-side SPSC ring over the IVC shared page — the C twin of the
- * hypervisor's host-tested model (components/ivc/include/ivc/ring.hpp),
+ * hypervisor's host-tested model (the ivc component's ring.hpp),
  * both speaking the nova/abi/ivc_ring.h layout.
  *
  * One VM produces into a ring, exactly one other consumes it — no

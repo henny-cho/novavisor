@@ -4,7 +4,7 @@
 //
 // Fatal-dump state facade — consumed by the trap_handler dump only.
 
-#include "hal/arch/aarch64/diag.hpp"
+#include "hal/arch/aarch64/exception/diag.hpp"
 
 namespace nova::diag {
 

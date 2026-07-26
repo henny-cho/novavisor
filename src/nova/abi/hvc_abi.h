@@ -2,14 +2,14 @@
  *
  * Guest <-> hypervisor HVC function IDs — the single source of truth for
  * the hypercall ABI. Included by the hypervisor dispatcher
- * (components/demo_hvc), the guest-side stubs (demo/common/include/
+ * (the demo_hvc component), the guest-side stubs (demo/common/include/
  * demo_hvc.h), and guest assembly (demo/common/startup.S).
  *
  * Calling convention (SMCCC-style): function ID in x0, arguments in
  * x1..x6, return value (if any) in x0, issued via `hvc #0`.
  *
  * ID allocation (one 0x100 range per subsystem; a subscriber must ignore
- * IDs outside its range — see components/trap_handler/):
+ * IDs outside its range — see the trap_handler component):
  *   0x1000..0x10FF  demo    (PUTS/PUTC/EXIT/...)
  *   0x1100..0x11FF  ivc     (Phase 7+)
  *   0x1200..0x12FF  timer   (Phase 6+)

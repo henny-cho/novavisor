@@ -1,4 +1,4 @@
-#include "nova/arch/gicv3_spi.hpp"
+#include "nova/arch/gicv3/spi.hpp"
 
 #include <gtest/gtest.h>
 

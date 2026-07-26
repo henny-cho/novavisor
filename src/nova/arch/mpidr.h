@@ -4,7 +4,7 @@
  * bits 39:32, Aff2..Aff0 in bits 23:0.
  *
  * Plain #define only: shared by the boot assembly (hal/arch/aarch64/
- * boot.S) and the C++ per-core identity helpers.
+ * boot/boot.S) and the C++ per-core identity helpers.
  */
 
 #ifndef NOVA_ARCH_MPIDR_H

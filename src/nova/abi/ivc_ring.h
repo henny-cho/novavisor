@@ -2,7 +2,7 @@
  *
  * Lock-free SPSC ring layout inside the IVC shared page — the single
  * source consumed by the hypervisor-side C++ model
- * (components/ivc/include/ivc/ring.hpp, host-tested) and the guest C
+ * (the ivc component's ring.hpp, host-tested) and the guest C
  * helper (demo/common/include/guest_ring.h).
  *
  * Two directional rings (one producer, one consumer each — no RMW

@@ -1,4 +1,4 @@
-#include "nova/arch/pci.hpp"
+#include "nova/arch/pci/config_space.hpp"
 
 #include <gtest/gtest.h>
 

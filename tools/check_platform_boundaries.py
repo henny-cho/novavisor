@@ -7,19 +7,24 @@ import argparse
 from pathlib import Path
 
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".h", ".hpp", ".py", ".S"}
+BOARD_ROOT = Path("src/hal/board")
 GENERIC_TREES = (
     Path("src/nova"),
     Path("src/components"),
     Path("src/hal/arch"),
-    Path("src/hal/board/common"),
+    Path("src/hal/drivers"),
     Path("tools"),
 )
 
 # Components compose against hal facades, nova/*, and DEPS'd peers only.
-# Reaching into a board or arch tree directly ties the component to one
-# platform and is what the hal/*.hpp facades exist to prevent.
+# Reaching into a board, arch or driver tree directly ties the component
+# to one platform and is what the hal/*.hpp facades exist to prevent.
 COMPONENT_TREE = Path("src/components")
-FORBIDDEN_COMPONENT_INCLUDES = ('#include "hal/board/', '#include "hal/arch/')
+FORBIDDEN_COMPONENT_INCLUDES = (
+    '#include "hal/board/',
+    '#include "hal/arch/',
+    '#include "hal/drivers/',
+)
 
 
 def _source_files(base: Path) -> list[Path]:
@@ -30,16 +35,37 @@ def _source_files(base: Path) -> list[Path]:
     ]
 
 
+def _board_names(root: Path) -> set[str]:
+    board_root = root / BOARD_ROOT
+    if not board_root.is_dir():
+        return set()
+    return {
+        path.name
+        for path in board_root.iterdir()
+        if path.is_dir() and (path / "board.cmake").is_file()
+    }
+
+
+def missing_scan_targets(root: Path) -> list[str]:
+    """Report scan inputs that no longer exist at their hardcoded paths.
+
+    Every rule below is a search over a fixed set of directories, so a
+    directory rename does not fail the scan — it empties it. Without this
+    check a moved tree reports zero violations because nothing was read.
+    """
+    missing = [
+        str(tree)
+        for tree in dict.fromkeys((*GENERIC_TREES, COMPONENT_TREE))
+        if not (root / tree).is_dir()
+    ]
+    if not _board_names(root):
+        missing.append(f"{BOARD_ROOT}/<board>/board.cmake")
+    return missing
+
+
 def find_violations(root: Path) -> list[tuple[Path, int, str, str]]:
     violations: list[tuple[Path, int, str, str]] = []
-    board_root = root / "src" / "hal" / "board"
-    board_names: set[str] = set()
-    if board_root.exists():
-        board_names = {
-            path.name
-            for path in board_root.iterdir()
-            if path.is_dir() and (path / "board.cmake").is_file()
-        }
+    board_names = _board_names(root)
     for tree in GENERIC_TREES:
         base = root / tree
         if not base.exists():
@@ -82,8 +108,16 @@ def main() -> int:
         "--root", type=Path, default=Path(__file__).resolve().parents[1]
     )
     args = parser.parse_args()
+    root = args.root.resolve()
 
-    violations = find_violations(args.root.resolve())
+    missing = missing_scan_targets(root)
+    for target in missing:
+        print(f"missing scan target: {target}")
+    if missing:
+        print(f"platform boundary check failed: {len(missing)} scan target(s) missing")
+        return 1
+
+    violations = find_violations(root)
     for path, line_number, line, reason in violations:
         print(f"{path}:{line_number}: {reason}: {line}")
     if violations:

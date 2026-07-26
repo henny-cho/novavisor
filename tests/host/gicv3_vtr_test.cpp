@@ -1,4 +1,4 @@
-#include "nova/arch/gicv3_vtr.hpp"
+#include "nova/arch/gicv3/vtr.hpp"
 
 #include <gtest/gtest.h>
 

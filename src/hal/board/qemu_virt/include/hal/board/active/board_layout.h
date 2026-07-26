@@ -1,7 +1,7 @@
 /* hal/board/active/board_layout.h (qemu_virt)
  *
  * The QEMU virt memory map — the single source shared by the
- * linker-script template (hal/arch/aarch64/linker.ld.S, preprocessed
+ * linker-script template (hal/arch/aarch64/boot/linker.ld.S, preprocessed
  * with cc -E) and the C++ view in board.hpp. Porting to a new board
  * changes these values, nothing else.
  *

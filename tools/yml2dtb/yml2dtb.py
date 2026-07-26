@@ -30,7 +30,7 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_LAYOUT = REPO / "src" / "nova" / "abi" / "guest_layout.h"
-GIC_REGS = REPO / "src" / "nova" / "arch" / "gicv3_regs.h"
+GIC_REGS = REPO / "src" / "nova" / "arch" / "gicv3" / "regs.h"
 
 MIB = 0x10_0000
 MAX_DEVICES = 8
@@ -207,7 +207,7 @@ def build_guest_dtb(guest: dict, layout: dict[str, int], serves_psci: bool = Tru
         w.end_node()
 
     # The emulated GICv3: one distributor frame plus one redistributor
-    # frame per vCPU (sizes single-sourced from gicv3_regs.h).
+    # frame per vCPU (sizes single-sourced from gicv3/regs.h).
     gicd = layout["NOVA_GICD_IPA_BASE"]
     w.begin_node(f"intc@{gicd:x}")
     w.prop_str("compatible", "arm,gic-v3")

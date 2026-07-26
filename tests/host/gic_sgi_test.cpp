@@ -1,4 +1,4 @@
-#include "nova/arch/gicv3_sgi.hpp"
+#include "nova/arch/gicv3/sgi.hpp"
 
 #include <gtest/gtest.h>
 
