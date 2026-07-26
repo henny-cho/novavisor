@@ -79,24 +79,70 @@ TEST(VgicRefill, PriorityOrderThenIntidOrder) {
   EXPECT_EQ(lr_vintid(c.lr[2]), 12U);
 }
 
-TEST(VgicRefill, InFlightDuplicateStaysPending) {
+TEST(VgicRefill, InFlightDuplicateStaysPendingAndArmsEoiMaintenance) {
   CpuState c{};
   c.redist.pending = 1U << 0U;
   EXPECT_FALSE(refill(c, kLrs));
   EXPECT_EQ(lr_vintid(c.lr[0]), 0U);
+  EXPECT_EQ(c.lr[0] & kLrEoi, 0U); // nothing queued behind it yet
 
   // Second edge while the first is still in flight stays queued without
-  // underflow maintenance; the next state-derived refill picks it up.
+  // underflow maintenance, and arms EOI maintenance on the LR holding
+  // the first — its deactivate is the exit that retries the queued one.
   c.redist.pending = 1U << 0U;
   EXPECT_FALSE(refill(c, kLrs));
   EXPECT_EQ(c.redist.pending, 1U << 0U);
   EXPECT_FALSE(lr_in_flight(c.lr[1]));
+  EXPECT_NE(c.lr[0] & kLrEoi, 0U);
 
   // Guest consumed the first edge → LR freed → the queued one lands.
   c.lr[0] = 0;
   EXPECT_FALSE(refill(c, kLrs));
   EXPECT_EQ(lr_vintid(c.lr[0]), 0U);
   EXPECT_EQ(c.redist.pending, 0U);
+}
+
+// The guest virtual timer re-asserting while its injected copy is still
+// active is the case that must never silently drop: EL2 masks CNTV when
+// it takes the physical PPI, so a lost re-injection costs the guest its
+// re-arm and with it every future timer interrupt. Free LRs mean no
+// underflow maintenance is coming, and a compute-bound guest issues no
+// wfi — the armed EOI maintenance is the only path back.
+TEST(VgicRefill, ReassertedTimerSurvivesAnActiveInFlightCopy) {
+  constexpr std::uint32_t kTimer = 27;
+  CpuState                c{};
+  c.redist.isenabler0 |= 1U << kTimer;
+  c.redist.pending = 1U << kTimer;
+  ASSERT_FALSE(refill(c, kLrs));
+  ASSERT_EQ(lr_vintid(c.lr[0]), kTimer);
+
+  c.lr[0] = (c.lr[0] & ~kLrStateMask) | kLrStateActive; // guest acknowledged it
+
+  c.redist.pending = 1U << kTimer; // CNTV asserted again inside the handler
+  EXPECT_FALSE(refill(c, kLrs));
+  EXPECT_EQ(c.redist.pending, 1U << kTimer);
+  EXPECT_NE(c.lr[0] & kLrEoi, 0U);
+
+  // Deactivate → EISR bit 0 → harvest frees the slot → the copy lands.
+  c.lr[0] &= ~kLrStateMask;
+  const EoiHarvest harvest = harvest_eois(c, 1U, kLrs);
+  EXPECT_EQ(harvest.count, 0U); // private INTID: no device EoI to settle
+  EXPECT_FALSE(refill(c, kLrs));
+  EXPECT_EQ(lr_vintid(c.lr[0]), kTimer);
+  EXPECT_EQ(c.redist.pending, 0U);
+}
+
+TEST(VgicRefill, DistinctIntidTakesAFreeLrWithoutArmingMaintenance) {
+  CpuState c{};
+  c.redist.pending = 1U << 5U;
+  ASSERT_FALSE(refill(c, kLrs));
+  ASSERT_EQ(lr_vintid(c.lr[0]), 5U);
+
+  c.redist.pending = 1U << 9U; // different INTID — a free LR takes it
+  EXPECT_FALSE(refill(c, kLrs));
+  EXPECT_EQ(lr_vintid(c.lr[1]), 9U);
+  EXPECT_EQ(c.lr[0] & kLrEoi, 0U);
+  EXPECT_EQ(c.lr[1] & kLrEoi, 0U);
 }
 
 TEST(VgicRefill, LrExhaustionRequestsMaintenance) {
@@ -164,6 +210,21 @@ TEST(VgicSpiRefill, DisabledSpiStaysPending) {
   EXPECT_FALSE(refill(c, kLrs, &d, 0, 1));
   EXPECT_EQ(d.spi_pending, 1U << 1U);
   EXPECT_FALSE(lr_in_flight(c.lr[0]));
+}
+
+TEST(VgicSpiRefill, InFlightDuplicateArmsEoiMaintenance) {
+  CpuState  c{};
+  DistState d{};
+  d.spi_enabled = 1U << 1U; // INTID 33
+  d.spi_pending = 1U << 1U;
+  ASSERT_FALSE(refill(c, kLrs, &d, 0, 1));
+  ASSERT_EQ(lr_vintid(c.lr[0]), 33U);
+  EXPECT_EQ(c.lr[0] & kLrEoi, 0U); // untracked SPI: no device token
+
+  d.spi_pending = 1U << 1U; // re-asserted before the guest retired it
+  EXPECT_FALSE(refill(c, kLrs, &d, 0, 1));
+  EXPECT_EQ(d.spi_pending, 1U << 1U);
+  EXPECT_NE(c.lr[0] & kLrEoi, 0U);
 }
 
 TEST(VgicSpiRefill, PrioritiesInterleaveWithPrivate) {
