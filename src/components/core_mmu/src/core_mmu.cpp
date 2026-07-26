@@ -280,6 +280,9 @@ void init_and_activate() noexcept {
     }
     if (guest.dtb_size != 0) {
       std::memcpy(reinterpret_cast<void*>(guest.to_pa(guest.dtb_ipa)), guest.dtb, guest.dtb_size);
+      // The MMU-off guest parses this at the PoC on its first
+      // instructions — the payload sync above does not cover it.
+      cache::clean_guest_data(guest.to_pa(guest.dtb_ipa), static_cast<std::size_t>(guest.dtb_size));
     }
   }
 

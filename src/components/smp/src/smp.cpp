@@ -8,12 +8,14 @@
 
 #include "core_mmu/core_mmu.hpp"
 #include "core_timer/core_timer.hpp"
+#include "hal/cache.hpp"
 #include "hal/console.hpp"
 #include "hal/cpu.hpp"
 #include "hal/gic.hpp"
 #include "hal/timer.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/psci.h"
+#include "nova/panic.hpp"
 #include "smp_internal.hpp"
 #include "soft_timer/soft_timer.hpp"
 #include "vgic/vgic.hpp"
@@ -27,9 +29,19 @@ extern "C" void nova_secondary_entry() noexcept;
 
 namespace nova::smp {
 
+namespace {
+// The boot PE's CTR_EL0 — every guest-memory CMO loop derives its line
+// size and maintenance shortcuts from the executing PE's CTR, which is
+// only sound while all PEs agree (homogeneous cluster). Secondaries
+// verify against this and park on mismatch instead of running with
+// under-scoped maintenance.
+std::uint64_t g_boot_ctr = 0;
+} // namespace
+
 void start_secondaries() noexcept {
   const auto entry = reinterpret_cast<std::uint64_t>(&nova_secondary_entry);
 
+  g_boot_ctr = cache::ctr();
   g_online[0].store(true, std::memory_order_release);
   gic::enable_ppi(kCrossCallSgi); // the primary receives cross-calls too
 
@@ -73,6 +85,15 @@ void start_secondaries() noexcept {
 // per PE, reports online, and enters this core's scheduler.
 extern "C" [[noreturn]] void novavisor_secondary(std::uint64_t cpu_index) noexcept {
   using namespace nova;
+
+  // Homogeneous-cluster premise: this core's cache geometry must match
+  // the boot PE's, or every CMO issued here is potentially under-scoped.
+  if (cache::ctr() != smp::g_boot_ctr) {
+    console::write("[smp] core ");
+    console::write_dec64(cpu_index);
+    console::write(" CTR_EL0 mismatch (heterogeneous cluster) — parking\n");
+    halt();
+  }
 
   gic::init_cpu();                     // redistributor + ICC
   vgic::init_cpu();                    // ICH + maintenance PPI
