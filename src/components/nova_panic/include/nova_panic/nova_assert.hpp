@@ -13,10 +13,16 @@
 
 #define NOVA_CRASH(msg) STDX_PANIC(msg)
 
+// Location baked into the compile-time panic string — every assertion
+// used to print the same "NOVA_ASSERT failed" line, which made a
+// serial-log-only failure unattributable.
+#define NOVA_STRINGIZE_DETAIL(x) #x
+#define NOVA_STRINGIZE(x)        NOVA_STRINGIZE_DETAIL(x)
+
 #define NOVA_ASSERT(expr)                                                                                              \
   do {                                                                                                                 \
     if (!(expr)) {                                                                                                     \
-      STDX_PANIC("NOVA_ASSERT failed");                                                                                \
+      STDX_PANIC("NOVA_ASSERT failed: " #expr " (" __FILE__ ":" NOVA_STRINGIZE(__LINE__) ")");                         \
     }                                                                                                                  \
   } while (0)
 

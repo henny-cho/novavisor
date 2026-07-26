@@ -14,11 +14,17 @@ struct Pl011 {
   inline static constexpr std::uint32_t  kRxEmpty    = 1U << 4U;
   inline static constexpr std::uint32_t  kRxIrq      = 1U << 4U;
 
+  // TX-full wait budget. At any real baud rate the FIFO drains orders
+  // of magnitude faster than this spin; the bound only breaks a dead
+  // or unclocked UART, where the alternative is a panic path that
+  // hangs on its first character instead of reaching the park.
+  inline static constexpr std::uint32_t kTxBudget = 1'000'000;
+
   static void write(std::span<const std::uint8_t> data) noexcept {
     auto* const       data_register = reinterpret_cast<volatile std::uint32_t*>(Base);
     const auto* const flags         = reinterpret_cast<const volatile std::uint32_t*>(Base + kFlagOffset);
     for (const std::uint8_t byte : data) {
-      while ((*flags & kTxFull) != 0U) {
+      for (std::uint32_t budget = kTxBudget; (*flags & kTxFull) != 0U && budget != 0U; --budget) {
       }
       *data_register = byte;
     }

@@ -25,6 +25,7 @@
 
 #include "hal/arch/aarch64/stage1_tables.hpp"
 #include "hal/board/active/board_layout.h"
+#include "hal/board/active/uart.hpp"
 
 #include <algorithm>
 #include <array>
@@ -66,6 +67,7 @@ extern "C" {
 extern char __text_start[];
 extern char __text_end[];
 extern char __rodata_end[];
+extern char __stack_top[];
 // NOLINTEND(readability-identifier-naming)
 
 // mmu.S. Loads MAIR/TCR/TTBR0, invalidates EL2 TLB + I-cache, then
@@ -78,23 +80,41 @@ void nova_el2_stage1_enable(std::uint64_t ttbr0, std::uint64_t tcr, std::uint64_
 alignas(4096) stage1::Table nova_el2_l1_root; // NOLINT(readability-identifier-naming)
 
 // Primary boot path (boot.S, after BSS zeroing): build the identity
-// map, then enable this core's translation regime.
+// map, then enable this core's translation regime. The per-core stack
+// guard pages stay unmapped so an EL2 stack overflow faults instead of
+// silently corrupting the neighbor stack or .bss.
 void nova_el2_mmu_init() noexcept {
   stage1::Stage1Builder builder{nova_el2_l1_root, std::span{g_pool}};
 
   const auto text_start = reinterpret_cast<std::uintptr_t>(__text_start);
   const auto text_end   = reinterpret_cast<std::uintptr_t>(__text_end);
   const auto rodata_end = reinterpret_cast<std::uintptr_t>(__rodata_end);
+  const auto stack_top  = reinterpret_cast<std::uintptr_t>(__stack_top);
 
-  const bool ok = builder.map(0, kRamLo, stage1::desc::kAttrDevice) &&
-                  builder.map(kRamLo, text_start, stage1::desc::kAttrNormalRw) &&
-                  builder.map(text_start, text_end, stage1::desc::kAttrNormalRx) &&
-                  builder.map(text_end, rodata_end, stage1::desc::kAttrNormalRo) &&
-                  builder.map(rodata_end, kRamHi, stage1::desc::kAttrNormalRw);
+  bool ok = builder.map(0, kRamLo, stage1::desc::kAttrDevice) &&
+            builder.map(kRamLo, text_start, stage1::desc::kAttrNormalRw) &&
+            builder.map(text_start, text_end, stage1::desc::kAttrNormalRx) &&
+            builder.map(text_end, rodata_end, stage1::desc::kAttrNormalRo);
+
+  // RW tail in fragments, skipping each stack's guard page (linker.ld.S
+  // reserves SIZE + 4 KiB per core, guard below the stack).
+  constexpr std::uintptr_t kGuardSize = 0x1000;
+  constexpr std::uintptr_t kStride    = NOVA_BOARD_EL2_STACK_SIZE + kGuardSize;
+  std::uintptr_t           cursor     = rodata_end;
+  for (std::size_t k = NOVA_BOARD_SMP_CPUS; k >= 1; --k) {
+    const std::uintptr_t guard = stack_top - (k * kStride);
+    ok                         = ok && builder.map(cursor, guard, stage1::desc::kAttrNormalRw);
+    cursor                     = guard + kGuardSize;
+  }
+  ok = ok && builder.map(cursor, kRamHi, stage1::desc::kAttrNormalRw);
+
   if (!ok) {
-    // Pre-console, pre-MMU: nothing can report this. The geometry is
-    // static per board, so a failure here is a build-time layout bug;
-    // park instead of running uncached forever.
+    // Pre-console: the shared console does not exist yet, but the
+    // board UART does — leave a breadcrumb so this park is
+    // distinguishable from a dead board, then stop instead of running
+    // uncached forever. The geometry is static per board, so reaching
+    // this is a build-time layout bug.
+    nova::board::active::Uart::write("[boot] halt: EL2 stage-1 map build failed\n");
     for (;;) {
       __asm__ volatile("wfi");
     }

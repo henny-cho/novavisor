@@ -9,6 +9,7 @@
 
 #include "dispatch.hpp"
 #include "hal/console.hpp"
+#include "hal/panic.hpp"
 #include "nova/arch/esr.hpp"
 #include "nova/arch/sysreg_trap.hpp"
 #include "nova/arch/trap_context.hpp"
@@ -19,8 +20,10 @@
 #include "trap_handler/trap_handler.hpp"
 #include "trap_handler/wfx.hpp"
 
+#include <array>
 #include <cib/top.hpp>
 #include <cstdint>
+#include <string_view>
 
 namespace nova {
 
@@ -135,10 +138,23 @@ void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
     return;
   }
 
+  if (panic::enter() != panic::Role::kFirst) {
+    halt(); // someone else already owns the report (or we re-faulted)
+  }
   console::write("[NOVA PANIC] inconsistent lower-EL exception class\n");
   dump_trap_context(ctx);
   halt();
 }
+
+namespace {
+
+// Slot names, indexed by vector offset / 0x80 (see vec.S).
+constexpr std::array<std::string_view, 16> kVectorNames{
+    "el2t_sync",  "el2t_irq",  "el2t_fiq",  "el2t_serror",  "el2h_sync", "el2h_irq", "el2h_fiq", "el2h_serror",
+    "lower_sync", "lower_irq", "lower_fiq", "lower_serror", "a32_sync",  "a32_irq",  "a32_fiq",  "a32_serror",
+};
+
+} // namespace
 
 } // namespace nova
 
@@ -152,16 +168,24 @@ void el2_trap_lower_sync(nova::TrapContext* ctx) noexcept {
   cib::service<nova::EL2SyncTrapService>(ctx);
 }
 
-void el2_trap_current_sync(nova::TrapContext* ctx) noexcept {
-  // Dump directly — the CIB service is not dispatched on this path
-  // because the exception occurred inside EL2 itself.
-  nova::console::write("[NOVA PANIC] EL2 self-trap (current-EL sync)\n");
-  nova::dump_trap_context(ctx);
-  nova::halt();
-}
-
-void el2_trap_unhandled(nova::TrapContext* ctx) noexcept {
-  nova::console::write("[NOVA PANIC] Unhandled EL2 exception\n");
+// Every vector with no recovery path funnels here (vec.S TRAP_FATAL_BODY).
+// Claim the machine first: the first failure owns the console raw, every
+// other core parks — a real board's serial log must end with exactly one
+// attributable report, not an interleave of neighbors and watchdog resets.
+void el2_trap_fatal(nova::TrapContext* ctx, std::uint64_t vector) noexcept {
+  switch (nova::panic::enter()) {
+  case nova::panic::Role::kRecursive:
+    // The report path itself faulted — say so raw and stop digging.
+    nova::console::write("\n[NOVA PANIC] recursive fault inside the panic path\n");
+    nova::halt();
+  case nova::panic::Role::kBystander:
+    nova::halt(); // the first failure owns the log
+  case nova::panic::Role::kFirst:
+    break;
+  }
+  nova::console::write("\n[NOVA PANIC] EL2 fatal exception: vector ");
+  nova::console::write(vector < nova::kVectorNames.size() ? nova::kVectorNames[vector] : "?");
+  nova::console::write("\n");
   nova::dump_trap_context(ctx);
   nova::halt();
 }

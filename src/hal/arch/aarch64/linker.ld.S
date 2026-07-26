@@ -49,8 +49,12 @@ SECTIONS
     } > RAM
 
     /* One EL2 stack per physical core, stacked downward from
-     * __stack_top: core i runs on [top - (i+1)*SIZE, top - i*SIZE). */
-    . = ALIGN(16);
-    . = . + NOVA_BOARD_EL2_STACK_SIZE * NOVA_BOARD_SMP_CPUS;
+     * __stack_top with a 4 KiB guard page under each: core i runs on
+     * [top - i*STRIDE - SIZE, top - i*STRIDE), STRIDE = SIZE + 4K.
+     * The guards stay unmapped in the EL2 Stage-1 map (el2_mmu.cpp),
+     * so an overflow faults instead of silently walking into the
+     * neighbor stack or .bss. boot.S computes SP with the same stride. */
+    . = ALIGN(4096);
+    . = . + (NOVA_BOARD_EL2_STACK_SIZE + 4096) * NOVA_BOARD_SMP_CPUS;
     __stack_top = .;
 }

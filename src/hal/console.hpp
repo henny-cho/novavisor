@@ -6,9 +6,11 @@
 // binds to the active board's UART.
 
 #include "hal/board/active/uart.hpp"
+#include "hal/cpu.hpp"
 #include "nova/fmt.hpp"
 #include "nova/sync.hpp"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -19,19 +21,55 @@ namespace nova::console {
 // The UART is one shared FIFO. Use write_parts for atomic multi-fragment lines.
 inline sync::SpinLock g_lock;
 
+// First-failure ownership (hal/panic.hpp claims it): while set, the
+// owning core writes raw — the normal lock may be held by a core that
+// is now parked — and every other core's output is dropped so nothing
+// splices into the failure report.
+inline constexpr std::size_t    kNoPanicOwner = ~std::size_t{0};
+inline std::atomic<std::size_t> g_panic_owner{kNoPanicOwner};
+
+namespace detail {
+enum class Route : std::uint8_t { kLocked, kRaw, kDrop };
+
+[[nodiscard]] inline auto route() noexcept -> Route {
+  const std::size_t owner = g_panic_owner.load(std::memory_order_relaxed);
+  if (owner == kNoPanicOwner) {
+    return Route::kLocked;
+  }
+  return owner == cpu::id() ? Route::kRaw : Route::kDrop;
+}
+} // namespace detail
+
 inline void write(std::string_view sv) noexcept {
+  const auto route = detail::route();
+  if (route == detail::Route::kDrop) {
+    return;
+  }
+  if (route == detail::Route::kRaw) {
+    board::active::Uart::write(sv);
+    return;
+  }
   sync::Guard guard{g_lock};
   board::active::Uart::write(sv);
 }
 
 // Null-terminated C strings (extern "C" boundaries, __func__-style values).
 inline void write(const char* str) noexcept {
-  sync::Guard guard{g_lock};
-  board::active::Uart::write(str);
+  write(std::string_view{str});
 }
 
 // Emit one logical line from preformatted fragments under one lock.
 inline void write_parts(std::span<const std::string_view> parts) noexcept {
+  const auto route = detail::route();
+  if (route == detail::Route::kDrop) {
+    return;
+  }
+  if (route == detail::Route::kRaw) {
+    for (const std::string_view part : parts) {
+      board::active::Uart::write(part);
+    }
+    return;
+  }
   sync::Guard guard{g_lock};
   for (const std::string_view part : parts) {
     board::active::Uart::write(part);
@@ -69,6 +107,14 @@ inline void put(Hex h) noexcept {
 // cannot.
 template <typename... Parts>
 inline void line(Parts... parts) noexcept {
+  const auto route = detail::route();
+  if (route == detail::Route::kDrop) {
+    return;
+  }
+  if (route == detail::Route::kRaw) {
+    (detail::put(parts), ...);
+    return;
+  }
   sync::Guard guard{g_lock};
   (detail::put(parts), ...);
 }

@@ -109,5 +109,6 @@ add_subdirectory(11_configurable)     # Phase 15
 add_subdirectory(15_dma_isolation)
 add_subdirectory(16_edu_passthrough)
 add_subdirectory(17_edu_dma)
+add_subdirectory(18_panic_smoke)      # Phase 25
 # Real-OS demos (Zephyr/Linux, Phase 16+) reference external images and
 # need no cmake subdir.

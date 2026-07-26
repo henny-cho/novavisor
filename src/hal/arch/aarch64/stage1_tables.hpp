@@ -112,6 +112,7 @@ static_assert(kTcrEl2 == NOVA_EL2_TCR);
 inline constexpr std::uint64_t kSctlrEl2 = 0x30C50830ULL   // RES1
                                            | (1ULL << 0)   // M: Stage-1 MMU
                                            | (1ULL << 2)   // C: data cache
+                                           | (1ULL << 3)   // SA: SP alignment check
                                            | (1ULL << 12)  // I: instruction cache
                                            | (1ULL << 19); // WXN: writable implies XN
 static_assert(kSctlrEl2 == NOVA_EL2_SCTLR);

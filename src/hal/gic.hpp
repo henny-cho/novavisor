@@ -8,8 +8,10 @@
 // hal/board/*/ one. The EL2 virtual CPU interface has its own facade
 // (hal/gic_virt.hpp) so only the vgic component sees it.
 
+#include "hal/arch/aarch64/cpu.hpp"
 #include "hal/arch/aarch64/gic_icc.hpp"
 #include "hal/board/active/gicv3.hpp"
+#include "nova/panic.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -29,6 +31,9 @@ inline constexpr std::uint32_t kSpecialIntidBase = arch::gicv3::kSpecialIntidBas
 inline void init_cpu() noexcept {
   board::active::Gicv3::redistributor_init();
   arch::gicv3::cpu_interface_init();
+  // The panic-stop SGI must be deliverable on every PE from cold boot —
+  // it is what keeps a first failure's report free of neighbor output.
+  board::active::Gicv3::enable_ppi(kPanicStopSgi);
 }
 
 // Cold-boot bring-up on the primary: the system-wide distributor,
@@ -82,6 +87,18 @@ inline void send_sgi(std::size_t target_cpu, std::uint32_t intid) noexcept {
     return;
   }
   arch::gicv3::send_sgi(affinity, intid);
+}
+
+// Ask every other PE to park at its next trap (hal/panic.hpp). Best
+// effort by design: a core spinning in EL2 with interrupts masked will
+// not take it, but cores running guests or idling in wfi will.
+inline void broadcast_panic_stop() noexcept {
+  const std::size_t me = arch::core_index();
+  for (std::size_t i = 0; i < board::active::kCpuAffinity.size(); ++i) {
+    if (i != me) {
+      send_sgi(i, kPanicStopSgi);
+    }
+  }
 }
 
 // Physical interrupt handshake for the EL2 IRQ handler.
