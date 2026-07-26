@@ -126,11 +126,14 @@ inline void clear_interrupts() noexcept {
   if (internal < kInternalBuffer || internal - kInternalBuffer > kBufferSize - count) {
     return false;
   }
+  // Publish before the doorbell, not after: the barrier orders the
+  // buffer stores the device is about to read against the kDmaRun write
+  // that lets it start. Trailing it left that ordering to the caller.
+  publish_memory();
   write_mmio64(reg::kDmaSource, source);
   write_mmio64(reg::kDmaDestination, destination);
   write_mmio64(reg::kDmaCount, count);
   write_mmio64(reg::kDmaCommand, kDmaRun | (to_ram ? kDmaToRam : 0U));
-  publish_memory();
   return true;
 }
 

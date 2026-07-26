@@ -205,11 +205,24 @@ CommandRing<HalHw> g_commands{
   return g_commands.submit(commands);
 }
 
+// SMMUv3 §3.21 configuration update: an STE may not be rewritten in
+// place while valid. Take it invalid, invalidate the config cache, fill
+// the body, then make it valid and invalidate again. The abort STE this
+// replaces is itself V=1, so writing words 1..7 under it relied on the
+// SMMU not having cached fields it is architecturally allowed to cache.
 [[nodiscard]] auto install_stream(std::uint32_t stream_id, const TranslationContext& context) noexcept -> bool {
   const SteEncoding encoding = make_stage2_ste(context.root_pa, context.vmid);
   if (!encoding.ok()) {
     return false;
   }
+
+  g_stream_table[stream_id][0] = 0; // V=0
+  hw::publish_memory();
+  const std::array<CommandEntry, 1> invalidate{make_cfgi_ste(stream_id)};
+  if (!g_commands.submit(invalidate)) {
+    return false;
+  }
+
   for (std::size_t i = 1; i < encoding.entry.size(); ++i) {
     g_stream_table[stream_id][i] = encoding.entry[i];
   }
