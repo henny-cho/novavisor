@@ -29,7 +29,7 @@
 //
 // Reference: Arm IHI 0069 (GICv3/v4 Architecture Specification).
 
-#include "nova/arch/gicv3_regs.h"
+#include "nova/arch/gicv3/regs.h"
 
 #include <array>
 #include <cstddef>

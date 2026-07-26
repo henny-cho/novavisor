@@ -7,7 +7,7 @@
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/guest_layout.h"
-#include "nova/arch/smmuv3_regs.hpp"
+#include "nova/arch/smmuv3/regs.hpp"
 #include "nova/fmt.hpp"
 #include "nova/panic.hpp"
 #include "nova/sync.hpp"

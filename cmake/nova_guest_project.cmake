@@ -41,7 +41,7 @@ function(nova_add_guest_project)
                 ${guest_payload_file}
                 ${CMAKE_SOURCE_DIR}/tools/yml2dtb/yml2dtb.py
                 ${CMAKE_SOURCE_DIR}/src/nova/abi/guest_layout.h
-                ${CMAKE_SOURCE_DIR}/src/nova/arch/gicv3_regs.h
+                ${CMAKE_SOURCE_DIR}/src/nova/arch/gicv3/regs.h
                 ${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/board_layout.h
                 ${NOVA_BOARD_DIR}/device_inventory.yml
         COMMENT "Generating guest payload bundle"

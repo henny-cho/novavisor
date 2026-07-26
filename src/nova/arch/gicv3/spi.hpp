@@ -2,7 +2,7 @@
 
 // Pure register selection for standard shared peripheral interrupts.
 
-#include "nova/arch/gicv3_regs.h"
+#include "nova/arch/gicv3/regs.h"
 
 #include <cstdint>
 

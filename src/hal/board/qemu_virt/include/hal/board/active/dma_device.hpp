@@ -6,7 +6,7 @@
 #include "hal/board/active/board_layout.h" /* search path: active board's layout */
 #include "nova/abi/edu.h"
 #include "nova/abi/guest_layout.h"
-#include "nova/arch/pci.hpp"
+#include "nova/arch/pci/config_space.hpp"
 
 #include <cstdint>
 

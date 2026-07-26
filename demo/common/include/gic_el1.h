@@ -13,7 +13,7 @@
 #define NOVAVISOR_DEMO_GIC_EL1_H
 
 #include "nova/abi/guest_layout.h"
-#include "nova/arch/gicv3_regs.h"
+#include "nova/arch/gicv3/regs.h"
 
 #include <stdint.h>
 

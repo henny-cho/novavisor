@@ -7,7 +7,7 @@
 // their S3_* encodings so the assembler needs no GIC architecture
 // extension; the architectural name is given next to each access.
 
-#include "nova/arch/gicv3_sgi.hpp"
+#include "nova/arch/gicv3/sgi.hpp"
 
 #include <cstdint>
 

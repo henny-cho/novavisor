@@ -33,7 +33,7 @@ inline void init() noexcept {
 }
 
 // Raw ICH_VTR_EL2 — vgic caches it and derives the emulated ICC_CTLR
-// view and the banked VMCR reset value (nova/arch/gicv3_vtr.hpp).
+// view and the banked VMCR reset value (nova/arch/gicv3/vtr.hpp).
 inline auto vtr() noexcept -> std::uint64_t {
   return arch::gicv3::read_vtr();
 }

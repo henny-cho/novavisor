@@ -1,8 +1,8 @@
 #pragma once
 
 #include "hal/arch/aarch64/cpu.hpp"
-#include "nova/arch/gicv3_regs.h"
-#include "nova/arch/gicv3_spi.hpp"
+#include "nova/arch/gicv3/regs.h"
+#include "nova/arch/gicv3/spi.hpp"
 #include "nova/sync.hpp"
 
 #include <array>

@@ -14,7 +14,7 @@
 #include "nova/abi/guest.hpp"
 #include "nova/abi/guest_layout.h"
 #include "nova/arch/esr.hpp"
-#include "nova/arch/gicv3_vtr.hpp"
+#include "nova/arch/gicv3/vtr.hpp"
 #include "nova/sync.hpp"
 #include "vgic/vgic_delivery.hpp"
 

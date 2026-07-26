@@ -1,6 +1,6 @@
 #pragma once
 
-// nova/arch/gicv3_vtr.hpp
+// nova/arch/gicv3/vtr.hpp
 //
 // ICH_VTR_EL2-derived interface facts and the two register views that
 // must track them (Arm IHI 0069 §9.4.19): the ICC_CTLR_EL1 value the

@@ -2,7 +2,7 @@
 
 // Pure capability and memory-structure encoding for the runtime driver.
 
-#include "nova/arch/smmuv3_regs.hpp"
+#include "nova/arch/smmuv3/regs.hpp"
 
 #include <cstdint>
 #include <limits>

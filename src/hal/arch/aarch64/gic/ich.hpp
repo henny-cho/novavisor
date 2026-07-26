@@ -7,7 +7,7 @@
 // virtual interrupt injection; LR bit encoding and injection policy
 // live in the vgic component's pure model.
 
-#include "nova/arch/gicv3_vtr.hpp"
+#include "nova/arch/gicv3/vtr.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -18,7 +18,7 @@ inline constexpr std::uint64_t kIchHcrEn  = 1ULL << 0;
 inline constexpr std::uint64_t kIchHcrUie = 1ULL << 1;  // underflow maintenance IRQ
 inline constexpr std::uint64_t kIchHcrTc  = 1ULL << 10; // trap ICC_SGI*R/DIR (common regs)
 
-// Raw ICH_VTR_EL2 — field decode lives in nova/arch/gicv3_vtr.hpp.
+// Raw ICH_VTR_EL2 — field decode lives in nova/arch/gicv3/vtr.hpp.
 inline auto read_vtr() noexcept -> std::uint64_t {
   std::uint64_t v = 0;
   __asm__ volatile("mrs %0, S3_4_C12_C11_1" : "=r"(v)); // ICH_VTR_EL2

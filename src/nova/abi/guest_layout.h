@@ -31,7 +31,7 @@
 #define NOVA_IVC_SHM_SIZE 0x00001000 /* 4 KiB */
 
 /* Emulated GICv3 frames: left unmapped in Stage 2 so every access traps
- * into the vGIC. Register offsets come from gicv3_regs.h. */
+ * into the vGIC. Register offsets come from gicv3/regs.h. */
 #define NOVA_GICD_IPA_BASE 0x08000000
 #define NOVA_GICR_IPA_BASE 0x080A0000
 

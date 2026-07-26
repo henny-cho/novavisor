@@ -1,4 +1,4 @@
-/* nova/arch/gicv3_regs.h
+/* nova/arch/gicv3/regs.h
  *
  * GICv3 memory-mapped register layout — offsets and bit fields fixed by
  * the GIC architecture. The single source shared by everything that

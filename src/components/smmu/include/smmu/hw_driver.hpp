@@ -6,7 +6,7 @@
 // acquire_memory), so the whole sequence runs against a fake device on the
 // host. No hal/* dependency here — the runtime glue binds the real frame.
 
-#include "nova/arch/smmuv3_regs.hpp"
+#include "nova/arch/smmuv3/regs.hpp"
 #include "smmu/command_model.hpp"
 #include "smmu/fault_model.hpp"
 #include "smmu/queue_model.hpp"
