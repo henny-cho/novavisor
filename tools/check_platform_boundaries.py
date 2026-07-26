@@ -12,15 +12,19 @@ GENERIC_TREES = (
     Path("src/nova"),
     Path("src/components"),
     Path("src/hal/arch"),
-    Path("src/hal/board/common"),
+    Path("src/hal/drivers"),
     Path("tools"),
 )
 
 # Components compose against hal facades, nova/*, and DEPS'd peers only.
-# Reaching into a board or arch tree directly ties the component to one
-# platform and is what the hal/*.hpp facades exist to prevent.
+# Reaching into a board, arch or driver tree directly ties the component
+# to one platform and is what the hal/*.hpp facades exist to prevent.
 COMPONENT_TREE = Path("src/components")
-FORBIDDEN_COMPONENT_INCLUDES = ('#include "hal/board/', '#include "hal/arch/')
+FORBIDDEN_COMPONENT_INCLUDES = (
+    '#include "hal/board/',
+    '#include "hal/arch/',
+    '#include "hal/drivers/',
+)
 
 
 def _source_files(base: Path) -> list[Path]:

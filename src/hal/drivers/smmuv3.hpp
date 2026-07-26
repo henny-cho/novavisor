@@ -1,8 +1,14 @@
 #pragma once
 
+// hal/drivers/smmuv3.hpp
+//
+// SMMUv3 register-frame accessor, parameterized on the base a
+// board supplies. The command/event protocol lives in the smmu
+// component; this is the seam that reaches the hardware.
+
 #include <cstdint>
 
-namespace nova::board::common {
+namespace nova::drivers {
 
 template <std::uintptr_t Base>
 struct Smmuv3 {
@@ -23,4 +29,4 @@ struct Smmuv3 {
   static void acquire_memory() noexcept { __asm__ volatile("dmb oshld" ::: "memory"); }
 };
 
-} // namespace nova::board::common
+} // namespace nova::drivers

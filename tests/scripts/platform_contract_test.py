@@ -74,9 +74,10 @@ class PlatformBoundaryTests(unittest.TestCase):
 
     def test_component_bypassing_a_hal_facade_is_rejected(self):
         # Components may include hal/*.hpp facades, nova/*, and DEPS'd
-        # peers — never a board or arch tree directly.
+        # peers — never a board, arch or driver tree directly.
         for include in ('#include "hal/board/active/board.hpp"',
-                        '#include "hal/arch/aarch64/cpu.hpp"'):
+                        '#include "hal/arch/aarch64/cpu.hpp"',
+                        '#include "hal/drivers/pl011.hpp"'):
             with self.subTest(include=include), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 source = root / "src" / "components" / "sample" / "sample.cpp"

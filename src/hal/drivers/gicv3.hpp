@@ -1,5 +1,11 @@
 #pragma once
 
+// hal/drivers/gicv3.hpp
+//
+// GICv3 distributor and redistributor driver, parameterized on
+// the frame bases and affinity table a board supplies. Boards
+// bind it in their active/gicv3.hpp facade.
+
 #include "hal/arch/aarch64/cpu.hpp"
 #include "nova/arch/gicv3/regs.h"
 #include "nova/arch/gicv3/spi.hpp"
@@ -9,7 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace nova::board::common {
+namespace nova::drivers {
 
 template <typename Config>
 struct Gicv3 {
@@ -276,4 +282,4 @@ struct Gicv3 {
   static auto disable_spi(std::uint32_t intid) noexcept -> bool { return mask_spi(intid); }
 };
 
-} // namespace nova::board::common
+} // namespace nova::drivers

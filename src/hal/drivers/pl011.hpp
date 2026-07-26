@@ -1,10 +1,15 @@
 #pragma once
 
+// hal/drivers/pl011.hpp
+//
+// PL011 UART driver, parameterized on the register base a board
+// supplies. Polled TX/RX only — the console needs no interrupts.
+
 #include <cstdint>
 #include <span>
 #include <string_view>
 
-namespace nova::board::common {
+namespace nova::drivers {
 
 template <std::uintptr_t Base>
 struct Pl011 {
@@ -50,4 +55,4 @@ struct Pl011 {
   }
 };
 
-} // namespace nova::board::common
+} // namespace nova::drivers
