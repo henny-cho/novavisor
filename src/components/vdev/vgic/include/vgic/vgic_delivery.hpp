@@ -140,15 +140,6 @@ struct EoiHarvest {
   return d.spi_pending & d.spi_enabled & routed;
 }
 
-[[nodiscard]] inline auto lr_holds(const CpuState& c, std::size_t lr_count, std::uint32_t vintid) noexcept -> bool {
-  for (std::size_t i = 0; i < lr_count; ++i) {
-    if (lr_in_flight(c.lr[i]) && lr_vintid(c.lr[i]) == vintid) {
-      return true;
-    }
-  }
-  return false;
-}
-
 // Move deliverable pending INTIDs into free list registers, highest
 // priority (lowest value, then lowest INTID) first. An INTID already in
 // flight in an LR cannot be injected twice, so it stays pending until
@@ -170,7 +161,7 @@ inline auto refill(CpuState& c, std::size_t lr_count, DistState* dist = nullptr,
 
   // The deliverable and in-flight sets are invariant across iterations
   // except for the bits this loop itself consumes — compute both once
-  // (spi_deliverable walks all routes; lr_holds scans every LR) and
+  // (route resolution walks every SPI, the in-flight scan every LR) and
   // track consumption locally instead of re-deriving them per INTID.
   std::uint64_t inflight = 0;
   for (std::size_t i = 0; i < lr_count; ++i) {
