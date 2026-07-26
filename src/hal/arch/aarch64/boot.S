@@ -82,6 +82,13 @@ _start:
     // everything else: from here on EL2 runs cacheable and W^X.
     bl nova_el2_mmu_init
 
+    // Unmask SError only now: the fatal-vector report path needs the
+    // console lock and panic owner word, which live in BSS — an abort
+    // surfacing earlier would have parked through garbage state. IRQ/
+    // FIQ stay masked at EL2 for good (HCR.IMO/FMO deliver them from
+    // guest context only).
+    msr daifclr, #4
+
     // Branch to C++ main entry
     bl novavisor_main
 
@@ -162,6 +169,10 @@ nova_secondary_entry:
     ldr x1, =_vector_table
     msr vbar_el2, x1
     isb
+
+    // Same rationale as the primary: report state is live, vectors are
+    // installed — SErrors on this PE may surface immediately.
+    msr daifclr, #4
 
     bl novavisor_secondary
     b .Lhang
