@@ -257,6 +257,10 @@ template <typename Hw, typename OnEvent>
     acknowledge_event_overflow(queue);
   }
   consumer = queue.consumer;
+  // Advancing EVTQ_CONS frees those slots for the SMMU to overwrite:
+  // the reads above must be complete first. The mirror of the barrier
+  // submit() uses before publishing CMDQ_PROD.
+  Hw::publish_memory();
   Hw::write32(regs::kEvtqCons, consumer);
   return stats;
 }
