@@ -102,28 +102,28 @@
 
 _vector_table:
     // --- Current EL with SP_EL0 (EL2t — unused, SPSel is never cleared) ---
-    TRAP_ENTRY _handle_el2h_sync      // +0x000 Synchronous
-    TRAP_ENTRY _handle_unhandled      // +0x080 IRQ
-    TRAP_ENTRY _handle_unhandled      // +0x100 FIQ
-    TRAP_ENTRY _handle_unhandled      // +0x180 SError
+    TRAP_ENTRY _handle_fatal_0        // +0x000 Synchronous
+    TRAP_ENTRY _handle_fatal_1        // +0x080 IRQ
+    TRAP_ENTRY _handle_fatal_2        // +0x100 FIQ
+    TRAP_ENTRY _handle_fatal_3        // +0x180 SError
 
     // --- Current EL with SP_ELx (EL2h — EL2 self-trap path) ---
-    TRAP_ENTRY _handle_el2h_sync      // +0x200 Synchronous
-    TRAP_ENTRY _handle_unhandled      // +0x280 IRQ
-    TRAP_ENTRY _handle_unhandled      // +0x300 FIQ
-    TRAP_ENTRY _handle_unhandled      // +0x380 SError
+    TRAP_ENTRY _handle_fatal_4        // +0x200 Synchronous ← EL2 self-trap
+    TRAP_ENTRY _handle_fatal_5        // +0x280 IRQ
+    TRAP_ENTRY _handle_fatal_6        // +0x300 FIQ
+    TRAP_ENTRY _handle_fatal_7        // +0x380 SError
 
     // --- Lower EL (AArch64) — primary guest trap path ---
     TRAP_ENTRY _handle_lower_sync     // +0x400 Synchronous ← HVC / data abort
     TRAP_ENTRY _handle_lower_irq      // +0x480 IRQ ← physical IRQ while guest runs
-    TRAP_ENTRY _handle_unhandled      // +0x500 FIQ
-    TRAP_ENTRY _handle_unhandled      // +0x580 SError
+    TRAP_ENTRY _handle_fatal_10       // +0x500 FIQ
+    TRAP_ENTRY _handle_fatal_11       // +0x580 SError
 
     // --- Lower EL (AArch32) --- (not used, but table must be complete)
-    TRAP_ENTRY _handle_unhandled      // +0x600 Synchronous
-    TRAP_ENTRY _handle_unhandled      // +0x680 IRQ
-    TRAP_ENTRY _handle_unhandled      // +0x700 FIQ
-    TRAP_ENTRY _handle_unhandled      // +0x780 SError
+    TRAP_ENTRY _handle_fatal_12       // +0x600 Synchronous
+    TRAP_ENTRY _handle_fatal_13       // +0x680 IRQ
+    TRAP_ENTRY _handle_fatal_14       // +0x700 FIQ
+    TRAP_ENTRY _handle_fatal_15       // +0x780 SError
 
 // ---------------------------------------------------------------------------
 // _handle_lower_sync — Lower EL AArch64 synchronous exception
@@ -149,24 +149,35 @@ _handle_lower_irq:
     b  _trap_restore_and_eret
 
 // ---------------------------------------------------------------------------
-// _handle_el2h_sync — EL2 self-trap (current-EL synchronous exception)
-//
-// Should not occur in normal operation. Dump and halt.
+// _handle_fatal_<n> — every vector with no recovery path (EL2 self-traps,
+// stray IRQ/FIQ/SError, AArch32). One body per slot so the report can name
+// the vector that fired; x1 carries the slot index (offset / 0x80).
+// The self-loop (not _trap_restore_and_eret) makes an accidental return
+// from the fatal handler impossible to ERET with EL2-state registers.
 // ---------------------------------------------------------------------------
 
-_handle_el2h_sync:
+.macro TRAP_FATAL_BODY index
+_handle_fatal_\index:
     TRAP_SAVE_CONTEXT               // x0 = TrapContext*
-    bl el2_trap_current_sync        // C++ handler (dumps and halts)
-    b  _trap_restore_and_eret       // unreachable if handler halts, but safe
+    mov x1, #\index
+    bl el2_trap_fatal               // C++ handler (claims panic, dumps, halts)
+    b .
+.endm
 
-// ---------------------------------------------------------------------------
-// _handle_unhandled — catch-all for unexpected exceptions
-// ---------------------------------------------------------------------------
-
-_handle_unhandled:
-    TRAP_SAVE_CONTEXT               // x0 = TrapContext*
-    bl el2_trap_unhandled           // C++ handler (dumps and halts)
-    b  _trap_restore_and_eret       // unreachable if handler halts, but safe
+    TRAP_FATAL_BODY 0
+    TRAP_FATAL_BODY 1
+    TRAP_FATAL_BODY 2
+    TRAP_FATAL_BODY 3
+    TRAP_FATAL_BODY 4
+    TRAP_FATAL_BODY 5
+    TRAP_FATAL_BODY 6
+    TRAP_FATAL_BODY 7
+    TRAP_FATAL_BODY 10
+    TRAP_FATAL_BODY 11
+    TRAP_FATAL_BODY 12
+    TRAP_FATAL_BODY 13
+    TRAP_FATAL_BODY 14
+    TRAP_FATAL_BODY 15
 
 // ---------------------------------------------------------------------------
 // _trap_restore_and_eret — restore all guest registers and return to guest

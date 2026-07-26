@@ -27,6 +27,8 @@ enum {
   HVC_TIMER_SET = NOVA_HVC_FN_TIMER_SET,
   // EL2-owned DMA test device
   HVC_DMA_FAULT_INJECT = NOVA_HVC_FN_DMA_FAULT_INJECT,
+  // Diagnostics (demo builds only)
+  HVC_DIAG_EL2_FAULT = NOVA_HVC_FN_DIAG_EL2_FAULT,
 };
 
 static inline void hvc_putc(char c) {
@@ -50,6 +52,14 @@ static inline void hvc_exit(int code) {
   register uint64_t x1 __asm__("x1") = (uint64_t)code;
   __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
   __builtin_unreachable();
+}
+
+// Ask EL2 to fault itself (panic-path smoke). Never returns.
+static inline void hvc_diag_el2_fault(void) {
+  register uint64_t x0 __asm__("x0") = HVC_DIAG_EL2_FAULT;
+  __asm__ volatile("hvc #0" : "+r"(x0)::"memory");
+  for (;;) {
+  }
 }
 
 static inline void hvc_yield(void) {

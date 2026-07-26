@@ -24,8 +24,9 @@ _start:
     lsr x0, x0, #2
     cmp x0, #2
 
-    // If not EL2 (Hypervisor mode), hang
-    b.ne .Lhang
+    // If not EL2 (Hypervisor mode), hang — with a breadcrumb, so the
+    // park is distinguishable from a dead board on real serial.
+    b.ne .Lhang_not_el2
 
     // Normalize inherited EL2 state instead of trusting firmware: mask
     // every interrupt class, zero MDCR_EL2 (no debug/PMU trapping —
@@ -44,7 +45,7 @@ _start:
     and x0, x0, x1
     ldr x1, =NOVA_BOARD_BOOT_MPIDR
     cmp x0, x1
-    b.ne .Lhang
+    b.ne .Lhang_not_boot_pe
 
     // Publish the dense core index for cpu::id() — the boot PE is
     // kCpuAffinity[0] by definition. TPIDR_EL2 is otherwise unused.
@@ -88,6 +89,39 @@ _start:
     wfi
     b .Lhang
 
+// Pre-console failure breadcrumbs. The shared console does not exist
+// yet; poke the board UART directly (firmware left it usable — the
+// same assumption the console makes later). Bounded TX-full poll so a
+// dead UART still reaches the park.
+.Lhang_not_el2:
+    adr x0, .Lmsg_not_el2
+    bl  boot_puts
+    b   .Lhang
+
+.Lhang_not_boot_pe:
+    adr x0, .Lmsg_not_boot_pe
+    bl  boot_puts
+    b   .Lhang
+
+// x0 = NUL-terminated string. Clobbers x0-x4, x30. MMU state agnostic.
+boot_puts:
+    ldr x1, =NOVA_BOARD_UART0_BASE
+1:  ldrb w2, [x0], #1
+    cbz  w2, 3f
+    mov  x3, #0x100000          // TX-full budget (dead-UART escape)
+2:  ldr  w4, [x1, #0x18]        // PL011 FR
+    tbz  w4, #5, 21f            // TXFF clear → write
+    subs x3, x3, #1
+    b.ne 2b
+21: str  w2, [x1]               // PL011 DR
+    b    1b
+3:  ret
+
+.section .rodata
+.Lmsg_not_el2:     .asciz "[boot] halt: not entered at EL2\n"
+.Lmsg_not_boot_pe: .asciz "[boot] halt: not the boot PE\n"
+.section .text.boot
+
 .global nova_secondary_entry
 .type   nova_secondary_entry, @function
 
@@ -116,9 +150,10 @@ nova_secondary_entry:
     bl  nova_el2_stage1_enable
 
     // Carve the core's stack out of the shared region:
-    // SP = __stack_top - index * stack size.
+    // SP = __stack_top - index * (stack size + 4 KiB guard page).
     ldr x1, =__stack_top
     mov x2, #NOVA_BOARD_EL2_STACK_SIZE
+    add x2, x2, #0x1000
     mul x2, x2, x9
     sub x1, x1, x2
     mov sp, x1

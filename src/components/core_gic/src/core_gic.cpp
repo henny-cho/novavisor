@@ -12,6 +12,7 @@
 #include "hal/cpu.hpp"
 #include "hal/gic.hpp"
 #include "nova/arch/trap_context.hpp"
+#include "nova/panic.hpp"
 
 #include <array>
 #include <cib/top.hpp>
@@ -33,6 +34,9 @@ void drain(TrapContext* ctx) noexcept {
     const auto intid = gic::ack();
     if (intid >= gic::kSpecialIntidBase) {
       return; // spurious — nothing left to dispatch or EOI
+    }
+    if (intid == kPanicStopSgi) {
+      halt(); // another core owns a first-failure report — park silently
     }
 
     IrqCall call{.ctx = ctx, .intid = intid, .handled = false};

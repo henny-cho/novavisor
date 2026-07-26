@@ -1,0 +1,25 @@
+name: "18_panic_smoke"
+description: "EL2 자기 폴트 주입 — fatal 벡터 식별·panic 프로토콜·확장 덤프 실주행 검증."
+phase: 25
+enabled: true
+timeout_seconds: 15
+payload_mode: embedded
+
+guests:
+  - name: "panic_smoke"
+    binary: "panic_smoke.bin"
+    load_addr:   0x50000000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+
+expect:
+  - pattern: "panic smoke: triggering an EL2 fault"
+    within_seconds: 5
+  - pattern: "\\[NOVA PANIC\\] EL2 fatal exception: vector el2h_sync"
+    within_seconds: 10
+  - pattern: "EL2 TRAP DUMP"
+    within_seconds: 10
+  - pattern: "data abort \\(EL2\\)"
+    within_seconds: 10

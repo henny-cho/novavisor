@@ -24,9 +24,10 @@ namespace {
 
 // Function IDs from the ABI header shared with the guest-side stubs.
 enum : std::uint16_t {
-  kHvcPuts = NOVA_HVC_FN_PUTS,
-  kHvcPutc = NOVA_HVC_FN_PUTC,
-  kHvcExit = NOVA_HVC_FN_EXIT,
+  kHvcPuts         = NOVA_HVC_FN_PUTS,
+  kHvcPutc         = NOVA_HVC_FN_PUTC,
+  kHvcExit         = NOVA_HVC_FN_EXIT,
+  kHvcDiagEl2Fault = NOVA_HVC_FN_DIAG_EL2_FAULT,
 };
 
 // Upper bound on bytes we will copy out of guest memory for kHvcPuts.
@@ -73,6 +74,17 @@ void handle_exit(TrapContext* ctx) noexcept {
   smp::stop_vm(vm_of(vcpu::current_index()), ctx);
 }
 
+// kHvcDiagEl2Fault: fault EL2 on purpose — a store into EL2's own
+// .rodata takes a W^X permission fault through the el2h_sync vector,
+// exercising the fatal/panic/dump path end-to-end (demo 18). The
+// object's address is taken so storage is emitted into .rodata.
+void handle_diag_el2_fault() noexcept {
+  static constexpr std::uint64_t kRoProbe = 0x600D;
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast) — the fault is the point
+  auto* probe = const_cast<volatile std::uint64_t*>(reinterpret_cast<const volatile std::uint64_t*>(&kRoProbe));
+  *probe      = 0; // permission fault → EL2 fatal vector
+}
+
 } // namespace
 
 void demo_hvc_component::handle_hvc(HvcCall* call) noexcept {
@@ -91,6 +103,10 @@ void demo_hvc_component::handle_hvc(HvcCall* call) noexcept {
   case kHvcExit:
     call->handled = true;
     handle_exit(call->ctx);
+    return;
+  case kHvcDiagEl2Fault:
+    call->handled = true;
+    handle_diag_el2_fault();
     return;
   default:
     // Not ours — leave unclaimed for other HvcService subscribers.

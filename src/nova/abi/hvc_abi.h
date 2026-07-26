@@ -14,6 +14,7 @@
  *   0x1100..0x11FF  ivc     (Phase 7+)
  *   0x1200..0x12FF  timer   (Phase 6+)
  *   0x1300..0x13FF  DMA test
+ *   0x1400..0x14FF  diagnostics (demo builds only)
  *
  * Plain #defines only: this header must survive the assembler and the
  * C/C++ compilers alike.
@@ -58,6 +59,13 @@
  * beyond the caller's assigned window. Available only to its owner VM.
  * Returns 0 when accepted, or -1 when no active assignment exists. */
 #define NOVA_HVC_FN_DMA_FAULT_INJECT 0x1300
+
+/* DIAG_EL2_FAULT: deliberately fault EL2 itself (a W^X write into its
+ * own .rodata) so the fatal-vector/panic/dump path runs for real in
+ * CI. Never returns. Served by demo_hvc — production compositions do
+ * not include it, so the surface exists in demo builds only (same
+ * policy as DMA_FAULT_INJECT). */
+#define NOVA_HVC_FN_DIAG_EL2_FAULT 0x1400
 
 /* Virtual timer PPI as the guest sees it — delivered on TIMER_SET
  * expiry and on native CNTV expiry alike. A guest must enable it at its

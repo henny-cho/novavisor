@@ -5,6 +5,7 @@
 
 #include "hal/console.hpp"
 
+#include <cstdint>
 #include <stdx/panic.hpp>
 
 namespace stdx {
@@ -27,12 +28,17 @@ namespace std {
 // but Clang (clang-tidy) sees that first declaration without the attribute
 // and rejects a definition that adds it. The attribute is inherited from the
 // declaration; the body ends in nova::halt() either way.
-void __glibcxx_assert_fail(const char* /*file*/, int /*line*/, const char* function, const char* condition) noexcept {
+void __glibcxx_assert_fail(const char* file, int line, const char* function, const char* condition) noexcept {
   using nova::console::write;
+  nova::NovaPanicHandler::claim();
   write("[NOVA PANIC] libstdc++ assertion failed: ");
   write(condition != nullptr ? condition : "?");
   write("\n  in: ");
   write(function != nullptr ? function : "?");
+  write("\n  at: ");
+  write(file != nullptr ? file : "?");
+  write(":");
+  nova::console::write_dec64(static_cast<std::uint64_t>(line));
   write("\n");
   nova::halt();
 }
