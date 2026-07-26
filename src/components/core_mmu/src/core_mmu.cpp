@@ -79,20 +79,33 @@ inline constexpr std::uint64_t kVtcrEl2 = mmu::kStage2T0sz | (mmu::kStage2Sl0 <<
 // HCR_EL2:  VM=1  (Stage 2 translation enable, bit 0)
 //           FMO=1 (route physical FIQ to EL2, bit 3)
 //           IMO=1 (route physical IRQ to EL2, bit 4)
+//           AMO=1 (route physical SError to EL2, bit 5)
 //           TWI=1 (trap EL1/EL0 WFI to EL2, bit 13)
 //           TWE=1 (trap EL1/EL0 WFE to EL2, bit 14)
 //           TSC=1 (trap EL1 SMC to EL2, bit 19)
 //           RW=1  (EL1 is AArch64, bit 31)
+//           TEA=1 (route synchronous external aborts to EL2, bit 37)
 // IMO/FMO make the hypervisor the sole owner of physical interrupts —
 // guests see only vINTIDs injected via ICH_LR (components/core_gic) —
 // and additionally expose the virtual interrupt registers (ICV_*) to
 // EL1 in place of the physical ICC_* ones. TWI/TWE hand guest waits to
 // the scheduler (WfxService) instead of stalling the physical core.
-// TSC gives us a second PSCI conduit: this board has no EL3, so an
-// untrapped guest SMC would just be an undefined instruction — we trap
-// it and serve it through the same dispatch as HVC.
-inline constexpr std::uint64_t kHcrEl2 =
-    (1ULL << 0U) | (1ULL << 3U) | (1ULL << 4U) | (1ULL << 13U) | (1ULL << 14U) | (1ULL << 19U) | (1ULL << 31U);
+// TSC keeps guest SMCs inside the hypervisor: where EL3 exists an
+// untrapped guest SMC would reach firmware directly, and where it does
+// not the instruction is UNDEFINED. Either way we trap it and serve the
+// same dispatch as HVC.
+//
+// AMO/TEA own the external-abort story (real silicon only — QEMU virt
+// generates neither; TEA is RES0 without FEAT_RAS, so pre-v8.2 parts
+// simply ignore it): a *synchronous* external abort on a guest access
+// is precise and attributable, so it lands in the lower-EL abort
+// router and isolates that VM like any other guest fault. An *SError*
+// is imprecise — without FEAT_RAS syndrome evidence the faulting agent
+// is unknowable, so the policy is to stop the whole machine through
+// the fatal-vector path (vector el2h_serror / lower_serror) rather
+// than blame whichever VM happened to be running.
+inline constexpr std::uint64_t kHcrEl2 = (1ULL << 0U) | (1ULL << 3U) | (1ULL << 4U) | (1ULL << 5U) | (1ULL << 13U) |
+                                         (1ULL << 14U) | (1ULL << 19U) | (1ULL << 31U) | (1ULL << 37U);
 
 // VTTBR_EL2 layout:
 //   bits 47:1  BADDR (L1 table PA; bit 0 is always 0 for 4K-aligned)
