@@ -11,7 +11,7 @@ qemu_devices:
 forbid:
   - "edu passthrough: identity mismatch"
   - "edu passthrough: interrupt mismatch"
-  - "unhandled physical IRQ"
+  - "unclaimed physical IRQ"
   - "demo_exit code=[1-9]"
 
 guests:

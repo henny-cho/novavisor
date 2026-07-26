@@ -15,7 +15,9 @@
 // always physical — HCR_EL2.IMO virtualizes EL1 accesses only — so both
 // paths use identical mechanics.
 
+#include "hal/console.hpp"
 #include "hal/gic.hpp"
+#include "nova/panic.hpp"
 
 #include <cib/top.hpp>
 #include <cstdint>
@@ -50,7 +52,19 @@ void drain(TrapContext* ctx) noexcept;
 } // namespace core_gic
 
 struct core_gic_component {
-  constexpr static auto INIT = flow::action<"core_gic_init">([]() noexcept { gic::init(); });
+  // A missing or unresponsive redistributor means this PE can never
+  // take an interrupt — report it here rather than let every later
+  // subsystem fail obscurely, and note the security state so a serial
+  // log records who owns SPI grouping on this board.
+  constexpr static auto INIT = flow::action<"core_gic_init">([]() noexcept {
+    const bool ok = gic::init();
+    console::line("[core_gic] GICv3 ", (gic::single_security_state() ? "single" : "two"),
+                  "-security-state distributor\n");
+    if (!ok) {
+      console::write("[NOVA PANIC] no usable redistributor for this PE\n");
+      halt();
+    }
+  });
 
   constexpr static auto config = cib::config(cib::exports<IrqService>, cib::extend<cib::RuntimeStart>(*INIT));
 };

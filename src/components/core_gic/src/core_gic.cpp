@@ -23,6 +23,30 @@ namespace {
 
 std::array<IrqEpilogue, cpu::kMaxCpus> g_epilogue{};
 
+// An INTID nobody claims must not come back. On QEMU only interrupts
+// the hypervisor configured can arrive, but a real distributor carries
+// whatever firmware or a previous boot left enabled, and a still-
+// asserted level source would re-arrive immediately — ack/log/EOI
+// forever, at EL2, with interrupts already masked. Quarantine the
+// source and log once; the per-INTID latch keeps a storm from
+// flooding a shared console.
+std::array<std::uint32_t, 4> g_reported{};
+
+void report_once(std::uint32_t intid) noexcept {
+  for (const std::uint32_t seen : g_reported) {
+    if (seen == intid) {
+      return;
+    }
+  }
+  for (std::uint32_t& slot : g_reported) {
+    if (slot == 0U) {
+      slot = intid;
+      break;
+    }
+  }
+  console::line("[core_gic] unclaimed physical IRQ INTID=", console::Dec{intid}, " — quarantined\n");
+}
+
 } // namespace
 
 void defer_epilogue(IrqEpilogue epilogue) noexcept {
@@ -43,9 +67,8 @@ void drain(TrapContext* ctx) noexcept {
     cib::service<IrqService>(&call);
 
     if (!call.handled) {
-      console::write("[core_gic] unhandled IRQ INTID=");
-      console::write_dec64(call.intid);
-      console::write("\n");
+      report_once(intid);
+      gic::quarantine_spi(intid); // no-op for SGI/PPI: those are ours by construction
     }
 
     gic::eoi(intid);

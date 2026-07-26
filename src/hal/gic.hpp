@@ -28,19 +28,36 @@ inline constexpr std::uint32_t kSpecialIntidBase = arch::gicv3::kSpecialIntidBas
 // interface. Every core runs it for itself (secondaries via
 // smp::secondary_main). The virtual CPU interface is brought up by
 // the vgic component through hal/gic_virt.hpp.
-inline void init_cpu() noexcept {
-  board::active::Gicv3::redistributor_init();
+// Returns false when this PE's redistributor is missing or does not
+// wake — the caller reports it; interrupts cannot work on this core.
+inline auto init_cpu() noexcept -> bool {
+  const bool ok = board::active::Gicv3::redistributor_init();
   arch::gicv3::cpu_interface_init();
   // The panic-stop SGI must be deliverable on every PE from cold boot —
   // it is what keeps a first failure's report free of neighbor output.
   board::active::Gicv3::enable_ppi(kPanicStopSgi);
+  return ok;
 }
 
-// Cold-boot bring-up on the primary: the system-wide distributor,
-// then this core's share.
-inline void init() noexcept {
+// Cold-boot bring-up on the primary: the system-wide distributor
+// (inherited state scrubbed before Group 1 is enabled), then this
+// core's share.
+inline auto init() noexcept -> bool {
   board::active::Gicv3::distributor_init();
-  init_cpu();
+  return init_cpu();
+}
+
+// True when the distributor runs in a single security state. With two
+// states the group registers are firmware-owned (RAZ/WI to NS EL2), so
+// SPI grouping depends on what the firmware set up.
+[[nodiscard]] inline auto single_security_state() noexcept -> bool {
+  return board::active::Gicv3::single_security_state();
+}
+
+// Disable an INTID nobody claims and clear its pending/active state —
+// without this a still-asserted level source re-arrives forever.
+inline auto quarantine_spi(std::uint32_t intid) noexcept -> bool {
+  return board::active::Gicv3::quarantine_spi(intid);
 }
 
 // Enable a private interrupt (SGI/PPI, INTID 0..31) for this PE.
