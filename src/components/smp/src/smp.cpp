@@ -46,7 +46,12 @@ void start_secondaries() noexcept {
   gic::enable_ppi(kCrossCallSgi); // the primary receives cross-calls too
 
   for (std::size_t i = 1; i < cpu::kMaxCpus; ++i) {
-    const std::uint64_t ret = cpu::smc_call(PSCI_FN_CPU_ON | PSCI_FN_SMC64, i, entry, i);
+    // PSCI takes an MPIDR affinity, not a dense index. They coincide on
+    // QEMU virt (0x0, 0x1, ...) but not on a multi-cluster part, where
+    // firmware answers INVALID_PARAMETERS for every secondary. The
+    // context id stays the dense index — that is what boot.S publishes
+    // into TPIDR_EL2 for cpu::id().
+    const std::uint64_t ret = cpu::smc_call(PSCI_FN_CPU_ON | PSCI_FN_SMC64, cpu::affinity_of(i), entry, i);
     if (ret != PSCI_SUCCESS) {
       console::write("[smp] core ");
       console::write_dec64(i);

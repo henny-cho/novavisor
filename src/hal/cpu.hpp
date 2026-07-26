@@ -27,6 +27,13 @@ inline constexpr std::size_t kMaxCpus = board::active::kSmpCpus;
   return arch::id_aa64mmfr0();
 }
 
+// MPIDR affinity of a dense core index — what PSCI CPU_ON and GIC
+// routing take (the two representations coincide only on flat
+// single-cluster topologies).
+[[nodiscard]] inline auto affinity_of(std::size_t index) noexcept -> std::uint64_t {
+  return index < board::active::kCpuAffinity.size() ? board::active::kCpuAffinity[index] : 0U;
+}
+
 // The MPIDR a guest reads at EL1 — per-vCPU, installed on switch-in.
 inline void write_vmpidr(std::uint64_t vcpu) noexcept {
   arch::write_vmpidr(vcpu);

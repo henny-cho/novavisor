@@ -191,6 +191,7 @@ else()
     nova_add_component_test(core_vcpu fp_model_test)         # lazy FP ownership
     nova_add_component_test(core_vcpu lifecycle_model_test)  # micro-reboot budget
     nova_add_component_test(psci psci_model_test)            # SMCCC range dispatch
+    nova_add_component_test(psci smccc_model_test)           # SMCCC arch service + FEATURES gate
     nova_add_component_test(watchdog watchdog_model_test)    # owner generation + deadline
     nova_add_component_test(dma_device device_lifecycle_model_test) # per-device lifecycle registry
     nova_add_component_test(smp quiesce_model_test)           # VM quiesce-epoch tracker

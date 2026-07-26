@@ -162,7 +162,7 @@ PHANDLE_CLK = 2
 GIC_SPI, GIC_PPI, EDGE_RISING, LEVEL_HIGH = 0, 1, 1, 4
 
 
-def build_guest_dtb(guest: dict, layout: dict[str, int]) -> bytes:
+def build_guest_dtb(guest: dict, layout: dict[str, int], serves_psci: bool = True) -> bytes:
     ipa_base = layout["NOVA_GUEST_IPA_BASE"]
     w = FdtWriter()
     w.begin_node("")
@@ -191,14 +191,20 @@ def build_guest_dtb(guest: dict, layout: dict[str, int]) -> bytes:
         w.prop_str("device_type", "cpu")
         w.prop_str("compatible", layout["NOVA_BOARD_GUEST_CPU_COMPATIBLE"])
         w.prop_u32("reg", n)
-        w.prop_str("enable-method", "psci")
+        if serves_psci:
+            w.prop_str("enable-method", "psci")
         w.end_node()
     w.end_node()
 
-    w.begin_node("psci")
-    w.prop_str("compatible", "arm,psci-1.0", "arm,psci-0.2")
-    w.prop_str("method", "hvc")
-    w.end_node()
+    # Only advertise PSCI when the active composition serves it: a node
+    # here is a promise, and a guest that finds one probes it before
+    # anything else (Linux prints a garbage version and then fails every
+    # CPU_ON, reboot and poweroff if nobody answers).
+    if serves_psci:
+        w.begin_node("psci")
+        w.prop_str("compatible", "arm,psci-1.0", "arm,psci-0.2")
+        w.prop_str("method", "hvc")
+        w.end_node()
 
     # The emulated GICv3: one distributor frame plus one redistributor
     # frame per vCPU (sizes single-sourced from gicv3_regs.h).
@@ -715,6 +721,9 @@ def main() -> int:
                     help="selected board_layout.h")
     ap.add_argument("--inventory", type=Path, required=True,
                     help="selected board device inventory")
+    ap.add_argument("--no-psci", action="store_true",
+                    help="composition does not serve PSCI: omit the psci node and "
+                         "the cpu enable-method that depends on it")
     ap.add_argument("--payloads", type=Path, required=True,
                     help="resolved guest binary payload manifest")
     args = ap.parse_args()
@@ -727,7 +736,7 @@ def main() -> int:
     args.outdir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
     for i, guest in enumerate(guests):
-        blob = build_guest_dtb(guest, layout)
+        blob = build_guest_dtb(guest, layout, serves_psci=not args.no_psci)
         if len(blob) > layout["NOVA_GUEST_DTB_SIZE"]:
             sys.exit(f"yml2dtb: {guest['name']}: DTB {len(blob)} bytes exceeds the "
                      f"{layout['NOVA_GUEST_DTB_SIZE']:#x} guest window reservation")
