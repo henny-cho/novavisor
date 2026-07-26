@@ -16,7 +16,7 @@
 namespace nova::arch::hyp_timer {
 
 // The EL2 physical timer's PPI. The guest-visible CNTV PPI belongs to
-// the guest-timer contract (components/core_timer).
+// the guest-timer contract (the core_timer component).
 inline constexpr std::uint32_t kHypTimerIntid = 26; // CNTHP
 
 // CNTHCTL_EL2 (HCR_EL2.E2H = 0):

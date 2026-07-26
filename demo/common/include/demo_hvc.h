@@ -2,7 +2,7 @@
 //
 // Inline stubs for the NovaVisor guest hypercall ABI. Shared by every
 // demo guest. Function IDs come from nova/abi/hvc_abi.h — the single source
-// shared with the hypervisor's dispatcher (components/demo_hvc).
+// shared with the hypervisor's dispatcher (the demo_hvc component).
 //
 // Function ID lives in x0. Arguments in x1..x6. Return (if any) in x0.
 

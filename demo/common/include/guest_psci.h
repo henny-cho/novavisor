@@ -2,7 +2,7 @@
 //
 // Inline stubs for the standard PSCI calls (Arm DEN0022) over the HVC
 // conduit. Function IDs come from nova/abi/psci.h — the single source
-// shared with the hypervisor's implementation (components/psci).
+// shared with the hypervisor's implementation (the psci component).
 //
 // Function ID lives in x0. Arguments in x1..x3. Return (if any) in x0.
 

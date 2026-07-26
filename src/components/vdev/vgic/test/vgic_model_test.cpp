@@ -1,7 +1,7 @@
 // tests/host/vgic_model_test.cpp
 //
 // Host-side GTest suite for the pure vGICv3 register model
-// (components/vgic/include/vgic_model.hpp): register emulation on the
+// (the vgic component): register emulation on the
 // GICD/GICR frames. Delivery is covered by vgic_delivery_test.cpp.
 
 #include "vgic/vgic_model.hpp"

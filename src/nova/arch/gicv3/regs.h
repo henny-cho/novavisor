@@ -4,7 +4,7 @@
  * the GIC architecture. The single source shared by everything that
  * programs or emulates a GICv3 frame:
  *   - the board GIC driver        (EL2, physical GIC bring-up)
- *   - components/vgic/vgic_model  (EL2, register emulation)
+ *   - the vgic component      (EL2, register emulation)
  *   - demo guest helpers          (EL1, guest programming the vGIC)
  *
  * Only architecture facts belong here; frame base addresses are board /

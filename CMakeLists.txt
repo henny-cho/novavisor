@@ -34,7 +34,7 @@ if(CMAKE_CROSSCOMPILING)
     )
     # Debug builds get libstdc++ hardening: std::array/string_view subscripts
     # bounds-check at runtime and land in the freestanding
-    # __glibcxx_assert_fail panic sink (components/nova_panic). Release stays
+    # __glibcxx_assert_fail panic sink (components/infra/nova_panic). Release stays
     # unchecked — zero-cost in the shipped image.
     target_compile_definitions(nova_warnings INTERFACE
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:_GLIBCXX_ASSERTIONS>
@@ -135,10 +135,8 @@ if(CMAKE_CROSSCOMPILING)
 
     # Only components selected by the active composition project are built.
     foreach(component IN LISTS NOVA_COMPONENTS)
-        if(NOT EXISTS "${CMAKE_SOURCE_DIR}/src/components/${component}/CMakeLists.txt")
-            message(FATAL_ERROR "Project '${NOVA_PROJECT}' selected unknown component '${component}'")
-        endif()
-        add_subdirectory(src/components/${component})
+        nova_component_dir(component_dir "${component}")
+        add_subdirectory("${component_dir}" "${CMAKE_BINARY_DIR}/components/${component}")
     endforeach()
 
     # Composition root: nexus + guest table + the novavisor.elf target.
@@ -178,7 +176,7 @@ else()
     nova_add_host_test(cpu_contract_test)     # boot-time ID-register contract gate
     nova_add_host_test(gicv3_vtr_test)        # ICH_VTR-derived ICC_CTLR view + VMCR reset
 
-    # Component tests (src/components/<name>/test/).
+    # Component tests (src/components/<group>/<name>/test/).
     nova_add_component_test(core_mmu stage2_descriptor_test) # Stage 2 descriptor encoding
     nova_add_component_test(core_mmu stage2_builder_test)    # Stage 2 identity-map builder
     nova_add_component_test(vgic vgic_model_test)            # GICD/GICR register model
@@ -198,17 +196,13 @@ else()
     nova_add_component_test(ivc ring_test)                   # SPSC ring protocol (threads)
     nova_add_component_test(vuart vuart_model_test)          # PL011 register model
     nova_add_component_test(dtb_parser fdt_model_test)       # FDT walker + guest extraction
-    nova_add_component_test(smmu ste_model_test)             # Stage-2-only STE encoding
-    target_include_directories(ste_model_test PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/components/core_mmu/include)
+    nova_add_component_test(smmu ste_model_test PEERS core_mmu) # Stage-2-only STE encoding
     nova_add_component_test(smmu queue_model_test)           # CMDQ/EVTQ phase transitions
     nova_add_component_test(smmu fault_model_test)           # SID/address fault records
     nova_add_component_test(smmu runtime_model_test)         # runtime capabilities and layout
     nova_add_component_test(smmu command_model_test)         # command entry encoding
     nova_add_component_test(smmu domain_model_test)          # guest DMA context lifecycle
     nova_add_component_test(smmu hw_driver_test)             # register protocol vs. fake device
-    nova_add_component_test(smmu dma_table_model_test)       # DMA-only Stage-2 mappings
-    target_include_directories(dma_table_model_test PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/components/core_mmu/include)
+    nova_add_component_test(smmu dma_table_model_test PEERS core_mmu) # DMA-only Stage-2 mappings
 
 endif() # CMAKE_CROSSCOMPILING

@@ -5,7 +5,7 @@
 // EL2 virtual CPU interface facade (ICH_*) — consumed by the vgic
 // component only; physical-side components bind through hal/gic.hpp
 // and never see these symbols. LR bit encoding and injection policy
-// live in the pure model (components/vgic/include/vgic_model.hpp);
+// live in the pure model (the vgic component);
 // this facade only moves raw values between that model and the
 // hardware.
 

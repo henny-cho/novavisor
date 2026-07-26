@@ -1,4 +1,4 @@
-// components/core_mmu/src/core_mmu.cpp
+// the core_mmu component
 //
 // Stage 2 MMU initialization and activation. Builds one table set per
 // guest_table() entry (nova/abi/guest.hpp) during RuntimeStart, activates
@@ -86,7 +86,7 @@ inline constexpr std::uint64_t kVtcrEl2 = mmu::kStage2T0sz | (mmu::kStage2Sl0 <<
 //           RW=1  (EL1 is AArch64, bit 31)
 //           TEA=1 (route synchronous external aborts to EL2, bit 37)
 // IMO/FMO make the hypervisor the sole owner of physical interrupts —
-// guests see only vINTIDs injected via ICH_LR (components/core_gic) —
+// guests see only vINTIDs injected via ICH_LR (the core_gic component) —
 // and additionally expose the virtual interrupt registers (ICV_*) to
 // EL1 in place of the physical ICC_* ones. TWI/TWE hand guest waits to
 // the scheduler (WfxService) instead of stalling the physical core.

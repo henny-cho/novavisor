@@ -1,7 +1,7 @@
 // hal/arch/aarch64/vmsa/mmu.S
 //
 // MMU primitives: EL2's own Stage-1 regime (called from boot paths)
-// and Stage 2 (called from components/core_mmu/src/core_mmu.cpp).
+// and Stage 2 (called from the core_mmu component).
 //
 // Contract:
 //   void nova_el2_stage1_enable(uint64_t ttbr0, uint64_t tcr,

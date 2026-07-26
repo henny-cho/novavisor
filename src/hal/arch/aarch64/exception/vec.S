@@ -145,7 +145,7 @@ _handle_lower_sync:
 
 _handle_lower_irq:
     TRAP_SAVE_CONTEXT               // x0 = TrapContext*
-    bl el2_trap_irq                 // C++ handler (components/core_gic)
+    bl el2_trap_irq                 // C++ handler (the core_gic component)
     b  _trap_restore_and_eret
 
 // ---------------------------------------------------------------------------

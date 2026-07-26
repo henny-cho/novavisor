@@ -1,6 +1,6 @@
 #pragma once
 
-// components/ivc/include/ivc/ring.hpp
+// the ivc component's ring.hpp
 //
 // SPSC ring over the nova/abi/ivc_ring.h layout — the host-testable
 // model of the protocol the guests speak in the IVC shared page.
