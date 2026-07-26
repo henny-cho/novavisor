@@ -23,8 +23,9 @@
 // NOLINTBEGIN(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
 /* Frame sizes. */
-#define NOVA_GICD_FRAME_SIZE 0x10000 /* 64 KiB distributor */
-#define NOVA_GICR_FRAME_SIZE 0x20000 /* one redistributor: RD + SGI frame */
+#define NOVA_GICD_FRAME_SIZE  0x10000 /* 64 KiB distributor */
+#define NOVA_GICR_FRAME_SIZE  0x20000 /* GICv3 redistributor: RD + SGI frames */
+#define NOVA_GICR_FRAME_SIZE4 0x40000 /* GICv4 (TYPER.VLPIS): + VLPI frames */
 
 /* Distributor (GICD_BASE + offset). */
 #define NOVA_GICD_CTLR   0x0000
@@ -72,7 +73,11 @@
 #define NOVA_GICR_PIDR2    0xFFE8
 
 /* GICR_TYPER bits (low word). */
-#define NOVA_GICR_TYPER_LAST (1U << 4) /* last redistributor frame */
+#define NOVA_GICR_TYPER_LAST  (1U << 4) /* last redistributor frame */
+#define NOVA_GICR_TYPER_VLPIS (1U << 1) /* GICv4: VLPI frames follow the SGI frame */
+
+/* GICR_CTLR bits. */
+#define NOVA_GICR_CTLR_RWP (1U << 3)
 
 /* GICR_WAKER bits. */
 #define NOVA_GICR_WAKER_PROCESSOR_SLEEP (1U << 1)
