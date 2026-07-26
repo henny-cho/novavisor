@@ -22,6 +22,11 @@ inline constexpr std::size_t kMaxCpus = board::active::kSmpCpus;
   return arch::core_index();
 }
 
+// Raw ID_AA64MMFR0_EL1 for the boot-time CPU contract gate.
+[[nodiscard]] inline auto id_aa64mmfr0() noexcept -> std::uint64_t {
+  return arch::id_aa64mmfr0();
+}
+
 // The MPIDR a guest reads at EL1 — per-vCPU, installed on switch-in.
 inline void write_vmpidr(std::uint64_t vcpu) noexcept {
   arch::write_vmpidr(vcpu);

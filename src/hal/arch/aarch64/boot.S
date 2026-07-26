@@ -27,6 +27,16 @@ _start:
     // If not EL2 (Hypervisor mode), hang
     b.ne .Lhang
 
+    // Normalize inherited EL2 state instead of trusting firmware: mask
+    // every interrupt class, zero MDCR_EL2 (no debug/PMU trapping —
+    // deterministic across firmware stacks), and make the guest-visible
+    // MIDR explicit — VPIDR_EL2 resets to an UNKNOWN value, and guests
+    // apply their own EL1-local errata from what they read here.
+    msr daifset, #0xf
+    msr mdcr_el2, xzr
+    mrs x0, midr_el1
+    msr vpidr_el2, x0
+
     // Park any core that is not the board's boot PE. Compare all four
     // affinity levels so a second cluster's Aff0=0 cannot enter twice.
     mrs x0, mpidr_el1
@@ -86,6 +96,12 @@ nova_secondary_entry:
     // runs on this core.
     msr tpidr_el2, x0
     mov x9, x0
+
+    // Same inherited-state normalization as _start, per PE.
+    msr daifset, #0xf
+    msr mdcr_el2, xzr
+    mrs x0, midr_el1
+    msr vpidr_el2, x0
 
     // Enable this core's Stage-1 regime before touching the stack or
     // any shared data: reading a runtime-set global here would be a

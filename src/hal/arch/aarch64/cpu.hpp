@@ -29,6 +29,14 @@ namespace nova::arch {
   return static_cast<std::size_t>(index);
 }
 
+// Raw ID_AA64MMFR0_EL1 for the boot-time CPU contract gate
+// (nova/arch/cpu_contract.hpp decodes and validates it).
+[[nodiscard]] inline auto id_aa64mmfr0() noexcept -> std::uint64_t {
+  std::uint64_t v = 0;
+  __asm__ volatile("mrs %0, id_aa64mmfr0_el1" : "=r"(v));
+  return v;
+}
+
 // The MPIDR value the guest reads at EL1. Per-vCPU: written on every
 // switch-in so a guest identifies its vCPU by Aff0, independent of the
 // physical core underneath. Bit 31 is RES1; U (bit 30) stays 0 — the

@@ -25,6 +25,11 @@ inline void cpu_interface_init() noexcept {
   v = kIccSreSre;
   __asm__ volatile("msr S3_0_C12_C12_5, %0" ::"r"(v)); // ICC_SRE_EL1
   __asm__ volatile("isb");
+  // EOImode = 0 and CBPR = 0, written explicitly — eoi() below relies
+  // on EOI meaning drop+deactivate, and a firmware-left EOImode = 1
+  // would wedge the first acknowledged INTID active forever.
+  v = 0;
+  __asm__ volatile("msr S3_0_C12_C12_4, %0" ::"r"(v)); // ICC_CTLR_EL1
   v = kPmrAcceptAll;
   __asm__ volatile("msr S3_0_C4_C6_0, %0" ::"r"(v)); // ICC_PMR_EL1
   v = kIgrpen1Enable;
