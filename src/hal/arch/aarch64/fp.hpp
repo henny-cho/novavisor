@@ -29,14 +29,20 @@ static_assert(sizeof(FpBank) == 528, "fp.S offsets depend on this layout");
 
 inline constexpr std::uint64_t kCptrTfp = 1ULL << 10U; // TFP (E2H = 0)
 
-// Set/clear the EL0/EL1 FP-access trap (EC 0x07 → EL2). Read-modify-
-// write keeps the RES1 bits the hardware reset to. The ISB makes the
-// change take effect immediately — required before the bank swap when
-// clearing, ordered anyway before the ERET when setting.
+// Whole-register CPTR_EL2 value (E2H = 0): the RES1 bits plus TZ so an
+// SVE-capable part traps guest SVE (no SVE bank exists; TZ is RES1
+// when SVE is absent). Written wholesale — TCPAC/TAM/TTA left set by
+// firmware would otherwise trap guest CPACR/AMU/trace accesses that
+// have no handler.
+inline constexpr std::uint64_t kCptrEl2Res1 = 0x32FFULL;
+inline constexpr std::uint64_t kCptrTz      = 1ULL << 8U;
+inline constexpr std::uint64_t kCptrEl2Base = kCptrEl2Res1 | kCptrTz;
+
+// Set/clear the EL0/EL1 FP-access trap (EC 0x07 → EL2). The ISB makes
+// the change take effect immediately — required before the bank swap
+// when clearing, ordered anyway before the ERET when setting.
 inline void set_fp_trap(bool trap) noexcept {
-  std::uint64_t v = 0;
-  __asm__ volatile("mrs %0, cptr_el2" : "=r"(v));
-  v = trap ? (v | kCptrTfp) : (v & ~kCptrTfp);
+  const std::uint64_t v = kCptrEl2Base | (trap ? kCptrTfp : 0U);
   __asm__ volatile("msr cptr_el2, %0\n\tisb" ::"r"(v));
 }
 
@@ -45,9 +51,7 @@ inline void set_fp_trap(bool trap) noexcept {
 // when EL2 code touches FP right afterwards (bank swaps need the
 // synchronous set_fp_trap).
 inline void set_fp_trap_before_eret(bool trap) noexcept {
-  std::uint64_t v = 0;
-  __asm__ volatile("mrs %0, cptr_el2" : "=r"(v));
-  v = trap ? (v | kCptrTfp) : (v & ~kCptrTfp);
+  const std::uint64_t v = kCptrEl2Base | (trap ? kCptrTfp : 0U);
   __asm__ volatile("msr cptr_el2, %0" ::"r"(v));
 }
 

@@ -19,17 +19,23 @@ namespace nova::gic_virt {
 // vGIC maintenance interrupt (standard SBSA PPI assignment).
 inline constexpr std::uint32_t kMaintenanceIntid = 25;
 
-// ICH_HCR_EL2 / ICH_VMCR_EL2 values banked per VCPU by vgic. The base
-// value keeps SGI-generation writes trapping (vSGI routing) alongside
-// the interface enable.
+// ICH_HCR_EL2 values banked per VCPU by vgic. The base value keeps
+// SGI-generation writes trapping (vSGI routing) alongside the
+// interface enable. The VMCR reset value is runtime-derived from
+// ICH_VTR (binary-point minimums) — see vmcr_reset() below.
 inline constexpr std::uint64_t kIchHcrEn   = arch::gicv3::kIchHcrEn;
 inline constexpr std::uint64_t kIchHcrUie  = arch::gicv3::kIchHcrUie;
 inline constexpr std::uint64_t kIchHcrBase = arch::gicv3::kIchHcrEn | arch::gicv3::kIchHcrTc;
-inline constexpr std::uint64_t kVmcrReset  = arch::gicv3::kIchVmcrVpmrAll | arch::gicv3::kIchVmcrVeng1;
 
 // One-time bring-up of the virtual CPU interface (VMCR reset + HCR.En).
 inline void init() noexcept {
   arch::gicv3::virtual_interface_init();
+}
+
+// Raw ICH_VTR_EL2 — vgic caches it and derives the emulated ICC_CTLR
+// view and the banked VMCR reset value (nova/arch/gicv3_vtr.hpp).
+inline auto vtr() noexcept -> std::uint64_t {
+  return arch::gicv3::read_vtr();
 }
 
 // Virtual CPU interface state moved on VCPU switches and LR refills.

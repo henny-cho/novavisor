@@ -7,20 +7,26 @@
 // virtual interrupt injection; LR bit encoding and injection policy
 // live in the vgic component's pure model.
 
+#include "nova/arch/gicv3_vtr.hpp"
+
 #include <cstddef>
 #include <cstdint>
 
 namespace nova::arch::gicv3 {
 
-inline constexpr std::uint64_t kIchVmcrVeng1   = 1ULL << 1;     // virtual Group 1 enable
-inline constexpr std::uint64_t kIchVmcrVpmrAll = 0xFFULL << 24; // guest PMR: accept all
-inline constexpr std::uint64_t kIchHcrEn       = 1ULL << 0;
-inline constexpr std::uint64_t kIchHcrUie      = 1ULL << 1;  // underflow maintenance IRQ
-inline constexpr std::uint64_t kIchHcrTc       = 1ULL << 10; // trap ICC_SGI*R/DIR (common regs)
-inline constexpr std::uint64_t kIchVtrListMask = 0x1FULL;    // ListRegs = count - 1
+inline constexpr std::uint64_t kIchHcrEn  = 1ULL << 0;
+inline constexpr std::uint64_t kIchHcrUie = 1ULL << 1;  // underflow maintenance IRQ
+inline constexpr std::uint64_t kIchHcrTc  = 1ULL << 10; // trap ICC_SGI*R/DIR (common regs)
+
+// Raw ICH_VTR_EL2 — field decode lives in nova/arch/gicv3_vtr.hpp.
+inline auto read_vtr() noexcept -> std::uint64_t {
+  std::uint64_t v = 0;
+  __asm__ volatile("mrs %0, S3_4_C12_C11_1" : "=r"(v)); // ICH_VTR_EL2
+  return v;
+}
 
 inline void virtual_interface_init() noexcept {
-  std::uint64_t v = kIchVmcrVpmrAll | kIchVmcrVeng1;
+  std::uint64_t v = vmcr_reset(read_vtr());            // binary points at the implemented minimum
   __asm__ volatile("msr S3_4_C12_C11_7, %0" ::"r"(v)); // ICH_VMCR_EL2
   v = kIchHcrEn | kIchHcrTc;
   __asm__ volatile("msr S3_4_C12_C11_0, %0" ::"r"(v)); // ICH_HCR_EL2
@@ -29,9 +35,7 @@ inline void virtual_interface_init() noexcept {
 
 // Number of implemented list registers (ICH_VTR_EL2.ListRegs + 1).
 inline auto list_register_count() noexcept -> std::size_t {
-  std::uint64_t v = 0;
-  __asm__ volatile("mrs %0, S3_4_C12_C11_1" : "=r"(v)); // ICH_VTR_EL2
-  return static_cast<std::size_t>(v & kIchVtrListMask) + 1;
+  return vtr_list_regs(read_vtr());
 }
 
 // ICH_VMCR_EL2 / ICH_HCR_EL2 accessors — per-VCPU state for the

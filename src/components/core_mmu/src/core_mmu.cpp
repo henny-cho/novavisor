@@ -14,11 +14,13 @@
 #include "core_mmu/stage2_descriptor.hpp"
 #include "hal/cache.hpp"
 #include "hal/console.hpp"
+#include "hal/cpu.hpp"
 #include "hal/mem.hpp"
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/guest_layout.h"
 #include "nova/abi/payload.hpp"
+#include "nova/arch/cpu_contract.hpp"
 #include "nova/panic.hpp"
 #include "nova/range.hpp"
 
@@ -134,6 +136,26 @@ auto pristine_slot(std::size_t index) noexcept -> void* {
   halt();
 }
 
+[[noreturn]] void panic_vmid(std::size_t guest_index) noexcept {
+  console::write("[NOVA PANIC] guest vmid exceeds the 8-bit VMID space (VTCR_EL2.VS=0) at guest ");
+  console::write_dec64(guest_index);
+  console::write("\n");
+  halt();
+}
+
+// Refuse to program VTCR_EL2 with parameters the silicon does not
+// implement — a too-small PARange or a missing 4 KiB stage-2 granule
+// is CONSTRAINED UNPREDICTABLE, not a reportable fault.
+void enforce_cpu_contract() noexcept {
+  const arch::CpuContractError error = arch::validate_cpu_contract(cpu::id_aa64mmfr0(), mmu::kStage2Pa40);
+  if (error != arch::CpuContractError::kNone) {
+    console::write("[NOVA PANIC] CPU contract: ");
+    console::write(arch::to_string(error));
+    console::write("\n");
+    halt();
+  }
+}
+
 void validate_payloads(std::span<const GuestDescriptor> guests) noexcept {
   // Fail early when the packed windows or their pristine snapshots
   // outgrow the board's reserved regions — the copies below would
@@ -143,6 +165,9 @@ void validate_payloads(std::span<const GuestDescriptor> guests) noexcept {
     if (!range_well_formed(guests[i].load_pa, guests[i].ipa_size) || guests[i].load_pa < memory::kGuestPaBase ||
         guests[i].load_pa + guests[i].ipa_size > window_limit) {
       panic_reservation(i);
+    }
+    if (guests[i].vmid > 0xFFU) {
+      panic_vmid(i); // bits above VTTBR[55:48] are RES0 — two VMs would alias one VMID
     }
   }
   if (pristine_span(guests) > memory::kPristineSize) {
@@ -224,6 +249,7 @@ extern "C" void nova_stage2_switch(std::uint64_t vttbr) noexcept;
 namespace mmu {
 
 void init_and_activate() noexcept {
+  enforce_cpu_contract();
   const auto guests = guest_table();
   if (guests.empty() || guests.size() > kMaxGuests) {
     console::write("[NOVA PANIC] guest_table size out of range\n");

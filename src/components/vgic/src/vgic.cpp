@@ -14,9 +14,11 @@
 #include "nova/abi/guest.hpp"
 #include "nova/abi/guest_layout.h"
 #include "nova/arch/esr.hpp"
+#include "nova/arch/gicv3_vtr.hpp"
 #include "nova/sync.hpp"
 #include "vgic/vgic_delivery.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -24,9 +26,11 @@
 namespace nova::vgic {
 namespace {
 
-// Hardware registers that carry live guest state while resident.
+// Hardware registers that carry live guest state while resident. The
+// VMCR reset value is runtime-derived from ICH_VTR (binary-point
+// minimums); init() seeds every bank and cpu_reset() re-seeds one.
 struct HwBank {
-  std::uint64_t vmcr = gic_virt::kVmcrReset;
+  std::uint64_t vmcr = 0;
   std::uint64_t hcr  = gic_virt::kIchHcrBase;
 };
 
@@ -46,7 +50,9 @@ inline constexpr std::uint64_t kGicrIpaBase = NOVA_GICR_IPA_BASE;
 std::array<CpuState, kMaxVcpus>        g_cpu;
 std::array<HwBank, kMaxVcpus>          g_hw;
 std::array<std::size_t, cpu::kMaxCpus> g_resident{}; // init() presets kNoResident
-std::size_t                            g_lr_count = 0;
+std::size_t                            g_lr_count   = 0;
+std::uint64_t                          g_vtr        = 0; // cached ICH_VTR_EL2 (boot-immutable)
+std::uint64_t                          g_vmcr_reset = 0; // vmcr_reset(g_vtr)
 
 // One distributor view per VM — the SPI banks are VM-global state
 // (enable/pending/route shared by the VM's vCPUs). Two cores' guests
@@ -261,7 +267,14 @@ void init_cpu() noexcept {
 
 void init() noexcept {
   init_cpu();
-  g_lr_count = gic_virt::lr_count(); // boot-immutable (homogeneous cores)
+  g_vtr        = gic_virt::vtr(); // boot-immutable (homogeneous cores)
+  g_vmcr_reset = arch::gicv3::vmcr_reset(g_vtr);
+  // The LR count is a hardware-derived array index: clamp it to the
+  // shadow size instead of trusting the 5-bit field's full range.
+  g_lr_count = std::min(gic_virt::lr_count(), kMaxLrs);
+  for (auto& hw : g_hw) {
+    hw.vmcr = g_vmcr_reset;
+  }
   for (std::size_t c = 0; c < cpu::kMaxCpus; ++c) {
     g_resident[c] = kNoResident;
   }
@@ -276,7 +289,7 @@ void cpu_reset(std::size_t index) noexcept {
     sync::Guard guard{g_vm_lock[vm_of(index)]}; // a sibling can MMIO this redistributor frame
     g_cpu[index] = CpuState{};
   }
-  g_hw[index] = HwBank{};
+  g_hw[index] = HwBank{.vmcr = g_vmcr_reset, .hcr = gic_virt::kIchHcrBase};
 }
 
 void cpu_save(std::size_t index) noexcept {
@@ -421,10 +434,13 @@ void vgic_component::handle_sysreg(SysregCall* call) noexcept {
   }
 
   if (s.crn != 12 || s.crm != 11) {
-    if (s.crn == 12 && s.crm == 12 && s.op2 == 4) { // ICC_CTLR_EL1: EOImode 0, nothing writable we honor
+    // ICC_CTLR_EL1: mirror the implemented PRIbits/IDbits from ICH_VTR
+    // (EOImode/CBPR stay 0); nothing writable we honor. A zero answer
+    // would tell the guest "one priority bit, 16-bit INTIDs".
+    if (s.crn == 12 && s.crm == 12 && s.op2 == 4) {
       call->handled = true;
       if (!s.write && s.rt != esr::kSrtZeroReg) {
-        call->ctx->x[s.rt] = 0;
+        call->ctx->x[s.rt] = arch::gicv3::icc_ctlr_view(vgic::g_vtr);
       }
     }
     return;
