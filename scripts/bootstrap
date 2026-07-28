@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tool-versions.env disable=SC1091
+source "${REPO}/scripts/tool-versions.env"
+
+MODE="developer"
+case "${1:-}" in
+    --ci) MODE="ci" ;;
+    --image) MODE="image" ;;
+    "") ;;
+    *)
+        echo "Usage: $0 [--ci|--image]" >&2
+        exit 2
+        ;;
+esac
+
+TOOLCHAIN_ROOT="${NOVA_TOOLCHAIN_DIR:-${REPO}/.toolchain}"
+PRIVILEGE=()
+if [[ ${EUID} -ne 0 ]]; then
+    PRIVILEGE=(sudo)
+fi
+
+CORE_PACKAGES=(
+    bc
+    bison
+    build-essential
+    ccache
+    "clang-tidy-${CLANG_TIDY_VERSION}"
+    cmake
+    curl
+    device-tree-compiler
+    flex
+    gcc-aarch64-linux-gnu
+    git
+    libssl-dev
+    ninja-build
+    pipx
+    python3
+    python3-pexpect
+    python3-venv
+    python3-yaml
+    qemu-system-arm
+    shellcheck
+    sudo
+    wget
+    xz-utils
+)
+DEVELOPER_PACKAGES=(
+    gdb-multiarch
+    pre-commit
+)
+
+install_packages() {
+    if ! command -v apt-get >/dev/null 2>&1; then
+        echo "apt-get is unavailable; install dependencies manually" >&2
+        return
+    fi
+    local packages=("${CORE_PACKAGES[@]}")
+    if [[ "${MODE}" != "ci" ]]; then
+        packages+=("${DEVELOPER_PACKAGES[@]}")
+    fi
+    "${PRIVILEGE[@]}" apt-get update -q
+    "${PRIVILEGE[@]}" apt-get install -y --no-install-recommends "${packages[@]}"
+    if [[ "${MODE}" == "image" ]]; then
+        rm -rf /var/lib/apt/lists/*
+    fi
+}
+
+pipx_install() {
+    if [[ "${MODE}" == "image" ]]; then
+        PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin \
+            pipx install --force "$1"
+    else
+        pipx install --force "$1"
+    fi
+}
+
+install_python_tools() {
+    pipx_install "clang-format==${CLANG_FORMAT_VERSION}"
+    pipx_install "ruff==${RUFF_VERSION}"
+}
+
+install_actionlint() {
+    local version="${ACTIONLINT_VERSION#v}"
+    local platform
+    local architecture
+    case "$(uname -s)" in
+        Linux) platform="linux" ;;
+        Darwin) platform="darwin" ;;
+        *)
+            echo "Unsupported actionlint platform: $(uname -s)" >&2
+            return 1
+            ;;
+    esac
+    case "$(uname -m)" in
+        x86_64) architecture="amd64" ;;
+        aarch64 | arm64) architecture="arm64" ;;
+        *)
+            echo "Unsupported actionlint architecture: $(uname -m)" >&2
+            return 1
+            ;;
+    esac
+
+    local archive="actionlint_${version}_${platform}_${architecture}.tar.gz"
+    local release="https://github.com/rhysd/actionlint/releases/download/v${version}"
+    local temporary
+    temporary="$(mktemp -d)"
+    curl -fsSLo "${temporary}/${archive}" "${release}/${archive}"
+    curl -fsSLo "${temporary}/checksums.txt" \
+        "${release}/actionlint_${version}_checksums.txt"
+    (
+        cd "${temporary}"
+        grep "  ${archive}$" checksums.txt | sha256sum --check -
+    )
+    tar -xzf "${temporary}/${archive}" -C "${temporary}" actionlint
+    "${PRIVILEGE[@]}" install -m 0755 "${temporary}/actionlint" /usr/local/bin/actionlint
+    rm -rf "${temporary}"
+}
+
+toolchain_names() {
+    local os_prefix=""
+    local architecture="x86_64"
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        os_prefix="darwin-"
+    fi
+    if [[ "$(uname -m)" == "arm64" || "$(uname -m)" == "aarch64" ]]; then
+        architecture="$([[ -n "${os_prefix}" ]] && echo arm64 || echo aarch64)"
+    fi
+    TOOLCHAIN_ARCHIVE="arm-gnu-toolchain-${ARM_GNU_VERSION}-${os_prefix}${architecture}-aarch64-none-elf.tar.xz"
+    TOOLCHAIN_EXTRACTED="arm-gnu-toolchain-${ARM_GNU_VERSION,,}-${os_prefix}${architecture}-aarch64-none-elf"
+}
+
+install_toolchain() {
+    toolchain_names
+    local extracted="${TOOLCHAIN_ROOT}/${TOOLCHAIN_EXTRACTED}"
+    if [[ ! -d "${extracted}" ]]; then
+        local archive="${TOOLCHAIN_ROOT}/${TOOLCHAIN_ARCHIVE}"
+        local url="https://developer.arm.com/-/media/Files/downloads/gnu/${ARM_GNU_VERSION}/binrel/${TOOLCHAIN_ARCHIVE}"
+        mkdir -p "${TOOLCHAIN_ROOT}"
+        curl -fL --retry 3 "${url}" -o "${archive}"
+        tar -xf "${archive}" -C "${TOOLCHAIN_ROOT}"
+        rm -f "${archive}"
+    fi
+    ln -sfn "${extracted}" "${TOOLCHAIN_ROOT}/current"
+}
+
+version_tuple() {
+    python3 - "$1" <<'PY'
+import re
+import sys
+
+match = re.search(r"\d+(?:\.\d+)+", sys.argv[1])
+if match is None:
+    raise SystemExit("unable to parse version")
+print(match.group())
+PY
+}
+
+check_qemu() {
+    local binary
+    binary="$(command -v qemu-system-aarch64 || true)"
+    if [[ -z "${binary}" ]]; then
+        echo "QEMU ${QEMU_MIN_VERSION}+ is required" >&2
+        return 1
+    fi
+    local installed
+    installed="$("${binary}" --version | head -n 1)"
+    python3 - "$(version_tuple "${installed}")" "${QEMU_MIN_VERSION}" <<'PY'
+import sys
+
+installed = tuple(map(int, sys.argv[1].split(".")))
+required = tuple(map(int, sys.argv[2].split(".")))
+raise SystemExit(0 if installed >= required else 1)
+PY
+}
+
+write_environment() {
+    local environment="${TOOLCHAIN_ROOT}/env.sh"
+    mkdir -p "${TOOLCHAIN_ROOT}"
+    {
+        echo '#!/usr/bin/env bash'
+        # shellcheck disable=SC2016
+        printf 'export PATH="%s/current/bin:${PATH}"\n' "${TOOLCHAIN_ROOT}"
+        echo 'export CROSS_COMPILE="aarch64-none-elf-"'
+    } > "${environment}"
+    chmod +x "${environment}"
+}
+
+install_hooks() {
+    if [[ "${MODE}" == "developer" && -d "${REPO}/.git" ]]; then
+        (cd "${REPO}" && pre-commit install)
+    fi
+}
+
+install_packages
+install_python_tools
+install_actionlint
+install_toolchain
+check_qemu
+if [[ "${MODE}" != "image" ]]; then
+    write_environment
+fi
+install_hooks

@@ -1,0 +1,6 @@
+.git
+.docs
+.toolchain
+build
+external
+__pycache__

@@ -3,11 +3,10 @@
 {
   "name": "NovaVisor DevContainer",
   "build": {
-    "dockerfile": "Dockerfile",
-    // Repo root as context so the Dockerfile can COPY scripts/lib/versions.sh.
+    "dockerfile": "../containers/toolchain/Dockerfile",
     "context": ".."
   },
-  "remoteUser": "vscode",
+  "remoteUser": "nova",
   "customizations": {
     "vscode": {
       "settings": {
@@ -27,5 +26,5 @@
       ]
     }
   },
-  "postCreateCommand": "pre-commit install && aarch64-none-elf-gcc --version"
+  "postCreateCommand": "pre-commit install && scripts/nova --help"
 }

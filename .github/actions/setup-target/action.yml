@@ -1,9 +1,5 @@
-# Shared setup for every job that cross-builds and runs QEMU demos:
-# the four caches plus host packages + ARM toolchain. Keeping the cache
-# definitions here means cpm/toolchain/guests/ccache keys cannot drift
-# between ci.yml and soak.yml.
 name: Setup target build environment
-description: Restore caches and install the cross toolchain (setup_env.sh --ci)
+description: Restore isolated caches and bootstrap the target tools
 inputs:
   guests:
     description: Also restore the external guest image cache
@@ -20,39 +16,24 @@ runs:
     - name: Cache CPM packages
       uses: actions/cache@v6
       with:
-        # Guest images and firmware sources live under external/cache too
-        # but have their own cache entries, because their lifecycles
-        # differ: they follow fetch.sh / versions.sh pins, not CPM pins.
-        # Leaving them in here would make a CMakeLists edit re-download
-        # hundreds of MB that did not change.
-        path: |
-          external/cache
-          !external/cache/guests
-          !external/cache/firmware
+        path: external/cache/cpm
         key: cpm-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake') }}
         restore-keys: cpm-
 
     - name: Cache Trusted Firmware-A source
-      # Keyed on the pin itself: a hit lets tfa_prepare_source verify the
-      # revision it already has and build offline, so the chain smoke does
-      # not depend on upstream being reachable.
       if: inputs.firmware == 'true'
       uses: actions/cache@v6
       with:
         path: external/cache/firmware
-        key: firmware-${{ hashFiles('scripts/lib/versions.sh') }}
+        key: firmware-${{ hashFiles('scripts/tool-versions.env') }}
 
     - name: Cache ARM toolchain
-      # setup_env.sh skips the ~700 MB download when the extracted
-      # toolchain is already present.
       uses: actions/cache@v6
       with:
         path: .toolchain
-        key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/lib/versions.sh') }}
+        key: toolchain-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/tool-versions.env') }}
 
     - name: Cache external guest images
-      # Built once per fetch recipe (pinned tag / overlay); a hit lets
-      # fetch.sh exit on its version stamp with zero network access.
       if: inputs.guests == 'true'
       uses: actions/cache@v6
       with:
@@ -66,6 +47,6 @@ runs:
         key: ${{ inputs.ccache-prefix }}-${{ github.sha }}
         restore-keys: ${{ inputs.ccache-prefix }}-
 
-    - name: Install dependencies and ARM toolchain
-      run: ./scripts/setup_env.sh --ci
+    - name: Bootstrap target tools
+      run: ./scripts/bootstrap --ci
       shell: bash

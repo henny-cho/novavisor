@@ -67,7 +67,7 @@ class ProcessTests(unittest.TestCase):
         self.assertEqual(kwargs["cwd"], config.REPO)
         self.assertEqual(
             kwargs["env"]["CPM_SOURCE_CACHE"],
-            str(config.REPO / "external" / "cache"),
+            str(config.REPO / "external" / "cache" / "cpm"),
         )
 
 

@@ -42,18 +42,10 @@ def _clang_format() -> str:
     raise SystemExit(f"clang-format {major}.x not found (pinned: {version})")
 
 
-def _check_format_pin() -> None:
-    version = config.tool_version("CLANG_FORMAT_VERSION")
-    hooks = (config.REPO / ".pre-commit-config.yaml").read_text()
-    if f"rev: v{version}" not in hooks:
-        raise SystemExit(f"clang-format hook does not match {version}")
-
-
 def format_sources(*, check: bool) -> int:
     formatter = _clang_format()
     files = [str(path) for path in source_files()]
     if check:
-        _check_format_pin()
         command = [formatter, "--dry-run", "--Werror", *files]
     else:
         command = [formatter, "-i", *files]

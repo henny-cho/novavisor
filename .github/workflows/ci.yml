@@ -23,7 +23,7 @@ jobs:
       - name: Cache CPM packages
         uses: actions/cache@v6
         with:
-          path: external/cache
+          path: external/cache/cpm
           # Dependency pins live in CMakeLists.txt AND cmake/ (get_cpm.cmake,
           # cib_cpm_pin.cmake), so both must key the cache.
           key: cpm-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake') }}
@@ -35,7 +35,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y cmake ninja-build
-          source scripts/lib/versions.sh
+          source scripts/tool-versions.env
           pipx install "clang-format==${CLANG_FORMAT_VERSION}"
 
       - name: Check formatting

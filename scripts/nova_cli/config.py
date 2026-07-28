@@ -14,7 +14,7 @@ DEMO_DIR = REPO / "demo"
 DEMO_BUILD_DIR = BUILD_ROOT / "demo"
 DEFAULT_CONFIG = REPO / "configs" / "default.yml"
 DEFAULT_PAYLOADS = REPO / "configs" / "payloads.yml"
-VERSION_SOURCE = SCRIPTS / "lib" / "versions.sh"
+VERSION_SOURCE = SCRIPTS / "tool-versions.env"
 HV_PRESET = os.environ.get("NOVA_HV_PRESET", "aarch64-debug")
 QEMU = os.environ.get("NOVA_QEMU", "qemu-system-aarch64")
 QEMU_BOARD_ARGS = (
@@ -42,7 +42,7 @@ def tool_version(name: str) -> str:
     if override:
         return override
     match = re.search(
-        rf'^export {re.escape(name)}="([^"]+)"$',
+        rf"^{re.escape(name)}=([^\s#]+)$",
         VERSION_SOURCE.read_text(),
         flags=re.MULTILINE,
     )
@@ -59,5 +59,5 @@ def command_env() -> dict[str, str]:
         entries = path.split(os.pathsep)
         if str(toolchain) not in entries:
             env["PATH"] = f"{toolchain}{os.pathsep}{path}"
-    env.setdefault("CPM_SOURCE_CACHE", str(REPO / "external" / "cache"))
+    env.setdefault("CPM_SOURCE_CACHE", str(REPO / "external" / "cache" / "cpm"))
     return env
