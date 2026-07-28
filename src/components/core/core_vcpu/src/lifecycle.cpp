@@ -317,7 +317,11 @@ auto prepare_reset_quiesced_vm(std::size_t vm) noexcept -> std::uint64_t {
 
   const std::uint64_t restore_start = hyp_timer::now();
   const auto          restored      = mmu::reload_guest_image(vm);
-  const std::uint64_t restore_ms    = (hyp_timer::now() - restore_start) * 1000U / hyp_timer::freq();
+  // Elapsed ticks → ms. The boot contract gate refuses a zero timebase,
+  // so the divisor is non-zero here; guarding anyway keeps this reporting
+  // path from being the one place a future ungated caller divides by it.
+  const std::uint64_t hz         = hyp_timer::freq();
+  const std::uint64_t restore_ms = hz != 0 ? (hyp_timer::now() - restore_start) * 1000U / hz : 0;
   fmt::DecBuf         vm_text{};
   fmt::DecBuf         written_text{};
   fmt::DecBuf         examined_text{};

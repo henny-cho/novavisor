@@ -4,6 +4,7 @@
 //
 // Per-core identity and the SMC conduit — pure architecture.
 
+#include "nova/arch/cpu_features.hpp"
 #include "nova/arch/mpidr.h"
 
 #include <cstddef>
@@ -35,6 +36,43 @@ namespace nova::arch {
   std::uint64_t v = 0;
   __asm__ volatile("mrs %0, id_aa64mmfr0_el1" : "=r"(v));
   return v;
+}
+
+// The speculation-barrier ID registers, decoded by
+// nova/arch/cpu_features.hpp into the verdict the boot report and the
+// guest-facing SMCCC answers share.
+[[nodiscard]] inline auto id_aa64pfr0() noexcept -> std::uint64_t {
+  std::uint64_t v = 0;
+  __asm__ volatile("mrs %0, id_aa64pfr0_el1" : "=r"(v));
+  return v;
+}
+
+[[nodiscard]] inline auto id_aa64pfr1() noexcept -> std::uint64_t {
+  std::uint64_t v = 0;
+  __asm__ volatile("mrs %0, id_aa64pfr1_el1" : "=r"(v));
+  return v;
+}
+
+[[nodiscard]] inline auto id_aa64isar2() noexcept -> std::uint64_t {
+  std::uint64_t v = 0;
+  __asm__ volatile("mrs %0, id_aa64isar2_el1" : "=r"(v));
+  return v;
+}
+
+namespace detail {
+// Decoded once by the boot contract gate. Two independent consumers read
+// it — the boot report and the guest-facing SMCCC workaround answers —
+// and they must agree, so the decode happens in one place. Same handoff
+// premise as the adopted timebase: written before secondaries exist.
+inline SpeculationState g_speculation{};
+} // namespace detail
+
+inline void adopt_speculation_state() noexcept {
+  detail::g_speculation = read_speculation_state(id_aa64pfr0(), id_aa64pfr1(), id_aa64isar2());
+}
+
+[[nodiscard]] inline auto speculation() noexcept -> const SpeculationState& {
+  return detail::g_speculation;
 }
 
 // The MPIDR value the guest reads at EL1. Per-vCPU: written on every

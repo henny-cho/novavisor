@@ -21,6 +21,9 @@
  * constexpr guidance does not apply. */
 // NOLINTBEGIN(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
+/* Board identity for the boot report. */
+#define NOVA_BOARD_NAME "qemu_tfa"
+
 #define NOVA_BOARD_RAM_BASE      0x60000000 /* TF-A qemu NS_IMAGE_OFFSET */
 #define NOVA_BOARD_RAM_SIZE      0x08000000
 #define NOVA_BOARD_PHYS_RAM_BASE 0x40000000

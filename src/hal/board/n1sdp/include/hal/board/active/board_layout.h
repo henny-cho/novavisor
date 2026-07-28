@@ -5,6 +5,9 @@
 
 /* TF-A loads BL33 at 0xE0000000. Guest state stays in the lower
  * non-secure DRAM bank and does not overlap the EL2 image. */
+/* Board identity for the boot report. */
+#define NOVA_BOARD_NAME "n1sdp"
+
 #define NOVA_BOARD_RAM_BASE      0xE0000000
 #define NOVA_BOARD_RAM_SIZE      0x08000000
 #define NOVA_BOARD_PHYS_RAM_BASE 0x80000000

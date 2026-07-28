@@ -18,6 +18,9 @@
 
 /* QEMU virt: RAM starts at 1 GiB. The hypervisor image + stack must fit
  * in this budget; guest windows (nova/abi/guest_layout.h) live above it. */
+/* Board identity for the boot report. */
+#define NOVA_BOARD_NAME "qemu_virt"
+
 #define NOVA_BOARD_RAM_BASE      0x40000000
 #define NOVA_BOARD_RAM_SIZE      0x08000000 /* 128 MiB */
 #define NOVA_BOARD_PHYS_RAM_BASE 0x40000000

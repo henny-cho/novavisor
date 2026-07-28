@@ -27,6 +27,17 @@ inline constexpr std::size_t kMaxCpus = board::active::kSmpCpus;
   return arch::id_aa64mmfr0();
 }
 
+// Speculation-barrier features, decoded once by the boot contract gate.
+// The boot report and the guest-facing SMCCC workaround answers both
+// read this, so they cannot disagree about what the PE reported.
+inline void adopt_speculation_state() noexcept {
+  arch::adopt_speculation_state();
+}
+
+[[nodiscard]] inline auto speculation() noexcept -> const arch::SpeculationState& {
+  return arch::speculation();
+}
+
 // MPIDR affinity of a dense core index — what PSCI CPU_ON and GIC
 // routing take (the two representations coincide only on flat
 // single-cluster topologies).

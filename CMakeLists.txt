@@ -132,6 +132,10 @@ if(CMAKE_CROSSCOMPILING)
     nova_validate_platform_targets()
     add_library(nova_platform INTERFACE)
     target_link_libraries(nova_platform INTERFACE nova_board)
+    # The composition's own name, for the boot identity line. CMake is the
+    # only source of it, and every component links nova_platform, so this
+    # is where it enters the build instead of a per-target definition.
+    target_compile_definitions(nova_platform INTERFACE NOVA_PROFILE_NAME="${NOVA_PROJECT}")
 
     # Only components selected by the active composition project are built.
     foreach(component IN LISTS NOVA_COMPONENTS)
@@ -175,6 +179,8 @@ else()
     nova_add_host_test(el2_stage1_test)       # EL2 Stage-1 identity map + W^X
     nova_add_host_test(cpu_contract_test)     # boot-time ID-register contract gate
     nova_add_host_test(gicv3_vtr_test)        # ICH_VTR-derived ICC_CTLR view + VMCR reset
+    nova_add_host_test(timebase_test)         # CNTFRQ contract + overflow-safe ms conversion
+    nova_add_host_test(cpu_features_test)     # speculation-barrier ID fields → SMCCC verdict
 
     # Component tests (src/components/<group>/<name>/test/).
     nova_add_component_test(core_mmu stage2_descriptor_test) # Stage 2 descriptor encoding

@@ -100,6 +100,16 @@ extern "C" [[noreturn]] void novavisor_secondary(std::uint64_t cpu_index) noexce
     halt();
   }
 
+  // Same premise for time: this PE's own per-core scheduler and soft
+  // timer arm deadlines from the frequency the boot PE adopted, so a
+  // disagreeing CNTFRQ_EL0 would silently scale every window on this
+  // core. Firmware programs the register per PE, so this can differ.
+  if (hyp_timer::raw_freq() != hyp_timer::freq()) {
+    console::line("[smp] core ", console::Dec{cpu_index}, " CNTFRQ_EL0 mismatch (", console::Dec{hyp_timer::raw_freq()},
+                  " vs adopted ", console::Dec{hyp_timer::freq()}, ") — parking\n");
+    halt();
+  }
+
   gic::init_cpu();                     // redistributor + ICC
   vgic::init_cpu();                    // ICH + maintenance PPI
   hyp_timer::init();                   // CNTHCTL/CNTVOFF/CNTHP
