@@ -11,10 +11,15 @@ import yaml
 REPO = Path(__file__).resolve().parents[2]
 GITHUB = REPO / ".github"
 WORKFLOWS = GITHUB / "workflows"
-IMAGE = (
-    "ghcr.io/henny-cho/novavisor-toolchain"
-    "@sha256:3f3b10be1424abf99b04d6d3a9fc0c8253252f750b3d8e1db4cadd9ac3609078"
-)
+PINNED_IMAGE = re.compile(r"image:\s*(\S+@sha256:[0-9a-f]{64})")
+
+
+def pinned_images() -> set[str]:
+    return {
+        digest
+        for path in WORKFLOWS.glob("*.yml")
+        for digest in PINNED_IMAGE.findall(path.read_text())
+    }
 
 
 class WorkflowContractTest(unittest.TestCase):
@@ -27,12 +32,28 @@ class WorkflowContractTest(unittest.TestCase):
                 with self.subTest(path=path, action=action):
                     self.assertRegex(action, r"@[\da-f]{40}$")
 
-    def test_ci_and_soak_use_the_same_immutable_image(self):
-        ci = (WORKFLOWS / "ci.yml").read_text()
-        soak = (WORKFLOWS / "soak.yml").read_text()
+    def test_every_container_pins_the_same_immutable_image(self):
+        # Pinning the value here would make this a third copy to bump; what
+        # matters is that the lanes and the soak never diverge.
+        self.assertEqual(len(pinned_images()), 1, pinned_images())
+        for name in ("ci.yml", "soak.yml"):
+            with self.subTest(workflow=name):
+                text = (WORKFLOWS / name).read_text()
+                self.assertEqual(len(PINNED_IMAGE.findall(text)), 1)
 
-        self.assertEqual(ci.count(f"image: {IMAGE}"), 1)
-        self.assertEqual(soak.count(f"image: {IMAGE}"), 1)
+    def test_the_publisher_reports_the_digest_its_consumers_must_pin(self):
+        # dependabot watches the Dockerfile base image, not the digest the
+        # consumers pin, so nothing else can notice a stale pin.
+        publisher = yaml.safe_load((WORKFLOWS / "toolchain-image.yml").read_text())
+
+        self.assertEqual(
+            publisher["permissions"],
+            {"contents": "read", "packages": "write"},
+        )
+        steps = publisher["jobs"]["publish"]["steps"]
+        report = next(step for step in steps if step.get("name", "").endswith("digest bump"))
+        self.assertEqual(report["env"]["DIGEST"], "${{ steps.build.outputs.digest }}")
+        self.assertIn("GITHUB_STEP_SUMMARY", report["run"])
 
     def test_ci_permissions_and_public_handlers_are_minimal(self):
         ci = yaml.safe_load((WORKFLOWS / "ci.yml").read_text())
@@ -54,7 +75,7 @@ class WorkflowContractTest(unittest.TestCase):
         lanes = ci["jobs"]["lane"]
 
         self.assertEqual(sorted(ci["jobs"]), ["ci", "lane"])
-        self.assertIn(IMAGE, lanes["container"]["image"])
+        self.assertIn(lanes["container"]["image"], pinned_images())
         self.assertEqual(
             [entry["lane"] for entry in lanes["strategy"]["matrix"]["include"]],
             ["host", "static", "runtime"],
