@@ -199,6 +199,7 @@ else()
     nova_add_component_test(watchdog watchdog_model_test)    # owner generation + deadline
     nova_add_component_test(dma_device device_lifecycle_model_test) # per-device lifecycle registry
     nova_add_component_test(smp quiesce_model_test)           # VM quiesce-epoch tracker
+    nova_add_component_test(smp dma_quiesce_model_test)       # unclaimed DMA quiesce = nothing to drain
     nova_add_component_test(ivc ring_test)                   # SPSC ring protocol (threads)
     nova_add_component_test(vuart vuart_model_test)          # PL011 register model
     nova_add_component_test(dtb_parser fdt_model_test)       # FDT walker + guest extraction

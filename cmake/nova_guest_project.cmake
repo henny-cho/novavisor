@@ -104,15 +104,31 @@ function(nova_add_guest_project)
     )
 endfunction()
 
-# The minimal single-core GICv3 profile: every source, including the
-# nexus, comes from src/projects/common/minimal. Board-specific profiles
-# that need nothing more than the board selection reduce to this call.
+# Shared composition tiers. Each takes every source, including the
+# nexus, from src/projects/common/<tier>, so a board-specific profile
+# that needs nothing beyond the board selection reduces to one call.
+#
+#   minimal  — single core, one guest, no device models
+#   standard — SMP, guest PSCI, lifecycle, vUART; no IOMMU
+#
+# A profile needing device passthrough on top of standard supplies its
+# own nexus and calls nova_add_guest_project directly.
 function(nova_add_minimal_guest_project)
     nova_add_guest_project(
         MAIN ${NOVA_PROJECT_COMMON_DIR}/main.cpp
         GUEST_CONFIG ${NOVA_PROJECT_COMMON_DIR}/guest_config.cpp
         INCLUDE_DIRS
             ${NOVA_PROJECT_COMMON_DIR}/minimal
+            ${NOVA_PROJECT_COMMON_DIR}/include
+    )
+endfunction()
+
+function(nova_add_standard_guest_project)
+    nova_add_guest_project(
+        MAIN ${NOVA_PROJECT_COMMON_DIR}/main.cpp
+        GUEST_CONFIG ${NOVA_PROJECT_COMMON_DIR}/guest_config.cpp
+        INCLUDE_DIRS
+            ${NOVA_PROJECT_COMMON_DIR}/standard
             ${NOVA_PROJECT_COMMON_DIR}/include
     )
 endfunction()

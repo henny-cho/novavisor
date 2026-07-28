@@ -67,6 +67,9 @@ jobs:
       - name: Build minimal platform profile
         run: scripts/task.sh build --preset aarch64-minimal-release
 
+      - name: Build standard platform profile
+        run: scripts/task.sh build --preset aarch64-standard-release
+
       - name: Build N1SDP payload profile
         run: scripts/task.sh firmware smoke
 
@@ -88,6 +91,19 @@ jobs:
         # Each completed phase flips its demo's `enabled` flag to true,
         # making this step the phase's acceptance gate.
         run: scripts/task.sh demo verify-all --artifacts build/demo-failures
+
+      - name: Demo verification (standard profile)
+        # The composition real-board bring-up runs before its IOMMU is
+        # characterized. Compiling it is not enough — these four cover
+        # what it adds over minimal (lifecycle/watchdog, physical SMP,
+        # guest SMP, vuart/console mux) and are the fast ones, so the
+        # tier is exercised without re-running the OS boots.
+        env:
+          NOVA_HV_PRESET: aarch64-standard-release
+        run: |
+          for id in 7 8 9 10; do
+            scripts/task.sh demo verify "$id" --artifacts build/demo-failures
+          done
 
       - name: Upload demo artifacts on failure
         if: failure()

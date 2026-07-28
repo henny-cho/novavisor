@@ -30,6 +30,20 @@ struct DeviceStream {
   std::uint32_t stream_id = 0;
 };
 
+// An isolated translation fault, as the VM owner needs to hear it: which
+// VM, which stream, and which generation of that VM was live when the
+// fault was quarantined. Lives here rather than in the SMMU component
+// because the component that reports faults and the one that recovers
+// from them must compile independently — a composition can include
+// either without the other.
+struct FaultNotice {
+  std::size_t   owner_vm   = kNoVm;
+  std::uint32_t stream_id  = 0;
+  std::uint64_t generation = 0;
+
+  [[nodiscard]] constexpr auto valid() const noexcept -> bool { return owner_vm != kNoVm && generation != 0U; }
+};
+
 struct DeviceRegion {
   DeviceId      device_id = kNoDevice;
   std::uint64_t ipa_base  = 0;

@@ -22,7 +22,8 @@
 
 #include "core_gic/core_gic.hpp"
 #include "core_vcpu/core_vcpu.hpp"
-#include "smmu/smmu.hpp"
+#include "smp/dma_quiesce.hpp"
+#include "trap_handler/dma_fault.hpp"
 #include "trap_handler/guest_fault.hpp"
 #include "trap_handler/hvc.hpp"
 #include "trap_handler/sysreg.hpp"
@@ -66,7 +67,9 @@ void reevaluate_virq(std::size_t slot) noexcept;
 // VM-wide power operations route through the boot owner and share one
 // serialized quiesce protocol. DMA is drained and detached before a
 // reset restores memory; the new generation is attached before vcpu 0
-// becomes runnable.
+// becomes runnable — through DmaQuiesceService (smp/dma_quiesce.hpp),
+// which this component exports and a device stack subscribes to, so
+// VM power does not require one to exist.
 void               stop_vm(std::size_t vm, TrapContext* live) noexcept;
 void               cpu_off(std::size_t slot, TrapContext* live) noexcept;
 [[nodiscard]] auto reset_vm(std::size_t vm, TrapContext* live, bool from_irq = false) noexcept -> bool;
@@ -107,7 +110,8 @@ struct smp_component {
   // last in RuntimeStart. That constraint is expressed by the project
   // nexus, which owns the whole boot chain.
   constexpr static auto config = cib::config(
-      cib::extend<cib::RuntimeStart>(*INIT), cib::extend<HvcService>(&smp_component::handle_hvc),
+      cib::exports<DmaQuiesceService>, cib::extend<cib::RuntimeStart>(*INIT),
+      cib::extend<HvcService>(&smp_component::handle_hvc),
       cib::extend<GuestFaultService>(&smp_component::handle_guest_fault),
       cib::extend<DmaFaultService>(&smp_component::handle_dma_fault),
       cib::extend<IrqService>(&smp_component::handle_irq), cib::extend<SysregService>(&smp_component::handle_sysreg),
