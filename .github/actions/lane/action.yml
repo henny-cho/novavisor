@@ -1,0 +1,57 @@
+name: Prepare a CI lane
+description: Restore exactly the caches a named lane needs
+inputs:
+  name:
+    description: host | static | runtime | soak-dma | soak-mixed
+    required: true
+runs:
+  using: composite
+  steps:
+    # What a lane needs follows from the lane, so the workflows name the
+    # lane and nothing else.
+    - name: Resolve lane inputs
+      id: lane
+      shell: bash
+      env:
+        LANE: ${{ inputs.name }}
+      run: |
+        source scripts/tool-versions.env
+        case "${LANE}" in
+          runtime)    guests=true;  firmware=true  ;;
+          soak-mixed) guests=true;  firmware=false ;;
+          *)          guests=false; firmware=false ;;
+        esac
+        {
+          echo "guests=${guests}"
+          echo "firmware=${firmware}"
+          echo "firmware_pin=${TFA_COMMIT}"
+          echo "compiler=${ARM_GNU_VERSION}-tidy${CLANG_TIDY_VERSION}"
+        } >> "${GITHUB_OUTPUT}"
+
+    - name: Cache CPM packages
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: external/cache/cpm
+        key: cpm-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake') }}
+        restore-keys: cpm-
+
+    - name: Cache Trusted Firmware-A source
+      if: steps.lane.outputs.firmware == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: external/cache/firmware
+        key: firmware-${{ steps.lane.outputs.firmware_pin }}
+
+    - name: Cache external guest images
+      if: steps.lane.outputs.guests == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: external/cache/guests
+        key: guests-${{ hashFiles('demo/*/fetch.sh', 'demo/*/novavisor.overlay', 'demo/12_zephyr/app/**') }}
+
+    - name: Cache ccache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/ccache
+        key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ steps.lane.outputs.compiler }}-${{ github.sha }}-${{ inputs.name }}
+        restore-keys: ccache-${{ runner.os }}-${{ runner.arch }}-${{ steps.lane.outputs.compiler }}-

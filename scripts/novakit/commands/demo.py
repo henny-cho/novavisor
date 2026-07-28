@@ -155,7 +155,10 @@ def _fetch(args) -> int:
         sys.exit(f"{SCOPE}: fetch requires a demo id/name or --all")
     script = config.DEMO_DIR / args.name / "fetch.sh"
     if not script.exists():
-        sys.exit(f"{SCOPE}: '{args.name}' has no fetch.sh; in-tree guests use build")
+        # Same contract as --all: nothing to fetch is not a failure, so a
+        # caller need not know which demos ship external images.
+        print(f"[{SCOPE}] {args.name}: no external images to fetch")
+        return 0
     return proc.call(["bash", str(script)])
 
 

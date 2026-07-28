@@ -25,12 +25,10 @@ jobs:
             demo: "15"
             default-runs: "10"
             timeout: 45
-            fetch: "false"
           - target: mixed
             demo: "14"
             default-runs: "5"
             timeout: 90
-            fetch: "true"
     concurrency:
       group: soak-${{ matrix.target }}
       cancel-in-progress: false
@@ -49,13 +47,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: ./.github/actions/cache-build
+      - uses: ./.github/actions/lane
         with:
-          lane: soak-${{ matrix.target }}
-          guests: ${{ matrix.fetch }}
+          name: soak-${{ matrix.target }}
 
+      # A demo without external images reports that and succeeds, so the
+      # target list stays the only place a target is described.
       - name: Fetch external guest images
-        if: matrix.fetch == 'true'
         run: scripts/nova demo fetch ${{ matrix.demo }}
 
       - name: Run recovery soak
