@@ -11,12 +11,13 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from nova_cli import firmware, qemu  # noqa: E402
+from novakit.core import board  # noqa: E402
+from novakit.services import tfa  # noqa: E402
 
 
 class QemuCommandTests(unittest.TestCase):
     def test_secure_firmware_boot_reuses_the_canonical_board(self):
-        command = qemu.board_command(
+        command = board.command(
             bios=Path("/tmp/flash.bin"),
             secure=True,
         )
@@ -33,20 +34,20 @@ class FirmwareSourceTests(unittest.TestCase):
             source = Path(directory) / "tf-a"
             (source / ".git").mkdir(parents=True)
             with (
-                mock.patch.object(firmware, "tfa_source_dir", return_value=source),
+                mock.patch.object(tfa, "source_dir", return_value=source),
                 mock.patch.object(
-                    firmware.config,
+                    tfa.config,
                     "tool_version",
                     return_value="pinned-commit",
                 ),
                 mock.patch.object(
-                    firmware,
+                    tfa,
                     "_revision",
                     return_value="pinned-commit",
                 ),
-                mock.patch.object(firmware.process, "run") as run,
+                mock.patch.object(tfa.proc, "run") as run,
             ):
-                resolved = firmware.prepare_tfa_source()
+                resolved = tfa.prepare_source()
 
             self.assertEqual(resolved, source)
             run.assert_not_called()
@@ -65,17 +66,17 @@ class FirmwarePackagingTests(unittest.TestCase):
 
             with (
                 mock.patch.object(
-                    firmware,
+                    tfa,
                     "_require_payload",
                     return_value=payload,
                 ),
                 mock.patch.object(
-                    firmware,
+                    tfa,
                     "_build_tfa",
                     return_value=tfa_output,
                 ),
             ):
-                flash = firmware.package_qemu(payload, root / "output")
+                flash = tfa.package_qemu(payload, root / "output")
 
             image = flash.read_bytes()
             self.assertEqual(image[:3], b"BL1")

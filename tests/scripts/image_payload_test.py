@@ -1,16 +1,13 @@
 import hashlib
-import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location(
-    "payload_manifest", REPO / "tools/payload_manifest.py"
-)
-assert SPEC and SPEC.loader
-PAYLOAD = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(PAYLOAD)
+sys.path.insert(0, str(REPO / "scripts"))
+
+from novakit.image import payload  # noqa: E402
 
 
 class PayloadManifestTest(unittest.TestCase):
@@ -19,7 +16,7 @@ class PayloadManifestTest(unittest.TestCase):
             binary = Path(directory) / "guest.bin"
             binary.write_bytes(b"guest")
 
-            record = PAYLOAD.make_record(
+            record = payload.make_record(
                 binary,
                 guest=0,
                 name="smoke",
@@ -39,7 +36,7 @@ class PayloadManifestTest(unittest.TestCase):
             binary = Path(directory) / "guest.bin"
             binary.write_bytes(b"")
             with self.assertRaisesRegex(ValueError, "must not be empty"):
-                PAYLOAD.make_record(
+                payload.make_record(
                     binary,
                     guest=0,
                     name="empty",
@@ -50,7 +47,7 @@ class PayloadManifestTest(unittest.TestCase):
 
             binary.write_bytes(b"x")
             with self.assertRaisesRegex(ValueError, "non-negative"):
-                PAYLOAD.make_record(
+                payload.make_record(
                     binary,
                     guest=-1,
                     name="invalid",

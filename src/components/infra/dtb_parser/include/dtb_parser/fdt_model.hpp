@@ -221,7 +221,7 @@ template <typename Fn>
 }
 
 // ---------------------------------------------------------------------------
-// Guest configuration extraction (the yml2dtb schema)
+// Guest configuration extraction (the generated DTB schema)
 // ---------------------------------------------------------------------------
 
 struct GuestInfo {

@@ -4,7 +4,7 @@
 //
 // Build identity facade: which board and which composition this image
 // is. The boot report needs both, and generic code may not name a board
-// (tools/check_platform_boundaries.py rejects board names in the
+// (the platform boundary check rejects board names in the
 // reusable trees) — so the board string comes from the board tree and
 // the profile name from the build system, and this is the one place
 // components read either.

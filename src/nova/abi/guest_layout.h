@@ -14,6 +14,13 @@
  * usual constexpr guidance does not apply. */
 // NOLINTBEGIN(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
+/* Static bounds on the guest set: entries in guest_table() and vCPUs per
+ * VM (a fixed stride, so a flat slot identifies one execution context).
+ * They size every per-VM backing store, and the build-time generators
+ * reject a configuration that exceeds them, so both sides read here. */
+#define NOVA_MAX_GUESTS       4
+#define NOVA_MAX_VCPUS_PER_VM 2
+
 /* Every guest sees the same IPA window (and links against it); the
  * backing PA differs per guest by slot. */
 #define NOVA_GUEST_IPA_BASE 0x50000000
@@ -22,7 +29,7 @@
 /* Guest PA windows are packed: guest i starts where guest i-1 ended,
  * rounded up to this alignment (keeps every window Block-mappable and
  * slot 0 identity with the IPA window). A demo manifest's
- * guests[].load_addr must equal the packed PA tools/yml2dtb computes. */
+ * guests[].load_addr must equal the packed PA novakit.image.dtb computes. */
 #define NOVA_GUEST_PA_ALIGN 0x00200000 /* 2 MiB */
 
 /* IVC shared page: one 4 KiB page mapped RW (XN) into every VM.
@@ -47,7 +54,7 @@
 #define NOVA_EDU_BAR0_SIZE 0x00100000
 #define NOVA_EDU_SPI       37
 
-/* Guest DTB: each guest's configuration blob (built by tools/yml2dtb)
+/* Guest DTB: each guest's configuration blob (built by novakit.image.dtb)
  * is copied to the top of that guest's configured window before the
  * pristine snapshot, and its IPA is handed to the boot vCPU in x0
  * (Linux boot protocol shape). The runtime guest table computes the

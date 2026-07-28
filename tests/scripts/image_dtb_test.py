@@ -1,14 +1,14 @@
 import hashlib
-import importlib.util
+import sys
 import tempfile
 import unittest
 import zlib
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("yml2dtb", REPO / "tools/yml2dtb/yml2dtb.py")
-YML2DTB = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(YML2DTB)
+sys.path.insert(0, str(REPO / "scripts"))
+
+from novakit.image import dtb  # noqa: E402
 
 BOARD_LAYOUT = REPO / "src/hal/board/qemu_virt/include/hal/board/active/board_layout.h"
 N1SDP_BOARD_LAYOUT = REPO / "src/hal/board/n1sdp/include/hal/board/active/board_layout.h"
@@ -44,26 +44,26 @@ class DevicePolicyTest(unittest.TestCase):
         self.config_path = self.root / "config.yml"
         self.inventory_path.write_text(INVENTORY)
         self.config_path.write_text(TWO_GUESTS)
-        self.layout = YML2DTB.read_layout(YML2DTB.DEFAULT_LAYOUT, BOARD_LAYOUT)
+        self.layout = dtb.read_layout(dtb.DEFAULT_LAYOUT, BOARD_LAYOUT)
 
     def tearDown(self):
         self.temp.cleanup()
 
     def load(self):
-        inventory = YML2DTB.load_inventory(self.inventory_path, self.layout)
-        guests, assigned = YML2DTB.load_config(self.config_path, self.layout, inventory)
+        inventory = dtb.load_inventory(self.inventory_path, self.layout)
+        guests, assigned = dtb.load_config(self.config_path, self.layout, inventory)
         return inventory, guests, assigned
 
     def test_emits_runtime_policy_and_owner_only_dtb_node(self):
         inventory, guests, assigned = self.load()
         self.assertEqual(guests[0]["devices"], [])
         self.assertEqual(len(guests[1]["devices"]), 1)
-        self.assertNotIn(b"qemu,edu\0", YML2DTB.build_guest_dtb(guests[0], self.layout))
-        owner_blob = YML2DTB.build_guest_dtb(guests[1], self.layout)
+        self.assertNotIn(b"qemu,edu\0", dtb.build_guest_dtb(guests[0], self.layout))
+        owner_blob = dtb.build_guest_dtb(guests[1], self.layout)
         self.assertIn(b"qemu,edu\0", owner_blob)
         self.assertIn(b"nova,dma-window\0", owner_blob)
 
-        policy = YML2DTB.emit_device_policy(inventory, assigned)
+        policy = dtb.emit_device_policy(inventory, assigned)
         self.assertIn(".stream_id = 0x10U, .vm = 1", policy)
         self.assertIn(".ipa_base = 0x10000000ULL", policy)
         self.assertIn(".virtual_intid = 48", policy)
@@ -117,7 +117,7 @@ class DevicePolicyTest(unittest.TestCase):
 
     def test_rejects_inventory_beyond_runtime_capacity(self):
         records = []
-        for index in range(YML2DTB.MAX_DEVICES + 1):
+        for index in range(dtb.MAX_DEVICES + 1):
             records.append(f"""\
   - id: edu{index}
     device_id: {index}
@@ -142,11 +142,11 @@ class BoardPhysicalLayoutTest(unittest.TestCase):
                 "  - {name: smoke, memory_size: 0x00100000, "
                 "vcpus: 1, uart: none}\n"
             )
-            layout = YML2DTB.read_layout(
-                YML2DTB.DEFAULT_LAYOUT, N1SDP_BOARD_LAYOUT
+            layout = dtb.read_layout(
+                dtb.DEFAULT_LAYOUT, N1SDP_BOARD_LAYOUT
             )
-            inventory = YML2DTB.load_inventory(N1SDP_INVENTORY, layout)
-            guests, _ = YML2DTB.load_config(config, layout, inventory)
+            inventory = dtb.load_inventory(N1SDP_INVENTORY, layout)
+            guests, _ = dtb.load_config(config, layout, inventory)
 
         self.assertEqual(guests[0]["load_pa"], 0x80000000)
         self.assertEqual(guests[0]["entry"], 0x50000000)
@@ -164,9 +164,9 @@ class PayloadBundleTest(unittest.TestCase):
         self.inventory_path.write_text(INVENTORY)
         self.config_path.write_text(TWO_GUESTS)
         self.binary_path.write_bytes(b"embedded guest image")
-        self.layout = YML2DTB.read_layout(YML2DTB.DEFAULT_LAYOUT, BOARD_LAYOUT)
-        inventory = YML2DTB.load_inventory(self.inventory_path, self.layout)
-        self.guests, _ = YML2DTB.load_config(
+        self.layout = dtb.read_layout(dtb.DEFAULT_LAYOUT, BOARD_LAYOUT)
+        inventory = dtb.load_inventory(self.inventory_path, self.layout)
+        self.guests, _ = dtb.load_config(
             self.config_path, self.layout, inventory
         )
 
@@ -187,7 +187,7 @@ class PayloadBundleTest(unittest.TestCase):
 
     def test_emits_binary_dtb_and_metadata_records(self):
         self.write_payloads()
-        payloads = YML2DTB.load_payloads(
+        payloads = dtb.load_payloads(
             self.payload_path, self.guests, self.layout
         )
 
@@ -196,7 +196,7 @@ class PayloadBundleTest(unittest.TestCase):
             payloads[0]["checksum"],
             zlib.crc32(self.binary_path.read_bytes()) & 0xFFFFFFFF,
         )
-        assembly = YML2DTB.emit_asm(
+        assembly = dtb.emit_asm(
             self.root, self.guests, payloads, "test-digest"
         )
         self.assertIn(f'.incbin "{self.binary_path}"', assembly)
@@ -206,10 +206,10 @@ class PayloadBundleTest(unittest.TestCase):
 
     def test_empty_payload_list_keeps_loader_compatibility(self):
         self.payload_path.write_text("payloads: []\n")
-        payloads = YML2DTB.load_payloads(
+        payloads = dtb.load_payloads(
             self.payload_path, self.guests, self.layout
         )
-        assembly = YML2DTB.emit_asm(
+        assembly = dtb.emit_asm(
             self.root, self.guests, payloads, "test-digest"
         )
 
@@ -221,11 +221,11 @@ class PayloadBundleTest(unittest.TestCase):
     def test_rejects_checksum_and_guest_index_mismatch(self):
         self.write_payloads(sha256="0" * 64)
         with self.assertRaisesRegex(SystemExit, "sha256 does not match"):
-            YML2DTB.load_payloads(self.payload_path, self.guests, self.layout)
+            dtb.load_payloads(self.payload_path, self.guests, self.layout)
 
         self.payload_path.write_text("payloads:\n  - {guest: 2}\n")
         with self.assertRaisesRegex(SystemExit, "outside the guest table"):
-            YML2DTB.load_payloads(self.payload_path, self.guests, self.layout)
+            dtb.load_payloads(self.payload_path, self.guests, self.layout)
 
     def test_rejects_binary_overlapping_dtb_reservation(self):
         self.binary_path.write_bytes(
@@ -233,7 +233,7 @@ class PayloadBundleTest(unittest.TestCase):
         )
         self.write_payloads()
         with self.assertRaisesRegex(SystemExit, "overlaps the guest DTB"):
-            YML2DTB.load_payloads(self.payload_path, self.guests, self.layout)
+            dtb.load_payloads(self.payload_path, self.guests, self.layout)
 
 
 if __name__ == "__main__":

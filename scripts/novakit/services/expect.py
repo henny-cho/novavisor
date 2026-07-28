@@ -1,73 +1,27 @@
-"""Process output capture and the verification state machine.
+"""What a run must show, and the state machine that decides whether it did.
 
-Nothing here knows about manifests, builds, or artifact filenames: it observes
-one spawned process against a list of expectations and reports the outcome.
+Nothing here spawns a process or names a file: it observes an already-running
+child against a list of expectations and reports the outcome. That keeps the
+decision logic testable against a fake child, with no pexpect in sight.
 """
 
 from __future__ import annotations
 
-import sys
-import time
 import traceback
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from pathlib import Path
-from typing import Callable, Sequence
-
-from . import config, process
+from typing import Callable
 
 
-def board_command(
-    *,
-    kernel: Path | None = None,
-    bios: Path | None = None,
-    secure: bool = False,
-) -> list[str]:
-    args = list(config.QEMU_BOARD_ARGS)
-    if secure:
-        args[1] = f"{args[1]},secure=on"
-    command = [config.QEMU, *args]
-    if kernel is not None:
-        command += ["-kernel", str(kernel)]
-    if bios is not None:
-        command += ["-bios", str(bios)]
-    return command
-
-
-class OutputCapture:
-    """Keep a bounded diagnostic tail and stream only outside CI."""
-
-    def __init__(self, stream, max_bytes: int = 32 * 1024):
-        self.stream = stream
-        self.max_bytes = max_bytes
-        self.tail = ""
-
-    def write(self, data: str) -> None:
-        if self.stream is not None:
-            self.stream.write(data)
-        encoded = (self.tail + data).encode("utf-8")
-        if len(encoded) > self.max_bytes:
-            encoded = encoded[-self.max_bytes:]
-        # The byte window may begin in the middle of a UTF-8 sequence.
-        self.tail = encoded.decode("utf-8", errors="ignore")
-
-    def flush(self) -> None:
-        if self.stream is not None:
-            self.stream.flush()
-
-
-def print_failure_tail(capture: OutputCapture) -> None:
-    if capture.stream is None and capture.tail:
-        print("[nova demo] --- QEMU output tail ---", file=sys.stderr)
-        print(capture.tail, file=sys.stderr, end="" if capture.tail.endswith("\n") else "\n")
-
-
-def preserve_failure_tail(capture: OutputCapture, path: Path | None) -> None:
-    print_failure_tail(capture)
-    if path is None:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(capture.tail, encoding="utf-8")
+@dataclass(frozen=True)
+class Scenario:
+    """One verifiable run: what to launch and what its output must show."""
+    label: str
+    phase: object
+    command: tuple[str, ...]
+    timeout_seconds: int
+    expectations: tuple[dict, ...]
+    forbidden_patterns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -117,81 +71,28 @@ class VerificationResult:
         return self.failure != FailureKind.SPAWN
 
 
-class VerificationInterrupted(BaseException):
+class Interrupted(BaseException):
+    """Ctrl-C during a run: carries the diagnostics, then lets the signal win."""
+
     def __init__(self, result: VerificationResult, cause: KeyboardInterrupt):
         super().__init__(str(cause))
         self.result = result
         self.cause = cause
-        self.capture: OutputCapture | None = None
+        self.capture = None
 
 
-def _require_pexpect():
-    try:
-        import pexpect
-
-        return pexpect
-    except ImportError:
-        raise SystemExit("QEMU verification requires python3-pexpect or pexpect")
-
-
-@dataclass(frozen=True)
-class CommandVerification:
-    result: VerificationResult
-    capture: OutputCapture
+def spawn_failure(exc: BaseException) -> VerificationResult:
+    """The outcome when the process never started."""
+    return VerificationResult(
+        failure=FailureKind.SPAWN,
+        error=f"{type(exc).__name__}: {exc}",
+        traceback_text=_format_traceback(exc),
+        termination_succeeded=False,
+        termination_error="not attempted: process was not started",
+    )
 
 
-def run_command(
-    command: Sequence[str],
-    expectations: list[dict],
-    timeout: float,
-    *,
-    stream,
-    clock: Callable[[], float] = time.monotonic,
-    on_match: Callable[[PatternMatch], None] | None = None,
-    fatal_patterns: tuple[str, ...] = (),
-    forbidden_patterns: tuple[str, ...] = (),
-) -> CommandVerification:
-    pexpect = _require_pexpect()
-    capture = OutputCapture(stream)
-    process.log([str(argument) for argument in command])
-    try:
-        child = pexpect.spawn(
-            command[0],
-            list(command[1:]),
-            timeout=timeout,
-            encoding="utf-8",
-        )
-    except (Exception, SystemExit) as exc:
-        return CommandVerification(
-            VerificationResult(
-                failure=FailureKind.SPAWN,
-                error=f"{type(exc).__name__}: {exc}",
-                traceback_text=_format_traceback(exc),
-                termination_succeeded=False,
-                termination_error="not attempted: process was not started",
-            ),
-            capture,
-        )
-    child.logfile_read = capture
-    try:
-        result = verify_child_output(
-            child,
-            expectations,
-            timeout,
-            clock=clock,
-            timeout_error=pexpect.TIMEOUT,
-            eof_error=pexpect.EOF,
-            on_match=on_match,
-            fatal_patterns=fatal_patterns,
-            forbidden_patterns=forbidden_patterns,
-        )
-    except VerificationInterrupted as interrupted:
-        interrupted.capture = capture
-        raise
-    return CommandVerification(result, capture)
-
-
-def verify_child_output(
+def observe_output(
     child,
     expectations: list[dict],
     scenario_timeout: float,
@@ -357,7 +258,7 @@ def verify_child_output(
         termination_error=termination_error,
     )
     if interrupted is not None:
-        raise VerificationInterrupted(final_result, interrupted)
+        raise Interrupted(final_result, interrupted)
     return final_result
 
 
@@ -373,7 +274,7 @@ class RepeatAttempt:
         return self.status == "pass"
 
 
-def run_repeated_verification(
+def run_repeated(
     runs: int,
     verify_once: Callable[[int], int],
     *,

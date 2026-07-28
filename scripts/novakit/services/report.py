@@ -14,19 +14,9 @@ import shutil
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from . import config, process
-from .qemu import (
-    FailureKind,
-    OutputCapture,
-    RepeatAttempt,
-    VerificationResult,
-    preserve_failure_tail,
-)
-
-if TYPE_CHECKING:  # Type-only: report never depends on command wiring.
-    from .demo import PreparedVerification
+from ..core import board, config, proc
+from .expect import FailureKind, RepeatAttempt, VerificationResult
 
 
 def diagnostics_path_for_tail(tail_path: Path) -> Path:
@@ -64,23 +54,7 @@ class ArtifactPaths:
         return self.root / f"attempt-{attempt:02d}-variant-{variant:02d}.qemu-tail.log"
 
 
-def preserve_failure_diagnostics(
-    capture: OutputCapture,
-    tail_path: Path | None,
-    prepared: "PreparedVerification",
-    result: VerificationResult,
-) -> None:
-    preserve_failure_tail(capture, tail_path)
-    if tail_path is None:
-        return
-    write_verification_diagnostics(
-        diagnostics_path_for_tail(tail_path),
-        prepared.label,
-        result,
-    )
-
-
-def write_verification_diagnostics(
+def write_diagnostics(
     path: Path,
     label: str,
     result: VerificationResult,
@@ -107,7 +81,7 @@ def write_verification_diagnostics(
     path.write_text(f"{json.dumps(diagnostics, indent=2)}\n", encoding="utf-8")
 
 
-def report_verification_failure(
+def report_failure(
     result: VerificationResult,
     *,
     scope: str = "nova demo",
@@ -180,10 +154,48 @@ def append_github_summary(
 
 def _first_line(cmd: list[str]) -> str:
     try:
-        out = process.run(cmd, capture=True, check=False).stdout
+        out = proc.run(cmd, capture=True, check=False).stdout
     except OSError as exc:
         return f"unavailable: {exc}"
     return out.splitlines()[0] if out else "unavailable"
+
+
+class Evidence:
+    """A directory of copied artifacts plus what identifies the machine.
+
+    A workflow uploads this directory as-is instead of hard-coding build-tree
+    paths that silently rot when the harness moves.
+    """
+
+    def __init__(self, artifacts: ArtifactPaths):
+        self.root = artifacts.root / "evidence"
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.collected: list[Path] = []
+
+    def keep(self, src: Path, rename: str | None = None) -> None:
+        if src.is_file():
+            dest = self.root / (rename or src.name)
+            shutil.copy2(src, dest)
+            self.collected.append(dest)
+
+    def keep_preset(self, preset: str) -> None:
+        """The inputs and output of one build preset, tagged with its name."""
+        preset_dir = config.BUILD_ROOT / preset
+        for name in ("novavisor.elf", "active_config.yml", "active_payloads.yml"):
+            self.keep(preset_dir / name, f"{preset}-{name}")
+        for dtb in sorted((preset_dir / "guest_dtb").glob("*.dtb")):
+            self.keep(dtb, f"{preset}-{dtb.name}")
+
+    def finish(self) -> None:
+        (self.root / "environment.txt").write_text("\n".join((
+            _first_line(["git", "-C", str(config.REPO), "rev-parse", "HEAD"]),
+            _first_line([board.QEMU, "--version"]),
+            _first_line(["aarch64-none-elf-gcc", "--version"]),
+        )) + "\n", encoding="utf-8")
+        (self.root / "sha256sums.txt").write_text("".join(
+            f"{hashlib.sha256(item.read_bytes()).hexdigest()}  {item.name}\n"
+            for item in self.collected
+        ), encoding="utf-8")
 
 
 def collect_evidence(
@@ -192,44 +204,41 @@ def collect_evidence(
     manifest: dict,
     elf_snapshots: list[Path],
 ) -> None:
-    """Copy everything a failure investigation needs next to the QEMU tails.
-
-    A workflow then uploads the artifacts directory as-is instead of
-    hard-coding build-tree paths that silently rot when the harness moves.
-    """
-    evidence = artifacts.root / "evidence"
-    evidence.mkdir(parents=True, exist_ok=True)
-    collected: list[Path] = []
-
-    def keep(src: Path, rename: str | None = None) -> None:
-        if src.is_file():
-            dest = evidence / (rename or src.name)
-            shutil.copy2(src, dest)
-            collected.append(dest)
-
+    """Everything one demo's failure investigation needs, next to its tails."""
+    evidence = Evidence(artifacts)
     for index, snapshot in enumerate(elf_snapshots, start=1):
-        keep(snapshot, f"variant-{index}-novavisor.elf")
+        evidence.keep(snapshot, f"variant-{index}-novavisor.elf")
     preset_dir = config.BUILD_ROOT / config.HV_PRESET
-    keep(preset_dir / "active_config.yml")
-    keep(preset_dir / "active_payloads.yml")
+    evidence.keep(preset_dir / "active_config.yml")
+    evidence.keep(preset_dir / "active_payloads.yml")
     for dtb in sorted((preset_dir / "guest_dtb").glob("*.dtb")):
-        keep(dtb)
+        evidence.keep(dtb)
     guest_cache = config.REPO / "external" / "cache" / "guests" / name
     for guest in manifest.get("guests", []):
         binary = Path(guest["binary"])
-        keep(config.DEMO_BUILD_DIR / name / binary.name)
-        keep(guest_cache / binary.name)
-        keep(guest_cache / f"{binary.stem}.elf")
+        evidence.keep(config.DEMO_BUILD_DIR / name / binary.name)
+        evidence.keep(guest_cache / binary.name)
+        evidence.keep(guest_cache / f"{binary.stem}.elf")
     if guest_cache.is_dir():
         for stamp in sorted(guest_cache.glob("*.version")):
-            keep(stamp)
+            evidence.keep(stamp)
+    evidence.finish()
 
-    (evidence / "environment.txt").write_text("\n".join((
-        _first_line(["git", "-C", str(config.REPO), "rev-parse", "HEAD"]),
-        _first_line([config.QEMU, "--version"]),
-        _first_line(["aarch64-none-elf-gcc", "--version"]),
-    )) + "\n", encoding="utf-8")
-    (evidence / "sha256sums.txt").write_text("".join(
-        f"{hashlib.sha256(item.read_bytes()).hexdigest()}  {item.name}\n"
-        for item in collected
-    ), encoding="utf-8")
+
+def collect_lane_evidence(artifacts: ArtifactPaths, presets: tuple[str, ...]) -> None:
+    """Everything a failed CI lane needs explained, for whichever step failed.
+
+    The lane cannot know which artifact matters, so it keeps the build state
+    of every preset it drove plus the images and firmware log it produced.
+    """
+    evidence = Evidence(artifacts)
+    for preset in presets:
+        evidence.keep_preset(preset)
+    firmware = config.BUILD_ROOT / "qemu-tfa-firmware"
+    evidence.keep(firmware / "smoke.log")
+    for diagnostics in sorted(firmware.glob("*.json")):
+        evidence.keep(diagnostics)
+    if config.DEMO_BUILD_DIR.is_dir():
+        for image in sorted(config.DEMO_BUILD_DIR.rglob("*.bin")):
+            evidence.keep(image, f"{image.parent.name}-{image.name}")
+    evidence.finish()

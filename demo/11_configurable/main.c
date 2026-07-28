@@ -4,7 +4,7 @@
 // with the minimal reader, and reports what it found — the harness
 // checks the report against the config YAML the hypervisor was built
 // with (configs/small.yml vs configs/large.yml), proving the whole
-// yml2dtb -> embed -> x0 -> guest-parse pipeline end to end. When the
+// generate -> embed -> x0 -> guest-parse pipeline end to end. When the
 // config grants a second vCPU, it is actually brought up via PSCI to
 // show the value is live, not just advertised.
 

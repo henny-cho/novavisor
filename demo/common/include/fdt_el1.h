@@ -2,7 +2,7 @@
 //
 // The hypervisor hands the boot vCPU its configuration blob's IPA in
 // x0 (see common/startup.S). This walker extracts what a guest needs
-// to know about itself from the yml2dtb schema: /memory reg size and
+// to know about itself from the generated DTB schema: /memory reg size and
 // the /cpus child count. FDT is big-endian; aarch64 EL1 here runs
 // little-endian with the MMU off, so reads are 4-byte aligned u32
 // loads (the structure block is 4-aligned throughout) swapped with

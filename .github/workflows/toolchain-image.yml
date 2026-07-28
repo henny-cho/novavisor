@@ -36,6 +36,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        id: build
         with:
           context: .
           file: containers/toolchain/Dockerfile
@@ -46,3 +47,35 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/novavisor-toolchain:sha-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # dependabot watches the Dockerfile's base image, not the digest its
+      # consumers pin, so the publisher is the only place that knows the new
+      # one. Report the exact edit; applying it stays a human decision, which
+      # keeps this workflow's write access limited to the registry.
+      - name: Report the consumer digest bump
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/novavisor-toolchain
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          consumers=$(grep -rl "${IMAGE}@sha256:" .github/workflows || true)
+          if [[ -z "${consumers}" ]]; then
+            echo "No workflow pins ${IMAGE} by digest." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          # Word splitting is the point: every consumer is edited at once.
+          # shellcheck disable=SC2086
+          sed -i -E "s|(${IMAGE}@sha256:)[0-9a-f]{64}|\1${DIGEST#sha256:}|" ${consumers}
+          {
+            echo "## Toolchain image"
+            echo
+            echo "Published \`${DIGEST}\`."
+            echo
+            if git diff --quiet; then
+              echo "Consumers already pin it."
+            else
+              echo "Apply this to move the consumers:"
+              echo '```diff'
+              git diff
+              echo '```'
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"

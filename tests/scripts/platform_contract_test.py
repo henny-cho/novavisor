@@ -1,31 +1,29 @@
-import importlib.util
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-CHECKER_PATH = REPO / "tools" / "check_platform_boundaries.py"
-SPEC = importlib.util.spec_from_file_location("platform_boundaries", CHECKER_PATH)
-assert SPEC and SPEC.loader
-BOUNDARIES = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(BOUNDARIES)
+sys.path.insert(0, str(REPO / "scripts"))
+
+from novakit.services import boundaries  # noqa: E402
 
 
 class PlatformBoundaryTests(unittest.TestCase):
     def test_repository_scan_targets_all_exist(self):
         # Guards every assertion below: the checker searches fixed paths,
         # so a renamed tree would empty the scan instead of failing it.
-        self.assertEqual(BOUNDARIES.missing_scan_targets(REPO), [])
+        self.assertEqual(boundaries.missing_scan_targets(REPO), [])
 
     def test_repository_has_no_board_reverse_dependency(self):
-        self.assertEqual(BOUNDARIES.find_violations(REPO), [])
+        self.assertEqual(boundaries.find_violations(REPO), [])
 
     def _complete_layout(self, root: Path):
-        for tree in (*BOUNDARIES.GENERIC_TREES, BOUNDARIES.COMPONENT_TREE):
+        for tree in (*boundaries.GENERIC_TREES, boundaries.COMPONENT_TREE):
             (root / tree).mkdir(parents=True, exist_ok=True)
-        board = root / BOUNDARIES.BOARD_ROOT / "sample_board"
+        board = root / boundaries.BOARD_ROOT / "sample_board"
         board.mkdir(parents=True)
         (board / "board.cmake").write_text("")
 
@@ -33,13 +31,13 @@ class PlatformBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._complete_layout(root)
-            self.assertEqual(BOUNDARIES.missing_scan_targets(root), [])
+            self.assertEqual(boundaries.missing_scan_targets(root), [])
 
-            moved = root / BOUNDARIES.COMPONENT_TREE
+            moved = root / boundaries.COMPONENT_TREE
             moved.rename(moved.with_name("modules"))
 
             self.assertIn(
-                str(BOUNDARIES.COMPONENT_TREE), BOUNDARIES.missing_scan_targets(root)
+                str(boundaries.COMPONENT_TREE), boundaries.missing_scan_targets(root)
             )
 
     def test_board_root_without_boards_is_reported(self):
@@ -48,11 +46,11 @@ class PlatformBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._complete_layout(root)
-            (root / BOUNDARIES.BOARD_ROOT / "sample_board" / "board.cmake").unlink()
+            (root / boundaries.BOARD_ROOT / "sample_board" / "board.cmake").unlink()
 
             self.assertEqual(
-                BOUNDARIES.missing_scan_targets(root),
-                [f"{BOUNDARIES.BOARD_ROOT}/<board>/board.cmake"],
+                boundaries.missing_scan_targets(root),
+                [f"{boundaries.BOARD_ROOT}/<board>/board.cmake"],
             )
 
     def test_board_reference_in_generic_tree_is_rejected(self):
@@ -65,7 +63,7 @@ class PlatformBoundaryTests(unittest.TestCase):
             source.parent.mkdir(parents=True)
             source.write_text("constexpr int kBase = qemu_virt::kBase;\n")
 
-            violations = BOUNDARIES.find_violations(root)
+            violations = boundaries.find_violations(root)
 
         self.assertEqual(len(violations), 1)
         self.assertEqual(violations[0][:2], (source.relative_to(root), 1))
@@ -83,7 +81,7 @@ class PlatformBoundaryTests(unittest.TestCase):
                 source.parent.mkdir(parents=True)
                 source.write_text(f"{include}\n")
 
-                violations = BOUNDARIES.find_violations(root)
+                violations = boundaries.find_violations(root)
 
                 self.assertEqual(len(violations), 1)
                 self.assertEqual(violations[0][:2], (source.relative_to(root), 1))
@@ -96,7 +94,7 @@ class PlatformBoundaryTests(unittest.TestCase):
             source.parent.mkdir(parents=True)
             source.write_text('#include "hal/board/active/uart.hpp"\n')
 
-            self.assertEqual(BOUNDARIES.find_violations(root), [])
+            self.assertEqual(boundaries.find_violations(root), [])
 
 
 class PlatformContractTests(unittest.TestCase):

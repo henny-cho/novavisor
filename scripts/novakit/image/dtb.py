@@ -28,8 +28,10 @@ from pathlib import Path
 
 import yaml
 
-REPO = Path(__file__).resolve().parents[2]
-DEFAULT_LAYOUT = REPO / "src" / "nova" / "abi" / "guest_layout.h"
+from . import abi
+
+REPO = abi.REPO
+DEFAULT_LAYOUT = abi.GUEST_LAYOUT
 GIC_REGS = REPO / "src" / "nova" / "arch" / "gicv3" / "regs.h"
 
 MIB = 0x10_0000
@@ -39,48 +41,31 @@ MAX_DEVICES = 8
 # Layout header
 # ---------------------------------------------------------------------------
 
-def read_defines(path: Path, wanted: list[str]) -> dict[str, int]:
-    """Pull #define constants from a platform header (single source)."""
-    text = path.read_text()
-    values: dict[str, int] = {}
-    for name in wanted:
-        m = re.search(rf"#define\s+{name}\s+(0[xX][0-9a-fA-F]+|\d+)", text)
-        if not m:
-            sys.exit(f"yml2dtb: {name} not found in {path}")
-        values[name] = int(m.group(1), 0)
-    return values
-
-
-def read_string_define(path: Path, name: str) -> str:
-    text = path.read_text()
-    match = re.search(rf'#define\s+{name}\s+"([^"]+)"', text)
-    if not match:
-        sys.exit(f"yml2dtb: {name} not found in {path}")
-    return match.group(1)
-
-
 def read_layout(path: Path, board_layout: Path) -> dict[str, int | str]:
-    values = read_defines(path, [
-        "NOVA_GUEST_IPA_BASE", "NOVA_GUEST_IPA_SIZE", "NOVA_GUEST_PA_ALIGN",
-        "NOVA_IVC_SHM_IPA", "NOVA_IVC_SHM_SIZE", "NOVA_GUEST_DTB_SIZE",
-        "NOVA_VUART_IPA_BASE", "NOVA_VUART_IPA_SIZE", "NOVA_VUART_SPI",
-        "NOVA_GICD_IPA_BASE", "NOVA_GICR_IPA_BASE",
-    ])
-    values |= read_defines(GIC_REGS, ["NOVA_GICD_FRAME_SIZE", "NOVA_GICR_FRAME_SIZE"])
-    values |= read_defines(board_layout, [
-        "NOVA_BOARD_SMP_CPUS", "NOVA_BOARD_RAM_BASE", "NOVA_BOARD_RAM_SIZE",
-        "NOVA_BOARD_PHYS_RAM_BASE", "NOVA_BOARD_PHYS_RAM_SIZE",
-        "NOVA_BOARD_GUEST_PA_BASE", "NOVA_BOARD_GUEST_PA_SIZE",
-        "NOVA_BOARD_IVC_SHM_PA",
-        "NOVA_BOARD_PRISTINE_PA",
-        "NOVA_BOARD_UART0_BASE", "NOVA_BOARD_UART0_INTID",
-        "NOVA_BOARD_GICD_BASE", "NOVA_BOARD_GICR_BASE",
-        "NOVA_BOARD_SMMU_BASE", "NOVA_BOARD_SMMU_SIZE",
-        "NOVA_BOARD_SMMU_EVENT_INTID", "NOVA_BOARD_SMMU_CMD_INTID",
-        "NOVA_BOARD_SMMU_ERROR_INTID",
-    ])
-    values["NOVA_BOARD_GUEST_CPU_COMPATIBLE"] = read_string_define(
-        board_layout, "NOVA_BOARD_GUEST_CPU_COMPATIBLE")
+    try:
+        values = abi.read_defines(path, [
+            "NOVA_GUEST_IPA_BASE", "NOVA_GUEST_IPA_SIZE", "NOVA_GUEST_PA_ALIGN",
+            "NOVA_IVC_SHM_IPA", "NOVA_IVC_SHM_SIZE", "NOVA_GUEST_DTB_SIZE",
+            "NOVA_VUART_IPA_BASE", "NOVA_VUART_IPA_SIZE", "NOVA_VUART_SPI",
+            "NOVA_GICD_IPA_BASE", "NOVA_GICR_IPA_BASE",
+        ])
+        values |= abi.read_defines(GIC_REGS, ["NOVA_GICD_FRAME_SIZE", "NOVA_GICR_FRAME_SIZE"])
+        values |= abi.read_defines(board_layout, [
+            "NOVA_BOARD_SMP_CPUS", "NOVA_BOARD_RAM_BASE", "NOVA_BOARD_RAM_SIZE",
+            "NOVA_BOARD_PHYS_RAM_BASE", "NOVA_BOARD_PHYS_RAM_SIZE",
+            "NOVA_BOARD_GUEST_PA_BASE", "NOVA_BOARD_GUEST_PA_SIZE",
+            "NOVA_BOARD_IVC_SHM_PA",
+            "NOVA_BOARD_PRISTINE_PA",
+            "NOVA_BOARD_UART0_BASE", "NOVA_BOARD_UART0_INTID",
+            "NOVA_BOARD_GICD_BASE", "NOVA_BOARD_GICR_BASE",
+            "NOVA_BOARD_SMMU_BASE", "NOVA_BOARD_SMMU_SIZE",
+            "NOVA_BOARD_SMMU_EVENT_INTID", "NOVA_BOARD_SMMU_CMD_INTID",
+            "NOVA_BOARD_SMMU_ERROR_INTID",
+        ])
+        values["NOVA_BOARD_GUEST_CPU_COMPATIBLE"] = abi.read_string_define(
+            board_layout, "NOVA_BOARD_GUEST_CPU_COMPATIBLE")
+    except ValueError as error:
+        sys.exit(f"nova dtb: {error}")
     return values
 
 
@@ -277,7 +262,7 @@ def build_guest_dtb(guest: dict, layout: dict[str, int], serves_psci: bool = Tru
 
 
 def config_error(path: Path, message: str) -> None:
-    sys.exit(f"yml2dtb: {path}: {message}")
+    sys.exit(f"nova dtb: {path}: {message}")
 
 
 def integer(value: object, path: Path, field: str) -> int:
@@ -399,8 +384,8 @@ def load_inventory(path: Path, layout: dict[str, int]) -> dict:
 def load_config(path: Path, layout: dict[str, int], inventory: dict) -> tuple[list[dict], list[dict]]:
     doc = yaml.safe_load(path.read_text())
     guests = doc.get("guests") if isinstance(doc, dict) else None
-    if not isinstance(guests, list) or not 1 <= len(guests) <= 4:  # kMaxGuests
-        sys.exit(f"yml2dtb: {path}: 'guests' must list 1..4 entries")
+    if not isinstance(guests, list) or not 1 <= len(guests) <= abi.MAX_GUESTS:
+        sys.exit(f"nova dtb: {path}: 'guests' must list 1..{abi.MAX_GUESTS} entries")
 
     # PA windows pack from the IPA base with Block-aligned starts —
     # the same cursor rule guest_config.cpp applies at boot. The whole
@@ -413,30 +398,26 @@ def load_config(path: Path, layout: dict[str, int], inventory: dict) -> tuple[li
     for i, g in enumerate(guests):
         name = g.get("name", f"vm{i}")
         size = int(g.get("memory_size", layout["NOVA_GUEST_IPA_SIZE"]))
-        vcpus = int(g.get("vcpus", 1))
+        vcpus = abi.validate_guest(f"nova dtb: {name}", g)
         uart = g.get("uart", "none")
         bootargs = g.get("bootargs", "")
         cores = g.get("cores")
         autostart = bool(g.get("autostart", False))
-        if not 1 <= vcpus <= 2:  # kMaxVcpusPerVm
-            sys.exit(f"yml2dtb: {name}: vcpus {vcpus} (supported: 1..2)")
-        if uart not in ("none", "vuart"):
-            sys.exit(f"yml2dtb: {name}: uart '{uart}' (supported: none, vuart)")
         if not isinstance(bootargs, str):
-            sys.exit(f"yml2dtb: {name}: bootargs must be a string")
+            sys.exit(f"nova dtb: {name}: bootargs must be a string")
         if cores is not None:
             smp = layout["NOVA_BOARD_SMP_CPUS"]
             if (not isinstance(cores, list) or len(cores) != vcpus or
                     not all(isinstance(c, int) and 0 <= c < smp for c in cores)):
-                sys.exit(f"yml2dtb: {name}: cores must list one core index "
+                sys.exit(f"nova dtb: {name}: cores must list one core index "
                          f"in [0, {smp}) per vcpu ({vcpus})")
         if size < layout["NOVA_GUEST_IPA_SIZE"] or size % MIB:
-            sys.exit(f"yml2dtb: {name}: memory_size {size:#x} must be a MiB "
+            sys.exit(f"nova dtb: {name}: memory_size {size:#x} must be a MiB "
                      f"multiple >= {layout['NOVA_GUEST_IPA_SIZE']:#x} (linker window)")
         window_end = (layout["NOVA_BOARD_GUEST_PA_BASE"] +
                       layout["NOVA_BOARD_GUEST_PA_SIZE"])
         if load_pa + size > window_end:
-            sys.exit(f"yml2dtb: {name}: window {load_pa:#x}+{size:#x} exceeds "
+            sys.exit(f"nova dtb: {name}: window {load_pa:#x}+{size:#x} exceeds "
                      f"the guest PA region ending at {window_end:#x}")
         parsed.append({"name": name, "memory_size": size, "vcpus": vcpus,
                        "uart": uart, "bootargs": bootargs, "cores": cores,
@@ -592,7 +573,7 @@ def load_payloads(path: Path, guests: list[dict], layout: dict[str, int]) -> lis
 
 def emit_asm(outdir: Path, guests: list[dict], payloads: list[dict | None], digest: str) -> str:
     lines = [
-        "// Generated by tools/yml2dtb/yml2dtb.py — do not edit.",
+        "// Generated by novakit.image.dtb — do not edit.",
         "// Embeds per-guest binaries, FDT blobs, and boot metadata.",
         # The digest makes this file's text change whenever any blob
         # changes, so ninja's restat never prunes the recompile that
@@ -738,7 +719,7 @@ def main() -> int:
     for i, guest in enumerate(guests):
         blob = build_guest_dtb(guest, layout, serves_psci=not args.no_psci)
         if len(blob) > layout["NOVA_GUEST_DTB_SIZE"]:
-            sys.exit(f"yml2dtb: {guest['name']}: DTB {len(blob)} bytes exceeds the "
+            sys.exit(f"nova dtb: {guest['name']}: DTB {len(blob)} bytes exceeds the "
                      f"{layout['NOVA_GUEST_DTB_SIZE']:#x} guest window reservation")
         (args.outdir / f"guest{i}.dtb").write_bytes(blob)
         digest.update(blob)
@@ -751,7 +732,7 @@ def main() -> int:
                  str(args.outdir / f"guest{i}.dtb")],
                 capture_output=True, text=True)
             if r.returncode != 0:
-                sys.exit(f"yml2dtb: {guest['name']}: dtc rejected the blob:\n{r.stderr}")
+                sys.exit(f"nova dtb: {guest['name']}: dtc rejected the blob:\n{r.stderr}")
     for payload in payloads:
         if payload is not None:
             digest.update(payload["sha256"].encode())
@@ -759,7 +740,7 @@ def main() -> int:
         emit_asm(args.outdir.resolve(), guests, payloads, digest.hexdigest()))
     (args.outdir / "device_policy.hpp").write_text(
         emit_device_policy(inventory, assigned))
-    print(f"yml2dtb: {args.config} -> {len(guests)} guest DTB(s), "
+    print(f"nova dtb: {args.config} -> {len(guests)} guest DTB(s), "
           f"{len(assigned)} device assignment(s) in {args.outdir}")
     return 0
 

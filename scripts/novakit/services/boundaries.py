@@ -6,14 +6,18 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+REPO = Path(__file__).resolve().parents[3]
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".h", ".hpp", ".py", ".S"}
 BOARD_ROOT = Path("src/hal/board")
+# Programs the build graph runs are generic too: a generator that names a
+# board produces one board's output. The commands above them may name
+# boards freely — selecting one is what they are for.
 GENERIC_TREES = (
     Path("src/nova"),
     Path("src/components"),
     Path("src/hal/arch"),
     Path("src/hal/drivers"),
-    Path("tools"),
+    Path("scripts/novakit/image"),
 )
 
 # Components compose against hal facades, nova/*, and DEPS'd peers only.
@@ -28,11 +32,7 @@ FORBIDDEN_COMPONENT_INCLUDES = (
 
 
 def _source_files(base: Path) -> list[Path]:
-    return [
-        path
-        for path in sorted(base.rglob("*"))
-        if path.suffix in SOURCE_SUFFIXES and path.name != Path(__file__).name
-    ]
+    return [path for path in sorted(base.rglob("*")) if path.suffix in SOURCE_SUFFIXES]
 
 
 def _board_names(root: Path) -> set[str]:
@@ -102,14 +102,8 @@ def find_violations(root: Path) -> list[tuple[Path, int, str, str]]:
     return violations
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--root", type=Path, default=Path(__file__).resolve().parents[1]
-    )
-    args = parser.parse_args()
-    root = args.root.resolve()
-
+def check(root: Path) -> int:
+    """Report every scan gap and violation under root; 0 when clean."""
     missing = missing_scan_targets(root)
     for target in missing:
         print(f"missing scan target: {target}")
@@ -125,6 +119,12 @@ def main() -> int:
         return 1
     print("platform boundary check passed")
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=REPO)
+    return check(parser.parse_args().root.resolve())
 
 
 if __name__ == "__main__":

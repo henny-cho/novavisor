@@ -9,7 +9,7 @@
 // this header only moves the registers and flips the trap.
 //
 // EL2 itself is compiled -mgeneral-regs-only and post-link verified
-// FP-free (tools/check_fp_free.sh), so the trap can stay set while
+// FP-free (novakit/image/fp_free.sh), so the trap can stay set while
 // the hypervisor runs without risk of a self-trap.
 
 #include <array>

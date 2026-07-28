@@ -13,7 +13,7 @@ NOVA = REPO / "scripts" / "nova"
 PRESETS = REPO / "CMakePresets.json"
 sys.path.insert(0, str(REPO / "scripts"))
 
-from nova_cli import config  # noqa: E402
+from novakit.core import board  # noqa: E402
 
 
 def run(*args: str) -> subprocess.CompletedProcess[str]:
@@ -76,7 +76,7 @@ class PublicCommandContractTest(unittest.TestCase):
 
     def test_qemu_board_arguments_have_one_internal_owner(self):
         self.assertEqual(
-            list(config.QEMU_BOARD_ARGS),
+            list(board.MACHINE_ARGS),
             [
                 "-machine",
                 "virt,virtualization=on,gic-version=3,iommu=smmuv3,highmem-ecam=off",

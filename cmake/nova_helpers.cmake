@@ -1,5 +1,18 @@
 # Target-definition helpers shared by the NovaVisor build.
 
+# nova_python_module(<out-var> <module>)
+#
+# Resolve the argv that runs an automation module out of scripts/. A
+# custom command then names the module the same way the CLI and the
+# tests do, so the package has one reachable form instead of a file path
+# per caller.
+function(nova_python_module out_var module)
+    set(${out_var}
+        ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_SOURCE_DIR}/scripts
+        python3 -m novakit.${module}
+        PARENT_SCOPE)
+endfunction()
+
 # nova_component_dir(<out-var> <name>)
 #
 # Resolve a component's directory from its name alone. Components are
