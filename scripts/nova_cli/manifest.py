@@ -10,7 +10,7 @@ import re
 import sys
 from pathlib import Path
 
-from . import settings
+from . import config
 
 
 def _require_yaml():
@@ -20,15 +20,16 @@ def _require_yaml():
         import yaml
         return yaml
     except ImportError:
-        sys.exit("demo_runner: missing PyYAML. Install with: apt-get install python3-yaml "
-                 "or pip install --user PyYAML")
+        sys.exit(
+            "nova demo: missing PyYAML. Install python3-yaml or PyYAML."
+        )
 
 
 def load_manifest(name: str) -> tuple[Path, dict]:
     yaml = _require_yaml()
-    manifest_path = settings.DEMO_DIR / name / "manifest.yml"
+    manifest_path = config.DEMO_DIR / name / "manifest.yml"
     if not manifest_path.exists():
-        sys.exit(f"demo_runner: no manifest at {manifest_path}")
+        sys.exit(f"nova demo: no manifest at {manifest_path}")
     with open(manifest_path) as f:
         data = yaml.safe_load(f)
     return manifest_path, data
@@ -37,7 +38,7 @@ def load_manifest(name: str) -> tuple[Path, dict]:
 def iter_demos() -> list[tuple[str, dict]]:
     yaml = _require_yaml()
     out = []
-    for p in sorted(settings.DEMO_DIR.iterdir()):
+    for p in sorted(config.DEMO_DIR.iterdir()):
         mf = p / "manifest.yml"
         if p.is_dir() and mf.exists():
             with open(mf) as f:
@@ -61,9 +62,9 @@ def resolve_demo(token: str) -> str:
         if len(matches) == 1:
             return matches[0]
         if len(matches) > 1:
-            sys.exit(f"demo_runner: ID '{token}' is ambiguous: {', '.join(matches)}")
+            sys.exit(f"nova demo: ID '{token}' is ambiguous: {', '.join(matches)}")
     available = ", ".join(f"{demo_id(n)}={n}" for n in names) or "(none)"
-    sys.exit(f"demo_runner: unknown demo '{token}'. Available: {available}")
+    sys.exit(f"nova demo: unknown demo '{token}'. Available: {available}")
 
 
 def manifest_config(manifest: dict) -> str | None:
@@ -88,19 +89,21 @@ def manifest_variants(manifest: dict) -> list[dict]:
 def manifest_pattern_list(manifest: dict, key: str) -> tuple[str, ...]:
     patterns = manifest.get(key, [])
     if not isinstance(patterns, list) or any(not isinstance(pattern, str) or not pattern for pattern in patterns):
-        raise SystemExit(f"[demo_runner] manifest '{key}' must be a list of non-empty patterns")
+        raise SystemExit(f"[nova demo] manifest '{key}' must be a list of non-empty patterns")
     for pattern in patterns:
         try:
             re.compile(pattern)
         except re.error as exc:
-            raise SystemExit(f"[demo_runner] manifest '{key}' has invalid pattern /{pattern}/: {exc}") from exc
+            raise SystemExit(
+                f"[nova demo] manifest '{key}' has invalid pattern /{pattern}/: {exc}"
+            ) from exc
     return tuple(patterns)
 
 
 def payload_mode(manifest: dict) -> str:
     mode = manifest.get("payload_mode", "loader")
     if mode not in ("loader", "embedded"):
-        raise SystemExit("[demo_runner] payload_mode must be 'loader' or 'embedded'")
+        raise SystemExit("[nova demo] payload_mode must be 'loader' or 'embedded'")
     return mode
 
 
@@ -108,13 +111,19 @@ def validate(demo_name: str, manifest: dict) -> None:
     """Reject manifests the board model or the guest ABI cannot honour."""
     devices = manifest.get("qemu_devices", [])
     if not isinstance(devices, list) or not all(isinstance(device, str) and device for device in devices):
-        raise SystemExit(f"[demo_runner] {demo_name}: qemu_devices must be a list of non-empty strings")
+        raise SystemExit(
+            f"[nova demo] {demo_name}: qemu_devices must be a list of non-empty strings"
+        )
     for guest in manifest.get("guests", []):
         vcpus = guest.get("vcpus", 1)
         if not 1 <= vcpus <= 2:  # kMaxVcpusPerVm (nova/abi/guest.hpp)
-            raise SystemExit(f"[demo_runner] {demo_name}: guest '{guest.get('name')}' asks for "
-                             f"{vcpus} vcpus (supported: 1..2)")
+            raise SystemExit(
+                f"[nova demo] {demo_name}: guest '{guest.get('name')}' asks for "
+                f"{vcpus} vcpus (supported: 1..2)"
+            )
         uart = guest.get("uart", "none")
         if uart not in ("none", "vuart"):  # UartKind (nova/abi/guest.hpp)
-            raise SystemExit(f"[demo_runner] {demo_name}: guest '{guest.get('name')}' asks for "
-                             f"uart '{uart}' (supported: none, vuart)")
+            raise SystemExit(
+                f"[nova demo] {demo_name}: guest '{guest.get('name')}' asks for "
+                f"uart '{uart}' (supported: none, vuart)"
+            )

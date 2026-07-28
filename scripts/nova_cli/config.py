@@ -10,9 +10,31 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "scripts"
 BUILD_ROOT = REPO / "build"
+DEMO_DIR = REPO / "demo"
+DEMO_BUILD_DIR = BUILD_ROOT / "demo"
 DEFAULT_CONFIG = REPO / "configs" / "default.yml"
 DEFAULT_PAYLOADS = REPO / "configs" / "payloads.yml"
 VERSION_SOURCE = SCRIPTS / "lib" / "versions.sh"
+HV_PRESET = os.environ.get("NOVA_HV_PRESET", "aarch64-debug")
+QEMU = os.environ.get("NOVA_QEMU", "qemu-system-aarch64")
+QEMU_BOARD_ARGS = (
+    "-machine",
+    "virt,virtualization=on,gic-version=3,iommu=smmuv3,highmem-ecam=off",
+    "-cpu",
+    "cortex-a57",
+    "-smp",
+    "2",
+    "-nographic",
+    "-nic",
+    "none",
+    "-m",
+    "1024",
+)
+FATAL_OUTPUT_PATTERNS = (
+    r"\[smmu\] initialization failed(?::| error=)",
+    r"\[smmu\] isolation failure:",
+)
+GUEST_LINK_BASE = 0x50000000
 
 
 def tool_version(name: str) -> str:

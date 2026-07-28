@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -46,8 +47,13 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(destination.stat().st_mtime_ns, first_timestamp)
 
             source.write_text("value: two\n")
+            os.utime(source, ns=(1_000_000_000, 1_000_000_000))
             build.sync_active(source, destination)
             self.assertEqual(destination.read_text(), "value: two\n")
+            self.assertGreater(
+                destination.stat().st_mtime_ns,
+                source.stat().st_mtime_ns,
+            )
 
 
 class ProcessTests(unittest.TestCase):

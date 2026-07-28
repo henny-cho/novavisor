@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import sys
 
-from . import build, checks, config, process
+from . import build, checks, config, demo, process
 
 
 def _add_build_options(parser: argparse.ArgumentParser, *, allow_clean: bool = True) -> None:
@@ -47,17 +46,6 @@ def _inspect(args) -> int:
 
 def _test(_args) -> int:
     return checks.test()
-
-
-def _demo(args) -> int:
-    return process.call(
-        [
-            sys.executable,
-            "-u",
-            str(config.SCRIPTS / "demo_runner.py"),
-            *args.arguments,
-        ]
-    )
 
 
 def _legacy(args) -> int:
@@ -109,9 +97,7 @@ def parser() -> argparse.ArgumentParser:
     test_parser = sub.add_parser("test", help="run host and script tests")
     test_parser.set_defaults(handler=_test)
 
-    demo_parser = sub.add_parser("demo", add_help=False)
-    demo_parser.add_argument("arguments", nargs=argparse.REMAINDER)
-    demo_parser.set_defaults(handler=_demo)
+    demo.register(sub)
 
     for command in ("firmware", "ci"):
         legacy_parser = sub.add_parser(command, add_help=False)

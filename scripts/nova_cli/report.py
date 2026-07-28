@@ -11,14 +11,13 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import settings
-from .console import (
+from . import config, process
+from .verifier import (
     FailureKind,
     OutputCapture,
     RepeatAttempt,
@@ -27,7 +26,7 @@ from .console import (
 )
 
 if TYPE_CHECKING:  # Type-only: report never depends on command wiring.
-    from .commands import PreparedVerification
+    from .demo import PreparedVerification
 
 
 def diagnostics_path_for_tail(tail_path: Path) -> Path:
@@ -109,12 +108,12 @@ def report_verification_failure(result: VerificationResult) -> None:
         FailureKind.INTERRUPTED: lambda: f"verifier exception: {result.error} (",
     }.get(result.failure)
     if headline is not None:
-        print(f"\n[demo_runner] FAIL: {headline()}"
+        print(f"\n[nova demo] FAIL: {headline()}"
               f"elapsed {result.elapsed_seconds:.1f}s, "
               f"remaining {result.remaining_seconds:.1f}s)", file=sys.stderr)
 
     if result.termination_attempted and not result.termination_succeeded:
-        print(f"\n[demo_runner] FAIL: QEMU cleanup: {result.termination_error}",
+        print(f"\n[nova demo] FAIL: QEMU cleanup: {result.termination_error}",
               file=sys.stderr)
 
 
@@ -165,7 +164,7 @@ def append_github_summary(
 
 def _first_line(cmd: list[str]) -> str:
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
+        out = process.run(cmd, capture=True, check=False).stdout
     except OSError as exc:
         return f"unavailable: {exc}"
     return out.splitlines()[0] if out else "unavailable"
@@ -194,15 +193,15 @@ def collect_evidence(
 
     for index, snapshot in enumerate(elf_snapshots, start=1):
         keep(snapshot, f"variant-{index}-novavisor.elf")
-    preset_dir = settings.BUILD_DIR / settings.HV_PRESET
+    preset_dir = config.BUILD_ROOT / config.HV_PRESET
     keep(preset_dir / "active_config.yml")
     keep(preset_dir / "active_payloads.yml")
     for dtb in sorted((preset_dir / "guest_dtb").glob("*.dtb")):
         keep(dtb)
-    guest_cache = settings.REPO / "external" / "cache" / "guests" / name
+    guest_cache = config.REPO / "external" / "cache" / "guests" / name
     for guest in manifest.get("guests", []):
         binary = Path(guest["binary"])
-        keep(settings.DEMO_BUILD_DIR / name / binary.name)
+        keep(config.DEMO_BUILD_DIR / name / binary.name)
         keep(guest_cache / binary.name)
         keep(guest_cache / f"{binary.stem}.elf")
     if guest_cache.is_dir():
@@ -210,8 +209,8 @@ def collect_evidence(
             keep(stamp)
 
     (evidence / "environment.txt").write_text("\n".join((
-        _first_line(["git", "-C", str(settings.REPO), "rev-parse", "HEAD"]),
-        _first_line([settings.QEMU, "--version"]),
+        _first_line(["git", "-C", str(config.REPO), "rev-parse", "HEAD"]),
+        _first_line([config.QEMU, "--version"]),
         _first_line(["aarch64-none-elf-gcc", "--version"]),
     )) + "\n", encoding="utf-8")
     (evidence / "sha256sums.txt").write_text("".join(

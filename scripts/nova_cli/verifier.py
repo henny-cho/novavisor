@@ -38,7 +38,7 @@ class OutputCapture:
 
 def print_failure_tail(capture: OutputCapture) -> None:
     if capture.stream is None and capture.tail:
-        print("[demo_runner] --- QEMU output tail ---", file=sys.stderr)
+        print("[nova demo] --- QEMU output tail ---", file=sys.stderr)
         print(capture.tail, file=sys.stderr, end="" if capture.tail.endswith("\n") else "\n")
 
 

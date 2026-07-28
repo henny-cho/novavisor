@@ -55,7 +55,7 @@ class PublicCommandContractTest(unittest.TestCase):
         self.assertNotIn("environment loaded", task.stdout.lower())
 
     def test_demo_help_exposes_every_public_operation(self):
-        result = run("python3", str(DEMO), "--help")
+        result = run(str(NOVA), "demo", "--help")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         for command in (
@@ -71,8 +71,15 @@ class PublicCommandContractTest(unittest.TestCase):
         ):
             self.assertIn(command, result.stdout)
 
+    def test_demo_compatibility_entrypoint_forwards_to_nova(self):
+        legacy = run("python3", str(DEMO), "--help")
+        nova = run(str(NOVA), "demo", "--help")
+
+        self.assertEqual(legacy.returncode, 0, legacy.stderr)
+        self.assertEqual(legacy.stdout, nova.stdout)
+
     def test_qemu_board_arguments_are_machine_readable_and_stable(self):
-        result = run("python3", str(DEMO), "qemu-args")
+        result = run(str(NOVA), "demo", "qemu-args")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(

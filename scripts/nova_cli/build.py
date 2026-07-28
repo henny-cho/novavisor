@@ -41,7 +41,7 @@ def sync_active(source: Path, destination: Path) -> None:
         raise SystemExit(f"input not found: {source}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     if not destination.exists() or source.read_bytes() != destination.read_bytes():
-        shutil.copy2(source, destination)
+        shutil.copyfile(source, destination)
 
 
 def clean() -> None:
@@ -71,12 +71,10 @@ def resolve_elf(spec: BuildSpec, *, rebuild: bool) -> Path:
 
 
 def run_hypervisor(spec: BuildSpec, *, debug: bool) -> int:
-    from novademo import settings
-
     elf = resolve_elf(spec, rebuild=True)
     command = [
-        settings.QEMU,
-        *settings.QEMU_BOARD_ARGS,
+        config.QEMU,
+        *config.QEMU_BOARD_ARGS,
         "-kernel",
         str(elf),
     ]

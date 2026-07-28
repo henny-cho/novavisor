@@ -12,7 +12,11 @@ from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
-from novademo import build, commands, console, manifest, report, settings  # noqa: E402
+from nova_cli import config as settings  # noqa: E402
+from nova_cli import demo as commands  # noqa: E402
+from nova_cli import demo_build as build  # noqa: E402
+from nova_cli import manifest, report  # noqa: E402
+from nova_cli import verifier as console  # noqa: E402
 
 
 class FakeTimeout(Exception):
@@ -133,7 +137,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
                 }],
             }
             with (
-                mock.patch.object(settings, "BUILD_DIR", root / "build"),
+                mock.patch.object(settings, "BUILD_ROOT", root / "build"),
                 mock.patch.object(
                     build, "resolve_guest_binary", return_value=binary
                 ),
