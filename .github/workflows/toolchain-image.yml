@@ -18,14 +18,29 @@ concurrency:
   group: toolchain-image-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/novavisor-toolchain
+
 jobs:
-  publish:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
+  # One runner per architecture. The arm64 leg used to build under QEMU
+  # emulation on an amd64 runner and cost more than everything else in this
+  # workflow put together; a public repository gets arm64 runners for free.
+  # Each leg pushes an untagged image and hands back only its digest.
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          persist-credentials: false
 
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
@@ -40,13 +55,70 @@ jobs:
         with:
           context: .
           file: containers/toolchain/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/novavisor-toolchain:main
-            ghcr.io/${{ github.repository_owner }}/novavisor-toolchain:sha-${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: linux/${{ matrix.arch }}
+          tags: ${{ env.IMAGE }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+          # Scope per architecture: one shared scope has each leg evicting
+          # the other's layers on every run.
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      # An empty file named after the digest is the whole handoff.
+      - name: Record the pushed digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          retention-days: 1
+          if-no-files-found: error
+
+  # Tags live only on the manifest list, so a consumer pins one immutable
+  # name that resolves to whichever architecture it runs on.
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Join the per-architecture images into one manifest list
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          # Word splitting is the point: one reference per architecture.
+          # shellcheck disable=SC2046,SC2086
+          docker buildx imagetools create \
+            -t "${IMAGE}:main" \
+            -t "${IMAGE}:sha-${GITHUB_SHA}" \
+            $(printf "${IMAGE}@sha256:%s " *)
+
+      - name: Resolve the list digest
+        id: manifest
+        run: |
+          digest=$(docker buildx imagetools inspect "${IMAGE}:main" \
+            --format '{{json .Manifest}}' | jq -r .digest)
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
 
       # dependabot watches the Dockerfile's base image, not the digest its
       # consumers pin, so the publisher is the only place that knows the new
@@ -54,8 +126,7 @@ jobs:
       # keeps this workflow's write access limited to the registry.
       - name: Report the consumer digest bump
         env:
-          IMAGE: ghcr.io/${{ github.repository_owner }}/novavisor-toolchain
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.manifest.outputs.digest }}
         run: |
           consumers=$(grep -rl "${IMAGE}@sha256:" .github/workflows || true)
           if [[ -z "${consumers}" ]]; then
@@ -68,7 +139,7 @@ jobs:
           {
             echo "## Toolchain image"
             echo
-            echo "Published \`${DIGEST}\`."
+            echo "Published \`${DIGEST}\` for linux/amd64 and linux/arm64."
             echo
             if git diff --quiet; then
               echo "Consumers already pin it."

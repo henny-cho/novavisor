@@ -56,8 +56,38 @@ class WorkflowContractTest(unittest.TestCase):
         )
         steps = publisher["jobs"]["publish"]["steps"]
         report = next(step for step in steps if step.get("name", "").endswith("digest bump"))
-        self.assertEqual(report["env"]["DIGEST"], "${{ steps.build.outputs.digest }}")
+        self.assertEqual(report["env"]["DIGEST"], "${{ steps.manifest.outputs.digest }}")
         self.assertIn("GITHUB_STEP_SUMMARY", report["run"])
+
+    def test_the_image_builds_each_architecture_on_its_own_runner(self):
+        # One job naming two platforms builds the second under QEMU
+        # emulation, which cost more than the rest of this workflow together.
+        text = (WORKFLOWS / "toolchain-image.yml").read_text()
+        build = yaml.safe_load(text)["jobs"]["build"]
+        legs = build["strategy"]["matrix"]["include"]
+
+        self.assertNotIn("setup-qemu-action", text)
+        self.assertGreater(len(legs), 1)
+        self.assertEqual(len({leg["runner"] for leg in legs}), len(legs))
+        for step in build["steps"]:
+            platforms = step.get("with", {}).get("platforms")
+            if platforms is not None:
+                self.assertEqual(platforms, "linux/${{ matrix.arch }}")
+
+    def test_no_checkout_persists_credentials(self):
+        # No workflow pushes, and the guest fetch scripts clone anonymously,
+        # so a token left in .git/config only widens what a later step reaches.
+        for path in WORKFLOWS.glob("*.yml"):
+            checkouts = [
+                step
+                for job in yaml.safe_load(path.read_text())["jobs"].values()
+                for step in job.get("steps", [])
+                if str(step.get("uses", "")).startswith("actions/checkout@")
+            ]
+            with self.subTest(workflow=path.name):
+                self.assertTrue(checkouts)
+                for step in checkouts:
+                    self.assertIs(step["with"]["persist-credentials"], False)
 
     def test_ci_permissions_and_public_handlers_are_minimal(self):
         ci = yaml.safe_load((WORKFLOWS / "ci.yml").read_text())
