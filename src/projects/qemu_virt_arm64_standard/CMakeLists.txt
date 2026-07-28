@@ -1,0 +1,1 @@
+nova_add_standard_guest_project()

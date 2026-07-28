@@ -49,6 +49,17 @@
       }
     },
     {
+      "name": "aarch64-standard-release",
+      "displayName": "AArch64 Standard Release",
+      "description": "Release build with SMP, guest PSCI, lifecycle and vUART but no IOMMU",
+      "inherits": "aarch64-base",
+      "binaryDir": "${sourceDir}/build/aarch64-standard-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NOVA_PROJECT": "qemu_virt_arm64_standard"
+      }
+    },
+    {
       "name": "aarch64-qemu-tfa-release",
       "displayName": "QEMU TF-A Chain Release",
       "description": "BL33 image for the real TF-A chain on QEMU virt (firmware handoff smoke)",
@@ -97,6 +108,10 @@
     {
       "name": "aarch64-minimal-release",
       "configurePreset": "aarch64-minimal-release"
+    },
+    {
+      "name": "aarch64-standard-release",
+      "configurePreset": "aarch64-standard-release"
     },
     {
       "name": "aarch64-qemu-tfa-release",

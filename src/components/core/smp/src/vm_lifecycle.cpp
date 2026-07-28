@@ -6,7 +6,6 @@
 // one quiesce protocol: every live vCPU is retired and DMA is drained
 // and detached before memory is restored.
 
-#include "dma_device/dma_device.hpp"
 #include "hal/console.hpp"
 #include "hal/cpu.hpp"
 #include "hal/timer.hpp"
@@ -14,6 +13,7 @@
 #include "nova/abi/hvc_abi.h"
 #include "nova/abi/psci.h"
 #include "nova/arch/trap_context.hpp"
+#include "smp/dma_quiesce.hpp"
 #include "smp/quiesce_model.hpp"
 #include "smp/smp.hpp"
 #include "smp_internal.hpp"
@@ -79,10 +79,10 @@ void finish_lifecycle(std::size_t vm) noexcept {
   console::write(" quiesced — restoring\n");
   const std::uint64_t generation = vcpu::prepare_reset_quiesced_vm(vm);
   bool                restarted  = false;
-  if (generation != 0U && dma_device::resume_vm(vm, generation)) {
+  if (generation != 0U && smp::dma_resume_vm(vm, generation)) {
     restarted = vcpu::publish_reset_vm(vm, generation);
     if (!restarted) {
-      static_cast<void>(dma_device::begin_quiesce(vm));
+      static_cast<void>(smp::dma_begin_quiesce(vm));
     }
   }
   (void)tracker.finish();
@@ -110,14 +110,14 @@ void on_dma_drain(TrapContext* /*ctx*/, std::uint64_t arg) noexcept {
     return;
   }
 
-  switch (dma_device::poll_quiesce(vm)) {
-  case dma_device::QuiesceResult::kPending:
+  switch (smp::dma_poll_quiesce(vm)) {
+  case DmaQuiesceResult::kPending:
     arm_dma_poll(vm);
     return;
-  case dma_device::QuiesceResult::kComplete:
+  case DmaQuiesceResult::kComplete:
     g_dma_pending[vm] = false;
     break;
-  case dma_device::QuiesceResult::kFailed:
+  case DmaQuiesceResult::kFailed:
     g_dma_pending[vm] = false;
     g_dma_failed[vm]  = true;
     break;
@@ -259,14 +259,14 @@ auto start_vm_local(std::size_t vm) noexcept -> bool {
   if (generation == 0U) {
     return false;
   }
-  if (!dma_device::resume_vm(vm, generation)) {
+  if (!smp::dma_resume_vm(vm, generation)) {
     vcpu::cancel_start(slot_of(vm));
     return false;
   }
   if (vcpu::publish_start_vm(vm, generation)) {
     return true;
   }
-  static_cast<void>(dma_device::begin_quiesce(vm));
+  static_cast<void>(smp::dma_begin_quiesce(vm));
   return false;
 }
 
@@ -334,14 +334,14 @@ auto begin_lifecycle_local(std::size_t vm, LifecycleMode mode) noexcept -> Begin
     }
   }
 
-  switch (dma_device::begin_quiesce(vm)) {
-  case dma_device::QuiesceResult::kComplete:
+  switch (smp::dma_begin_quiesce(vm)) {
+  case DmaQuiesceResult::kComplete:
     break;
-  case dma_device::QuiesceResult::kPending:
+  case DmaQuiesceResult::kPending:
     g_dma_pending[vm] = true;
     arm_dma_poll(vm);
     break;
-  case dma_device::QuiesceResult::kFailed:
+  case DmaQuiesceResult::kFailed:
     g_dma_failed[vm] = true;
     break;
   }
@@ -383,7 +383,7 @@ auto begin_lifecycle_local(std::size_t vm, LifecycleMode mode) noexcept -> Begin
 }
 
 auto start_vm(std::size_t vm) noexcept -> bool {
-  if (vm >= guest_table().size() || lifecycle_blocks_start(vm) || vcpu::vm_on(vm) || !dma_device::can_start(vm)) {
+  if (vm >= guest_table().size() || lifecycle_blocks_start(vm) || vcpu::vm_on(vm) || !smp::dma_can_start(vm)) {
     return false;
   }
   const std::size_t boot = slot_of(vm);
@@ -539,8 +539,8 @@ void smp_component::handle_guest_fault(GuestFaultCall* call) noexcept {
 }
 
 void smp_component::handle_dma_fault(DmaFaultCall* call) noexcept {
-  call->handled                   = true;
-  const smmu::FaultNotice& notice = call->notice;
+  call->handled                  = true;
+  const dma::FaultNotice& notice = call->notice;
   if (!notice.valid() || notice.owner_vm >= guest_table().size() || !smp::g_online[0].load(std::memory_order_acquire)) {
     return;
   }

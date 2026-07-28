@@ -77,13 +77,9 @@ template <std::size_t MaxStreams>
   return index;
 }
 
-struct FaultNotice {
-  std::size_t   owner_vm   = dma::kNoVm;
-  std::uint32_t stream_id  = 0;
-  std::uint64_t generation = 0;
-
-  [[nodiscard]] constexpr auto valid() const noexcept -> bool { return owner_vm != dma::kNoVm && generation != 0U; }
-};
+// The notice itself is part of the DMA ABI (nova/abi/dma.hpp) so the
+// recovery side can name it without depending on this component.
+using FaultNotice = dma::FaultNotice;
 
 template <std::size_t Capacity>
 struct FaultNoticeBatch {

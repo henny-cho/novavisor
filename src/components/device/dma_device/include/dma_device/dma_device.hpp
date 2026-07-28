@@ -2,6 +2,7 @@
 
 #include "core_vcpu/core_vcpu.hpp"
 #include "nova/abi/dma.hpp"
+#include "smp/dma_quiesce.hpp"
 #include "vgic/vgic.hpp"
 
 #include <cib/top.hpp>
@@ -11,11 +12,9 @@
 
 namespace nova::dma_device {
 
-enum class QuiesceResult : std::uint8_t {
-  kComplete,
-  kPending,
-  kFailed,
-};
+// The protocol's own result type (smp/dma_quiesce.hpp) — this side
+// fills it in, VM power reads it, and there is one definition.
+using QuiesceResult = DmaQuiesceResult;
 
 void init() noexcept;
 
@@ -41,11 +40,17 @@ struct dma_device_component {
 
   constexpr static auto INIT = flow::action<"dma_device_init">([]() noexcept { dma_device::init(); });
 
+  // Serves the DMA half of VM power. Subscribing rather than being
+  // called means a composition without this component simply has no
+  // DMA to drain, instead of no VM power at all.
+  static void handle_quiesce(DmaQuiesceCall* call) noexcept;
+
   // Registers vIRQ backends, so it needs vgic and core_vcpu up first —
   // an ordering the project nexus declares.
   constexpr static auto config =
       cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<IrqService>(&dma_device_component::handle_irq),
-                  cib::extend<VirtualEoiService>(&dma_device_component::handle_virtual_eoi));
+                  cib::extend<VirtualEoiService>(&dma_device_component::handle_virtual_eoi),
+                  cib::extend<DmaQuiesceService>(&dma_device_component::handle_quiesce));
 };
 
 } // namespace nova

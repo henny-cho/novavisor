@@ -2,6 +2,7 @@
 
 #include "core_gic/core_gic.hpp"
 #include "smmu/domain_model.hpp"
+#include "trap_handler/dma_fault.hpp"
 
 #include <cib/top.hpp>
 #include <cstddef>
@@ -22,22 +23,17 @@ void               handle_irq(IrqCall* call) noexcept;
 
 namespace nova {
 
-struct DmaFaultCall {
-  smmu::FaultNotice notice{};
-  bool              handled = false;
-};
-
-struct DmaFaultService : public callback::service<DmaFaultCall*> {};
-
 struct smmu_component {
   constexpr static auto INIT = flow::action<"smmu_init">([]() noexcept { smmu::init(); });
 
   static void handle_irq(IrqCall* call) noexcept { smmu::handle_irq(call); }
 
   // init() routes the SMMU event SPIs, so the physical GIC bring-up
-  // must have run first — the project nexus orders it.
-  constexpr static auto config = cib::config(cib::exports<DmaFaultService>, cib::extend<cib::RuntimeStart>(*INIT),
-                                             cib::extend<IrqService>(&smmu_component::handle_irq));
+  // must have run first — the project nexus orders it. DmaFaultService
+  // is published here but exported by trap_handler, so a profile can
+  // subscribe to fault recovery without composing this component.
+  constexpr static auto config =
+      cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<IrqService>(&smmu_component::handle_irq));
 };
 
 } // namespace nova

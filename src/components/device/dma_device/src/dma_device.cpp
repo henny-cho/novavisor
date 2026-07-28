@@ -547,4 +547,26 @@ void dma_device_component::handle_virtual_eoi(VirtualEoiCall* call) noexcept {
   }
 }
 
+// The DMA half of VM power. Claiming every request tells the caller a
+// device stack is present; the per-op answers are the same ones VM
+// lifecycle used to call directly.
+void dma_device_component::handle_quiesce(DmaQuiesceCall* call) noexcept {
+  call->handled = true;
+  switch (call->op) {
+  case DmaQuiesceOp::kBegin:
+    call->result = dma_device::begin_quiesce(call->vm);
+    return;
+  case DmaQuiesceOp::kPoll:
+    call->result = dma_device::poll_quiesce(call->vm);
+    return;
+  case DmaQuiesceOp::kResume:
+    call->result =
+        dma_device::resume_vm(call->vm, call->generation) ? DmaQuiesceResult::kComplete : DmaQuiesceResult::kFailed;
+    return;
+  case DmaQuiesceOp::kCanStart:
+    call->result = dma_device::can_start(call->vm) ? DmaQuiesceResult::kComplete : DmaQuiesceResult::kFailed;
+    return;
+  }
+}
+
 } // namespace nova
