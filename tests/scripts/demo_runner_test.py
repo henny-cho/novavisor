@@ -16,7 +16,7 @@ from nova_cli import config as settings  # noqa: E402
 from nova_cli import demo as commands  # noqa: E402
 from nova_cli import demo_build as build  # noqa: E402
 from nova_cli import manifest, report  # noqa: E402
-from nova_cli import verifier as console  # noqa: E402
+from nova_cli import qemu as console  # noqa: E402
 
 
 class FakeTimeout(Exception):
@@ -436,7 +436,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             tail_path = Path(directory) / "interrupt.qemu-tail.log"
             with (
-                mock.patch.object(commands, "_require_pexpect", return_value=FakePexpect),
+                mock.patch.object(console, "_require_pexpect", return_value=FakePexpect),
                 mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
@@ -553,7 +553,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             tail_path = Path(directory) / "attempt.qemu-tail.log"
             with (
-                mock.patch.object(commands, "_require_pexpect", return_value=FakePexpect),
+                mock.patch.object(console, "_require_pexpect", return_value=FakePexpect),
                 mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
@@ -613,7 +613,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
             tail_path = Path(directory) / "timeout.qemu-tail.log"
             stderr = io.StringIO()
             with (
-                mock.patch.object(commands, "_require_pexpect", return_value=FakePexpect),
+                mock.patch.object(console, "_require_pexpect", return_value=FakePexpect),
                 mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
                 mock.patch.object(commands.time, "monotonic", side_effect=child.clock),
                 contextlib.redirect_stdout(io.StringIO()),
@@ -656,7 +656,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             tail_path = Path(directory) / "spawn.qemu-tail.log"
             with (
-                mock.patch.object(commands, "_require_pexpect", return_value=FakePexpect),
+                mock.patch.object(console, "_require_pexpect", return_value=FakePexpect),
                 mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),

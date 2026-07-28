@@ -78,6 +78,13 @@ class PublicCommandContractTest(unittest.TestCase):
         self.assertEqual(legacy.returncode, 0, legacy.stderr)
         self.assertEqual(legacy.stdout, nova.stdout)
 
+    def test_firmware_help_exposes_role_based_operations(self):
+        result = run(str(NOVA), "firmware", "--help")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for operation in ("profile", "package", "verify"):
+            self.assertIn(operation, result.stdout)
+
     def test_qemu_board_arguments_are_machine_readable_and_stable(self):
         result = run(str(NOVA), "demo", "qemu-args")
 

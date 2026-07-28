@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from . import build, checks, config, demo, process
+from . import build, checks, config, demo, firmware, process
 
 
 def _add_build_options(parser: argparse.ArgumentParser, *, allow_clean: bool = True) -> None:
@@ -98,8 +98,9 @@ def parser() -> argparse.ArgumentParser:
     test_parser.set_defaults(handler=_test)
 
     demo.register(sub)
+    firmware.register(sub)
 
-    for command in ("firmware", "ci"):
+    for command in ("ci",):
         legacy_parser = sub.add_parser(command, add_help=False)
         legacy_parser.add_argument("arguments", nargs=argparse.REMAINDER)
         legacy_parser.set_defaults(handler=_legacy, legacy_command=command)

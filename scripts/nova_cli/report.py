@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from . import config, process
-from .verifier import (
+from .qemu import (
     FailureKind,
     OutputCapture,
     RepeatAttempt,
@@ -73,9 +73,20 @@ def preserve_failure_diagnostics(
     preserve_failure_tail(capture, tail_path)
     if tail_path is None:
         return
+    write_verification_diagnostics(
+        diagnostics_path_for_tail(tail_path),
+        prepared.label,
+        result,
+    )
 
+
+def write_verification_diagnostics(
+    path: Path,
+    label: str,
+    result: VerificationResult,
+) -> None:
     diagnostics = {
-        "label": prepared.label,
+        "label": label,
         "failure": {
             "kind": result.failure,
             "pattern": result.pattern,
@@ -92,11 +103,15 @@ def preserve_failure_diagnostics(
         },
         "matches": [asdict(match) for match in result.matches],
     }
-    path = diagnostics_path_for_tail(tail_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"{json.dumps(diagnostics, indent=2)}\n", encoding="utf-8")
 
 
-def report_verification_failure(result: VerificationResult) -> None:
+def report_verification_failure(
+    result: VerificationResult,
+    *,
+    scope: str = "nova demo",
+) -> None:
     # Every headline shares the trailing "elapsed .../remaining ..." suffix.
     headline = {
         FailureKind.TIMEOUT: lambda: (f"timeout waiting for /{result.pattern}/ "
@@ -106,14 +121,15 @@ def report_verification_failure(result: VerificationResult) -> None:
         FailureKind.FORBIDDEN: lambda: f"forbidden output /{result.pattern}/ {result.error} (",
         FailureKind.EXCEPTION: lambda: f"verifier exception: {result.error} (",
         FailureKind.INTERRUPTED: lambda: f"verifier exception: {result.error} (",
+        FailureKind.SPAWN: lambda: f"QEMU spawn: {result.error} (",
     }.get(result.failure)
     if headline is not None:
-        print(f"\n[nova demo] FAIL: {headline()}"
+        print(f"\n[{scope}] FAIL: {headline()}"
               f"elapsed {result.elapsed_seconds:.1f}s, "
               f"remaining {result.remaining_seconds:.1f}s)", file=sys.stderr)
 
     if result.termination_attempted and not result.termination_succeeded:
-        print(f"\n[nova demo] FAIL: QEMU cleanup: {result.termination_error}",
+        print(f"\n[{scope}] FAIL: QEMU cleanup: {result.termination_error}",
               file=sys.stderr)
 
 

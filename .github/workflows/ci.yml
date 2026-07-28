@@ -72,7 +72,7 @@ jobs:
         run: scripts/task.sh build --preset aarch64-standard-release
 
       - name: Build N1SDP payload profile
-        run: scripts/task.sh firmware smoke
+        run: scripts/nova firmware profile n1sdp
 
       - name: QEMU TF-A chain smoke
         # Boots BL1 -> BL2 -> BL31 -> BL33 and matches five ordered
@@ -80,7 +80,7 @@ jobs:
         # (--profile-only), which is why the gate could sit broken from
         # Phase 25e until Phase 26b noticed: a smoke that never executes
         # verifies nothing. ~30 s with the firmware cache warm.
-        run: scripts/task.sh firmware qemu-smoke
+        run: scripts/nova firmware verify qemu-tfa
 
       - name: Lint
         # run-clang-tidy over the debug tree's compile database; the debug

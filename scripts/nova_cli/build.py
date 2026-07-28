@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config, process
+from . import config, process, qemu
 
 
 @dataclass(frozen=True)
@@ -72,12 +72,7 @@ def resolve_elf(spec: BuildSpec, *, rebuild: bool) -> Path:
 
 def run_hypervisor(spec: BuildSpec, *, debug: bool) -> int:
     elf = resolve_elf(spec, rebuild=True)
-    command = [
-        config.QEMU,
-        *config.QEMU_BOARD_ARGS,
-        "-kernel",
-        str(elf),
-    ]
+    command = qemu.board_command(kernel=elf)
     if debug:
         command += ["-s", "-S"]
     return process.call(command)

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import build as core_build
-from . import config, process
+from . import config, process, qemu
 from .manifest import demo_id, payload_mode, validate
 
 _make_record = None
@@ -94,7 +94,7 @@ def resolve_guest_binary(demo_name: str, demo_build: Path, manifest: dict, spec:
     )
 
 
-def _payload_record() -> Callable[..., dict]:
+def payload_record() -> Callable[..., dict]:
     """Borrow the record builder from the platform payload tool so the record
     schema and its checksum rule keep a single owner."""
     global _make_record
@@ -115,7 +115,7 @@ def prepare_payload_manifest(
     if payload_mode(manifest) != "embedded":
         return None
 
-    make_record = _payload_record()
+    make_record = payload_record()
     records = []
     for index, guest in enumerate(manifest.get("guests", [])):
         binary = resolve_guest_binary(demo_name, demo_build, manifest, guest)
@@ -134,16 +134,20 @@ def prepare_payload_manifest(
         raise SystemExit(f"[nova demo] {demo_name}: embedded mode requires guests")
 
     path = config.BUILD_ROOT / "payload-manifests" / f"{demo_name}.yml"
+    write_payload_manifest(path, records)
+    return path
+
+
+def write_payload_manifest(path: Path, records: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     content = f"{json.dumps({'payloads': records}, indent=2)}\n"
     if not path.exists() or path.read_text() != content:
         path.write_text(content)
-    return path
 
 
 def build_qemu_cmd(elf: Path, demo_name: str, demo_build: Path, manifest: dict) -> list[str]:
     validate(demo_name, manifest)
-    cmd = [config.QEMU, *config.QEMU_BOARD_ARGS, "-kernel", str(elf)]
+    cmd = qemu.board_command(kernel=elf)
     for device in manifest.get("qemu_devices", []):
         cmd += ["-device", device]
     if payload_mode(manifest) == "embedded":

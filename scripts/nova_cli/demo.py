@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shlex
 import shutil
 import sys
 import time
@@ -11,16 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import config, demo_build as build, manifest, process, report
-from . import verifier as console
-
-
-def _require_pexpect():
-    # Keep discovery usable on minimal systems without process-control deps.
-    try:
-        import pexpect  # noqa: F401
-        return pexpect
-    except ImportError:
-        sys.exit("nova demo: missing pexpect. Install python3-pexpect or pexpect.")
+from . import qemu
 
 
 @dataclass(frozen=True)
@@ -69,61 +59,48 @@ def run_prepared_verification(
     prepared: PreparedVerification,
     failure_tail: Path | None = None,
 ) -> int:
-    pexpect = _require_pexpect()
     timeout = prepared.timeout_seconds
     print(f"[nova demo] --- {prepared.label} (phase {prepared.phase}) timeout={timeout}s ---")
-    print(f"[nova demo] $ {' '.join(shlex.quote(c) for c in prepared.command)}")
 
-    capture = console.OutputCapture(
-        None if os.environ.get("GITHUB_ACTIONS") == "true" else sys.stdout)
-    try:
-        child = pexpect.spawn(
-            prepared.command[0],
-            list(prepared.command[1:]),
-            timeout=timeout,
-            encoding="utf-8",
-        )
-    except (Exception, SystemExit) as exc:
-        result = console.VerificationResult(
-            failure=console.FailureKind.SPAWN,
-            error=f"{type(exc).__name__}: {exc}",
-            traceback_text=console._format_traceback(exc),
-            termination_succeeded=False,
-            termination_error="not attempted: process was not started",
-        )
-        print(f"\n[nova demo] FAIL: QEMU spawn: {result.error}", file=sys.stderr)
-        report.preserve_failure_diagnostics(capture, failure_tail, prepared, result)
-        return 1
-    child.logfile_read = capture
-
-    def report_match(match: console.PatternMatch) -> None:
+    def report_match(match: qemu.PatternMatch) -> None:
         print(f"[nova demo] matched[{match.index}/{len(prepared.expectations)}] "
               f"/{match.pattern}/ elapsed={match.elapsed_seconds:.1f}s "
               f"wait={match.waited_seconds:.1f}s remaining={match.remaining_seconds:.1f}s")
 
     try:
-        result = console.verify_child_output(
-            child,
+        verification = qemu.run_command(
+            prepared.command,
             list(prepared.expectations),
             timeout,
+            stream=None if os.environ.get("GITHUB_ACTIONS") == "true" else sys.stdout,
             clock=time.monotonic,
-            timeout_error=pexpect.TIMEOUT,
-            eof_error=pexpect.EOF,
             on_match=report_match,
             fatal_patterns=config.FATAL_OUTPUT_PATTERNS,
             forbidden_patterns=prepared.forbidden_patterns,
         )
-    except console.VerificationInterrupted as interrupted:
+    except qemu.VerificationInterrupted as interrupted:
         report.report_verification_failure(interrupted.result)
-        report.preserve_failure_diagnostics(capture, failure_tail, prepared, interrupted.result)
-        raise interrupted.cause.with_traceback(interrupted.cause.__traceback__)
+        report.preserve_failure_diagnostics(
+            interrupted.capture,
+            failure_tail,
+            prepared,
+            interrupted.result,
+        )
+        raise interrupted.cause.with_traceback(
+            interrupted.cause.__traceback__
+        ) from None
     except BaseException:
-        console.preserve_failure_tail(capture, failure_tail)
         raise
 
+    result = verification.result
     if not result.ok:
         report.report_verification_failure(result)
-        report.preserve_failure_diagnostics(capture, failure_tail, prepared, result)
+        report.preserve_failure_diagnostics(
+            verification.capture,
+            failure_tail,
+            prepared,
+            result,
+        )
         return 1
 
     print(f"\n[nova demo] PASS: {prepared.label}")
@@ -285,7 +262,7 @@ def cmd_verify_repeat(args) -> int:
             elf_snapshot=snapshot,
         ))
 
-    def report_attempt(attempt: console.RepeatAttempt) -> None:
+    def report_attempt(attempt: qemu.RepeatAttempt) -> None:
         print(f"[nova demo] repeat {attempt.number}/{args.runs}: "
               f"{attempt.status.upper()} ({attempt.elapsed_seconds:.1f}s)")
         if attempt.error:
@@ -304,7 +281,7 @@ def cmd_verify_repeat(args) -> int:
                 return return_code
         return 0
 
-    attempts = console.run_repeated_verification(
+    attempts = qemu.run_repeated_verification(
         args.runs,
         verify_once,
         clock=time.monotonic,
