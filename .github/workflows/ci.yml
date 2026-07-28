@@ -71,24 +71,15 @@ jobs:
       - name: Run ${{ matrix.lane }} lane
         run: scripts/nova ci ${{ matrix.lane }}
 
-      - name: Upload runtime failure evidence
-        if: failure() && matrix.lane == 'runtime'
+      # The lane collects its own evidence, so this names one directory
+      # instead of a build-tree layout that rots when the harness moves.
+      - name: Upload failure evidence
+        if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: demo-artifacts
-          path: |
-            build/demo-failures/
-            build/qemu-tfa-firmware/smoke.log
-            build/qemu-tfa-firmware/*.json
-            build/demo/**/*.bin
-            build/demo/**/*.elf
-            build/aarch64-debug/novavisor.elf
-            build/aarch64-debug/active_config.yml
-            build/aarch64-debug/active_payloads.yml
-            build/aarch64-debug/guest_dtb/*.dtb
-            build/aarch64-standard-release/novavisor.elf
-            build/aarch64-n1sdp-release/novavisor.elf
-            build/aarch64-n1sdp-release/active_payloads.yml
+          name: ${{ matrix.lane }}-evidence
+          path: build/ci-evidence/
+          retention-days: 7
           if-no-files-found: ignore
 
   ci:

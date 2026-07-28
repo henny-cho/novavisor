@@ -15,7 +15,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 from novakit.commands import check, ci  # noqa: E402
 from novakit.core import config, proc  # noqa: E402
-from novakit.services import cmake  # noqa: E402
+from novakit.services import cmake, report  # noqa: E402
 
 
 class BuildTests(unittest.TestCase):
@@ -97,33 +97,52 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("{host,static,runtime,all}", result.stdout)
 
-    def test_ci_all_dispatches_each_lane_once(self):
+    def test_lane_steps_are_uniquely_named(self):
+        # A step name is what the CI summary reports and what a failure is
+        # attributed to, so two steps may never share one.
+        names = [f"{lane.name}/{step}" for lane in ci.LANES for step, _ in lane.steps]
+        self.assertEqual(sorted(names), sorted(set(names)))
+        self.assertEqual([lane.name for lane in ci.LANES], ["host", "static", "runtime"])
+
+    def test_ci_all_runs_every_lane_step_in_order(self):
         calls = []
+
+        def record(name, result=0):
+            return lambda *_args, **_kwargs: (calls.append(name), result)[1]
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
         with (
+            mock.patch.object(check, "format_sources", side_effect=record("format")),
+            mock.patch.object(check, "test", side_effect=record("tests")),
+            mock.patch.object(check, "static_analysis", side_effect=record("static")),
+            mock.patch.object(cmake, "build", side_effect=record("preset")),
+            mock.patch.object(cmake, "BuildSpec"),
+            mock.patch.object(ci.tfa, "build_profile", side_effect=record("bl33")),
             mock.patch.object(
-                check,
-                "format_sources",
-                side_effect=lambda **_kwargs: calls.append("format") or 0,
+                ci.firmware, "verify_chain", side_effect=record("firmware")
             ),
-            mock.patch.object(
-                check,
-                "test",
-                side_effect=lambda: calls.append("tests") or 0,
-            ),
-            mock.patch.object(
-                check,
-                "static_analysis",
-                side_effect=lambda: calls.append("static") or 0,
-            ),
-            mock.patch.object(
-                ci,
-                "runtime_checks",
-                side_effect=lambda: calls.append("runtime") or 0,
-            ),
+            mock.patch.object(ci.demo, "fetch_all", side_effect=record("fetch")),
+            mock.patch.object(ci.demo, "verify_all", side_effect=record("demos")),
+            mock.patch.object(ci.demo, "verify_one", side_effect=record("recheck")),
+            mock.patch.object(ci, "EVIDENCE", report.ArtifactPaths(Path(directory.name))),
         ):
             self.assertEqual(ci.run_lane("all"), 0)
 
-        self.assertEqual(calls, ["format", "tests", "static", "runtime"])
+        self.assertEqual(
+            calls,
+            [
+                "format",
+                "tests",
+                "static",
+                *["preset"] * len(ci.RUNTIME_PRESETS),
+                "bl33",
+                "firmware",
+                "fetch",
+                "demos",
+                *["recheck"] * len(ci.RUNTIME_RECHECK),
+            ],
+        )
 
     @mock.patch("novakit.commands.ci.shutil.which", return_value="/usr/bin/ccache")
     @mock.patch("novakit.core.proc.run")
