@@ -70,4 +70,4 @@ jobs:
           name: soak-${{ matrix.target }}-${{ github.run_id }}
           retention-days: 14
           if-no-files-found: error
-          path: build/soak-${{ matrix.target }}/
+          path: ${{ env.SOAK_DIR }}/

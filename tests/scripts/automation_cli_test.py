@@ -113,6 +113,10 @@ class CliTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         with (
+            # run_lane publishes a step summary. Under Actions this test runs
+            # inside a real lane, so leaving the variable set appends a table
+            # of mocked steps to the job summary of the lane that ran it.
+            mock.patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": ""}),
             mock.patch.object(check, "format_sources", side_effect=record("format")),
             mock.patch.object(check, "test", side_effect=record("tests")),
             mock.patch.object(check, "static_analysis", side_effect=record("static")),

@@ -9,13 +9,12 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
-import os
 import shutil
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from ..core import board, config, proc
+from ..core import actions, board, config, proc
 from .expect import FailureKind, RepeatAttempt, VerificationResult
 
 
@@ -131,11 +130,8 @@ def append_github_summary(
     """Publish the soak result to the GitHub Actions step summary.
 
     The harness already knows the pass rate, so workflows never post-process
-    the CSV. No-op outside Actions (GITHUB_STEP_SUMMARY unset).
+    the CSV.
     """
-    target = os.environ.get("GITHUB_STEP_SUMMARY")
-    if not target:
-        return
     passed = sum(1 for attempt in attempts if attempt.ok)
     total = len(attempts)
     rate = 100.0 * passed / total if total else 0.0
@@ -148,8 +144,7 @@ def append_github_summary(
     ]
     if summary_csv is not None and summary_csv.exists():
         lines += ["```csv", summary_csv.read_text().rstrip("\n"), "```"]
-    with open(target, "a", encoding="utf-8") as stream:
-        stream.write("\n".join(lines) + "\n")
+    actions.step_summary(*lines)
 
 
 def _first_line(cmd: list[str]) -> str:

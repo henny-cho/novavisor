@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 
-from ..core import config, proc
+from ..core import actions, config, proc
 from ..services import cmake, report, tfa
 from . import check, demo, firmware
 
@@ -94,30 +92,34 @@ LANES = (
 BY_NAME = {lane.name: lane for lane in LANES}
 
 
+def _ccache_stats() -> tuple[str, ...]:
+    """The compiler-cache block of the summary, empty when ccache is absent."""
+    ccache = shutil.which("ccache", path=config.command_env().get("PATH"))
+    if ccache is None:
+        return ()
+    stats = proc.run([ccache, "--show-stats"], capture=True, check=False)
+    if stats.returncode != 0:
+        return ()
+    return (
+        "<details><summary>ccache</summary>",
+        "",
+        "```text",
+        stats.stdout.rstrip("\n"),
+        "```",
+        "</details>",
+    )
+
+
 def _append_summary(lane: str, steps: list[tuple[str, str, float]]) -> None:
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if not summary:
-        return
-    lines = [
+    actions.step_summary(
         f"## nova ci {lane}",
         "",
         "| Step | Result | Seconds |",
         "| --- | --- | ---: |",
         *(f"| {name} | {status} | {elapsed:.1f} |" for name, status, elapsed in steps),
         "",
-    ]
-    with Path(summary).open("a", encoding="utf-8") as output:
-        output.write("\n".join(lines))
-
-    ccache = shutil.which("ccache", path=config.command_env().get("PATH"))
-    if ccache is None:
-        return
-    stats = proc.run([ccache, "--show-stats"], capture=True, check=False)
-    if stats.returncode == 0:
-        with Path(summary).open("a", encoding="utf-8") as output:
-            output.write("\n<details><summary>ccache</summary>\n\n```text\n")
-            output.write(stats.stdout)
-            output.write("```\n</details>\n")
+        *_ccache_stats(),
+    )
 
 
 def run_lane(lane: str) -> int:

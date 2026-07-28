@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import os
 import sys
 import time
 from pathlib import Path
 
-from ..core import config, proc
+from ..core import actions, config, proc
 from ..image import abi
 from ..services import artifacts, cmake, expect, manifest, report, verify
 
@@ -18,7 +17,7 @@ def _sink(tail: Path | None) -> verify.Sink:
     # In Actions the uploaded log is the record, so streaming would double
     # every line in the job output; locally the live output is the point.
     return verify.Sink(
-        stream=None if os.environ.get("GITHUB_ACTIONS") == "true" else sys.stdout,
+        stream=None if actions.in_actions() else sys.stdout,
         tail=tail,
     )
 

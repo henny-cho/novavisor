@@ -89,6 +89,16 @@ class LayerTests(unittest.TestCase):
             ["core/proc.py", "image/dtb.py", "image/layout.py"],
         )
 
+    def test_only_core_actions_reads_the_workflow_environment(self):
+        # Three modules used to ask the environment whether this was CI, and
+        # two of them owned a copy of the step-summary append.
+        owners = [
+            path.relative_to(PACKAGE).as_posix()
+            for path in modules()
+            if "GITHUB_" in path.read_text()
+        ]
+        self.assertEqual(owners, ["core/actions.py"])
+
     def test_the_board_model_has_one_owner(self):
         owners = [
             path.relative_to(PACKAGE).as_posix()
