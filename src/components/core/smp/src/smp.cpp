@@ -110,7 +110,15 @@ extern "C" [[noreturn]] void novavisor_secondary(std::uint64_t cpu_index) noexce
     halt();
   }
 
-  gic::init_cpu();                     // redistributor + ICC
+  // A missing or unresponsive redistributor means this PE can never take
+  // an interrupt. Park before reporting online rather than joining the
+  // scheduler deaf: the primary panics on the same failure, and a core
+  // that says "online" but silently drops every IPI turns a GIC power or
+  // frame-discovery problem into a scheduler mystery.
+  if (!gic::init_cpu()) {
+    console::line("[smp] core ", console::Dec{cpu_index}, " no usable redistributor — parking\n");
+    halt();
+  }
   vgic::init_cpu();                    // ICH + maintenance PPI
   hyp_timer::init();                   // CNTHCTL/CNTVOFF/CNTHP
   soft_timer::init();                  // CNTHP PPI enable

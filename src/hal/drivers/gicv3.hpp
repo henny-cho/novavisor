@@ -7,6 +7,7 @@
 // bind it in their active/gicv3.hpp facade.
 
 #include "hal/arch/aarch64/cpu.hpp"
+#include "hal/timer.hpp"
 #include "nova/arch/gicv3/regs.h"
 #include "nova/arch/gicv3/spi.hpp"
 #include "nova/sync.hpp"
@@ -26,25 +27,36 @@ struct Gicv3 {
   // Register-write-pending polls carry a budget: on silicon RWP takes
   // real time (QEMU reports it always clear), and an unresponsive
   // distributor must surface as a diagnosable failure rather than a
-  // silent hang inside an IRQ handler.
-  static constexpr std::uint32_t kRwpBudget = 100'000;
+  // silent hang inside an IRQ handler. The budget is time, not
+  // iterations — a loop count is unrelated to the distributor's clock.
+  static constexpr std::uint64_t kRwpTimeoutUs = 10'000;
+
+  // The redistributor wake is the slower handshake of the two: it can
+  // involve a power domain coming up, not just a register settling.
+  static constexpr std::uint64_t kWakeTimeoutUs = 100'000;
 
   static auto wait_for_rwp() noexcept -> bool {
-    for (std::uint32_t budget = kRwpBudget; budget != 0U; --budget) {
+    timer::Budget budget{kRwpTimeoutUs};
+    for (;;) { // read before judging the budget: an already-clear RWP must not cost a poll
       if ((*mmio32(Config::kDistributorBase + NOVA_GICD_CTLR) & NOVA_GICD_CTLR_RWP) == 0U) {
         return true;
       }
+      if (budget.expired()) {
+        return false;
+      }
     }
-    return false;
   }
 
   static auto wait_for_redist_rwp(std::uintptr_t frame) noexcept -> bool {
-    for (std::uint32_t budget = kRwpBudget; budget != 0U; --budget) {
+    timer::Budget budget{kRwpTimeoutUs};
+    for (;;) {
       if ((*mmio32(frame + NOVA_GICR_CTLR) & NOVA_GICR_CTLR_RWP) == 0U) {
         return true;
       }
+      if (budget.expired()) {
+        return false;
+      }
     }
-    return false;
   }
 
   // GICR_TYPER packs Aff3 into bits 31:24 of the high word, while the
@@ -139,9 +151,13 @@ struct Gicv3 {
     }
     auto* const waker = mmio32(frame + NOVA_GICR_WAKER);
     *waker            = *waker & ~NOVA_GICR_WAKER_PROCESSOR_SLEEP;
-    bool awake        = false;
-    for (std::uint32_t budget = kRwpBudget; budget != 0U && !awake; --budget) {
+    timer::Budget budget{kWakeTimeoutUs};
+    bool          awake = false;
+    for (;;) {
       awake = (*waker & NOVA_GICR_WAKER_CHILDREN_ASLEEP) == 0U;
+      if (awake || budget.expired()) {
+        break;
+      }
     }
     if (!awake) {
       return false;

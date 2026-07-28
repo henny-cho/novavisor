@@ -5,6 +5,9 @@
 // PL011 UART driver, parameterized on the register base a board
 // supplies. Polled TX/RX only — the console needs no interrupts.
 
+#include "hal/drivers/pl011_regs.h"
+#include "hal/timer.hpp"
+
 #include <cstdint>
 #include <span>
 #include <string_view>
@@ -13,25 +16,37 @@ namespace nova::drivers {
 
 template <std::uintptr_t Base>
 struct Pl011 {
-  inline static constexpr std::uintptr_t kFlagOffset = 0x18;
-  inline static constexpr std::uintptr_t kMaskOffset = 0x38;
-  inline static constexpr std::uint32_t  kTxFull     = 1U << 5U;
-  inline static constexpr std::uint32_t  kRxEmpty    = 1U << 4U;
-  inline static constexpr std::uint32_t  kRxIrq      = 1U << 4U;
+  // Waiting for FIFO space is the one place the console can hang. A full
+  // 16-deep FIFO drains in ~1.4 ms at 115200 baud and ~17 ms at 9600, so
+  // the bound has to clear the slowest plausible console — while still
+  // ending, because an unclocked or disabled UART never drains and the
+  // alternative is a panic report that stops on its first character.
+  inline static constexpr std::uint64_t kTxTimeoutUs = 20'000;
 
-  // TX-full wait budget. At any real baud rate the FIFO drains orders
-  // of magnitude faster than this spin; the bound only breaks a dead
-  // or unclocked UART, where the alternative is a panic path that
-  // hangs on its first character instead of reaching the park.
-  inline static constexpr std::uint32_t kTxBudget = 1'000'000;
+  static auto reg(std::uintptr_t offset) noexcept -> volatile std::uint32_t* {
+    return reinterpret_cast<volatile std::uint32_t*>(Base + offset);
+  }
+
+  // Firmware normally hands the console over enabled, but "normally" is
+  // not a contract: a UART left disabled swallows every byte, and a board
+  // that swallows its own breadcrumbs is indistinguishable from a dead
+  // one. Baud rate stays with firmware — that needs a board clock this
+  // layer does not have — so this guarantees only that what we write
+  // leaves the device.
+  static void ensure_enabled() noexcept {
+    constexpr std::uint32_t kNeeded = NOVA_PL011_CR_UARTEN | NOVA_PL011_CR_TXE | NOVA_PL011_CR_RXE;
+    auto* const             control = reg(NOVA_PL011_CR);
+    if ((*control & kNeeded) != kNeeded) {
+      *control = *control | kNeeded;
+    }
+  }
 
   static void write(std::span<const std::uint8_t> data) noexcept {
-    auto* const       data_register = reinterpret_cast<volatile std::uint32_t*>(Base);
-    const auto* const flags         = reinterpret_cast<const volatile std::uint32_t*>(Base + kFlagOffset);
     for (const std::uint8_t byte : data) {
-      for (std::uint32_t budget = kTxBudget; (*flags & kTxFull) != 0U && budget != 0U; --budget) {
+      timer::Budget budget{kTxTimeoutUs};
+      while ((*reg(NOVA_PL011_FR) & NOVA_PL011_FR_TXFF) != 0U && !budget.expired()) {
       }
-      *data_register = byte;
+      *reg(NOVA_PL011_DR) = byte;
     }
   }
 
@@ -42,16 +57,15 @@ struct Pl011 {
   static void write(const char* text) noexcept { write(std::string_view{text}); }
 
   [[nodiscard]] static auto try_read() noexcept -> int {
-    const auto* const flags = reinterpret_cast<const volatile std::uint32_t*>(Base + kFlagOffset);
-    if ((*flags & kRxEmpty) != 0U) {
+    if ((*reg(NOVA_PL011_FR) & NOVA_PL011_FR_RXFE) != 0U) {
       return -1;
     }
-    return static_cast<int>(*reinterpret_cast<const volatile std::uint32_t*>(Base) & 0xFFU);
+    return static_cast<int>(*reg(NOVA_PL011_DR) & 0xFFU);
   }
 
   static void rx_irq_enable() noexcept {
-    auto* const mask = reinterpret_cast<volatile std::uint32_t*>(Base + kMaskOffset);
-    *mask            = *mask | kRxIrq;
+    auto* const mask = reg(NOVA_PL011_IMSC);
+    *mask            = *mask | NOVA_PL011_IMSC_RX;
   }
 };
 

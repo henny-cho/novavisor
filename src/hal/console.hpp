@@ -18,6 +18,13 @@
 
 namespace nova::console {
 
+// Guarantee the device will emit what we write before the first line
+// leaves. Firmware usually hands the console over enabled; a board that
+// swallows its own output looks dead, so this does not rely on usually.
+inline void ensure_enabled() noexcept {
+  board::active::Uart::ensure_enabled();
+}
+
 // The UART is one shared FIFO. Use write_parts for atomic multi-fragment lines.
 inline sync::SpinLock g_lock;
 
