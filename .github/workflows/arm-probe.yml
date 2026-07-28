@@ -1,0 +1,79 @@
+name: ARM Runner Probe
+
+# Temporary experiment, dispatch only: does an arm64 runner offer KVM, and is
+# an AArch64 guest under TCG faster there than on an amd64 runner?
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  capabilities:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+          - arch: amd64
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - name: Host capabilities
+        run: |
+          echo "== uname =="; uname -m
+          echo "== nproc / memory =="; nproc; free -g | head -2
+          echo "== /dev/kvm =="; ls -l /dev/kvm 2>&1 || echo "absent"
+          echo "== cpu =="; lscpu | grep -E "Model name|Vendor|Flags|Features" | cut -c1-200
+          echo "== virt =="; lscpu | grep -iE "virtual|hypervisor" | cut -c1-200 || true
+          echo "== kvm dmesg =="; sudo dmesg | grep -iE "kvm|hyp mode|EL2" | head -10 || true
+
+      - name: QEMU accelerators for our machine model
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends qemu-system-arm >/dev/null
+          qemu-system-aarch64 --version | head -1
+          echo "== accel list =="
+          qemu-system-aarch64 -accel help || true
+          echo "== virt + virtualization=on under kvm (NovaVisor needs EL2) =="
+          timeout 20 qemu-system-aarch64 \
+            -machine virt,virtualization=on,gic-version=3,accel=kvm \
+            -cpu host -smp 2 -m 512 -nographic -nic none 2>&1 | head -5 || true
+          echo "== same model under tcg =="
+          timeout 20 qemu-system-aarch64 \
+            -machine virt,virtualization=on,gic-version=3,accel=tcg \
+            -cpu cortex-a57 -smp 2 -m 512 -nographic -nic none 2>&1 | head -5 || true
+
+  runtime_timing:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+          - arch: amd64
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    container:
+      image: ghcr.io/henny-cho/novavisor-toolchain@sha256:c2808b0aae9f4c64fb7b803fcd9eedd964cd806b89de1d38c4cc13b942f84c4e
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/lane
+        with:
+          name: runtime
+
+      - name: Run the runtime lane
+        run: scripts/nova ci runtime
