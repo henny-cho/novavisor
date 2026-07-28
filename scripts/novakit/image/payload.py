@@ -1,16 +1,13 @@
-#!/usr/bin/env python3
-"""Create a checksum-pinned payload manifest for a platform build."""
+"""One payload record: the binary, its digest, and where it is placed.
+
+A library, not a program: the build graph never runs this, it is the shape
+that services/artifacts.py and services/tfa.py write manifests from.
+"""
 
 from __future__ import annotations
 
-import argparse
 import hashlib
-import json
 from pathlib import Path
-
-
-def integer(value: str) -> int:
-    return int(value, 0)
 
 
 def make_record(
@@ -37,37 +34,3 @@ def make_record(
         "entry": entry,
         "memory_size": memory_size,
     }
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--guest", type=int, default=0)
-    parser.add_argument("--name", default="guest")
-    parser.add_argument("--load-pa", type=integer, required=True)
-    parser.add_argument("--entry", type=integer, required=True)
-    parser.add_argument("--memory-size", type=integer, required=True)
-    args = parser.parse_args()
-
-    try:
-        record = make_record(
-            args.binary,
-            guest=args.guest,
-            name=args.name,
-            load_pa=args.load_pa,
-            entry=args.entry,
-            memory_size=args.memory_size,
-        )
-    except (OSError, ValueError) as error:
-        parser.error(str(error))
-
-    content = f"{json.dumps({'payloads': [record]}, indent=2)}\n"
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    if not args.output.exists() or args.output.read_text() != content:
-        args.output.write_text(content)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
