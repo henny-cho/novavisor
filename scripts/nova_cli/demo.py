@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import shutil
 import sys
@@ -9,8 +10,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config, demo_build as build, manifest, process, report
-from . import qemu
+from . import config, manifest, process, qemu, report
+from . import demo_build as build
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ def prepare_verification(
     *,
     demo_build: Path | None = None,
     elf_snapshot: Path | None = None,
+    preset: str | None = None,
 ) -> PreparedVerification:
     label = name if "name" not in variant else f"{name}[{variant['name']}]"
     forbidden_patterns = manifest.manifest_pattern_list(demo_manifest, "forbid")
@@ -39,7 +41,7 @@ def prepare_verification(
     if demo_build is None:
         demo_build = build.build_demos()
     payloads = build.prepare_payload_manifest(name, demo_build, demo_manifest)
-    elf = build.build_hypervisor(variant.get("config"), payloads)
+    elf = build.build_hypervisor(variant.get("config"), payloads, preset)
     if elf_snapshot is not None:
         elf_snapshot.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(elf, elf_snapshot)
@@ -107,7 +109,12 @@ def run_prepared_verification(
     return 0
 
 
-def verify(name: str, artifacts: report.ArtifactPaths | None = None) -> int:
+def verify(
+    name: str,
+    artifacts: report.ArtifactPaths | None = None,
+    *,
+    preset: str | None = None,
+) -> int:
     _, demo_manifest = manifest.load_manifest(name)
     if not demo_manifest.get("enabled", False):
         print(f"[nova demo] SKIP {name} (manifest.enabled=false)")
@@ -120,7 +127,7 @@ def verify(name: str, artifacts: report.ArtifactPaths | None = None) -> int:
     for index, variant in enumerate(manifest.manifest_variants(demo_manifest), start=1):
         failure_tail = None if artifacts is None else artifacts.verify_tail(name, index)
         rc = run_prepared_verification(
-            prepare_verification(name, demo_manifest, variant),
+            prepare_verification(name, demo_manifest, variant, preset=preset),
             failure_tail,
         )
         if rc != 0:
@@ -144,20 +151,24 @@ def cmd_build(_args) -> int:
     return 0
 
 
+def fetch_all() -> int:
+    names = [
+        name
+        for name, demo_manifest in manifest.iter_demos()
+        if demo_manifest.get("enabled", False)
+        and (config.DEMO_DIR / name / "fetch.sh").exists()
+    ]
+    for name in names:
+        result = process.call(["bash", str(config.DEMO_DIR / name / "fetch.sh")])
+        if result != 0:
+            return result
+    print(f"[nova demo] fetched {len(names)} demo image set(s).")
+    return 0
+
+
 def cmd_fetch(args) -> int:
-    # Delegate to the demo's own fetch.sh (pinned versions, idempotent
-    # caching into external/cache/guests/<demo>/ live there).
     if args.all:
-        # Every enabled demo with an external image recipe — the single
-        # source for what CI must fetch before verify-all.
-        names = [name for name, mf in manifest.iter_demos()
-                 if mf.get("enabled", False) and (config.DEMO_DIR / name / "fetch.sh").exists()]
-        for name in names:
-            rc = process.call(["bash", str(config.DEMO_DIR / name / "fetch.sh")])
-            if rc != 0:
-                return rc
-        print(f"[nova demo] fetched {len(names)} demo image set(s).")
-        return 0
+        return fetch_all()
     if args.name is None:
         sys.exit("nova demo: fetch requires a demo id/name or --all")
     script = config.DEMO_DIR / args.name / "fetch.sh"
@@ -235,7 +246,7 @@ def cmd_verify(args) -> int:
     return verify(args.name, report.ArtifactPaths.from_arg(args.artifacts))
 
 
-def cmd_verify_repeat(args) -> int:
+def cmd_soak(args) -> int:
     _, demo_manifest = manifest.load_manifest(args.name)
     if not demo_manifest.get("enabled", False):
         print(f"[nova demo] SKIP {args.name} (manifest.enabled=false)")
@@ -298,22 +309,23 @@ def cmd_verify_repeat(args) -> int:
     return 0 if passed == len(attempts) else 1
 
 
-def cmd_verify_all(args) -> int:
+def verify_all(
+    artifacts: report.ArtifactPaths | None = None,
+    *,
+    preset: str | None = None,
+) -> int:
     demos = manifest.iter_demos()
     enabled = [(n, m) for n, m in demos if m.get("enabled", False)]
     if not enabled:
         print("[nova demo] no enabled demos; nothing to verify.")
         return 0
 
-    artifacts = report.ArtifactPaths.from_arg(args.artifacts)
-
-    # Build once up front so per-demo failures don't keep rebuilding.
-    build.build_hypervisor()
+    build.build_hypervisor(preset=preset)
     build.build_demos()
 
     failures = []
     for name, _mf in enabled:
-        rc = verify(name, artifacts)
+        rc = verify(name, artifacts, preset=preset)
         if rc != 0:
             failures.append(name)
     if failures:
@@ -322,6 +334,10 @@ def cmd_verify_all(args) -> int:
         return 1
     print(f"\n[nova demo] all {len(enabled)} demo(s) passed.")
     return 0
+
+
+def cmd_verify_all(args) -> int:
+    return verify_all(report.ArtifactPaths.from_arg(args.artifacts))
 
 
 def register(subcommands) -> None:
@@ -355,18 +371,25 @@ def register(subcommands) -> None:
     verify.add_argument("--artifacts", metavar="DIR")
     verify.set_defaults(handler=cmd_verify)
 
-    repeat = operations.add_parser("verify-repeat", help="repeat one verification")
-    repeat.add_argument("name", **demo_arg)
-    repeat.add_argument(
-        "--runs",
-        type=int,
-        required=True,
-        choices=range(1, 101),
-        metavar="N",
-    )
-    repeat.add_argument("--summary", metavar="CSV")
-    repeat.add_argument("--artifacts", metavar="DIR")
-    repeat.set_defaults(handler=cmd_verify_repeat)
+    def add_soak_parser(name: str, *, hidden: bool = False) -> None:
+        soak = operations.add_parser(
+            name,
+            help=argparse.SUPPRESS if hidden else "repeat one verification",
+        )
+        soak.add_argument("name", **demo_arg)
+        soak.add_argument(
+            "--runs",
+            type=int,
+            required=True,
+            choices=range(1, 101),
+            metavar="N",
+        )
+        soak.add_argument("--summary", metavar="CSV")
+        soak.add_argument("--artifacts", metavar="DIR")
+        soak.set_defaults(handler=cmd_soak)
+
+    add_soak_parser("soak")
+    add_soak_parser("verify-repeat", hidden=True)
 
     verify_all = operations.add_parser("verify-all", help="verify enabled demos")
     verify_all.add_argument("--artifacts", metavar="DIR")

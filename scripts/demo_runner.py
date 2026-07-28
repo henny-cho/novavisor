@@ -7,5 +7,4 @@ import sys
 
 from nova_cli.cli import main
 
-
 raise SystemExit(main(["demo", *sys.argv[1:]]))

@@ -9,7 +9,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 from nova_cli import config as settings  # noqa: E402
@@ -75,6 +74,15 @@ class DemoRunnerVerificationTest(unittest.TestCase):
             timeout_error=FakeTimeout,
             eof_error=FakeEof,
         )
+
+    @mock.patch.object(build.core_build, "build")
+    def test_hypervisor_build_accepts_an_explicit_profile(self, build_target):
+        build_target.return_value = Path("/tmp/novavisor.elf")
+
+        build.build_hypervisor(preset="aarch64-standard-release")
+
+        spec = build_target.call_args.args[0]
+        self.assertEqual(spec.preset, "aarch64-standard-release")
 
     def test_qemu_command_uses_stable_low_ecam_and_manifest_devices(self):
         command = build.build_qemu_cmd(

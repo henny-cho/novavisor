@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from . import build, checks, config, demo, firmware, process
+from . import build, checks, demo, firmware
 
 
 def _add_build_options(parser: argparse.ArgumentParser, *, allow_clean: bool = True) -> None:
@@ -48,14 +48,8 @@ def _test(_args) -> int:
     return checks.test()
 
 
-def _legacy(args) -> int:
-    return process.call(
-        [
-            str(config.SCRIPTS / "task_legacy.sh"),
-            args.legacy_command,
-            *args.arguments,
-        ]
-    )
+def _ci(args) -> int:
+    return checks.ci(args.lane)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -100,10 +94,9 @@ def parser() -> argparse.ArgumentParser:
     demo.register(sub)
     firmware.register(sub)
 
-    for command in ("ci",):
-        legacy_parser = sub.add_parser(command, add_help=False)
-        legacy_parser.add_argument("arguments", nargs=argparse.REMAINDER)
-        legacy_parser.set_defaults(handler=_legacy, legacy_command=command)
+    ci_parser = sub.add_parser("ci", help="run a local CI lane")
+    ci_parser.add_argument("lane", choices=(*checks.CI_LANES, "all"))
+    ci_parser.set_defaults(handler=_ci)
 
     return root
 

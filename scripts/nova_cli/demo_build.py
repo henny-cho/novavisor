@@ -9,8 +9,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from . import build as core_build
 from . import config, process, qemu
@@ -22,6 +22,7 @@ _make_record = None
 def build_hypervisor(
     guest_config: str | None = None,
     payloads: Path | None = None,
+    preset: str | None = None,
 ) -> Path:
     # A no-change Ninja rebuild is nearly free, while skipping on ELF
     # existence would verify against a stale binary after source edits.
@@ -40,7 +41,7 @@ def build_hypervisor(
 
     return core_build.build(
         core_build.BuildSpec(
-            preset=config.HV_PRESET,
+            preset=preset or config.HV_PRESET,
             config_path=cfg,
             payloads_path=payload_manifest,
         )

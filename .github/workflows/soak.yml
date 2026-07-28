@@ -1,23 +1,19 @@
-# Nightly recovery soaks. One workflow, one matrix entry per soak target —
-# the per-attempt summary and failure evidence are produced by the demo
-# harness itself (verify-repeat --artifacts), so a job only restores caches,
-# runs the soak, and uploads one directory.
 name: Recovery Soak
 
 on:
   schedule:
-    # 03:17 KST. Offset from the hour to avoid peak shared-runner demand.
     - cron: "17 18 * * *"
   workflow_dispatch:
     inputs:
       runs:
-        description: Recovery attempts per target (empty = per-target default)
+        description: Recovery attempts per target
         required: false
         default: ""
         type: string
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   soak:
@@ -39,39 +35,39 @@ jobs:
       group: soak-${{ matrix.target }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout }}
     container:
-      image: ubuntu:26.04
+      image: ghcr.io/henny-cho/novavisor-toolchain@sha256:3f3b10be1424abf99b04d6d3a9fc0c8253252f750b3d8e1db4cadd9ac3609078
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         shell: bash
-    timeout-minutes: ${{ matrix.timeout }}
     env:
       SOAK_DIR: build/soak-${{ matrix.target }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: ./.github/actions/setup-target
+      - uses: ./.github/actions/cache-build
         with:
+          lane: soak-${{ matrix.target }}
           guests: ${{ matrix.fetch }}
-          ccache-prefix: ccache-soak-${{ matrix.target }}
 
       - name: Fetch external guest images
         if: matrix.fetch == 'true'
-        run: scripts/task.sh demo fetch ${{ matrix.demo }}
+        run: scripts/nova demo fetch ${{ matrix.demo }}
 
-      - name: Repeat recovery
-        # The harness writes the per-attempt CSV, the GitHub step summary,
-        # and (on failure) the QEMU tails, diagnostics, and build evidence
-        # into ${SOAK_DIR}.
+      - name: Run recovery soak
         run: |
-          scripts/task.sh demo verify-repeat ${{ matrix.demo }} \
+          scripts/nova demo soak ${{ matrix.demo }} \
             --runs "${{ inputs.runs || matrix.default-runs }}" \
             --summary "${SOAK_DIR}/summary.csv" \
             --artifacts "${SOAK_DIR}"
 
       - name: Upload failure evidence
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: soak-${{ matrix.target }}-${{ github.run_id }}
           retention-days: 14

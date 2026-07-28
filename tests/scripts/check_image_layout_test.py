@@ -2,7 +2,6 @@ import importlib.util
 import unittest
 from pathlib import Path
 
-
 REPO = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
     "check_image_layout", REPO / "tools/check_image_layout.py"

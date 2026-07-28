@@ -6,131 +6,91 @@ on:
   pull_request:
     branches: ["main"]
 
-# A newer push to the same branch or PR supersedes the in-flight run.
+permissions:
+  contents: read
+  packages: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Fast-feedback lane: formatting + native GTest suite. Needs neither the
-  # ARM toolchain nor QEMU, so it reports within a couple of minutes.
   host:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Cache CPM packages
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: external/cache/cpm
-          # Dependency pins live in CMakeLists.txt AND cmake/ (get_cpm.cmake,
-          # cib_cpm_pin.cmake), so both must key the cache.
           key: cpm-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake') }}
           restore-keys: cpm-
 
-      - name: Install dependencies
-        # The distro clang-format (v18 on noble) disagrees with the pinned
-        # v20 on wrapping rules; install the pinned version via pipx.
+      - name: Install formatter
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y cmake ninja-build
           source scripts/tool-versions.env
           pipx install "clang-format==${CLANG_FORMAT_VERSION}"
 
-      - name: Check formatting
-        run: scripts/task.sh format --check
+      - name: Run host lane
+        run: scripts/nova ci host
 
-      - name: Host unit tests
-        run: scripts/task.sh test
-
-  # Cross lane: Release build, clang-tidy, and QEMU demo verification.
   target:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: static
+            guests: "false"
+            firmware: "false"
+            timeout: 20
+          - lane: runtime
+            guests: "true"
+            firmware: "true"
+            timeout: 40
     runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout }}
     container:
-      image: ubuntu:26.04
+      image: ghcr.io/henny-cho/novavisor-toolchain@sha256:3f3b10be1424abf99b04d6d3a9fc0c8253252f750b3d8e1db4cadd9ac3609078
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         shell: bash
-    # The mixed-criticality demo alone boots Linux twice under TCG.
-    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: ./.github/actions/setup-target
+      - uses: ./.github/actions/cache-build
         with:
-          guests: "true"
-          firmware: "true"
+          lane: ${{ matrix.lane }}
+          guests: ${{ matrix.guests }}
+          firmware: ${{ matrix.firmware }}
 
-      - name: Build (Release)
-        run: scripts/task.sh build --release
+      - name: Run ${{ matrix.lane }} lane
+        run: scripts/nova ci ${{ matrix.lane }}
 
-      - name: Build minimal platform profile
-        run: scripts/task.sh build --preset aarch64-minimal-release
-
-      - name: Build standard platform profile
-        run: scripts/task.sh build --preset aarch64-standard-release
-
-      - name: Build N1SDP payload profile
-        run: scripts/nova firmware profile n1sdp
-
-      - name: QEMU TF-A chain smoke
-        # Boots BL1 -> BL2 -> BL31 -> BL33 and matches five ordered
-        # handoff markers. This used to compile the BL33 profile and stop
-        # (--profile-only), which is why the gate could sit broken from
-        # Phase 25e until Phase 26b noticed: a smoke that never executes
-        # verifies nothing. ~30 s with the firmware cache warm.
-        run: scripts/nova firmware verify qemu-tfa
-
-      - name: Lint
-        # run-clang-tidy over the debug tree's compile database; the debug
-        # objects are reused by the demo step below.
-        run: scripts/task.sh lint
-
-      - name: Fetch external guest images
-        # Idempotent: no-op on a guest-cache hit, source build on a miss
-        # (the workspaces themselves are disposable and never cached).
-        # The demo list is derived from the manifests (enabled + fetch.sh).
-        run: scripts/task.sh demo fetch --all
-
-      - name: Demo verification (enabled demos only)
-        # Each completed phase flips its demo's `enabled` flag to true,
-        # making this step the phase's acceptance gate.
-        run: scripts/task.sh demo verify-all --artifacts build/demo-failures
-
-      - name: Demo verification (standard profile)
-        # The composition real-board bring-up runs before its IOMMU is
-        # characterized. Compiling it is not enough — these four cover
-        # what it adds over minimal (lifecycle/watchdog, physical SMP,
-        # guest SMP, vuart/console mux) and are the fast ones, so the
-        # tier is exercised without re-running the OS boots.
-        env:
-          NOVA_HV_PRESET: aarch64-standard-release
-        run: |
-          for id in 7 8 9 10; do
-            scripts/task.sh demo verify "$id" --artifacts build/demo-failures
-          done
-
-      - name: Upload demo artifacts on failure
-        if: failure()
-        uses: actions/upload-artifact@v7
+      - name: Upload runtime failure evidence
+        if: failure() && matrix.lane == 'runtime'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: demo-artifacts
           path: |
             build/demo-failures/
             build/qemu-tfa-firmware/smoke.log
+            build/qemu-tfa-firmware/*.json
             build/demo/**/*.bin
             build/demo/**/*.elf
             build/aarch64-debug/novavisor.elf
             build/aarch64-debug/active_config.yml
             build/aarch64-debug/active_payloads.yml
             build/aarch64-debug/guest_dtb/*.dtb
+            build/aarch64-standard-release/novavisor.elf
             build/aarch64-n1sdp-release/novavisor.elf
             build/aarch64-n1sdp-release/active_payloads.yml
           if-no-files-found: ignore
 
-  # Aggregate gate: one stable status-check name for branch protection,
-  # independent of how the jobs above are split or renamed.
   ci:
     if: always()
     needs: [host, target]

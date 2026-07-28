@@ -1,10 +1,9 @@
-import importlib.util
 import hashlib
+import importlib.util
 import tempfile
 import unittest
 import zlib
 from pathlib import Path
-
 
 REPO = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("yml2dtb", REPO / "tools/yml2dtb/yml2dtb.py")

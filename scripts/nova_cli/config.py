@@ -6,7 +6,6 @@ import os
 import re
 from pathlib import Path
 
-
 REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "scripts"
 BUILD_ROOT = REPO / "build"

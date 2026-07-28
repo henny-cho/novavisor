@@ -5,7 +5,6 @@ import textwrap
 import unittest
 from pathlib import Path
 
-
 REPO = Path(__file__).resolve().parents[2]
 CHECKER_PATH = REPO / "tools" / "check_platform_boundaries.py"
 SPEC = importlib.util.spec_from_file_location("platform_boundaries", CHECKER_PATH)

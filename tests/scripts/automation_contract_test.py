@@ -7,7 +7,6 @@ import subprocess
 import unittest
 from pathlib import Path
 
-
 REPO = Path(__file__).resolve().parents[2]
 TASK = REPO / "scripts" / "task.sh"
 NOVA = REPO / "scripts" / "nova"
@@ -65,6 +64,7 @@ class PublicCommandContractTest(unittest.TestCase):
             "fetch",
             "run",
             "verify",
+            "soak",
             "verify-repeat",
             "verify-all",
             "debug",

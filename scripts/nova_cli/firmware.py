@@ -13,7 +13,6 @@ from pathlib import Path
 
 from . import build, config, demo_build, process, qemu, report
 
-
 TFA_REPOSITORY = "https://github.com/ARM-software/arm-trusted-firmware.git"
 
 
