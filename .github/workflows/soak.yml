@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ matrix.timeout }}
     container:
-      image: ghcr.io/henny-cho/novavisor-toolchain@sha256:3c8ebdfb73815f66abae13dd218c3921fc6dbdff3ea22784c9af32f4b62e2614
+      image: ghcr.io/henny-cho/novavisor-toolchain@sha256:c2808b0aae9f4c64fb7b803fcd9eedd964cd806b89de1d38c4cc13b942f84c4e
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -46,6 +46,8 @@ jobs:
       SOAK_DIR: build/soak-${{ matrix.target }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: ./.github/actions/lane
         with:
@@ -70,4 +72,4 @@ jobs:
           name: soak-${{ matrix.target }}-${{ github.run_id }}
           retention-days: 14
           if-no-files-found: error
-          path: build/soak-${{ matrix.target }}/
+          path: ${{ env.SOAK_DIR }}/

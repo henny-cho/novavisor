@@ -89,6 +89,49 @@ class LayerTests(unittest.TestCase):
             ["core/proc.py", "image/dtb.py", "image/layout.py"],
         )
 
+    def test_no_command_imports_a_command(self):
+        # DEPTH only orders the layers, so a sibling import inside the top one
+        # was unchecked: the lane table reached into three command modules for
+        # steps whose logic therefore served two consumers from the top layer.
+        for path in modules():
+            if layer_of(path) != "commands":
+                continue
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.ImportFrom) and node.level == 1:
+                    siblings = [alias.name for alias in node.names]
+                    with self.subTest(module=path.name):
+                        self.assertEqual(siblings, [])
+
+    def test_the_repository_root_has_one_owner(self):
+        # parents[3] is an assumption about how deep the package sits, so
+        # deriving it per module made moving the package a three-file edit.
+        owners = [
+            path.relative_to(PACKAGE).as_posix()
+            for path in modules()
+            if "parents[3]" in path.read_text()
+        ]
+        self.assertEqual(owners, ["core/config.py"])
+
+    def test_only_the_programs_the_build_graph_runs_have_an_entrypoint(self):
+        # A __main__ block claims something invokes this module as a program.
+        # Two modules claimed it with no caller in CMake, a workflow or a hook.
+        programs = [
+            path.relative_to(PACKAGE).as_posix()
+            for path in modules()
+            if "__main__" in path.read_text()
+        ]
+        self.assertEqual(programs, ["image/dtb.py", "image/layout.py"])
+
+    def test_only_core_actions_reads_the_workflow_environment(self):
+        # Three modules used to ask the environment whether this was CI, and
+        # two of them owned a copy of the step-summary append.
+        owners = [
+            path.relative_to(PACKAGE).as_posix()
+            for path in modules()
+            if "GITHUB_" in path.read_text()
+        ]
+        self.assertEqual(owners, ["core/actions.py"])
+
     def test_the_board_model_has_one_owner(self):
         owners = [
             path.relative_to(PACKAGE).as_posix()

@@ -1,4 +1,9 @@
-"""Trusted Firmware-A: the pinned source, the build, and the packaged images."""
+"""Trusted Firmware-A: the pinned source, the build, the images, the chain.
+
+Two consumers verify a chain — the `firmware verify` command and the CI
+runtime lane — so the handoff a real BL1 -> BL2 -> BL31 -> BL33 must show
+lives here with the images it boots.
+"""
 
 from __future__ import annotations
 
@@ -8,9 +13,9 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..core import config, proc
+from ..core import board, config, proc
 from ..image.payload import make_record
-from . import artifacts, cmake
+from . import artifacts, cmake, expect, verify
 
 REPOSITORY = "https://github.com/ARM-software/arm-trusted-firmware.git"
 
@@ -199,3 +204,51 @@ def package_n1sdp(payload: Path, output_dir: Path) -> Path:
         shutil.copyfile(fip, package)
     print(f"N1SDP firmware package: {package}")
     return package
+
+
+# What a real BL1 -> BL2 -> BL31 -> BL33 handoff must print, in order: the
+# firmware banner, then the hypervisor reaching the same guest exit the
+# -kernel path reaches.
+CHAIN_MARKERS = (
+    "BL31: v",
+    "NovaVisor booted",
+    "core 1 online",
+    "Hello from EL1 guest",
+    "demo_exit code=0",
+)
+CHAIN_TIMEOUT = 120
+
+
+def _chain_scenario(flash: Path) -> expect.Scenario:
+    return expect.Scenario(
+        label="qemu-tfa chain handoff",
+        phase="firmware",
+        command=tuple(board.command(bios=flash, secure=True)),
+        timeout_seconds=CHAIN_TIMEOUT,
+        expectations=tuple(
+            {"pattern": marker, "within_seconds": CHAIN_TIMEOUT}
+            for marker in CHAIN_MARKERS
+        ),
+    )
+
+
+def verify_chain(
+    *,
+    build_only: bool,
+    payload: Path | None = None,
+    output_dir: Path | None = None,
+) -> int:
+    output = (output_dir or config.BUILD_ROOT / "qemu-tfa-firmware").resolve()
+    payload = build_profile("qemu-tfa") if payload is None else payload
+    flash = package_qemu(payload, output)
+    if build_only:
+        return 0
+
+    diagnostics = output / "smoke.diagnostics.json"
+    diagnostics.unlink(missing_ok=True)
+    with (output / "smoke.log").open("w", encoding="utf-8") as log:
+        return verify.run_scenario(
+            _chain_scenario(flash),
+            verify.Sink(stream=log, diagnostics=diagnostics),
+            scope="nova firmware",
+        )

@@ -43,7 +43,7 @@ def build_demos() -> Path:
     return demo_build
 
 
-def resolve_guest_binary(demo_name: str, demo_build: Path, manifest: dict, spec: dict) -> Path:
+def resolve_guest_binary(demo_name: str, demo_build: Path, spec: dict) -> Path:
     # Search order: custom-built demo artifacts, then external cache for
     # prebuilt/reference images (Zephyr, Linux).
     candidates = [
@@ -75,7 +75,7 @@ def prepare_payload_manifest(
 
     records = []
     for index, guest in enumerate(manifest.get("guests", [])):
-        binary = resolve_guest_binary(demo_name, demo_build, manifest, guest)
+        binary = resolve_guest_binary(demo_name, demo_build, guest)
         try:
             records.append(make_record(
                 binary,
@@ -111,7 +111,7 @@ def build_qemu_cmd(elf: Path, demo_name: str, demo_build: Path, manifest: dict) 
         # The payloads travel inside the ELF; QEMU loads nothing extra.
         return cmd
     for guest in manifest.get("guests", []):
-        binary = resolve_guest_binary(demo_name, demo_build, manifest, guest)
+        binary = resolve_guest_binary(demo_name, demo_build, guest)
         cmd += ["-device", f"loader,file={binary},addr={guest['load_addr']:#x},force-raw=on"]
     return cmd
 

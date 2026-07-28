@@ -14,7 +14,8 @@ import re
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[3]
+from ..core.config import REPO
+
 GUEST_LAYOUT = REPO / "src" / "nova" / "abi" / "guest_layout.h"
 
 

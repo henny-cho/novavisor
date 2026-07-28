@@ -1,12 +1,9 @@
-#!/usr/bin/env python3
 """Reject board-specific references and facade bypasses from reusable trees."""
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[3]
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".h", ".hpp", ".py", ".S"}
 BOARD_ROOT = Path("src/hal/board")
 # Programs the build graph runs are generic too: a generator that names a
@@ -119,13 +116,3 @@ def check(root: Path) -> int:
         return 1
     print("platform boundary check passed")
     return 0
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=REPO)
-    return check(parser.parse_args().root.resolve())
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
