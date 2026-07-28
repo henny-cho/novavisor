@@ -11,7 +11,7 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from nova_cli import firmware, qemu  # noqa: E402
+from novakit import firmware, qemu  # noqa: E402
 
 
 class QemuCommandTests(unittest.TestCase):

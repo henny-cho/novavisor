@@ -1,4 +1,4 @@
-# Generator input for tools/yml2dtb: plain data, so the guest-visible
+# Generator input for novakit.image.dtb: plain data, so the guest-visible
 # EDU values are restated here rather than included. They must match
 # NOVA_EDU_BAR0_IPA / NOVA_EDU_BAR0_SIZE / NOVA_EDU_SPI in
 # nova/abi/guest_layout.h, which the C++ device backend derives from.

@@ -13,7 +13,7 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from nova_cli import build, checks, config, process  # noqa: E402
+from novakit import build, checks, config, process  # noqa: E402
 
 
 class BuildTests(unittest.TestCase):
@@ -56,7 +56,7 @@ class BuildTests(unittest.TestCase):
 
 
 class ProcessTests(unittest.TestCase):
-    @mock.patch("nova_cli.process.subprocess.run")
+    @mock.patch("novakit.process.subprocess.run")
     def test_commands_share_repository_cwd_and_environment(self, run):
         run.return_value = subprocess.CompletedProcess(["true"], 0)
 
@@ -123,8 +123,8 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(calls, ["format", "tests", "static", "runtime"])
 
-    @mock.patch("nova_cli.checks.shutil.which", return_value="/usr/bin/ccache")
-    @mock.patch("nova_cli.checks.process.run")
+    @mock.patch("novakit.checks.shutil.which", return_value="/usr/bin/ccache")
+    @mock.patch("novakit.checks.process.run")
     def test_ci_summary_includes_timing_and_ccache_stats(self, run, _which):
         run.return_value = subprocess.CompletedProcess(
             ["ccache", "--show-stats"],
@@ -147,7 +147,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("| static/static-analysis | pass | 1.2 |", content)
         self.assertIn("Cacheable calls: 10", content)
 
-    @mock.patch("nova_cli.checks.shutil.which", return_value=None)
+    @mock.patch("novakit.checks.shutil.which", return_value=None)
     def test_ci_summary_allows_host_without_ccache(self, _which):
         with tempfile.TemporaryDirectory() as directory:
             summary = Path(directory) / "summary.md"

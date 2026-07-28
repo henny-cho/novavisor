@@ -13,7 +13,7 @@ NOVA = REPO / "scripts" / "nova"
 PRESETS = REPO / "CMakePresets.json"
 sys.path.insert(0, str(REPO / "scripts"))
 
-from nova_cli import config  # noqa: E402
+from novakit import config  # noqa: E402
 
 
 def run(*args: str) -> subprocess.CompletedProcess[str]:

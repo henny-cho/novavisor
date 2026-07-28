@@ -22,7 +22,7 @@
 /* Guest PA windows are packed: guest i starts where guest i-1 ended,
  * rounded up to this alignment (keeps every window Block-mappable and
  * slot 0 identity with the IPA window). A demo manifest's
- * guests[].load_addr must equal the packed PA tools/yml2dtb computes. */
+ * guests[].load_addr must equal the packed PA novakit.image.dtb computes. */
 #define NOVA_GUEST_PA_ALIGN 0x00200000 /* 2 MiB */
 
 /* IVC shared page: one 4 KiB page mapped RW (XN) into every VM.
@@ -47,7 +47,7 @@
 #define NOVA_EDU_BAR0_SIZE 0x00100000
 #define NOVA_EDU_SPI       37
 
-/* Guest DTB: each guest's configuration blob (built by tools/yml2dtb)
+/* Guest DTB: each guest's configuration blob (built by novakit.image.dtb)
  * is copied to the top of that guest's configured window before the
  * pristine snapshot, and its IPA is handed to the boot vCPU in x0
  * (Linux boot protocol shape). The runtime guest table computes the

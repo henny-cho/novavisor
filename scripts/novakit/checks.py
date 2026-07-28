@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import build, config, demo, firmware, manifest, process, report
+from .services import boundaries
 
 LINT_TREES = ("components", "hal", "nova", "projects")
 SOURCE_SUFFIXES = {".c", ".cpp", ".h", ".hpp"}
@@ -122,7 +123,8 @@ def test() -> int:
             "*_test.py",
         ]
     )
-    process.run([sys.executable, str(config.REPO / "tools" / "check_platform_boundaries.py")])
+    if boundaries.check(config.REPO) != 0:
+        raise SystemExit(1)
     return 0
 
 
@@ -152,16 +154,7 @@ def static_checks() -> int:
         raise SystemExit(
             f"missing static analysis tools: {', '.join(missing)}; run scripts/bootstrap"
         )
-    process.run(
-        [
-            "ruff",
-            "check",
-            "--no-cache",
-            "scripts",
-            "tests/scripts",
-            "tools",
-        ]
-    )
+    process.run(["ruff", "check", "--no-cache", "scripts", "tests/scripts"])
     process.run(["shellcheck", "-x", "--exclude=SC1091", *_shell_files()])
     process.run(["actionlint"])
     return lint()

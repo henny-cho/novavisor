@@ -70,7 +70,7 @@ void init_guest_table() noexcept {
     const std::span<const std::uint8_t> blob{metadata.dtb_start,
                                              static_cast<std::size_t>(metadata.dtb_end - metadata.dtb_start)};
     const fdt::GuestInfo                info = fdt::parse_guest(blob);
-    // yml2dtb validated sizes and collisions at build time — a failure
+    // The DTB generator validated sizes and collisions at build time — a failure
     // here means the blob or the parser regressed, not the config.
     if (!info.ok || info.cpus > kMaxVcpusPerVm || info.mem_base != kGuestIpaBase || blob.size() > NOVA_GUEST_DTB_SIZE ||
         metadata.load_pa != load_pa || metadata.memory_size != info.mem_size || metadata.entry < kGuestIpaBase ||
@@ -96,7 +96,7 @@ void init_guest_table() noexcept {
         .payload_checksum = metadata.checksum,
     };
     // Config-driven core assignment overrides the index-derived table
-    // (yml2dtb validated the core indices at build time).
+    // (the DTB generator validated the core indices at build time).
     if (info.has_affinity) {
       for (std::size_t v = 0; v < info.cpus && v < kMaxVcpusPerVm; ++v) {
         g_table[i].cpu[v] = info.affinity[v];

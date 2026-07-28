@@ -6,7 +6,7 @@
 # -mgeneral-regs-only keeps compiler-generated code clean; this catches
 # what the flag cannot see (prebuilt libc routines, hand-written asm).
 #
-# Usage: check_fp_free.sh <objdump> <elf>
+# Usage: fp_free.sh <objdump> <elf>
 set -euo pipefail
 
 OBJDUMP="$1"

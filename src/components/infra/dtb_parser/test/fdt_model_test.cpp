@@ -1,6 +1,6 @@
 // Host tests for the FDT walker: header validation, node/prop
 // primitives and the guest-config extraction, driven by blobs the
-// real yml2dtb generator produced (fdt_fixture.hpp).
+// real DTB generator produced (fdt_fixture.hpp).
 
 #include "dtb_parser/fdt_model.hpp"
 #include "fdt_fixture.hpp"

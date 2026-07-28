@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import build, config, demo_build, process, qemu, report
+from .image.payload import make_record
 
 TFA_REPOSITORY = "https://github.com/ARM-software/arm-trusted-firmware.git"
 
@@ -132,7 +133,7 @@ def build_profile(name: str) -> Path:
     profile = PROFILES[name]
     demo_build.build_demos()
     binary = config.DEMO_BUILD_DIR / "01_hello" / "hello.bin"
-    record = demo_build.payload_record()(
+    record = make_record(
         binary,
         guest=0,
         name="platform-smoke",

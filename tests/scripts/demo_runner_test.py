@@ -11,11 +11,11 @@ from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
-from nova_cli import config as settings  # noqa: E402
-from nova_cli import demo as commands  # noqa: E402
-from nova_cli import demo_build as build  # noqa: E402
-from nova_cli import manifest, report  # noqa: E402
-from nova_cli import qemu as console  # noqa: E402
+from novakit import config as settings  # noqa: E402
+from novakit import demo as commands  # noqa: E402
+from novakit import demo_build as build  # noqa: E402
+from novakit import manifest, report  # noqa: E402
+from novakit import qemu as console  # noqa: E402
 
 
 class FakeTimeout(Exception):

@@ -4,7 +4,7 @@
 //
 // Embedded guest-payload metadata and the CRC32 the loader validates it
 // with. Metadata mirrors, field for field, the record that
-// tools/payload_manifest.py emits into the generated guest_dtbs.S — the
+// novakit.image.payload emits into the generated guest_dtbs.S — the
 // static_asserts below pin that layout so a change on either side fails
 // the build instead of misreading the image at boot.
 

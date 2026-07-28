@@ -6,17 +6,14 @@ guest binaries, an optional embedded-payload manifest, and the QEMU argv.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import sys
-from collections.abc import Callable
 from pathlib import Path
 
 from . import build as core_build
 from . import config, process, qemu
+from .image.payload import make_record
 from .manifest import demo_id, payload_mode, validate
-
-_make_record = None
 
 
 def build_hypervisor(
@@ -95,19 +92,6 @@ def resolve_guest_binary(demo_name: str, demo_build: Path, manifest: dict, spec:
     )
 
 
-def payload_record() -> Callable[..., dict]:
-    """Borrow the record builder from the platform payload tool so the record
-    schema and its checksum rule keep a single owner."""
-    global _make_record
-    if _make_record is None:
-        path = config.REPO / "tools" / "payload_manifest.py"
-        spec = importlib.util.spec_from_file_location("nova_payload_manifest", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        _make_record = module.make_record
-    return _make_record
-
-
 def prepare_payload_manifest(
     demo_name: str,
     demo_build: Path,
@@ -116,7 +100,6 @@ def prepare_payload_manifest(
     if payload_mode(manifest) != "embedded":
         return None
 
-    make_record = payload_record()
     records = []
     for index, guest in enumerate(manifest.get("guests", [])):
         binary = resolve_guest_binary(demo_name, demo_build, manifest, guest)

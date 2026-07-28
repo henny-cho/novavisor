@@ -27,10 +27,11 @@ function(nova_add_guest_project)
     else()
         set(nova_dtb_psci_flag "--no-psci")
     endif()
+    nova_python_module(nova_dtb_command image.dtb)
     add_custom_command(
         OUTPUT ${guest_dtb_dir}/guest_dtbs.S
                ${guest_dtb_dir}/device_policy.hpp
-        COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/yml2dtb/yml2dtb.py
+        COMMAND ${nova_dtb_command}
                 ${guest_config_file}
                 -o ${guest_dtb_dir}
                 --board-layout ${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/board_layout.h
@@ -39,7 +40,7 @@ function(nova_add_guest_project)
                 ${nova_dtb_psci_flag}
         DEPENDS ${guest_config_file}
                 ${guest_payload_file}
-                ${CMAKE_SOURCE_DIR}/tools/yml2dtb/yml2dtb.py
+                ${CMAKE_SOURCE_DIR}/scripts/novakit/image/dtb.py
                 ${CMAKE_SOURCE_DIR}/src/nova/abi/guest_layout.h
                 ${CMAKE_SOURCE_DIR}/src/nova/arch/gicv3/regs.h
                 ${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/board_layout.h
@@ -79,7 +80,7 @@ function(nova_add_guest_project)
         LINK_DEPENDS ${NOVA_LINKER_SCRIPT})
 
     add_custom_command(TARGET novavisor.elf POST_BUILD
-        COMMAND ${CMAKE_SOURCE_DIR}/tools/check_fp_free.sh ${CMAKE_OBJDUMP}
+        COMMAND ${CMAKE_SOURCE_DIR}/scripts/novakit/image/fp_free.sh ${CMAKE_OBJDUMP}
                 $<TARGET_FILE:novavisor.elf>
         COMMENT "Checking novavisor.elf is FP/SIMD-free"
     )
@@ -87,8 +88,9 @@ function(nova_add_guest_project)
     if(NOVA_PROJECT_REQUIRE_EMBEDDED_PAYLOAD)
         list(APPEND image_layout_args --require-payload)
     endif()
+    nova_python_module(nova_layout_command image.layout)
     add_custom_command(TARGET novavisor.elf POST_BUILD
-        COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/check_image_layout.py
+        COMMAND ${nova_layout_command}
                 --elf $<TARGET_FILE:novavisor.elf>
                 --board-layout ${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/board_layout.h
                 --readelf ${CMAKE_READELF}
