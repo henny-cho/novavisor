@@ -8,8 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..core import actions, config, proc
-from ..services import cmake, report, tfa
-from . import check, demo, firmware
+from ..services import cmake, gates, report, suite, tfa
 
 # Profiles the runtime lane links, in the order it links them.
 RUNTIME_PRESETS = (
@@ -41,15 +40,15 @@ class Lane:
 
 
 def _format() -> int:
-    return check.format_sources(check=True)
+    return gates.format_sources(check=True)
 
 
 def _tests() -> int:
-    return check.test()
+    return gates.test()
 
 
 def _static() -> int:
-    return check.static_analysis()
+    return gates.static_analysis()
 
 
 def _presets() -> int:
@@ -60,18 +59,18 @@ def _presets() -> int:
 
 def _firmware_chain() -> int:
     tfa.build_profile("n1sdp")
-    return firmware.verify_chain(build_only=False)
+    return tfa.verify_chain(build_only=False)
 
 
 def _demos() -> int:
-    if demo.fetch_all() != 0:
+    if suite.fetch_all() != 0:
         return 1
-    return demo.verify_all(EVIDENCE)
+    return suite.verify_all(EVIDENCE)
 
 
 def _recheck() -> int:
     for name in RUNTIME_RECHECK:
-        if demo.verify_one(name, EVIDENCE, preset=RECHECK_PRESET) != 0:
+        if suite.verify_one(name, EVIDENCE, preset=RECHECK_PRESET) != 0:
             return 1
     return 0
 

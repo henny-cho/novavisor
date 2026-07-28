@@ -13,9 +13,9 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit.commands import check, ci  # noqa: E402
+from novakit.commands import ci  # noqa: E402
 from novakit.core import config, proc  # noqa: E402
-from novakit.services import cmake, report  # noqa: E402
+from novakit.services import cmake, gates, report  # noqa: E402
 
 
 class BuildTests(unittest.TestCase):
@@ -117,18 +117,18 @@ class CliTests(unittest.TestCase):
             # inside a real lane, so leaving the variable set appends a table
             # of mocked steps to the job summary of the lane that ran it.
             mock.patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": ""}),
-            mock.patch.object(check, "format_sources", side_effect=record("format")),
-            mock.patch.object(check, "test", side_effect=record("tests")),
-            mock.patch.object(check, "static_analysis", side_effect=record("static")),
+            mock.patch.object(gates, "format_sources", side_effect=record("format")),
+            mock.patch.object(gates, "test", side_effect=record("tests")),
+            mock.patch.object(gates, "static_analysis", side_effect=record("static")),
             mock.patch.object(cmake, "build", side_effect=record("preset")),
             mock.patch.object(cmake, "BuildSpec"),
             mock.patch.object(ci.tfa, "build_profile", side_effect=record("bl33")),
             mock.patch.object(
-                ci.firmware, "verify_chain", side_effect=record("firmware")
+                ci.tfa, "verify_chain", side_effect=record("firmware")
             ),
-            mock.patch.object(ci.demo, "fetch_all", side_effect=record("fetch")),
-            mock.patch.object(ci.demo, "verify_all", side_effect=record("demos")),
-            mock.patch.object(ci.demo, "verify_one", side_effect=record("recheck")),
+            mock.patch.object(ci.suite, "fetch_all", side_effect=record("fetch")),
+            mock.patch.object(ci.suite, "verify_all", side_effect=record("demos")),
+            mock.patch.object(ci.suite, "verify_one", side_effect=record("recheck")),
             mock.patch.object(ci, "EVIDENCE", report.ArtifactPaths(Path(directory.name))),
         ):
             self.assertEqual(ci.run_lane("all"), 0)

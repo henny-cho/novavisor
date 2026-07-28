@@ -89,6 +89,19 @@ class LayerTests(unittest.TestCase):
             ["core/proc.py", "image/dtb.py", "image/layout.py"],
         )
 
+    def test_no_command_imports_a_command(self):
+        # DEPTH only orders the layers, so a sibling import inside the top one
+        # was unchecked: the lane table reached into three command modules for
+        # steps whose logic therefore served two consumers from the top layer.
+        for path in modules():
+            if layer_of(path) != "commands":
+                continue
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.ImportFrom) and node.level == 1:
+                    siblings = [alias.name for alias in node.names]
+                    with self.subTest(module=path.name):
+                        self.assertEqual(siblings, [])
+
     def test_the_repository_root_has_one_owner(self):
         # parents[3] is an assumption about how deep the package sits, so
         # deriving it per module made moving the package a three-file edit.

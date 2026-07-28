@@ -120,6 +120,31 @@ class WorkflowContractTest(unittest.TestCase):
             )
         self.assertIn('echo "::error::unknown lane: ${LANE}"', action)
 
+    def test_the_lane_action_knows_every_lane_and_soak_target(self):
+        # The case labels are the third place a lane name appears, and the only
+        # one nothing checked: a new lane passed every test here and failed in
+        # Actions with "unknown lane".
+        action = yaml.safe_load((GITHUB / "actions" / "lane" / "action.yml").read_text())
+        resolve = next(
+            step for step in action["runs"]["steps"] if step.get("id") == "lane"
+        )["run"]
+        # Read the labels as shell, not as YAML indentation.
+        handled = {
+            name
+            for labels in re.findall(r"^\s*([\w|-]+)\)\s", resolve, re.MULTILINE)
+            for name in labels.split("|")
+        }
+        soak = yaml.safe_load((WORKFLOWS / "soak.yml").read_text())
+        targets = [
+            f"soak-{entry['target']}"
+            for entry in soak["jobs"]["soak"]["strategy"]["matrix"]["include"]
+        ]
+
+        self.assertTrue(targets)
+        for name in (*ci_command.BY_NAME, *targets):
+            with self.subTest(lane=name):
+                self.assertIn(name, handled)
+
     def test_no_workflow_repeats_what_a_lane_needs(self):
         # guests/firmware follow from the lane name, so a workflow that spells
         # them out has a second copy of that mapping.

@@ -6,82 +6,9 @@ import sys
 import time
 from pathlib import Path
 
-from ..core import actions, config, proc
+from ..core import config, proc
 from ..image import abi
-from ..services import artifacts, cmake, expect, manifest, report, verify
-
-SCOPE = "nova demo"
-
-
-def _sink(tail: Path | None) -> verify.Sink:
-    # In Actions the uploaded log is the record, so streaming would double
-    # every line in the job output; locally the live output is the point.
-    return verify.Sink(
-        stream=None if actions.in_actions() else sys.stdout,
-        tail=tail,
-    )
-
-
-def verify_one(
-    name: str,
-    paths: report.ArtifactPaths | None = None,
-    *,
-    preset: str | None = None,
-) -> int:
-    _, demo_manifest = manifest.load_manifest(name)
-    if not demo_manifest.get("enabled", False):
-        print(f"[{SCOPE}] SKIP {name} (manifest.enabled=false)")
-        return 0
-
-    # A manifest is either a single run (top-level config/expect) or a
-    # `variants:` list — one full run (build + QEMU + expect) each, with
-    # the shared guests list. demo/11_configurable uses this to verify
-    # the same guest under two configs.
-    for index, variant in enumerate(manifest.manifest_variants(demo_manifest), start=1):
-        scenario = artifacts.scenario_for(name, demo_manifest, variant, preset=preset)
-        tail = None if paths is None else paths.verify_tail(name, index)
-        rc = verify.run_scenario(scenario, _sink(tail), scope=SCOPE)
-        if rc != 0:
-            return rc
-    return 0
-
-
-def verify_all(
-    paths: report.ArtifactPaths | None = None,
-    *,
-    preset: str | None = None,
-) -> int:
-    enabled = [(n, m) for n, m in manifest.iter_demos() if m.get("enabled", False)]
-    if not enabled:
-        print(f"[{SCOPE}] no enabled demos; nothing to verify.")
-        return 0
-
-    # Warm the shared artifacts once so each demo's own build stays incremental.
-    cmake.build(cmake.BuildSpec.of(preset=preset or config.HV_PRESET))
-    artifacts.build_demos()
-
-    failures = [name for name, _ in enabled if verify_one(name, paths, preset=preset) != 0]
-    if failures:
-        print(f"\n[{SCOPE}] {len(failures)} demo(s) failed: "
-              f"{', '.join(failures)}", file=sys.stderr)
-        return 1
-    print(f"\n[{SCOPE}] all {len(enabled)} demo(s) passed.")
-    return 0
-
-
-def fetch_all() -> int:
-    names = [
-        name
-        for name, demo_manifest in manifest.iter_demos()
-        if demo_manifest.get("enabled", False)
-        and (config.DEMO_DIR / name / "fetch.sh").exists()
-    ]
-    for name in names:
-        result = proc.call(["bash", str(config.DEMO_DIR / name / "fetch.sh")])
-        if result != 0:
-            return result
-    print(f"[{SCOPE}] fetched {len(names)} demo image set(s).")
-    return 0
+from ..services import artifacts, cmake, expect, manifest, report, suite, verify
 
 
 def _launch(name: str) -> tuple[Path, dict, list[str]]:
@@ -149,14 +76,14 @@ def _build(_args) -> int:
 
 def _fetch(args) -> int:
     if args.all:
-        return fetch_all()
+        return suite.fetch_all()
     if args.name is None:
-        sys.exit(f"{SCOPE}: fetch requires a demo id/name or --all")
+        sys.exit(f"{suite.SCOPE}: fetch requires a demo id/name or --all")
     script = config.DEMO_DIR / args.name / "fetch.sh"
     if not script.exists():
         # Same contract as --all: nothing to fetch is not a failure, so a
         # caller need not know which demos ship external images.
-        print(f"[{SCOPE}] {args.name}: no external images to fetch")
+        print(f"[{suite.SCOPE}] {args.name}: no external images to fetch")
         return 0
     return proc.call(["bash", str(script)])
 
@@ -165,22 +92,22 @@ def _run(args) -> int:
     if args.debug:
         return _debug(args.name)
     *_, command = _launch(args.name)
-    print(f"[{SCOPE}] Press Ctrl-A x to exit QEMU.")
+    print(f"[{suite.SCOPE}] Press Ctrl-A x to exit QEMU.")
     return proc.call(command)
 
 
 def _verify(args) -> int:
-    return verify_one(args.name, report.ArtifactPaths.from_arg(args.artifacts))
+    return suite.verify_one(args.name, report.ArtifactPaths.from_arg(args.artifacts))
 
 
 def _verify_all(args) -> int:
-    return verify_all(report.ArtifactPaths.from_arg(args.artifacts))
+    return suite.verify_all(report.ArtifactPaths.from_arg(args.artifacts))
 
 
 def _soak(args) -> int:
     _, demo_manifest = manifest.load_manifest(args.name)
     if not demo_manifest.get("enabled", False):
-        print(f"[{SCOPE}] SKIP {args.name} (manifest.enabled=false)")
+        print(f"[{suite.SCOPE}] SKIP {args.name} (manifest.enabled=false)")
         return 0
 
     summary_path = Path(args.summary) if args.summary else None
@@ -204,10 +131,10 @@ def _soak(args) -> int:
         ))
 
     def report_attempt(attempt: expect.RepeatAttempt) -> None:
-        print(f"[{SCOPE}] repeat {attempt.number}/{args.runs}: "
+        print(f"[{suite.SCOPE}] repeat {attempt.number}/{args.runs}: "
               f"{attempt.status.upper()} ({attempt.elapsed_seconds:.1f}s)")
         if attempt.error:
-            print(f"[{SCOPE}] repeat error: {attempt.error}", file=sys.stderr)
+            print(f"[{suite.SCOPE}] repeat error: {attempt.error}", file=sys.stderr)
         if summary_path is not None:
             report.append_repeat_summary(summary_path, attempt)
 
@@ -217,7 +144,7 @@ def _soak(args) -> int:
                 None if paths is None
                 else paths.repeat_tail(attempt_number, variant_number)
             )
-            rc = verify.run_scenario(scenario, _sink(tail), scope=SCOPE)
+            rc = verify.run_scenario(scenario, suite.sink(tail), scope=suite.SCOPE)
             if rc != 0:
                 return rc
         return 0
@@ -230,7 +157,7 @@ def _soak(args) -> int:
     )
     passed = sum(attempt.ok for attempt in attempts)
     total_seconds = sum(attempt.elapsed_seconds for attempt in attempts)
-    print(f"[{SCOPE}] repeat summary: {passed}/{len(attempts)} passed "
+    print(f"[{suite.SCOPE}] repeat summary: {passed}/{len(attempts)} passed "
           f"({100.0 * passed / len(attempts):.1f}%), total={total_seconds:.1f}s")
     report.append_github_summary(f"{args.name} recovery soak", attempts, summary_path)
     if passed != len(attempts) and paths is not None:
