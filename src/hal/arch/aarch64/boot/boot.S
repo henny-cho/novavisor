@@ -13,6 +13,7 @@
 
 #include "hal/arch/aarch64/vmsa/stage1_regs.h"
 #include "hal/board/active/board_layout.h"
+#include "hal/drivers/pl011_regs.h"
 #include "nova/arch/mpidr.h"
 
 .global _start
@@ -97,9 +98,11 @@ _start:
     b .Lhang
 
 // Pre-console failure breadcrumbs. The shared console does not exist
-// yet; poke the board UART directly (firmware left it usable — the
-// same assumption the console makes later). Bounded TX-full poll so a
-// dead UART still reaches the park.
+// yet; poke the board UART directly. Firmware normally leaves it
+// enabled, but a UART handed over disabled swallows every byte and the
+// park becomes indistinguishable from a dead board — so enable what we
+// need first. Register layout is shared with the C++ driver
+// (hal/drivers/pl011_regs.h); only the baud rate stays firmware's.
 .Lhang_not_el2:
     adr x0, .Lmsg_not_el2
     bl  boot_puts
@@ -111,16 +114,23 @@ _start:
     b   .Lhang
 
 // x0 = NUL-terminated string. Clobbers x0-x4, x30. MMU state agnostic.
+// The TX-full wait counts iterations rather than time: this runs before
+// the boot contract adopts a timebase, and one of the failures it has to
+// report is that timebase being unusable.
 boot_puts:
     ldr x1, =NOVA_BOARD_UART0_BASE
+    ldr w4, [x1, #NOVA_PL011_CR]
+    mov w3, #(NOVA_PL011_CR_UARTEN | NOVA_PL011_CR_TXE)
+    orr w4, w4, w3
+    str w4, [x1, #NOVA_PL011_CR]
 1:  ldrb w2, [x0], #1
     cbz  w2, 3f
-    mov  x3, #0x100000          // TX-full budget (dead-UART escape)
-2:  ldr  w4, [x1, #0x18]        // PL011 FR
-    tbz  w4, #5, 21f            // TXFF clear → write
+    mov  x3, #0x100000               // dead-UART escape (see above)
+2:  ldr  w4, [x1, #NOVA_PL011_FR]
+    tbz  w4, #NOVA_PL011_FR_TXFF_BIT, 21f   // TXFF clear → write
     subs x3, x3, #1
     b.ne 2b
-21: str  w2, [x1]               // PL011 DR
+21: str  w2, [x1, #NOVA_PL011_DR]
     b    1b
 3:  ret
 

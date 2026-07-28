@@ -8,6 +8,7 @@ namespace {
 using nova::arch::deadline_after_ms;
 using nova::arch::ms_to_ticks;
 using nova::arch::TimebaseError;
+using nova::arch::us_to_ticks;
 using nova::arch::validate_timebase;
 
 constexpr std::uint64_t kMax     = std::numeric_limits<std::uint64_t>::max();
@@ -62,6 +63,24 @@ TEST(Timebase, ZeroMillisecondsIsAZeroTickPlan) {
   const auto plan = ms_to_ticks(kBoardHz, 0);
   EXPECT_TRUE(plan.accepted);
   EXPECT_EQ(plan.ticks, 0);
+}
+
+// Microsecond conversion backs the driver poll budgets, so a positive
+// request must never round down to "already expired".
+TEST(Timebase, ConvertsMicrosecondsWithoutRoundingToZero) {
+  EXPECT_EQ(us_to_ticks(kQemuHz, 1).ticks, 62U);
+  EXPECT_EQ(us_to_ticks(kBoardHz, 1).ticks, 100U);
+  EXPECT_EQ(us_to_ticks(kBoardHz, 10'000).ticks, kBoardHz / 100);
+  EXPECT_EQ(us_to_ticks(kBoardHz, 1'000'000).ticks, kBoardHz);
+  // The validated window's floor still yields a tick per microsecond.
+  EXPECT_EQ(us_to_ticks(nova::arch::kMinCounterHz, 1).ticks, 1U);
+}
+
+TEST(Timebase, MicrosecondConversionRejectsBadInput) {
+  EXPECT_FALSE(us_to_ticks(0, 100).accepted);
+  EXPECT_FALSE(us_to_ticks(kMax, 2'000'000).accepted);
+  EXPECT_TRUE(us_to_ticks(kBoardHz, 0).accepted);
+  EXPECT_EQ(us_to_ticks(kBoardHz, 0).ticks, 0U);
 }
 
 TEST(Timebase, DeadlineAddsTicksToNow) {

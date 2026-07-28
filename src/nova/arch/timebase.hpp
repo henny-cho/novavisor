@@ -93,6 +93,31 @@ struct DeadlinePlan {
   return {.accepted = true, .ticks = whole + fraction};
 }
 
+// Microseconds → counter ticks. Same split as above, one scale down: the
+// validated window guarantees hz >= 1 MHz, so the whole-microsecond term
+// never rounds a positive request to zero ticks.
+[[nodiscard]] constexpr auto us_to_ticks(std::uint64_t hz, std::uint64_t us) noexcept -> TickPlan {
+  if (hz == 0) {
+    return {};
+  }
+
+  constexpr std::uint64_t kMicrosPerSecond = 1'000'000;
+  constexpr std::uint64_t kMax             = std::numeric_limits<std::uint64_t>::max();
+  const std::uint64_t     seconds          = us / kMicrosPerSecond;
+  const std::uint64_t     micros           = us % kMicrosPerSecond;
+  if (seconds > kMax / hz) {
+    return {};
+  }
+
+  const std::uint64_t whole = seconds * hz;
+  const std::uint64_t fraction =
+      (hz / kMicrosPerSecond) * micros + ((hz % kMicrosPerSecond) * micros) / kMicrosPerSecond;
+  if (whole > kMax - fraction) {
+    return {};
+  }
+  return {.accepted = true, .ticks = whole + fraction};
+}
+
 // Absolute counter value `ms` from `now`, or a rejected plan when the
 // conversion or the addition would wrap.
 [[nodiscard]] constexpr auto deadline_after_ms(std::uint64_t now, std::uint64_t hz, std::uint64_t ms) noexcept

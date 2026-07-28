@@ -8,6 +8,7 @@
 
 #include "boot_contract.hpp"
 #include "guest_config.hpp"
+#include "hal/console.hpp"
 #include "nexus.hpp"
 
 #include <cstdint>
@@ -15,11 +16,12 @@
 extern "C" void novavisor_main();
 
 void novavisor_main() {
-  // Boot core only (secondaries enter via novavisor_secondary). Both
-  // calls run before RuntimeStart: the hardware contract because the
-  // timebase it adopts backs the very first init action's bounded waits,
-  // and the guest table so every guest_table() consumer sees it
-  // populated.
+  // Boot core only (secondaries enter via novavisor_secondary). All three
+  // run before RuntimeStart: the console first because the contract gate
+  // reports through it, the hardware contract next because the timebase
+  // it adopts backs the very first init action's bounded waits, and the
+  // guest table so every guest_table() consumer sees it populated.
+  nova::console::ensure_enabled();
   nova::boot_contract::enforce();
   nova::project::init_guest_table();
   nova::nova_top top{};
