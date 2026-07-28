@@ -10,8 +10,8 @@ import re
 import sys
 from pathlib import Path
 
-from . import config
-from .image import abi
+from ..core import config
+from ..image import abi
 
 
 def _require_yaml():

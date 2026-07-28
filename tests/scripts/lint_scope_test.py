@@ -9,7 +9,7 @@ REPO = Path(__file__).resolve().parents[2]
 CLANG_TIDY = REPO / ".clang-tidy"
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit.checks import LINT_TREES  # noqa: E402
+from novakit.commands.check import LINT_TREES  # noqa: E402
 
 
 def lint_trees() -> list[str]:

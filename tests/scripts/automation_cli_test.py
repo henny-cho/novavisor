@@ -13,21 +13,23 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit import build, checks, config, process  # noqa: E402
+from novakit.commands import check, ci  # noqa: E402
+from novakit.core import config, proc  # noqa: E402
+from novakit.services import cmake  # noqa: E402
 
 
 class BuildTests(unittest.TestCase):
     def test_release_and_explicit_presets_have_one_selector(self):
         self.assertEqual(
-            build.selected_preset(release=False, preset=None),
+            cmake.selected_preset(release=False, preset=None),
             "aarch64-debug",
         )
         self.assertEqual(
-            build.selected_preset(release=True, preset=None),
+            cmake.selected_preset(release=True, preset=None),
             "aarch64-release",
         )
         self.assertEqual(
-            build.selected_preset(release=True, preset="custom"),
+            cmake.selected_preset(release=True, preset="custom"),
             "custom",
         )
 
@@ -38,16 +40,16 @@ class BuildTests(unittest.TestCase):
             destination = root / "build" / "active.yml"
             source.write_text("value: one\n")
 
-            build.sync_active(source, destination)
+            cmake.sync_active(source, destination)
             first_timestamp = destination.stat().st_mtime_ns
-            build.sync_active(source, destination)
+            cmake.sync_active(source, destination)
 
             self.assertEqual(destination.read_text(), "value: one\n")
             self.assertEqual(destination.stat().st_mtime_ns, first_timestamp)
 
             source.write_text("value: two\n")
             os.utime(source, ns=(1_000_000_000, 1_000_000_000))
-            build.sync_active(source, destination)
+            cmake.sync_active(source, destination)
             self.assertEqual(destination.read_text(), "value: two\n")
             self.assertGreater(
                 destination.stat().st_mtime_ns,
@@ -56,11 +58,11 @@ class BuildTests(unittest.TestCase):
 
 
 class ProcessTests(unittest.TestCase):
-    @mock.patch("novakit.process.subprocess.run")
+    @mock.patch("novakit.core.proc.subprocess.run")
     def test_commands_share_repository_cwd_and_environment(self, run):
         run.return_value = subprocess.CompletedProcess(["true"], 0)
 
-        process.run(["true"])
+        proc.run(["true"])
 
         _, kwargs = run.call_args
         self.assertEqual(kwargs["cwd"], config.REPO)
@@ -99,32 +101,32 @@ class CliTests(unittest.TestCase):
         calls = []
         with (
             mock.patch.object(
-                checks,
+                check,
                 "format_sources",
                 side_effect=lambda **_kwargs: calls.append("format") or 0,
             ),
             mock.patch.object(
-                checks,
+                check,
                 "test",
                 side_effect=lambda: calls.append("tests") or 0,
             ),
             mock.patch.object(
-                checks,
-                "static_checks",
+                check,
+                "static_analysis",
                 side_effect=lambda: calls.append("static") or 0,
             ),
             mock.patch.object(
-                checks,
+                ci,
                 "runtime_checks",
                 side_effect=lambda: calls.append("runtime") or 0,
             ),
         ):
-            self.assertEqual(checks.ci("all"), 0)
+            self.assertEqual(ci.run_lane("all"), 0)
 
         self.assertEqual(calls, ["format", "tests", "static", "runtime"])
 
-    @mock.patch("novakit.checks.shutil.which", return_value="/usr/bin/ccache")
-    @mock.patch("novakit.checks.process.run")
+    @mock.patch("novakit.commands.ci.shutil.which", return_value="/usr/bin/ccache")
+    @mock.patch("novakit.core.proc.run")
     def test_ci_summary_includes_timing_and_ccache_stats(self, run, _which):
         run.return_value = subprocess.CompletedProcess(
             ["ccache", "--show-stats"],
@@ -137,7 +139,7 @@ class CliTests(unittest.TestCase):
                 os.environ,
                 {"GITHUB_STEP_SUMMARY": str(summary)},
             ):
-                checks._append_ci_summary(
+                ci._append_summary(
                     "static",
                     [("static/static-analysis", "pass", 1.25)],
                 )
@@ -147,7 +149,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("| static/static-analysis | pass | 1.2 |", content)
         self.assertIn("Cacheable calls: 10", content)
 
-    @mock.patch("novakit.checks.shutil.which", return_value=None)
+    @mock.patch("novakit.commands.ci.shutil.which", return_value=None)
     def test_ci_summary_allows_host_without_ccache(self, _which):
         with tempfile.TemporaryDirectory() as directory:
             summary = Path(directory) / "summary.md"
@@ -155,7 +157,7 @@ class CliTests(unittest.TestCase):
                 os.environ,
                 {"GITHUB_STEP_SUMMARY": str(summary)},
             ):
-                checks._append_ci_summary("host", [("host/tests", "pass", 1.0)])
+                ci._append_summary("host", [("host/tests", "pass", 1.0)])
 
             content = summary.read_text()
 

@@ -49,9 +49,14 @@ def read_string_define(path: Path, name: str) -> str:
     return match.group(1)
 
 
-LIMITS = read_defines(GUEST_LAYOUT, ["NOVA_MAX_GUESTS", "NOVA_MAX_VCPUS_PER_VM"])
+LIMITS = read_defines(
+    GUEST_LAYOUT,
+    ["NOVA_MAX_GUESTS", "NOVA_MAX_VCPUS_PER_VM", "NOVA_GUEST_IPA_BASE"],
+)
 MAX_GUESTS = LIMITS["NOVA_MAX_GUESTS"]
 MAX_VCPUS_PER_VM = LIMITS["NOVA_MAX_VCPUS_PER_VM"]
+# Every guest links against this window; its backing PA differs by slot.
+GUEST_IPA_BASE = LIMITS["NOVA_GUEST_IPA_BASE"]
 UART_KINDS = ("none", "vuart")  # UartKind (nova/abi/guest.hpp)
 
 

@@ -1,48 +1,21 @@
-"""Build steps and QEMU command construction.
+"""A manifest turned into the artifacts a run needs.
 
-Turns a manifest into the artifacts a run needs: the hypervisor ELF, the demo
-guest binaries, an optional embedded-payload manifest, and the QEMU argv.
+The hypervisor ELF, the guest binaries, an optional embedded-payload
+manifest, the QEMU argv — and the scenario that ties them to what the run
+must print.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
-from . import build as core_build
-from . import config, process, qemu
-from .image.payload import make_record
-from .manifest import demo_id, payload_mode, validate
-
-
-def build_hypervisor(
-    guest_config: str | None = None,
-    payloads: Path | None = None,
-    preset: str | None = None,
-) -> Path:
-    # A no-change Ninja rebuild is nearly free, while skipping on ELF
-    # existence would verify against a stale binary after source edits.
-    # Omitting config/payloads restores the defaults, so one demo's
-    # choice never leaks into the next.
-    cfg = (
-        config.DEFAULT_CONFIG
-        if guest_config is None
-        else config.REPO / guest_config
-    )
-    if not cfg.exists():
-        sys.exit(f"nova demo: guest config not found: {cfg}")
-    payload_manifest = payloads if payloads is not None else config.DEFAULT_PAYLOADS
-    if not payload_manifest.exists():
-        sys.exit(f"nova demo: payload manifest not found: {payload_manifest}")
-
-    return core_build.build(
-        core_build.BuildSpec(
-            preset=preset or config.HV_PRESET,
-            config_path=cfg,
-            payloads_path=payload_manifest,
-        )
-    )
+from ..core import board, config, proc
+from ..image.payload import make_record
+from . import cmake, expect
+from . import manifest as manifests
 
 
 def build_demos() -> Path:
@@ -50,7 +23,7 @@ def build_demos() -> Path:
     demo_build = config.DEMO_BUILD_DIR
     if not (demo_build / "build.ninja").exists():
         demo_build.mkdir(parents=True, exist_ok=True)
-        process.run(
+        proc.run(
             [
                 "cmake",
                 "-S",
@@ -66,7 +39,7 @@ def build_demos() -> Path:
                 "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY",
             ]
         )
-    process.run(["cmake", "--build", str(demo_build)])
+    proc.run(["cmake", "--build", str(demo_build)])
     return demo_build
 
 
@@ -82,7 +55,7 @@ def resolve_guest_binary(demo_name: str, demo_build: Path, manifest: dict, spec:
             return c
     # External images are fetched explicitly, never as a run side effect.
     hint = (
-        f"\nRun: scripts/nova demo fetch {demo_id(demo_name)}"
+        f"\nRun: scripts/nova demo fetch {manifests.demo_id(demo_name)}"
         if (config.DEMO_DIR / demo_name / "fetch.sh").exists()
         else ""
     )
@@ -97,7 +70,7 @@ def prepare_payload_manifest(
     demo_build: Path,
     manifest: dict,
 ) -> Path | None:
-    if payload_mode(manifest) != "embedded":
+    if manifests.payload_mode(manifest) != "embedded":
         return None
 
     records = []
@@ -130,14 +103,55 @@ def write_payload_manifest(path: Path, records: list[dict]) -> None:
 
 
 def build_qemu_cmd(elf: Path, demo_name: str, demo_build: Path, manifest: dict) -> list[str]:
-    validate(demo_name, manifest)
-    cmd = qemu.board_command(kernel=elf)
+    manifests.validate(demo_name, manifest)
+    cmd = board.command(kernel=elf)
     for device in manifest.get("qemu_devices", []):
         cmd += ["-device", device]
-    if payload_mode(manifest) == "embedded":
+    if manifests.payload_mode(manifest) == "embedded":
         # The payloads travel inside the ELF; QEMU loads nothing extra.
         return cmd
     for guest in manifest.get("guests", []):
         binary = resolve_guest_binary(demo_name, demo_build, manifest, guest)
         cmd += ["-device", f"loader,file={binary},addr={guest['load_addr']:#x},force-raw=on"]
     return cmd
+
+
+def scenario_for(
+    name: str,
+    demo_manifest: dict,
+    variant: dict,
+    *,
+    demo_build: Path | None = None,
+    elf_snapshot: Path | None = None,
+    preset: str | None = None,
+) -> expect.Scenario:
+    """Build everything the variant needs and state what its run must print."""
+    forbidden = manifests.manifest_pattern_list(demo_manifest, "forbid")
+    expectations = tuple(variant.get("expect", []))
+    if forbidden and not expectations:
+        raise SystemExit("[nova demo] manifest 'forbid' requires expected patterns")
+
+    if demo_build is None:
+        demo_build = build_demos()
+    payloads = prepare_payload_manifest(name, demo_build, demo_manifest)
+    guest_config = variant.get("config")
+    elf = cmake.build(cmake.BuildSpec.of(
+        preset=preset or config.HV_PRESET,
+        config_path=None if guest_config is None else config.REPO / guest_config,
+        payloads_path=payloads,
+    ))
+    if elf_snapshot is not None:
+        # A soak rebuilds between attempts; the snapshot keeps the exact
+        # image an attempt ran so the evidence matches the failure.
+        elf_snapshot.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(elf, elf_snapshot)
+        elf = elf_snapshot
+
+    return expect.Scenario(
+        label=name if "name" not in variant else f"{name}[{variant['name']}]",
+        phase=demo_manifest.get("phase"),
+        command=tuple(build_qemu_cmd(elf, name, demo_build, demo_manifest)),
+        timeout_seconds=int(demo_manifest.get("timeout_seconds", 30)),
+        expectations=expectations,
+        forbidden_patterns=forbidden,
+    )

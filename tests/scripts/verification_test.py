@@ -11,11 +11,16 @@ from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
-from novakit import config as settings  # noqa: E402
-from novakit import demo as commands  # noqa: E402
-from novakit import demo_build as build  # noqa: E402
-from novakit import manifest, report  # noqa: E402
-from novakit import qemu as console  # noqa: E402
+from novakit.core import board, config  # noqa: E402
+from novakit.services import (  # noqa: E402
+    artifacts,
+    cmake,
+    expect,
+    manifest,
+    report,
+    spawn,
+    verify,
+)
 
 
 class FakeTimeout(Exception):
@@ -66,7 +71,7 @@ class FakeChild:
 
 class DemoRunnerVerificationTest(unittest.TestCase):
     def verify(self, child, expectations, timeout=10):
-        return console.verify_child_output(
+        return expect.observe_output(
             child,
             expectations,
             timeout,
@@ -75,17 +80,14 @@ class DemoRunnerVerificationTest(unittest.TestCase):
             eof_error=FakeEof,
         )
 
-    @mock.patch.object(build.core_build, "build")
-    def test_hypervisor_build_accepts_an_explicit_profile(self, build_target):
-        build_target.return_value = Path("/tmp/novavisor.elf")
+    def test_hypervisor_build_accepts_an_explicit_profile(self):
+        spec = cmake.BuildSpec.of(preset="aarch64-standard-release")
 
-        build.build_hypervisor(preset="aarch64-standard-release")
-
-        spec = build_target.call_args.args[0]
         self.assertEqual(spec.preset, "aarch64-standard-release")
+        self.assertEqual(spec.config_path, config.DEFAULT_CONFIG)
 
     def test_qemu_command_uses_stable_low_ecam_and_manifest_devices(self):
-        command = build.build_qemu_cmd(
+        command = artifacts.build_qemu_cmd(
             Path("/tmp/novavisor.elf"),
             "15_dma_isolation",
             Path("/tmp/demo"),
@@ -103,7 +105,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
 
     def test_qemu_command_rejects_invalid_device_list(self):
         with self.assertRaisesRegex(SystemExit, "qemu_devices"):
-            build.build_qemu_cmd(
+            artifacts.build_qemu_cmd(
                 Path("/tmp/novavisor.elf"),
                 "invalid",
                 Path("/tmp/demo"),
@@ -111,7 +113,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
             )
 
     def test_embedded_qemu_command_omits_external_loader(self):
-        command = build.build_qemu_cmd(
+        command = artifacts.build_qemu_cmd(
             Path("/tmp/novavisor.elf"),
             "embedded",
             Path("/tmp/demo"),
@@ -145,12 +147,12 @@ class DemoRunnerVerificationTest(unittest.TestCase):
                 }],
             }
             with (
-                mock.patch.object(settings, "BUILD_ROOT", root / "build"),
+                mock.patch.object(config, "BUILD_ROOT", root / "build"),
                 mock.patch.object(
-                    build, "resolve_guest_binary", return_value=binary
+                    artifacts, "resolve_guest_binary", return_value=binary
                 ),
             ):
-                path = build.prepare_payload_manifest(
+                path = artifacts.prepare_payload_manifest(
                     "embedded", root, manifest
                 )
 
@@ -211,18 +213,18 @@ class DemoRunnerVerificationTest(unittest.TestCase):
 
         clock = FakeClock()
         child = FatalChild(clock)
-        result = console.verify_child_output(
+        result = expect.observe_output(
             child,
             [{"pattern": "guest-ready"}],
             120,
             clock=clock,
             timeout_error=FakeTimeout,
             eof_error=FakeEof,
-            fatal_patterns=settings.FATAL_OUTPUT_PATTERNS,
+            fatal_patterns=board.FATAL_PATTERNS,
         )
 
         self.assertEqual(result.failure, "fatal")
-        self.assertEqual(result.pattern, settings.FATAL_OUTPUT_PATTERNS[0])
+        self.assertEqual(result.pattern, board.FATAL_PATTERNS[0])
         self.assertEqual(result.error, "while waiting for /guest-ready/")
         self.assertEqual(result.elapsed_seconds, 0.5)
         self.assertEqual(child.terminate_calls, [True])
@@ -237,14 +239,14 @@ class DemoRunnerVerificationTest(unittest.TestCase):
         clock = FakeClock()
         child = ForbiddenChild(clock)
         forbidden = (r"\[dma\] VM 0 resumed generation 4",)
-        result = console.verify_child_output(
+        result = expect.observe_output(
             child,
             [{"pattern": "dma lifecycle boot 3"}],
             20,
             clock=clock,
             timeout_error=FakeTimeout,
             eof_error=FakeEof,
-            fatal_patterns=settings.FATAL_OUTPUT_PATTERNS,
+            fatal_patterns=board.FATAL_PATTERNS,
             forbidden_patterns=forbidden,
         )
 
@@ -281,7 +283,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
         clock = FakeClock()
         child = BufferedForbiddenChild(clock)
         forbidden = ("generation 4",)
-        result = console.verify_child_output(
+        result = expect.observe_output(
             child,
             [{"pattern": "boot 3"}],
             20,
@@ -308,7 +310,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
                 return 1
 
         child = CleanChild(FakeClock())
-        result = console.verify_child_output(
+        result = expect.observe_output(
             child,
             [{"pattern": "boot 3"}],
             20,
@@ -374,7 +376,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
         child = FakeChild(clock, actions=[2.0, 3.0])
         matches = []
 
-        result = console.verify_child_output(
+        result = expect.observe_output(
             child,
             [{"pattern": "boot"}, {"pattern": "ready"}],
             10,
@@ -386,8 +388,8 @@ class DemoRunnerVerificationTest(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual(matches, list(result.matches))
-        self.assertEqual(matches[0], console.PatternMatch(1, "boot", 2.0, 2.0, 8.0))
-        self.assertEqual(matches[1], console.PatternMatch(2, "ready", 5.0, 3.0, 5.0))
+        self.assertEqual(matches[0], expect.PatternMatch(1, "boot", 2.0, 2.0, 8.0))
+        self.assertEqual(matches[1], expect.PatternMatch(2, "ready", 5.0, 3.0, 5.0))
 
     def test_timeout_diagnostics_include_elapsed_and_scenario_remaining(self):
         class TimedTimeoutChild(FakeChild):
@@ -434,7 +436,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
             def spawn(*_args, **_kwargs):
                 return child
 
-        prepared = commands.PreparedVerification(
+        prepared = expect.Scenario(
             label="interrupt",
             phase=0,
             command=("fake-qemu",),
@@ -444,13 +446,13 @@ class DemoRunnerVerificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             tail_path = Path(directory) / "interrupt.qemu-tail.log"
             with (
-                mock.patch.object(console, "_require_pexpect", return_value=FakePexpect),
+                mock.patch.object(spawn, "_require_pexpect", return_value=FakePexpect),
                 mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
             ):
                 with self.assertRaises(KeyboardInterrupt):
-                    commands.run_prepared_verification(prepared, tail_path)
+                    verify.run_scenario(prepared, verify.Sink(tail=tail_path), scope="nova demo")
 
             diagnostics = json.loads(
                 report.diagnostics_path_for_tail(tail_path).read_text()
@@ -464,7 +466,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
             self.assertEqual(child.terminate_calls, [True])
 
     def test_failure_capture_keeps_only_the_recent_32_kib_of_utf8(self):
-        capture = console.OutputCapture(None)
+        capture = spawn.OutputCapture(None)
         discarded = "discarded-prefix:"
         payload = discarded + ("한" * (40 * 1024)) + "recent-tail"
 
@@ -475,7 +477,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
         self.assertEqual(capture.tail, expected)
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
-            console.print_failure_tail(capture)
+            spawn.print_tail(capture, scope="nova demo")
         self.assertNotIn(discarded, stderr.getvalue())
         self.assertIn("recent-tail", stderr.getvalue())
 
@@ -496,7 +498,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
                 raise outcome
             return outcome
 
-        attempts = console.run_repeated_verification(
+        attempts = expect.run_repeated(
             4,
             verify_once,
             clock=clock,
@@ -516,7 +518,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
         self.assertEqual(reported, attempts)
 
     def test_repeat_summary_is_durable_after_each_attempt(self):
-        attempt = console.RepeatAttempt(1, "fail", 2.125, "RuntimeError: broken")
+        attempt = expect.RepeatAttempt(1, "fail", 2.125, "RuntimeError: broken")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "summary.csv"
 
@@ -551,7 +553,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
             def spawn(*_args, **_kwargs):
                 return child
 
-        prepared = commands.PreparedVerification(
+        prepared = expect.Scenario(
             label="fake",
             phase=0,
             command=("fake-qemu",),
@@ -561,12 +563,12 @@ class DemoRunnerVerificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             tail_path = Path(directory) / "attempt.qemu-tail.log"
             with (
-                mock.patch.object(console, "_require_pexpect", return_value=FakePexpect),
+                mock.patch.object(spawn, "_require_pexpect", return_value=FakePexpect),
                 mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
             ):
-                return_code = commands.run_prepared_verification(prepared, tail_path)
+                return_code = verify.run_scenario(prepared, verify.Sink(tail=tail_path), scope="nova demo")
 
             self.assertEqual(return_code, 1)
             tail = tail_path.read_text()
@@ -610,7 +612,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
             def spawn(*_args, **_kwargs):
                 return child
 
-        prepared = commands.PreparedVerification(
+        prepared = expect.Scenario(
             label="timeout",
             phase=0,
             command=("fake-qemu",),
@@ -621,14 +623,14 @@ class DemoRunnerVerificationTest(unittest.TestCase):
             tail_path = Path(directory) / "timeout.qemu-tail.log"
             stderr = io.StringIO()
             with (
-                mock.patch.object(console, "_require_pexpect", return_value=FakePexpect),
+                mock.patch.object(spawn, "_require_pexpect", return_value=FakePexpect),
                 mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
-                mock.patch.object(commands.time, "monotonic", side_effect=child.clock),
+                mock.patch.object(spawn.time, "monotonic", side_effect=child.clock),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(stderr),
             ):
                 with self.assertRaises(KeyboardInterrupt):
-                    commands.run_prepared_verification(prepared, tail_path)
+                    verify.run_scenario(prepared, verify.Sink(tail=tail_path), scope="nova demo")
 
             self.assertIn("timeout waiting for /ready/", stderr.getvalue())
             self.assertIn("QEMU cleanup: KeyboardInterrupt", stderr.getvalue())
@@ -654,7 +656,7 @@ class DemoRunnerVerificationTest(unittest.TestCase):
             def spawn(*_args, **_kwargs):
                 raise OSError("spawn failed")
 
-        prepared = commands.PreparedVerification(
+        prepared = expect.Scenario(
             label="spawn",
             phase=0,
             command=("missing-qemu",),
@@ -664,12 +666,12 @@ class DemoRunnerVerificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             tail_path = Path(directory) / "spawn.qemu-tail.log"
             with (
-                mock.patch.object(console, "_require_pexpect", return_value=FakePexpect),
+                mock.patch.object(spawn, "_require_pexpect", return_value=FakePexpect),
                 mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
             ):
-                return_code = commands.run_prepared_verification(prepared, tail_path)
+                return_code = verify.run_scenario(prepared, verify.Sink(tail=tail_path), scope="nova demo")
 
             self.assertEqual(return_code, 1)
             diagnostics = json.loads(

@@ -14,19 +14,9 @@ import shutil
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from . import config, process
-from .qemu import (
-    FailureKind,
-    OutputCapture,
-    RepeatAttempt,
-    VerificationResult,
-    preserve_failure_tail,
-)
-
-if TYPE_CHECKING:  # Type-only: report never depends on command wiring.
-    from .demo import PreparedVerification
+from ..core import board, config, proc
+from .expect import FailureKind, RepeatAttempt, VerificationResult
 
 
 def diagnostics_path_for_tail(tail_path: Path) -> Path:
@@ -64,23 +54,7 @@ class ArtifactPaths:
         return self.root / f"attempt-{attempt:02d}-variant-{variant:02d}.qemu-tail.log"
 
 
-def preserve_failure_diagnostics(
-    capture: OutputCapture,
-    tail_path: Path | None,
-    prepared: "PreparedVerification",
-    result: VerificationResult,
-) -> None:
-    preserve_failure_tail(capture, tail_path)
-    if tail_path is None:
-        return
-    write_verification_diagnostics(
-        diagnostics_path_for_tail(tail_path),
-        prepared.label,
-        result,
-    )
-
-
-def write_verification_diagnostics(
+def write_diagnostics(
     path: Path,
     label: str,
     result: VerificationResult,
@@ -107,7 +81,7 @@ def write_verification_diagnostics(
     path.write_text(f"{json.dumps(diagnostics, indent=2)}\n", encoding="utf-8")
 
 
-def report_verification_failure(
+def report_failure(
     result: VerificationResult,
     *,
     scope: str = "nova demo",
@@ -180,7 +154,7 @@ def append_github_summary(
 
 def _first_line(cmd: list[str]) -> str:
     try:
-        out = process.run(cmd, capture=True, check=False).stdout
+        out = proc.run(cmd, capture=True, check=False).stdout
     except OSError as exc:
         return f"unavailable: {exc}"
     return out.splitlines()[0] if out else "unavailable"
@@ -226,7 +200,7 @@ def collect_evidence(
 
     (evidence / "environment.txt").write_text("\n".join((
         _first_line(["git", "-C", str(config.REPO), "rev-parse", "HEAD"]),
-        _first_line([config.QEMU, "--version"]),
+        _first_line([board.QEMU, "--version"]),
         _first_line(["aarch64-none-elf-gcc", "--version"]),
     )) + "\n", encoding="utf-8")
     (evidence / "sha256sums.txt").write_text("".join(

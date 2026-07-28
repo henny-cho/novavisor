@@ -15,7 +15,7 @@ IMAGE = REPO / "containers" / "toolchain" / "Dockerfile"
 DEVCONTAINER = REPO / ".devcontainer" / "devcontainer.json"
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit import config  # noqa: E402
+from novakit.core import config  # noqa: E402
 
 
 class ToolVersionTests(unittest.TestCase):
