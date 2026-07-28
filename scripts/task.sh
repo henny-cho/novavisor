@@ -484,10 +484,16 @@ cmd_ci() {
     fi
 
     # Profile builds mirror the remote CI lanes so a local pass predicts a
-    # remote pass (minimal platform + N1SDP payload smoke).
+    # remote pass: every composition tier plus the two firmware-chained
+    # targets. Serialized, because each preset triggers its own CPM
+    # configure and concurrent cache writes race.
     cmd_build --preset aarch64-minimal-release
+    cmd_build --preset aarch64-standard-release
     cmd_firmware smoke
-    cmd_firmware qemu-smoke --profile-only
+    # The full chain, not --profile-only: compiling the BL33 payload
+    # proves nothing about the handoff it exists to verify, and that gap
+    # is how this gate stayed broken for a phase without anyone noticing.
+    cmd_firmware qemu-smoke
 
     cmd_lint
     cmd_test
@@ -495,6 +501,18 @@ cmd_ci() {
     # that prints "no enabled demos" and exits 0, so it's safe to include
     # in CI from day one.
     cmd_demo verify-all
+    # The standard tier's runtime behaviour, not just its link: the four
+    # demos covering what it adds over minimal (lifecycle/watchdog,
+    # physical SMP, guest SMP, vuart/console mux), which are also the fast
+    # ones — no OS boot is repeated. Subshell so the preset override
+    # cannot leak past the loop.
+    local demo_id
+    for demo_id in 7 8 9 10; do
+        (
+            export NOVA_HV_PRESET=aarch64-standard-release
+            cmd_demo verify "${demo_id}"
+        )
+    done
     echo "==> Local CI Pipeline Passed Successfully!"
 }
 
