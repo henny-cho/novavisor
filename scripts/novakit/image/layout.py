@@ -9,21 +9,12 @@ import subprocess
 from pathlib import Path
 from typing import NamedTuple
 
+from .abi import read_define
+
 
 class Segment(NamedTuple):
     physical_address: int
     memory_size: int
-
-
-def read_define(path: Path, name: str) -> int:
-    match = re.search(
-        rf"^#define\s+{re.escape(name)}\s+(0[xX][0-9A-Fa-f]+|\d+)",
-        path.read_text(),
-        re.MULTILINE,
-    )
-    if match is None:
-        raise ValueError(f"{name} not found in {path}")
-    return int(match.group(1), 0)
 
 
 def parse_elf_header(text: str) -> int:

@@ -29,12 +29,12 @@ namespace nova {
 
 // Compile-time upper bound on guest_table() entries — sizes the static
 // per-VM backing stores (Stage 2 table sets, restart budget).
-inline constexpr std::size_t kMaxGuests = 4;
+inline constexpr std::size_t kMaxGuests = NOVA_MAX_GUESTS;
 
 // VCPUs per VM, fixed stride. A flat "vCPU slot" identifies one
 // execution context machine-wide; per-VM state (Stage 2, budget,
 // watchdog) keys on vm_of(slot), everything else on the slot itself.
-inline constexpr std::size_t kMaxVcpusPerVm = 2;
+inline constexpr std::size_t kMaxVcpusPerVm = NOVA_MAX_VCPUS_PER_VM;
 inline constexpr std::size_t kMaxVcpus      = kMaxGuests * kMaxVcpusPerVm;
 
 [[nodiscard]] constexpr auto vm_of(std::size_t slot) noexcept -> std::size_t {

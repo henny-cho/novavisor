@@ -28,8 +28,10 @@ from pathlib import Path
 
 import yaml
 
-REPO = Path(__file__).resolve().parents[3]
-DEFAULT_LAYOUT = REPO / "src" / "nova" / "abi" / "guest_layout.h"
+from . import abi
+
+REPO = abi.REPO
+DEFAULT_LAYOUT = abi.GUEST_LAYOUT
 GIC_REGS = REPO / "src" / "nova" / "arch" / "gicv3" / "regs.h"
 
 MIB = 0x10_0000
@@ -39,48 +41,31 @@ MAX_DEVICES = 8
 # Layout header
 # ---------------------------------------------------------------------------
 
-def read_defines(path: Path, wanted: list[str]) -> dict[str, int]:
-    """Pull #define constants from a platform header (single source)."""
-    text = path.read_text()
-    values: dict[str, int] = {}
-    for name in wanted:
-        m = re.search(rf"#define\s+{name}\s+(0[xX][0-9a-fA-F]+|\d+)", text)
-        if not m:
-            sys.exit(f"nova dtb: {name} not found in {path}")
-        values[name] = int(m.group(1), 0)
-    return values
-
-
-def read_string_define(path: Path, name: str) -> str:
-    text = path.read_text()
-    match = re.search(rf'#define\s+{name}\s+"([^"]+)"', text)
-    if not match:
-        sys.exit(f"nova dtb: {name} not found in {path}")
-    return match.group(1)
-
-
 def read_layout(path: Path, board_layout: Path) -> dict[str, int | str]:
-    values = read_defines(path, [
-        "NOVA_GUEST_IPA_BASE", "NOVA_GUEST_IPA_SIZE", "NOVA_GUEST_PA_ALIGN",
-        "NOVA_IVC_SHM_IPA", "NOVA_IVC_SHM_SIZE", "NOVA_GUEST_DTB_SIZE",
-        "NOVA_VUART_IPA_BASE", "NOVA_VUART_IPA_SIZE", "NOVA_VUART_SPI",
-        "NOVA_GICD_IPA_BASE", "NOVA_GICR_IPA_BASE",
-    ])
-    values |= read_defines(GIC_REGS, ["NOVA_GICD_FRAME_SIZE", "NOVA_GICR_FRAME_SIZE"])
-    values |= read_defines(board_layout, [
-        "NOVA_BOARD_SMP_CPUS", "NOVA_BOARD_RAM_BASE", "NOVA_BOARD_RAM_SIZE",
-        "NOVA_BOARD_PHYS_RAM_BASE", "NOVA_BOARD_PHYS_RAM_SIZE",
-        "NOVA_BOARD_GUEST_PA_BASE", "NOVA_BOARD_GUEST_PA_SIZE",
-        "NOVA_BOARD_IVC_SHM_PA",
-        "NOVA_BOARD_PRISTINE_PA",
-        "NOVA_BOARD_UART0_BASE", "NOVA_BOARD_UART0_INTID",
-        "NOVA_BOARD_GICD_BASE", "NOVA_BOARD_GICR_BASE",
-        "NOVA_BOARD_SMMU_BASE", "NOVA_BOARD_SMMU_SIZE",
-        "NOVA_BOARD_SMMU_EVENT_INTID", "NOVA_BOARD_SMMU_CMD_INTID",
-        "NOVA_BOARD_SMMU_ERROR_INTID",
-    ])
-    values["NOVA_BOARD_GUEST_CPU_COMPATIBLE"] = read_string_define(
-        board_layout, "NOVA_BOARD_GUEST_CPU_COMPATIBLE")
+    try:
+        values = abi.read_defines(path, [
+            "NOVA_GUEST_IPA_BASE", "NOVA_GUEST_IPA_SIZE", "NOVA_GUEST_PA_ALIGN",
+            "NOVA_IVC_SHM_IPA", "NOVA_IVC_SHM_SIZE", "NOVA_GUEST_DTB_SIZE",
+            "NOVA_VUART_IPA_BASE", "NOVA_VUART_IPA_SIZE", "NOVA_VUART_SPI",
+            "NOVA_GICD_IPA_BASE", "NOVA_GICR_IPA_BASE",
+        ])
+        values |= abi.read_defines(GIC_REGS, ["NOVA_GICD_FRAME_SIZE", "NOVA_GICR_FRAME_SIZE"])
+        values |= abi.read_defines(board_layout, [
+            "NOVA_BOARD_SMP_CPUS", "NOVA_BOARD_RAM_BASE", "NOVA_BOARD_RAM_SIZE",
+            "NOVA_BOARD_PHYS_RAM_BASE", "NOVA_BOARD_PHYS_RAM_SIZE",
+            "NOVA_BOARD_GUEST_PA_BASE", "NOVA_BOARD_GUEST_PA_SIZE",
+            "NOVA_BOARD_IVC_SHM_PA",
+            "NOVA_BOARD_PRISTINE_PA",
+            "NOVA_BOARD_UART0_BASE", "NOVA_BOARD_UART0_INTID",
+            "NOVA_BOARD_GICD_BASE", "NOVA_BOARD_GICR_BASE",
+            "NOVA_BOARD_SMMU_BASE", "NOVA_BOARD_SMMU_SIZE",
+            "NOVA_BOARD_SMMU_EVENT_INTID", "NOVA_BOARD_SMMU_CMD_INTID",
+            "NOVA_BOARD_SMMU_ERROR_INTID",
+        ])
+        values["NOVA_BOARD_GUEST_CPU_COMPATIBLE"] = abi.read_string_define(
+            board_layout, "NOVA_BOARD_GUEST_CPU_COMPATIBLE")
+    except ValueError as error:
+        sys.exit(f"nova dtb: {error}")
     return values
 
 
@@ -399,8 +384,8 @@ def load_inventory(path: Path, layout: dict[str, int]) -> dict:
 def load_config(path: Path, layout: dict[str, int], inventory: dict) -> tuple[list[dict], list[dict]]:
     doc = yaml.safe_load(path.read_text())
     guests = doc.get("guests") if isinstance(doc, dict) else None
-    if not isinstance(guests, list) or not 1 <= len(guests) <= 4:  # kMaxGuests
-        sys.exit(f"nova dtb: {path}: 'guests' must list 1..4 entries")
+    if not isinstance(guests, list) or not 1 <= len(guests) <= abi.MAX_GUESTS:
+        sys.exit(f"nova dtb: {path}: 'guests' must list 1..{abi.MAX_GUESTS} entries")
 
     # PA windows pack from the IPA base with Block-aligned starts —
     # the same cursor rule guest_config.cpp applies at boot. The whole
@@ -413,15 +398,11 @@ def load_config(path: Path, layout: dict[str, int], inventory: dict) -> tuple[li
     for i, g in enumerate(guests):
         name = g.get("name", f"vm{i}")
         size = int(g.get("memory_size", layout["NOVA_GUEST_IPA_SIZE"]))
-        vcpus = int(g.get("vcpus", 1))
+        vcpus = abi.validate_guest(f"nova dtb: {name}", g)
         uart = g.get("uart", "none")
         bootargs = g.get("bootargs", "")
         cores = g.get("cores")
         autostart = bool(g.get("autostart", False))
-        if not 1 <= vcpus <= 2:  # kMaxVcpusPerVm
-            sys.exit(f"nova dtb: {name}: vcpus {vcpus} (supported: 1..2)")
-        if uart not in ("none", "vuart"):
-            sys.exit(f"nova dtb: {name}: uart '{uart}' (supported: none, vuart)")
         if not isinstance(bootargs, str):
             sys.exit(f"nova dtb: {name}: bootargs must be a string")
         if cores is not None:

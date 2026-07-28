@@ -14,6 +14,13 @@
  * usual constexpr guidance does not apply. */
 // NOLINTBEGIN(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
+/* Static bounds on the guest set: entries in guest_table() and vCPUs per
+ * VM (a fixed stride, so a flat slot identifies one execution context).
+ * They size every per-VM backing store, and the build-time generators
+ * reject a configuration that exceeds them, so both sides read here. */
+#define NOVA_MAX_GUESTS       4
+#define NOVA_MAX_VCPUS_PER_VM 2
+
 /* Every guest sees the same IPA window (and links against it); the
  * backing PA differs per guest by slot. */
 #define NOVA_GUEST_IPA_BASE 0x50000000

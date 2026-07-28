@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from . import config
+from .image import abi
 
 
 def _require_yaml():
@@ -115,15 +116,6 @@ def validate(demo_name: str, manifest: dict) -> None:
             f"[nova demo] {demo_name}: qemu_devices must be a list of non-empty strings"
         )
     for guest in manifest.get("guests", []):
-        vcpus = guest.get("vcpus", 1)
-        if not 1 <= vcpus <= 2:  # kMaxVcpusPerVm (nova/abi/guest.hpp)
-            raise SystemExit(
-                f"[nova demo] {demo_name}: guest '{guest.get('name')}' asks for "
-                f"{vcpus} vcpus (supported: 1..2)"
-            )
-        uart = guest.get("uart", "none")
-        if uart not in ("none", "vuart"):  # UartKind (nova/abi/guest.hpp)
-            raise SystemExit(
-                f"[nova demo] {demo_name}: guest '{guest.get('name')}' asks for "
-                f"uart '{uart}' (supported: none, vuart)"
-            )
+        abi.validate_guest(
+            f"[nova demo] {demo_name}: guest '{guest.get('name')}'", guest
+        )
