@@ -8,7 +8,7 @@ set(CMAKE_SYSTEM_PROCESSOR aarch64)
 get_filename_component(TOOLCHAIN_BIN_DIR "${CMAKE_CURRENT_LIST_DIR}/../.toolchain/current/bin" ABSOLUTE)
 
 # REQUIRED: fail at configure with a clear message if the toolchain is
-# missing, instead of an obscure error later (run scripts/setup_env.sh).
+# missing, instead of an obscure error later (run scripts/bootstrap).
 find_program(CMAKE_C_COMPILER aarch64-none-elf-gcc HINTS "${TOOLCHAIN_BIN_DIR}" REQUIRED)
 find_program(CMAKE_CXX_COMPILER aarch64-none-elf-g++ HINTS "${TOOLCHAIN_BIN_DIR}" REQUIRED)
 find_program(CMAKE_ASM_COMPILER aarch64-none-elf-gcc HINTS "${TOOLCHAIN_BIN_DIR}" REQUIRED)

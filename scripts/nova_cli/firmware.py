@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import os
 import re
 import shutil
@@ -302,29 +301,6 @@ def _verify(args) -> int:
     )
 
 
-def _legacy_smoke(_args) -> int:
-    build_profile("n1sdp")
-    return 0
-
-
-def _legacy_qemu_smoke(args) -> int:
-    payload = build_profile("qemu-tfa")
-    if args.profile_only:
-        return 0
-    return verify_qemu_tfa(
-        build_only=args.build_only,
-        payload=payload,
-    )
-
-
-def _legacy_fip(args) -> int:
-    package_n1sdp(
-        args.payload,
-        args.output or config.BUILD_ROOT / "n1sdp-firmware",
-    )
-    return 0
-
-
 def register(subcommands) -> None:
     parser = subcommands.add_parser("firmware", help="build and verify TF-A")
     operations = parser.add_subparsers(dest="firmware_command", required=True)
@@ -343,18 +319,5 @@ def register(subcommands) -> None:
     verify.add_argument("platform", choices=("qemu-tfa",))
     verify.add_argument("--build-only", action="store_true")
     verify.add_argument("--output", type=Path)
-    verify.add_argument("--payload", type=Path, help=argparse.SUPPRESS)
+    verify.add_argument("--payload", type=Path)
     verify.set_defaults(handler=_verify)
-
-    smoke = operations.add_parser("smoke", help=argparse.SUPPRESS)
-    smoke.set_defaults(handler=_legacy_smoke)
-
-    qemu_smoke = operations.add_parser("qemu-smoke", help=argparse.SUPPRESS)
-    qemu_smoke.add_argument("--profile-only", action="store_true")
-    qemu_smoke.add_argument("--build-only", action="store_true")
-    qemu_smoke.set_defaults(handler=_legacy_qemu_smoke)
-
-    fip = operations.add_parser("fip", help=argparse.SUPPRESS)
-    fip.add_argument("payload", type=Path)
-    fip.add_argument("output", type=Path, nargs="?")
-    fip.set_defaults(handler=_legacy_fip)

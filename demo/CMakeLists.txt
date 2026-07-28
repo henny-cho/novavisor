@@ -5,18 +5,16 @@
 # (no hypervisor CIB/ETL dependencies, no -fno-rtti/-fno-exceptions since
 # all demos are C).
 #
-# Invoked by scripts/task.sh demo build / verify / verify-all.
+# Invoked by scripts/nova demo build, verify, and verify-all.
 
 cmake_minimum_required(VERSION 3.25)
 project(novavisor_demos LANGUAGES C ASM)
 
-# Verify we're using the cross toolchain. scripts/task.sh sources
-# .toolchain/env.sh before invoking cmake, which puts aarch64-none-elf-gcc
-# on PATH and sets CC via the toolchain file.
+# Verify that the shared bootstrap or toolchain image supplied the compiler.
 if(NOT CMAKE_C_COMPILER MATCHES "aarch64-none-elf")
     message(FATAL_ERROR
         "Demo guests require the aarch64-none-elf cross toolchain. "
-        "Run 'source .toolchain/env.sh' or invoke via scripts/task.sh.")
+        "Run scripts/bootstrap, then source .toolchain/env.sh.")
 endif()
 
 set(CMAKE_C_STANDARD 17)

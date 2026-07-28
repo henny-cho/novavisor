@@ -4,8 +4,8 @@
         {
             "label": "qemu: start GDB stub",
             "type": "shell",
-            "command": "${workspaceFolder}/scripts/task.sh",
-            "args": ["debug"],
+            "command": "${workspaceFolder}/scripts/nova",
+            "args": ["run", "--debug"],
             "isBackground": true,
             "problemMatcher": [
                 {
@@ -34,8 +34,8 @@
         {
             "label": "qemu: start GDB stub (demo)",
             "type": "shell",
-            "command": "${workspaceFolder}/scripts/task.sh",
-            "args": ["demo", "debug", "${input:demoName}"],
+            "command": "${workspaceFolder}/scripts/nova",
+            "args": ["demo", "run", "${input:demoName}", "--debug"],
             "isBackground": true,
             "problemMatcher": [
                 {
@@ -72,9 +72,7 @@
             }
         }
     ],
-    // Keep `inputs[0].options` in sync with `demo/NN_*/` directories so the
-    // F5 `QEMU Demo Debug` picker shows every available demo. See README's
-    // Demo-driven phase completion section.
+    // Keep the picker in sync with the demo directories.
     "inputs": [
         {
             "id": "demoName",

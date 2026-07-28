@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-TASK = REPO / "scripts" / "task.sh"
 NOVA = REPO / "scripts" / "nova"
-DEMO = REPO / "scripts" / "demo_runner.py"
 PRESETS = REPO / "CMakePresets.json"
+sys.path.insert(0, str(REPO / "scripts"))
+
+from nova_cli import config  # noqa: E402
 
 
 def run(*args: str) -> subprocess.CompletedProcess[str]:
@@ -35,7 +37,6 @@ class PublicCommandContractTest(unittest.TestCase):
             "fmt",
             "lint",
             "run",
-            "debug",
             "size",
             "objdump",
             "test",
@@ -45,14 +46,6 @@ class PublicCommandContractTest(unittest.TestCase):
         ):
             self.assertIn(command, result.stdout)
 
-    def test_task_entrypoint_forwards_to_nova(self):
-        task = run(str(TASK), "--help")
-        nova = run(str(NOVA), "--help")
-
-        self.assertEqual(task.returncode, 0, task.stderr)
-        self.assertEqual(task.stdout, nova.stdout)
-        self.assertNotIn("environment loaded", task.stdout.lower())
-
     def test_demo_help_exposes_every_public_operation(self):
         result = run(str(NOVA), "demo", "--help")
 
@@ -60,23 +53,19 @@ class PublicCommandContractTest(unittest.TestCase):
         for command in (
             "list",
             "build",
-            "qemu-args",
             "fetch",
             "run",
             "verify",
             "soak",
-            "verify-repeat",
             "verify-all",
-            "debug",
         ):
             self.assertIn(command, result.stdout)
 
-    def test_demo_compatibility_entrypoint_forwards_to_nova(self):
-        legacy = run("python3", str(DEMO), "--help")
-        nova = run(str(NOVA), "demo", "--help")
-
-        self.assertEqual(legacy.returncode, 0, legacy.stderr)
-        self.assertEqual(legacy.stdout, nova.stdout)
+    def test_debug_is_an_option_on_run_commands(self):
+        for command in ((str(NOVA), "run", "--help"), (str(NOVA), "demo", "run", "1", "--help")):
+            result = run(*command)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("--debug", result.stdout)
 
     def test_firmware_help_exposes_role_based_operations(self):
         result = run(str(NOVA), "firmware", "--help")
@@ -85,12 +74,9 @@ class PublicCommandContractTest(unittest.TestCase):
         for operation in ("profile", "package", "verify"):
             self.assertIn(operation, result.stdout)
 
-    def test_qemu_board_arguments_are_machine_readable_and_stable(self):
-        result = run(str(NOVA), "demo", "qemu-args")
-
-        self.assertEqual(result.returncode, 0, result.stderr)
+    def test_qemu_board_arguments_have_one_internal_owner(self):
         self.assertEqual(
-            result.stdout.strip().split(),
+            list(config.QEMU_BOARD_ARGS),
             [
                 "-machine",
                 "virt,virtualization=on,gic-version=3,iommu=smmuv3,highmem-ecam=off",
@@ -105,7 +91,32 @@ class PublicCommandContractTest(unittest.TestCase):
                 "1024",
             ],
         )
-        self.assertEqual(result.stderr, "")
+
+    def test_removed_compatibility_commands_are_rejected(self):
+        commands = (
+            ("debug",),
+            ("format",),
+            ("demo", "debug", "1"),
+            ("demo", "verify" + "-repeat", "1", "--runs", "1"),
+            ("demo", "qemu-args"),
+            ("firmware", "smoke"),
+            ("firmware", "qemu-smoke"),
+            ("firmware", "fip"),
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual(run(str(NOVA), *command).returncode, 2)
+
+    def test_compatibility_entrypoints_are_removed(self):
+        for name in (
+            "task" + ".sh",
+            "task" + "_legacy.sh",
+            "demo" + "_runner.py",
+            "setup" + "_env.sh",
+            "qemu" + "_tfa_smoke.sh",
+            "n1sdp" + "_firmware.sh",
+        ):
+            self.assertFalse((REPO / "scripts" / name).exists(), name)
 
 
 class BuildPresetContractTest(unittest.TestCase):
@@ -127,9 +138,7 @@ class BuildPresetContractTest(unittest.TestCase):
         self.assertLessEqual(required, build)
 
     def test_public_entrypoints_are_executable(self):
-        self.assertTrue(TASK.stat().st_mode & 0o111)
         self.assertTrue(NOVA.stat().st_mode & 0o111)
-        self.assertTrue(DEMO.stat().st_mode & 0o111)
 
 
 if __name__ == "__main__":

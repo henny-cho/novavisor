@@ -29,7 +29,7 @@ class WorkflowContractTest(unittest.TestCase):
 
     def test_ci_and_soak_use_the_same_immutable_image(self):
         ci = (WORKFLOWS / "ci.yml").read_text()
-        soak = (WORKFLOWS / "soak.yml").read_text()
+        soak = (WORKFLOWS / "recovery-soak.yml").read_text()
 
         self.assertEqual(ci.count(f"image: {IMAGE}"), 1)
         self.assertEqual(soak.count(f"image: {IMAGE}"), 1)
@@ -46,7 +46,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("scripts/nova ci ${{ matrix.lane }}", text)
         for lane in ("static", "runtime"):
             self.assertIn(f"lane: {lane}", text)
-        self.assertNotIn("scripts/task.sh", text)
+        self.assertNotIn(f"scripts/{'task'}.sh", text)
 
     def test_cache_action_has_no_provisioning(self):
         action = (GITHUB / "actions" / "cache-build" / "action.yml").read_text()

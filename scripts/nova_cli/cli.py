@@ -65,7 +65,6 @@ def parser() -> argparse.ArgumentParser:
 
     format_parser = sub.add_parser(
         "fmt",
-        aliases=["format"],
         help="format C and C++ sources",
     )
     format_parser.add_argument("--check", action="store_true")
@@ -78,10 +77,6 @@ def parser() -> argparse.ArgumentParser:
     _add_build_options(run_parser)
     run_parser.add_argument("--debug", action="store_true")
     run_parser.set_defaults(handler=_run)
-
-    debug_parser = sub.add_parser("debug", help="compatibility alias for run --debug")
-    _add_build_options(debug_parser)
-    debug_parser.set_defaults(handler=_run, debug=True)
 
     for operation in ("size", "objdump"):
         inspect_parser = sub.add_parser(operation, help=f"inspect the target ELF with {operation}")

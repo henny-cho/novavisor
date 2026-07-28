@@ -8,7 +8,7 @@ payload_mode: embedded
 config: "configs/linux.yml"
 
 # External image: fetch.sh builds the pinned kernel+initramfs into
-# external/cache/guests/13_linux/ (run `task.sh demo fetch 13` once).
+# external/cache/guests/13_linux/ (run `scripts/nova demo fetch 13` once).
 # The arm64 Image header starts with a branch, so entry == load base.
 guests:
   - name: "linux"

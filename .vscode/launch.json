@@ -8,7 +8,7 @@
             "program": "${command:cmake.launchTargetPath}",
             "cwd": "${workspaceFolder}",
             "MIMode": "gdb",
-            "miDebuggerPath": "${workspaceFolder}/scripts/aarch64_gdb.sh",
+            "miDebuggerPath": "${workspaceFolder}/scripts/aarch64-gdb",
             "miDebuggerServerAddress": "localhost:1234",
             "stopAtConnect": true,
             "externalConsole": false,
@@ -32,7 +32,7 @@
             "program": "${workspaceFolder}/build/aarch64-debug/novavisor.elf",
             "cwd": "${workspaceFolder}",
             "MIMode": "gdb",
-            "miDebuggerPath": "${workspaceFolder}/scripts/aarch64_gdb.sh",
+            "miDebuggerPath": "${workspaceFolder}/scripts/aarch64-gdb",
             "miDebuggerServerAddress": "localhost:1234",
             "stopAtConnect": true,
             "externalConsole": false,
@@ -45,7 +45,7 @@
                     "ignoreFailures": true
                 },
                 {
-                    "description": "Load demo guest symbols (written by scripts/task.sh demo debug)",
+                    "description": "Load demo guest symbols",
                     "text": "source ${workspaceFolder}/build/demo/debug-symbols.gdb",
                     "ignoreFailures": true
                 }

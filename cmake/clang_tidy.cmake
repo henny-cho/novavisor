@@ -8,7 +8,7 @@
 # Rather than wiring CMAKE_CXX_CLANG_TIDY into the build (which would force a
 # dedicated build tree and a full recompile per lint run), this writes the
 # computed arguments to <build>/clang_tidy_extra_args.txt at configure time.
-# `scripts/task.sh lint` feeds them to run-clang-tidy against this build's
+# `scripts/nova lint` feeds them to run-clang-tidy against this build's
 # compile_commands.json.
 
 if(NOT (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64"))

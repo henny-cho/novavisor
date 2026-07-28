@@ -75,6 +75,8 @@ def run_hypervisor(spec: BuildSpec, *, debug: bool) -> int:
     command = qemu.board_command(kernel=elf)
     if debug:
         command += ["-s", "-S"]
+        print("==> Launching QEMU with GDB stub on :1234 (CPU halted).")
+        print("==> Press Ctrl-A then x in QEMU to exit.")
     return process.call(command)
 
 
