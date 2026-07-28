@@ -5,6 +5,17 @@
 
 tfa_prepare_source() {
     TFA_SOURCE_DIR="${WORK_DIR}/external/cache/firmware/arm-trusted-firmware-${TFA_VERSION}"
+
+    # A checkout already at the pin is the answer: return without touching
+    # the network, the same way the guest fetch recipes exit on their
+    # version stamp. This is what lets a cache hit run the chain smoke
+    # offline — otherwise every CI run would depend on upstream being
+    # reachable to verify a revision it already has.
+    if [[ -d "${TFA_SOURCE_DIR}/.git" ]] &&
+        [[ "$(git -C "${TFA_SOURCE_DIR}" rev-parse HEAD 2>/dev/null)" == "${TFA_COMMIT}" ]]; then
+        return 0
+    fi
+
     mkdir -p "$(dirname "${TFA_SOURCE_DIR}")"
     if [[ ! -d "${TFA_SOURCE_DIR}/.git" ]]; then
         git clone --filter=blob:none --no-checkout \

@@ -8,6 +8,9 @@ inputs:
   guests:
     description: Also restore the external guest image cache
     default: "false"
+  firmware:
+    description: Also restore the pinned Trusted Firmware-A source cache
+    default: "false"
   ccache-prefix:
     description: Namespace for the ccache cache key
     default: "ccache"
@@ -17,13 +20,27 @@ runs:
     - name: Cache CPM packages
       uses: actions/cache@v6
       with:
-        # Guest images live under external/cache too but have their own
-        # cache entry (different lifecycle: fetch.sh pins, not CPM pins).
+        # Guest images and firmware sources live under external/cache too
+        # but have their own cache entries, because their lifecycles
+        # differ: they follow fetch.sh / versions.sh pins, not CPM pins.
+        # Leaving them in here would make a CMakeLists edit re-download
+        # hundreds of MB that did not change.
         path: |
           external/cache
           !external/cache/guests
+          !external/cache/firmware
         key: cpm-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake') }}
         restore-keys: cpm-
+
+    - name: Cache Trusted Firmware-A source
+      # Keyed on the pin itself: a hit lets tfa_prepare_source verify the
+      # revision it already has and build offline, so the chain smoke does
+      # not depend on upstream being reachable.
+      if: inputs.firmware == 'true'
+      uses: actions/cache@v6
+      with:
+        path: external/cache/firmware
+        key: firmware-${{ hashFiles('scripts/lib/versions.sh') }}
 
     - name: Cache ARM toolchain
       # setup_env.sh skips the ~700 MB download when the extracted

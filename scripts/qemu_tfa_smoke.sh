@@ -50,6 +50,7 @@ BUILD_BASE="${OUTPUT_DIR}/tf-a-build"
 # BL33 lives in the FIP and is loaded by BL2 at NS_IMAGE_OFFSET
 # (0x60000000) — the address qemu_tfa's board_layout links against.
 make -C "${TFA_SOURCE_DIR}" \
+    -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
     BUILD_BASE="${BUILD_BASE}" \
     CROSS_COMPILE=aarch64-none-elf- \
     PLAT=qemu \

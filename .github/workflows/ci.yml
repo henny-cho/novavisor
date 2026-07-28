@@ -60,6 +60,7 @@ jobs:
       - uses: ./.github/actions/setup-target
         with:
           guests: "true"
+          firmware: "true"
 
       - name: Build (Release)
         run: scripts/task.sh build --release
@@ -73,8 +74,13 @@ jobs:
       - name: Build N1SDP payload profile
         run: scripts/task.sh firmware smoke
 
-      - name: Build QEMU TF-A chain profile
-        run: scripts/task.sh firmware qemu-smoke --profile-only
+      - name: QEMU TF-A chain smoke
+        # Boots BL1 -> BL2 -> BL31 -> BL33 and matches five ordered
+        # handoff markers. This used to compile the BL33 profile and stop
+        # (--profile-only), which is why the gate could sit broken from
+        # Phase 25e until Phase 26b noticed: a smoke that never executes
+        # verifies nothing. ~30 s with the firmware cache warm.
+        run: scripts/task.sh firmware qemu-smoke
 
       - name: Lint
         # run-clang-tidy over the debug tree's compile database; the debug
@@ -112,6 +118,7 @@ jobs:
           name: demo-artifacts
           path: |
             build/demo-failures/
+            build/qemu-tfa-firmware/smoke.log
             build/demo/**/*.bin
             build/demo/**/*.elf
             build/aarch64-debug/novavisor.elf
