@@ -1,21 +1,20 @@
 """The clang-tidy scope is spelled twice; keep both real and identical."""
 
 import re
+import sys
 import unittest
 from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[2]
-TASK_SH = REPO / "scripts" / "task.sh"
 CLANG_TIDY = REPO / ".clang-tidy"
+sys.path.insert(0, str(REPO / "scripts"))
+
+from nova_cli.checks import LINT_TREES  # noqa: E402
 
 
 def lint_trees() -> list[str]:
-    match = re.search(
-        r'^NOVA_LINT_TREES="([^"]+)"', TASK_SH.read_text(), flags=re.MULTILINE
-    )
-    assert match, "task.sh no longer defines NOVA_LINT_TREES"
-    return match.group(1).split("|")
+    return list(LINT_TREES)
 
 
 class LintScopeTests(unittest.TestCase):
@@ -26,7 +25,7 @@ class LintScopeTests(unittest.TestCase):
             with self.subTest(tree=tree):
                 self.assertTrue((REPO / "src" / tree).is_dir())
 
-    def test_clang_tidy_header_filter_matches_task_sh(self):
+    def test_clang_tidy_header_filter_matches_cli(self):
         match = re.search(
             r"^HeaderFilterRegex:\s*'([^']+)'",
             CLANG_TIDY.read_text(),

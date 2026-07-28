@@ -10,6 +10,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 TASK = REPO / "scripts" / "task.sh"
+NOVA = REPO / "scripts" / "nova"
 DEMO = REPO / "scripts" / "demo_runner.py"
 PRESETS = REPO / "CMakePresets.json"
 
@@ -25,14 +26,14 @@ def run(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 class PublicCommandContractTest(unittest.TestCase):
-    def test_task_help_exposes_every_top_level_command(self):
-        result = run(str(TASK), "--help")
+    def test_nova_help_exposes_every_top_level_command(self):
+        result = run(str(NOVA), "--help")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         for command in (
             "build",
             "clean",
-            "format",
+            "fmt",
             "lint",
             "run",
             "debug",
@@ -43,7 +44,15 @@ class PublicCommandContractTest(unittest.TestCase):
             "firmware",
             "ci",
         ):
-            self.assertRegex(result.stdout, rf"(?m)^  {command}\s")
+            self.assertIn(command, result.stdout)
+
+    def test_task_entrypoint_forwards_to_nova(self):
+        task = run(str(TASK), "--help")
+        nova = run(str(NOVA), "--help")
+
+        self.assertEqual(task.returncode, 0, task.stderr)
+        self.assertEqual(task.stdout, nova.stdout)
+        self.assertNotIn("environment loaded", task.stdout.lower())
 
     def test_demo_help_exposes_every_public_operation(self):
         result = run("python3", str(DEMO), "--help")
@@ -105,6 +114,7 @@ class BuildPresetContractTest(unittest.TestCase):
 
     def test_public_entrypoints_are_executable(self):
         self.assertTrue(TASK.stat().st_mode & 0o111)
+        self.assertTrue(NOVA.stat().st_mode & 0o111)
         self.assertTrue(DEMO.stat().st_mode & 0o111)
 
 
