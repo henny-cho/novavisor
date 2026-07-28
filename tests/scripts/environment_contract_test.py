@@ -28,6 +28,9 @@ class ToolVersionTests(unittest.TestCase):
 
         required = {
             "ARM_GNU_VERSION",
+            "ARM_GNU_SHA256_LINUX_X86_64",
+            "ARM_GNU_SHA256_LINUX_AARCH64",
+            "ARM_GNU_SHA256_DARWIN_ARM64",
             "CLANG_FORMAT_VERSION",
             "CLANG_TIDY_VERSION",
             "QEMU_MIN_VERSION",
@@ -39,12 +42,22 @@ class ToolVersionTests(unittest.TestCase):
         self.assertEqual(set(entries), required)
         for name in required:
             self.assertEqual(config.tool_version(name), entries[name])
+            if "_SHA256_" in name:
+                self.assertRegex(entries[name], r"^[0-9a-f]{64}$")
 
     def test_public_bootstrap_and_image_share_the_version_source(self):
         self.assertTrue(BOOTSTRAP.stat().st_mode & 0o111)
         self.assertIn("source \"${REPO}/scripts/tool-versions.env\"", BOOTSTRAP.read_text())
         self.assertIn("scripts/tool-versions.env", IMAGE.read_text())
         self.assertIn("scripts/bootstrap --image", IMAGE.read_text())
+        self.assertRegex(
+            IMAGE.read_text().splitlines()[0],
+            r"^FROM ubuntu:26\.04@sha256:[0-9a-f]{64}$",
+        )
+        self.assertIn(
+            'verify_sha256 "${TOOLCHAIN_SHA256}" "${archive}"',
+            BOOTSTRAP.read_text(),
+        )
 
     def test_devcontainer_builds_the_shared_image(self):
         data = json.loads(

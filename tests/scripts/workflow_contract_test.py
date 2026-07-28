@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import unittest
 from pathlib import Path
 
@@ -12,6 +13,9 @@ REPO = Path(__file__).resolve().parents[2]
 GITHUB = REPO / ".github"
 WORKFLOWS = GITHUB / "workflows"
 PINNED_IMAGE = re.compile(r"image:\s*(\S+@sha256:[0-9a-f]{64})")
+sys.path.insert(0, str(REPO / "scripts"))
+
+from novakit.commands import ci as ci_command  # noqa: E402
 
 
 def pinned_images() -> set[str]:
@@ -64,7 +68,7 @@ class WorkflowContractTest(unittest.TestCase):
 
         text = (WORKFLOWS / "ci.yml").read_text()
         self.assertIn("scripts/nova ci ${{ matrix.lane }}", text)
-        for lane in ("host", "static", "runtime"):
+        for lane in ci_command.BY_NAME:
             self.assertIn(f"lane: {lane}", text)
         self.assertNotIn(f"scripts/{'task'}.sh", text)
 
@@ -78,7 +82,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn(lanes["container"]["image"], pinned_images())
         self.assertEqual(
             [entry["lane"] for entry in lanes["strategy"]["matrix"]["include"]],
-            ["host", "static", "runtime"],
+            [lane.name for lane in ci_command.LANES],
         )
 
     def test_the_gate_compares_one_matrix_result_without_interpolation(self):
@@ -97,7 +101,8 @@ class WorkflowContractTest(unittest.TestCase):
 
         self.assertNotIn("bootstrap", action)
         self.assertNotIn(".toolchain", action)
-        self.assertEqual(list(yaml.safe_load(action)["inputs"]), ["name"])
+        data = yaml.safe_load(action)
+        self.assertEqual(list(data["inputs"]), ["name"])
         for path in (
             "external/cache/cpm",
             "external/cache/firmware",
@@ -105,6 +110,15 @@ class WorkflowContractTest(unittest.TestCase):
             "~/.cache/ccache",
         ):
             self.assertIn(path, action)
+        cache = next(
+            step for step in data["runs"]["steps"] if step.get("name") == "Cache ccache"
+        )
+        for field in ("key", "restore-keys"):
+            self.assertIn(
+                "${{ steps.lane.outputs.cache_scope }}",
+                cache["with"][field],
+            )
+        self.assertIn('echo "::error::unknown lane: ${LANE}"', action)
 
     def test_no_workflow_repeats_what_a_lane_needs(self):
         # guests/firmware follow from the lane name, so a workflow that spells

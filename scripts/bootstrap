@@ -82,6 +82,25 @@ install_python_tools() {
     pipx_install "ruff==${RUFF_VERSION}"
 }
 
+verify_sha256() {
+    local expected="$1"
+    local path="$2"
+    local actual
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum "${path}")"
+    elif command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 256 "${path}")"
+    else
+        echo "No SHA-256 verifier is available" >&2
+        return 1
+    fi
+    actual="${actual%% *}"
+    if [[ "${actual}" != "${expected}" ]]; then
+        echo "SHA-256 mismatch for ${path}" >&2
+        return 1
+    fi
+}
+
 install_actionlint() {
     local version="${ACTIONLINT_VERSION#v}"
     local platform
@@ -110,26 +129,41 @@ install_actionlint() {
     curl -fsSLo "${temporary}/${archive}" "${release}/${archive}"
     curl -fsSLo "${temporary}/checksums.txt" \
         "${release}/actionlint_${version}_checksums.txt"
-    (
-        cd "${temporary}"
-        grep "  ${archive}$" checksums.txt | sha256sum --check -
-    )
+    local expected
+    expected="$(awk -v archive="${archive}" '$2 == archive {print $1}' \
+        "${temporary}/checksums.txt")"
+    if [[ -z "${expected}" ]]; then
+        echo "Missing checksum for ${archive}" >&2
+        return 1
+    fi
+    verify_sha256 "${expected}" "${temporary}/${archive}"
     tar -xzf "${temporary}/${archive}" -C "${temporary}" actionlint
     "${PRIVILEGE[@]}" install -m 0755 "${temporary}/actionlint" /usr/local/bin/actionlint
     rm -rf "${temporary}"
 }
 
 toolchain_names() {
-    local os_prefix=""
-    local architecture="x86_64"
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-        os_prefix="darwin-"
-    fi
-    if [[ "$(uname -m)" == "arm64" || "$(uname -m)" == "aarch64" ]]; then
-        architecture="$([[ -n "${os_prefix}" ]] && echo arm64 || echo aarch64)"
-    fi
-    TOOLCHAIN_ARCHIVE="arm-gnu-toolchain-${ARM_GNU_VERSION}-${os_prefix}${architecture}-aarch64-none-elf.tar.xz"
-    TOOLCHAIN_EXTRACTED="arm-gnu-toolchain-${ARM_GNU_VERSION,,}-${os_prefix}${architecture}-aarch64-none-elf"
+    local host
+    case "$(uname -s):$(uname -m)" in
+        Linux:x86_64)
+            host="x86_64"
+            TOOLCHAIN_SHA256="${ARM_GNU_SHA256_LINUX_X86_64}"
+            ;;
+        Linux:aarch64 | Linux:arm64)
+            host="aarch64"
+            TOOLCHAIN_SHA256="${ARM_GNU_SHA256_LINUX_AARCH64}"
+            ;;
+        Darwin:arm64 | Darwin:aarch64)
+            host="darwin-arm64"
+            TOOLCHAIN_SHA256="${ARM_GNU_SHA256_DARWIN_ARM64}"
+            ;;
+        *)
+            echo "Unsupported Arm GNU host: $(uname -s) $(uname -m)" >&2
+            return 1
+            ;;
+    esac
+    TOOLCHAIN_ARCHIVE="arm-gnu-toolchain-${ARM_GNU_VERSION}-${host}-aarch64-none-elf.tar.xz"
+    TOOLCHAIN_EXTRACTED="arm-gnu-toolchain-${ARM_GNU_VERSION,,}-${host}-aarch64-none-elf"
 }
 
 install_toolchain() {
@@ -140,6 +174,7 @@ install_toolchain() {
         local url="https://developer.arm.com/-/media/Files/downloads/gnu/${ARM_GNU_VERSION}/binrel/${TOOLCHAIN_ARCHIVE}"
         mkdir -p "${TOOLCHAIN_ROOT}"
         curl -fL --retry 3 "${url}" -o "${archive}"
+        verify_sha256 "${TOOLCHAIN_SHA256}" "${archive}"
         tar -xf "${archive}" -C "${TOOLCHAIN_ROOT}"
         rm -f "${archive}"
     fi

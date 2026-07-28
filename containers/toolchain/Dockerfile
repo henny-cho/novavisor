@@ -1,4 +1,4 @@
-FROM ubuntu:26.04
+FROM ubuntu:26.04@sha256:3131b4cc82a783df6c9df078f86e01819a13594b865c2cad47bd1bca2b7063bb
 
 ARG DEBIAN_FRONTEND=noninteractive
 ENV NOVA_TOOLCHAIN_DIR=/opt/toolchain \
