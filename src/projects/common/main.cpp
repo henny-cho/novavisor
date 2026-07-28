@@ -6,6 +6,7 @@
 //                     …), ending with the boot banner.
 //   2. MainLoop     → core_vcpu_component: ERET into EL1 ([[noreturn]]).
 
+#include "boot_contract.hpp"
 #include "guest_config.hpp"
 #include "nexus.hpp"
 
@@ -14,8 +15,12 @@
 extern "C" void novavisor_main();
 
 void novavisor_main() {
-  // Boot core only (secondaries enter via novavisor_secondary), before
-  // RuntimeStart — every guest_table() consumer sees a populated table.
+  // Boot core only (secondaries enter via novavisor_secondary). Both
+  // calls run before RuntimeStart: the hardware contract because the
+  // timebase it adopts backs the very first init action's bounded waits,
+  // and the guest table so every guest_table() consumer sees it
+  // populated.
+  nova::boot_contract::enforce();
   nova::project::init_guest_table();
   nova::nova_top top{};
   top.main(); // [[noreturn]]

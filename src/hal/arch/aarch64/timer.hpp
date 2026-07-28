@@ -11,6 +11,8 @@
 // per-VM, rewritten on switch-in) and read-only access to the physical
 // counter; programming the EL1 physical timer traps to EL2.
 
+#include "nova/arch/timebase.hpp"
+
 #include <cstdint>
 
 namespace nova::arch::hyp_timer {
@@ -53,18 +55,49 @@ inline void write_cntvoff(std::uint64_t offset) noexcept {
   return cnt;
 }
 
-// Counter frequency in Hz (fixed by the platform, readable at any EL).
-[[nodiscard]] inline auto freq() noexcept -> std::uint64_t {
+namespace detail {
+// The adopted counter frequency. Written once by the boot contract gate
+// before any RuntimeStart action runs, so every later reader sees a
+// value that was judged usable. A secondary reads it after PSCI hands
+// the core over, which orders the primary's write ahead of the
+// secondary's first instruction — the same premise the boot CTR_EL0
+// snapshot relies on.
+inline std::uint64_t g_freq_hz = 0;
+} // namespace detail
+
+// Raw CNTFRQ_EL0. Only the boot gate and the per-PE agreement check read
+// this; everything else uses the adopted value below.
+[[nodiscard]] inline auto raw_freq() noexcept -> std::uint64_t {
   std::uint64_t f = 0;
   __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f));
   return f;
 }
 
-// Milliseconds → counter ticks. Multiplying before dividing keeps the
-// sub-millisecond resolution of the counter; callers use timeouts far
-// below the 64-bit overflow point (freq() is tens of MHz).
+// Judge CNTFRQ_EL0 and adopt it as the machine timebase. Every bounded
+// wait and timer arm derives from the adopted value, so a failed
+// judgement has no safe fallback — the caller must stop the boot.
+[[nodiscard]] inline auto adopt_timebase() noexcept -> TimebaseError {
+  const std::uint64_t hz    = raw_freq();
+  const TimebaseError error = validate_timebase(hz);
+  if (error == TimebaseError::kNone) {
+    detail::g_freq_hz = hz;
+  }
+  return error;
+}
+
+// Counter frequency in Hz — the adopted value, not a fresh read. One
+// load instead of an MRS on every slice rearm and watchdog refresh.
+[[nodiscard]] inline auto freq() noexcept -> std::uint64_t {
+  return detail::g_freq_hz;
+}
+
+// Milliseconds → counter ticks, overflow-safe (nova/arch/timebase.hpp).
+// A rejected conversion yields 0, which would place a deadline at now —
+// reachable only before the boot gate adopts a timebase, or for windows
+// no caller arms. The gate exists so the first case cannot happen at
+// runtime; do not add a path that arms timers ahead of it.
 [[nodiscard]] inline auto ms_to_ticks(std::uint64_t ms) noexcept -> std::uint64_t {
-  return freq() * ms / 1000U;
+  return nova::arch::ms_to_ticks(freq(), ms).ticks;
 }
 
 // Absolute counter value `ms` milliseconds from now — the shape every

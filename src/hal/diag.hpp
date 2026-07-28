@@ -2,7 +2,10 @@
 
 // hal/diag.hpp
 //
-// Fatal-dump state facade — consumed by the trap_handler dump only.
+// EL2 state snapshot facade. Two consumers: the trap_handler fatal dump,
+// which needs it to attribute a failure, and the boot identity line,
+// which reports the same registers so a first failure can be compared
+// against the state the image actually started in.
 
 #include "hal/arch/aarch64/exception/diag.hpp"
 

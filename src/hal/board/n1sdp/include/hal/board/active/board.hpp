@@ -9,8 +9,13 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 namespace nova::board::active {
+
+// Board identity for the boot report (hal/platform.hpp re-exports it;
+// generic code may not spell a board name itself).
+inline constexpr std::string_view kName = NOVA_BOARD_NAME;
 
 inline constexpr std::uintptr_t kUart0Base = NOVA_BOARD_UART0_BASE;
 inline constexpr std::uint32_t  kUartIntid = NOVA_BOARD_UART0_INTID;

@@ -4,6 +4,7 @@
 
 #include "core_vcpu/core_vcpu.hpp"
 #include "hal/console.hpp"
+#include "hal/cpu.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/arch/trap_context.hpp"
 #include "psci/psci_model.hpp"
@@ -28,7 +29,7 @@ void psci_component::handle_hvc(HvcCall* call) noexcept {
   }
   // The SMCCC Arch service shares this subscriber: same conduit, same
   // guest-facing firmware interface, and PSCI_FEATURES answers for both.
-  if (const smccc::Verdict a = smccc::dispatch(call->func_id, call->ctx->x[1]); a.claimed) {
+  if (const smccc::Verdict a = smccc::dispatch(call->func_id, call->ctx->x[1], cpu::speculation()); a.claimed) {
     call->handled   = true;
     call->ctx->x[0] = a.ret;
     return;
