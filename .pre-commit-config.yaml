@@ -1,27 +1,26 @@
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-added-large-files
 
-  - repo: https://github.com/pre-commit/mirrors-clang-format
-    rev: v20.1.7
+  - repo: local
     hooks:
-      - id: clang-format
+      - id: nova-format
+        name: clang-format
+        entry: scripts/nova fmt
+        language: system
+        pass_filenames: false
         types_or: [c++, c]
 
   - repo: https://github.com/shellcheck-py/shellcheck-py
-    rev: v0.10.0.1
+    rev: v0.11.0.1
     hooks:
       - id: shellcheck
-        # Follow `source` statements in setup_env.sh / task.sh.
         args: ["-x"]
 
-  # clang-tidy is NOT run as a pre-commit hook.
-  # Reason: cross-compilation requires --target=aarch64-none-elf and -isystem
-  # paths that are only available after cmake configuration; a per-file hook
-  # cannot replicate the CMake-integrated invocation reliably.
-  # Use: scripts/task.sh lint
+  # Cross-compilation context is only available after CMake configuration.
+  # Run clang-tidy with: scripts/nova lint

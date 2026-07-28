@@ -5,7 +5,7 @@ enabled: true
 timeout_seconds: 40
 
 # The guest parses the DTB the hypervisor passes in x0; each variant
-# rebuilds the hypervisor with its config (task.sh build --config) and
+# rebuilds the hypervisor with its config (scripts/nova build --config) and
 # checks the guest's report matches the YAML's declared values. The
 # guests list is shared; memory_size/vcpus below document the LARGE
 # variant (the fields are validation/documentation only — the DTB is

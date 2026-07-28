@@ -1,16 +1,9 @@
-# Dependabot — keeps the devcontainer base image and the workflow actions
-# current.
+# Dependabot keeps the shared toolchain image and workflow actions current.
 
 version: 2
 updates:
-  # The devcontainer's only updatable dependency is the Dockerfile FROM
-  # image — devcontainer.json declares no features — so the docker
-  # ecosystem is the one that tracks it. (The former "devcontainers" entry
-  # failed every run: that ecosystem treats `directory` as the repo root
-  # and looks for .devcontainer/devcontainer.json beneath it, so
-  # "/.devcontainer" resolved to /.devcontainer/.devcontainer/.)
   - package-ecosystem: "docker"
-    directory: "/.devcontainer"
+    directory: "/containers/toolchain"
     schedule:
       interval: weekly
 

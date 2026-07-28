@@ -53,7 +53,7 @@ if(CMAKE_CROSSCOMPILING)
     add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-mgeneral-regs-only>)
 endif()
 
-# Clang-Tidy retarget args for `scripts/task.sh lint` (cross builds only).
+# Clang-Tidy retarget args for `scripts/nova lint` (cross builds only).
 include(cmake/clang_tidy.cmake)
 
 # Target-definition helpers (nova_add_component, nova_add_host_test).
@@ -63,7 +63,7 @@ include(cmake/nova_platform_contract.cmake)
 # CMake Package Manager (CPM) — v0.42.1. Must be included before any CPM
 # dependency so CIB's bundled get_cpm.cmake (pinned at v0.40.2) finds CPM
 # already loaded and skips its own download. All CPMAddPackage sources land
-# in CPM_SOURCE_CACHE (external/cache, exported by scripts/task.sh) and are
+# in CPM_SOURCE_CACHE (external/cache/cpm, exported by scripts/nova) and are
 # shared across build trees.
 include(cmake/get_cpm.cmake)
 include(cmake/cib_cpm_pin.cmake)

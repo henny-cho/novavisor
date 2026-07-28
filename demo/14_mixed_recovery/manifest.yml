@@ -9,7 +9,7 @@ timeout_seconds: 180
 config: "configs/mixed.yml"
 
 # External images assembled by fetch.sh from the 12/13 pipelines
-# (run `task.sh demo fetch 14` once). Linux sits at the packed PA
+# (run `scripts/nova demo fetch 14` once). Linux sits at the packed PA
 # slot after Zephyr's 8 MiB window.
 guests:
   - name: "zephyr"
