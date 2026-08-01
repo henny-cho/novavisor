@@ -82,7 +82,7 @@ class CliTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn("unrecognized arguments", result.stderr)
+        self.assertIn("No such option", result.stderr)
 
     def test_build_selectors_are_mutually_exclusive(self):
         result = subprocess.run(
@@ -100,7 +100,7 @@ class CliTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn("not allowed with argument", result.stderr)
+        self.assertIn("cannot be used together", result.stderr)
 
     def test_ci_help_exposes_explicit_lanes(self):
         result = subprocess.run(
@@ -112,7 +112,7 @@ class CliTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("{host,static,runtime,all}", result.stdout)
+        self.assertIn("host|static|runtime|all", result.stdout)
 
     def test_lane_steps_are_uniquely_named(self):
         # A step name is what the CI summary reports and what a failure is

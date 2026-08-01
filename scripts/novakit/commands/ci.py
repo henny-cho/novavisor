@@ -2,18 +2,28 @@
 
 from __future__ import annotations
 
-from ..services import ci
+from enum import Enum
+from typing import Annotated
+
+import typer
+
+from ..services import ci as service
+
+Lane = Enum(
+    "Lane",
+    {name.upper(): name for name in (*service.BY_NAME, "all")},
+    type=str,
+)
 
 
-def _ci(args) -> int:
-    return ci.run_lane(args.lane)
+def run(
+    lane: Annotated[Lane, typer.Argument(help="Lane to run; all runs every lane.")],
+) -> None:
+    """Run a CI lane locally."""
+    code = service.run_lane(lane.value)
+    if code:
+        raise typer.Exit(code)
 
 
-def register(subcommands) -> None:
-    parser = subcommands.add_parser("ci", help="run a CI lane locally")
-    parser.add_argument(
-        "lane",
-        choices=(*ci.BY_NAME, "all"),
-        help="lane to run; all runs every lane in order",
-    )
-    parser.set_defaults(handler=_ci)
+def register(root: typer.Typer) -> None:
+    root.command("ci")(run)

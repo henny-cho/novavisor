@@ -2,34 +2,43 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
+import typer
+
 from ..services import gates
 
-
-def _format(args) -> int:
-    return gates.format_sources(check=args.check)
-
-
-def _lint(_args) -> int:
-    return gates.lint()
-
-
-def _test(_args) -> int:
-    return gates.test()
-
-
-def register(subcommands) -> None:
-    formatting = subcommands.add_parser(
-        "format",
-        help="format C and C++ sources",
-    )
-    formatting.add_argument(
+Check = Annotated[
+    bool,
+    typer.Option(
         "--check",
-        action="store_true",
-        help="report formatting differences without changing files",
-    )
-    formatting.set_defaults(handler=_format)
+        help="Report formatting differences without changing files.",
+    ),
+]
 
-    subcommands.add_parser("lint", help="run clang-tidy").set_defaults(handler=_lint)
-    subcommands.add_parser("test", help="build and run host tests").set_defaults(
-        handler=_test
-    )
+
+def _finish(code: int) -> None:
+    if code:
+        raise typer.Exit(code)
+
+
+def format_sources(check: Check = False) -> None:
+    """Format C and C++ sources."""
+    _finish(gates.format_sources(check=check))
+
+
+def lint() -> None:
+    """Run clang-tidy."""
+    _finish(gates.lint())
+
+
+def test() -> None:
+    """Build and run host tests."""
+    _finish(gates.test())
+
+
+def register(root: typer.Typer) -> None:
+    root.command("format")(format_sources)
+    root.command()(lint)
+    root.command()(test)
+    root.command("fmt", hidden=True)(format_sources)

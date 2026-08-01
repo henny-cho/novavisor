@@ -126,11 +126,13 @@ class WorkflowContractTest(unittest.TestCase):
             ['test "${LANES}" = "success"'],
         )
 
-    def test_lane_action_derives_its_caches_and_provisions_nothing(self):
+    def test_lane_action_derives_its_caches_and_reuses_python_setup(self):
         action = (GITHUB / "actions" / "lane" / "action.yml").read_text()
 
         self.assertNotIn("bootstrap", action)
         self.assertNotIn(".toolchain", action)
+        self.assertIn("scripts/python-env", action)
+        self.assertIn("NOVA_PYTHON=", action)
         data = yaml.safe_load(action)
         self.assertEqual(list(data["inputs"]), ["name"])
         for path in (

@@ -1,56 +1,32 @@
-"""Argument parsing and command dispatch for the public automation CLI."""
+"""Typer application composition for the public automation CLI."""
 
 from __future__ import annotations
 
-import argparse
 import io
 import sys
-from collections.abc import Sequence
+
+import typer
 
 from .commands import ci, demo, firmware, quality, workspace
 
-# Registration order is the order `nova --help` lists the commands.
-REGISTRARS = (workspace, quality, demo, firmware, ci)
-
-# Public migrations stay out of parser registration so the canonical help tree
-# has one name per operation. Remove an entry only after its callers migrate.
-LEGACY_PREFIXES = (
-    (("demo", "verify-all"), ("demo", "verify", "--all")),
-    (("firmware", "profile"), ("firmware", "build")),
-    (("objdump",), ("inspect", "disassemble")),
-    (("size",), ("inspect", "size")),
-    (("fmt",), ("format",)),
+app = typer.Typer(
+    name="nova",
+    help="NovaVisor automation",
+    no_args_is_help=True,
+    add_completion=False,
+    rich_markup_mode=None,
+    pretty_exceptions_enable=False,
 )
 
-
-def canonical_argv(argv: Sequence[str]) -> list[str]:
-    """Translate legacy command prefixes without advertising a second tree."""
-    arguments = list(argv)
-    for legacy, canonical in LEGACY_PREFIXES:
-        if tuple(arguments[: len(legacy)]) == legacy:
-            return [*canonical, *arguments[len(legacy) :]]
-    return arguments
+workspace.register(app)
+quality.register(app)
+app.add_typer(demo.app, name="demo")
+app.add_typer(firmware.app, name="firmware")
+ci.register(app)
 
 
-def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(prog="nova", description="NovaVisor automation")
-    subcommands = root.add_subparsers(
-        dest="command",
-        required=True,
-        title="commands",
-    )
-    for registrar in REGISTRARS:
-        registrar.register(subcommands)
-    return root
-
-
-def main(argv: list[str] | None = None) -> int:
-    # Progress output is evidence. Redirected stdout is block-buffered, so a
-    # run killed by a job timeout loses every line it printed, and the lines
-    # that do survive arrive after the command trace stderr already streamed.
-    # stderr is line-buffered; match it so both read in one causal order.
+def main() -> None:
+    # Keep stdout and stderr in causal order when CI kills a timed-out job.
     if isinstance(sys.stdout, io.TextIOWrapper):
         sys.stdout.reconfigure(line_buffering=True)
-    arguments = sys.argv[1:] if argv is None else argv
-    args = parser().parse_args(canonical_argv(arguments))
-    return args.handler(args)
+    app(prog_name="nova")

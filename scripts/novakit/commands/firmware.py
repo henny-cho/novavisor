@@ -2,92 +2,82 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from pathlib import Path
+from typing import Annotated
+
+import typer
 
 from ..services import tfa
 
-
-def _build(args) -> int:
-    tfa.build_profile(args.platform)
-    return 0
-
-
-def _package(args) -> int:
-    tfa.package_platform(
-        args.platform,
-        args.payload,
-        args.output,
-    )
-    return 0
+app = typer.Typer(
+    help="Build and verify TF-A firmware.",
+    no_args_is_help=True,
+    add_completion=False,
+    rich_markup_mode=None,
+)
 
 
-def _verify(args) -> int:
-    return tfa.verify_platform(
-        args.platform,
-        build_only=args.build_only,
-        payload=args.payload,
-        output_dir=args.output,
-    )
+def _choices(name: str, values) -> type[Enum]:
+    members = {value.upper().replace("-", "_"): value for value in values}
+    return Enum(name, members, type=str)
 
 
-def register(subcommands) -> None:
-    parser = subcommands.add_parser("firmware", help="build and verify TF-A firmware")
-    operations = parser.add_subparsers(
-        dest="firmware_command",
-        required=True,
-        title="operations",
-    )
+Profile = _choices("Profile", tfa.PROFILES)
+Packager = _choices("Packager", tfa.PACKAGERS)
+Verifier = _choices("Verifier", tfa.VERIFIERS)
+PackagePayload = Annotated[
+    Path,
+    typer.Option(metavar="FILE", help="BL33 payload to package."),
+]
+Output = Annotated[
+    Path | None,
+    typer.Option(metavar="DIR", help="Firmware output directory."),
+]
+BuildOnly = Annotated[
+    bool,
+    typer.Option("--build-only", help="Build the chain without launching QEMU."),
+]
+VerifyPayload = Annotated[
+    Path | None,
+    typer.Option(metavar="FILE", help="Use an existing BL33 payload."),
+]
 
-    build = operations.add_parser("build", help="build a BL33 firmware profile")
-    build.add_argument(
-        "platform",
-        choices=tuple(tfa.PROFILES),
-        help="profile to build",
-    )
-    build.set_defaults(handler=_build)
 
-    package = operations.add_parser("package", help="package a BL33 firmware image")
-    package.add_argument(
-        "platform",
-        choices=tuple(tfa.PACKAGERS),
-        help="target platform",
-    )
-    package.add_argument(
-        "--payload",
-        type=Path,
-        required=True,
-        metavar="FILE",
-        help="BL33 payload to package",
-    )
-    package.add_argument(
-        "--output",
-        type=Path,
-        metavar="DIR",
-        help="firmware output directory",
-    )
-    package.set_defaults(handler=_package)
+@app.command()
+def build(
+    platform: Annotated[Profile, typer.Argument(help="Profile to build.")],
+) -> None:
+    """Build a BL33 firmware profile."""
+    tfa.build_profile(platform.value)
 
-    chain = operations.add_parser("verify", help="verify a firmware chain")
-    chain.add_argument(
-        "platform",
-        choices=tuple(tfa.VERIFIERS),
-        help="firmware platform to verify",
+
+@app.command()
+def package(
+    platform: Annotated[Packager, typer.Argument(help="Target platform.")],
+    payload: PackagePayload,
+    output: Output = None,
+) -> None:
+    """Package a BL33 firmware image."""
+    tfa.package_platform(platform.value, payload, output)
+
+
+@app.command()
+def verify(
+    platform: Annotated[Verifier, typer.Argument(help="Firmware platform.")],
+    build_only: BuildOnly = False,
+    output: Output = None,
+    payload: VerifyPayload = None,
+) -> None:
+    """Verify a firmware chain."""
+    code = tfa.verify_platform(
+        platform.value,
+        build_only=build_only,
+        payload=payload,
+        output_dir=output,
     )
-    chain.add_argument(
-        "--build-only",
-        action="store_true",
-        help="build the chain without launching QEMU",
-    )
-    chain.add_argument(
-        "--output",
-        type=Path,
-        metavar="DIR",
-        help="firmware output directory",
-    )
-    chain.add_argument(
-        "--payload",
-        type=Path,
-        metavar="FILE",
-        help="use an existing BL33 payload",
-    )
-    chain.set_defaults(handler=_verify)
+    if code:
+        raise typer.Exit(code)
+
+
+app.command("profile", hidden=True)(build)

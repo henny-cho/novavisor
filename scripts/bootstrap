@@ -230,6 +230,7 @@ install_hooks() {
 }
 
 install_packages
+"${REPO}/scripts/python-env" "${TOOLCHAIN_ROOT}/python"
 install_python_tools
 install_actionlint
 install_toolchain

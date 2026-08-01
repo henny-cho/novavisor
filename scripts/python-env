@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+NOVA_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+NOVA_ENVIRONMENT="${1:-${NOVA_TOOLCHAIN_DIR:-${NOVA_REPO}/.toolchain}/python}"
+
+if [[ ! -x "${NOVA_ENVIRONMENT}/bin/python" ]]; then
+    python3 -m venv "${NOVA_ENVIRONMENT}"
+fi
+"${NOVA_ENVIRONMENT}/bin/python" -m pip install \
+    --disable-pip-version-check \
+    --requirement "${NOVA_REPO}/scripts/requirements-cli.txt"

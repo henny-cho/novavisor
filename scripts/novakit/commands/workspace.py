@@ -3,97 +3,130 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
+
+import typer
 
 from ..services import cmake, workspace
 
-
-def add_build_options(parser, *, allow_clean: bool = True) -> None:
-    """Register the build inputs shared by workspace operations."""
-    selector = parser.add_mutually_exclusive_group()
-    selector.add_argument(
-        "--release",
-        action="store_true",
-        help="use the aarch64-release preset",
-    )
-    selector.add_argument(
-        "--preset",
-        metavar="NAME",
-        help="use an explicit CMake preset",
-    )
-    parser.add_argument(
-        "--config",
-        type=Path,
+Release = Annotated[
+    bool,
+    typer.Option("--release", help="Use the aarch64-release preset."),
+]
+Preset = Annotated[
+    str | None,
+    typer.Option(metavar="NAME", help="Use an explicit CMake preset."),
+]
+Config = Annotated[
+    Path | None,
+    typer.Option(
         metavar="FILE",
-        help="use a guest configuration instead of configs/default.yml",
-    )
-    parser.add_argument(
-        "--payloads",
-        type=Path,
+        help="Use a guest configuration instead of configs/default.yml.",
+    ),
+]
+Payloads = Annotated[
+    Path | None,
+    typer.Option(
         metavar="FILE",
-        help="use a payload manifest instead of configs/payloads.yml",
-    )
-    if allow_clean:
-        parser.add_argument(
-            "--clean",
-            action="store_true",
-            help="remove the build tree before building",
-        )
+        help="Use a payload manifest instead of configs/payloads.yml.",
+    ),
+]
+Clean = Annotated[
+    bool,
+    typer.Option("--clean", help="Remove the build tree before building."),
+]
+Debug = Annotated[
+    bool,
+    typer.Option("--debug", help="Halt the CPU and expose a GDB server on port 1234."),
+]
+
+inspect_app = typer.Typer(
+    help="Inspect the hypervisor image.",
+    no_args_is_help=True,
+    add_completion=False,
+    rich_markup_mode=None,
+)
 
 
-def spec_from(args) -> cmake.BuildSpec:
+def _spec(
+    release: bool,
+    preset: str | None,
+    config: Path | None,
+    payloads: Path | None,
+    *,
+    clean: bool = False,
+) -> cmake.BuildSpec:
+    if release and preset:
+        raise typer.BadParameter("--release and --preset cannot be used together")
     return cmake.BuildSpec.of(
-        preset=args.preset,
-        release=args.release,
-        config_path=args.config,
-        payloads_path=args.payloads,
-        clean=getattr(args, "clean", False),
+        preset=preset,
+        release=release,
+        config_path=config,
+        payloads_path=payloads,
+        clean=clean,
     )
 
 
-def _build(args) -> int:
-    return workspace.build(spec_from(args))
+def _finish(code: int) -> None:
+    if code:
+        raise typer.Exit(code)
 
 
-def _clean(_args) -> int:
-    return workspace.clean()
+def build(
+    release: Release = False,
+    preset: Preset = None,
+    config: Config = None,
+    payloads: Payloads = None,
+    clean: Clean = False,
+) -> None:
+    """Build the hypervisor."""
+    _finish(workspace.build(_spec(release, preset, config, payloads, clean=clean)))
 
 
-def _run(args) -> int:
-    return workspace.run(spec_from(args), debug=args.debug)
+def run(
+    release: Release = False,
+    preset: Preset = None,
+    config: Config = None,
+    payloads: Payloads = None,
+    debug: Debug = False,
+) -> None:
+    """Run the hypervisor under QEMU."""
+    _finish(workspace.run(_spec(release, preset, config, payloads), debug=debug))
 
 
-def _inspect(args) -> int:
-    return workspace.inspect(spec_from(args), args.inspect_command)
+def clean() -> None:
+    """Remove the build tree."""
+    _finish(workspace.clean())
 
 
-def register(subcommands) -> None:
-    build = subcommands.add_parser("build", help="build the hypervisor")
-    add_build_options(build)
-    build.set_defaults(handler=_build)
+@inspect_app.command("size")
+def size(
+    release: Release = False,
+    preset: Preset = None,
+    config: Config = None,
+    payloads: Payloads = None,
+) -> None:
+    """Report section sizes."""
+    _finish(workspace.inspect(_spec(release, preset, config, payloads), "size"))
 
-    run = subcommands.add_parser("run", help="run the hypervisor under QEMU")
-    add_build_options(run, allow_clean=False)
-    run.add_argument(
-        "--debug",
-        action="store_true",
-        help="halt the CPU and expose a GDB server on port 1234",
-    )
-    run.set_defaults(handler=_run)
 
-    subcommands.add_parser("clean", help="remove the build tree").set_defaults(
-        handler=_clean
-    )
+@inspect_app.command("disassemble")
+def disassemble(
+    release: Release = False,
+    preset: Preset = None,
+    config: Config = None,
+    payloads: Payloads = None,
+) -> None:
+    """Disassemble the image with source lines."""
+    _finish(workspace.inspect(_spec(release, preset, config, payloads), "disassemble"))
 
-    inspect = subcommands.add_parser("inspect", help="inspect the hypervisor image")
-    operations = inspect.add_subparsers(
-        dest="inspect_command",
-        required=True,
-        title="operations",
-    )
-    for name, help_text in (
-        ("size", "report section sizes"),
-        ("disassemble", "disassemble the image with source lines"),
-    ):
-        operation = operations.add_parser(name, help=help_text)
-        add_build_options(operation, allow_clean=False)
-        operation.set_defaults(handler=_inspect)
+
+def register(root: typer.Typer) -> None:
+    root.command()(build)
+    root.command()(run)
+    root.command()(clean)
+    root.add_typer(inspect_app, name="inspect")
+
+    # Compatibility paths remain callable without duplicating public help.
+    root.command("size", hidden=True)(size)
+    root.command("objdump", hidden=True)(disassemble)

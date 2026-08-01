@@ -1,1 +1,1 @@
-"""CLI adapters: argparse wiring and service argument conversion."""
+"""Typer adapters and service argument conversion."""

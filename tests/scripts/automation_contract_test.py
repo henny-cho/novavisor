@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import unittest
 from pathlib import Path
+
+from typer.testing import CliRunner
 
 REPO = Path(__file__).resolve().parents[2]
 NOVA = REPO / "scripts" / "nova"
@@ -27,8 +30,21 @@ def run(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+RUNNER = CliRunner()
+
+
+def listed(output: str, command: str) -> bool:
+    return (
+        re.search(
+            rf"(?m)^[^A-Za-z0-9_\n]*{re.escape(command)}\s",
+            output,
+        )
+        is not None
+    )
+
+
 class PublicCommandContractTest(unittest.TestCase):
-    def test_every_canonical_leaf_dispatches_to_a_handler(self):
+    def test_every_canonical_leaf_has_valid_typer_help(self):
         commands = (
             ("build",),
             ("run",),
@@ -51,8 +67,8 @@ class PublicCommandContractTest(unittest.TestCase):
         )
         for command in commands:
             with self.subTest(command=command):
-                args = cli.parser().parse_args(command)
-                self.assertTrue(callable(args.handler))
+                result = RUNNER.invoke(cli.app, [*command, "--help"], color=False)
+                self.assertEqual(result.exit_code, 0, result.output)
 
     def test_nova_help_exposes_every_top_level_command(self):
         result = run(str(NOVA), "--help")
@@ -73,14 +89,14 @@ class PublicCommandContractTest(unittest.TestCase):
             self.assertIn(command, result.stdout)
 
         for legacy in ("fmt", "size", "objdump"):
-            self.assertNotRegex(result.stdout, rf"(?m)^\s+{legacy}\s")
+            self.assertFalse(listed(result.stdout, legacy))
 
     def test_inspect_help_groups_image_queries(self):
         result = run(str(NOVA), "inspect", "--help")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         for operation in ("size", "disassemble"):
-            self.assertRegex(result.stdout, rf"(?m)^\s+{operation}\s")
+            self.assertTrue(listed(result.stdout, operation))
 
     def test_demo_help_exposes_every_public_operation(self):
         result = run(str(NOVA), "demo", "--help")
@@ -94,8 +110,8 @@ class PublicCommandContractTest(unittest.TestCase):
             "verify",
             "soak",
         ):
-            self.assertRegex(result.stdout, rf"(?m)^\s+{command}\s")
-        self.assertNotRegex(result.stdout, r"(?m)^\s+verify-all\s")
+            self.assertTrue(listed(result.stdout, command))
+        self.assertFalse(listed(result.stdout, "verify-all"))
 
     def test_debug_is_an_option_on_run_commands(self):
         for command in ((str(NOVA), "run", "--help"), (str(NOVA), "demo", "run", "1", "--help")):
@@ -108,8 +124,8 @@ class PublicCommandContractTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         for operation in ("build", "package", "verify"):
-            self.assertRegex(result.stdout, rf"(?m)^\s+{operation}\s")
-        self.assertNotRegex(result.stdout, r"(?m)^\s+profile\s")
+            self.assertTrue(listed(result.stdout, operation))
+        self.assertFalse(listed(result.stdout, "profile"))
 
     def test_legacy_command_paths_remain_hidden_compatibility_aliases(self):
         aliases = (
