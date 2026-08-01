@@ -11,7 +11,7 @@ repos:
     hooks:
       - id: nova-format
         name: clang-format
-        entry: scripts/nova fmt
+        entry: scripts/nova format
         language: system
         pass_filenames: false
         types_or: [c++, c]

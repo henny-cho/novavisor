@@ -184,7 +184,7 @@ For Phases 8+ that reference real OSes (Zephyr, Linux), add a `fetch.sh` in the 
 ./scripts/nova demo list
 
 # Run all enabled demos (CI uses this)
-./scripts/nova demo verify-all
+./scripts/nova demo verify --all
 
 # Launch a demo interactively (no pattern checking)
 ./scripts/nova demo run 1

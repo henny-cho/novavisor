@@ -13,9 +13,8 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit.commands import ci  # noqa: E402
 from novakit.core import config, proc  # noqa: E402
-from novakit.services import cmake, gates, report  # noqa: E402
+from novakit.services import ci, cmake, gates, report  # noqa: E402
 
 
 class BuildTests(unittest.TestCase):
@@ -85,6 +84,24 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("unrecognized arguments", result.stderr)
 
+    def test_build_selectors_are_mutually_exclusive(self):
+        result = subprocess.run(
+            [
+                str(REPO / "scripts" / "nova"),
+                "build",
+                "--release",
+                "--preset",
+                "custom",
+            ],
+            cwd=REPO,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("not allowed with argument", result.stderr)
+
     def test_ci_help_exposes_explicit_lanes(self):
         result = subprocess.run(
             [str(REPO / "scripts" / "nova"), "ci", "--help"],
@@ -148,7 +165,7 @@ class CliTests(unittest.TestCase):
             ],
         )
 
-    @mock.patch("novakit.commands.ci.shutil.which", return_value="/usr/bin/ccache")
+    @mock.patch("novakit.services.ci.shutil.which", return_value="/usr/bin/ccache")
     @mock.patch("novakit.core.proc.run")
     def test_ci_summary_includes_timing_and_ccache_stats(self, run, _which):
         run.return_value = subprocess.CompletedProcess(
@@ -172,7 +189,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("| static/static-analysis | pass | 1.2 |", content)
         self.assertIn("Cacheable calls: 10", content)
 
-    @mock.patch("novakit.commands.ci.shutil.which", return_value=None)
+    @mock.patch("novakit.services.ci.shutil.which", return_value=None)
     def test_ci_summary_allows_host_without_ccache(self, _which):
         with tempfile.TemporaryDirectory() as directory:
             summary = Path(directory) / "summary.md"

@@ -50,6 +50,10 @@ Use the automated setup script. It detects the host CPU architecture (x86_64 or 
 
 All routine tasks go through `scripts/nova`.
 
+Common workspace operations are top-level commands. Scoped operations use
+`nova <domain> <operation>`; for example, `nova inspect size` and
+`nova firmware verify qemu-tfa`.
+
 ### Build
 
 ```bash
@@ -112,24 +116,25 @@ Each roadmap phase is validated by a **demo** in `demo/NN_name/`. A demo consist
 ./scripts/nova demo list              # show all demos and their enabled status
 ./scripts/nova demo run 1             # interactive launch (no pattern check)
 ./scripts/nova demo verify 1          # ID or full directory name
-./scripts/nova demo verify-all        # every enabled demo
+./scripts/nova demo verify --all      # every enabled demo
 ```
 
-Before a phase is complete its demo has `enabled: false` in the manifest, and `demo verify-all` skips it. Full details live in [`demo/README.md`](demo/README.md).
+Before a phase is complete its demo has `enabled: false` in the manifest, and
+`demo verify --all` skips it. Full details live in [`demo/README.md`](demo/README.md).
 
 ### Format & lint
 
 ```bash
-./scripts/nova fmt                    # apply clang-format
-./scripts/nova fmt --check            # dry-run
+./scripts/nova format                 # apply clang-format
+./scripts/nova format --check         # dry-run
 ./scripts/nova lint                   # run-clang-tidy over the debug compile database
 ```
 
 ### Misc inspection helpers
 
 ```bash
-./scripts/nova size                   # section sizes of novavisor.elf
-./scripts/nova objdump                # disassembly interleaved with source
+./scripts/nova inspect size           # section sizes of novavisor.elf
+./scripts/nova inspect disassemble    # disassembly interleaved with source
 ./scripts/nova clean                  # remove build/
 ```
 
@@ -185,7 +190,7 @@ Conventional Commits style. The scope (parenthesized segment) is optional but pr
 feat(core_mmu): activate Stage 2 MMU with identity-mapped guest window
 test(core_mmu): add Stage 2 descriptor encoding with host GTest
 build(devcontainer): install python deps for demo harness
-ci: run demo verify-all as the final pipeline gate
+ci: verify all demos as the final pipeline gate
 ```
 
 ### Pre-commit hooks

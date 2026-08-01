@@ -15,7 +15,7 @@ WORKFLOWS = GITHUB / "workflows"
 PINNED_IMAGE = re.compile(r"image:\s*(\S+@sha256:[0-9a-f]{64})")
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit.commands import ci as ci_command  # noqa: E402
+from novakit.services import ci as ci_service  # noqa: E402
 
 
 def pinned_images() -> set[str]:
@@ -98,7 +98,7 @@ class WorkflowContractTest(unittest.TestCase):
 
         text = (WORKFLOWS / "ci.yml").read_text()
         self.assertIn("scripts/nova ci ${{ matrix.lane }}", text)
-        for lane in ci_command.BY_NAME:
+        for lane in ci_service.BY_NAME:
             self.assertIn(f"lane: {lane}", text)
         self.assertNotIn(f"scripts/{'task'}.sh", text)
 
@@ -112,7 +112,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn(lanes["container"]["image"], pinned_images())
         self.assertEqual(
             [entry["lane"] for entry in lanes["strategy"]["matrix"]["include"]],
-            [lane.name for lane in ci_command.LANES],
+            [lane.name for lane in ci_service.LANES],
         )
 
     def test_the_gate_compares_one_matrix_result_without_interpolation(self):
@@ -171,7 +171,7 @@ class WorkflowContractTest(unittest.TestCase):
         ]
 
         self.assertTrue(targets)
-        for name in (*ci_command.BY_NAME, *targets):
+        for name in (*ci_service.BY_NAME, *targets):
             with self.subTest(lane=name):
                 self.assertIn(name, handled)
 

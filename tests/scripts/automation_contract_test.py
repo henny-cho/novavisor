@@ -13,6 +13,7 @@ NOVA = REPO / "scripts" / "nova"
 PRESETS = REPO / "CMakePresets.json"
 sys.path.insert(0, str(REPO / "scripts"))
 
+from novakit import cli  # noqa: E402
 from novakit.core import board  # noqa: E402
 
 
@@ -27,6 +28,32 @@ def run(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 class PublicCommandContractTest(unittest.TestCase):
+    def test_every_canonical_leaf_dispatches_to_a_handler(self):
+        commands = (
+            ("build",),
+            ("run",),
+            ("clean",),
+            ("inspect", "size"),
+            ("inspect", "disassemble"),
+            ("format",),
+            ("lint",),
+            ("test",),
+            ("demo", "list"),
+            ("demo", "build"),
+            ("demo", "fetch", "--all"),
+            ("demo", "run", "1"),
+            ("demo", "verify", "--all"),
+            ("demo", "soak", "1", "--runs", "1"),
+            ("firmware", "build", "n1sdp"),
+            ("firmware", "package", "n1sdp", "--payload", "payload.bin"),
+            ("firmware", "verify", "qemu-tfa"),
+            ("ci", "host"),
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                args = cli.parser().parse_args(command)
+                self.assertTrue(callable(args.handler))
+
     def test_nova_help_exposes_every_top_level_command(self):
         result = run(str(NOVA), "--help")
 
@@ -34,17 +61,26 @@ class PublicCommandContractTest(unittest.TestCase):
         for command in (
             "build",
             "clean",
-            "fmt",
+            "format",
+            "inspect",
             "lint",
             "run",
-            "size",
-            "objdump",
             "test",
             "demo",
             "firmware",
             "ci",
         ):
             self.assertIn(command, result.stdout)
+
+        for legacy in ("fmt", "size", "objdump"):
+            self.assertNotRegex(result.stdout, rf"(?m)^\s+{legacy}\s")
+
+    def test_inspect_help_groups_image_queries(self):
+        result = run(str(NOVA), "inspect", "--help")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for operation in ("size", "disassemble"):
+            self.assertRegex(result.stdout, rf"(?m)^\s+{operation}\s")
 
     def test_demo_help_exposes_every_public_operation(self):
         result = run(str(NOVA), "demo", "--help")
@@ -57,9 +93,9 @@ class PublicCommandContractTest(unittest.TestCase):
             "run",
             "verify",
             "soak",
-            "verify-all",
         ):
-            self.assertIn(command, result.stdout)
+            self.assertRegex(result.stdout, rf"(?m)^\s+{command}\s")
+        self.assertNotRegex(result.stdout, r"(?m)^\s+verify-all\s")
 
     def test_debug_is_an_option_on_run_commands(self):
         for command in ((str(NOVA), "run", "--help"), (str(NOVA), "demo", "run", "1", "--help")):
@@ -71,8 +107,30 @@ class PublicCommandContractTest(unittest.TestCase):
         result = run(str(NOVA), "firmware", "--help")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        for operation in ("profile", "package", "verify"):
-            self.assertIn(operation, result.stdout)
+        for operation in ("build", "package", "verify"):
+            self.assertRegex(result.stdout, rf"(?m)^\s+{operation}\s")
+        self.assertNotRegex(result.stdout, r"(?m)^\s+profile\s")
+
+    def test_legacy_command_paths_remain_hidden_compatibility_aliases(self):
+        aliases = (
+            ("fmt",),
+            ("size",),
+            ("objdump",),
+            ("demo", "verify-all"),
+            ("firmware", "profile"),
+        )
+        for alias in aliases:
+            with self.subTest(alias=alias):
+                result = run(str(NOVA), *alias, "--help")
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_demo_set_operations_require_one_scope(self):
+        for operation in ("fetch", "verify"):
+            with self.subTest(operation=operation, scope="missing"):
+                self.assertEqual(run(str(NOVA), "demo", operation).returncode, 2)
+            with self.subTest(operation=operation, scope="conflicting"):
+                result = run(str(NOVA), "demo", operation, "1", "--all")
+                self.assertEqual(result.returncode, 2)
 
     def test_qemu_board_arguments_have_one_internal_owner(self):
         self.assertEqual(
@@ -95,7 +153,6 @@ class PublicCommandContractTest(unittest.TestCase):
     def test_removed_compatibility_commands_are_rejected(self):
         commands = (
             ("debug",),
-            ("format",),
             ("demo", "debug", "1"),
             ("demo", "verify" + "-repeat", "1", "--runs", "1"),
             ("demo", "qemu-args"),

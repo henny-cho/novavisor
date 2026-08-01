@@ -1,4 +1,4 @@
-"""Quality gate commands: formatting, static analysis, and the test suites."""
+"""Source quality commands: formatting, static analysis, and host tests."""
 
 from __future__ import annotations
 
@@ -18,8 +18,15 @@ def _test(_args) -> int:
 
 
 def register(subcommands) -> None:
-    formatting = subcommands.add_parser("fmt", help="format sources with clang-format")
-    formatting.add_argument("--check", action="store_true")
+    formatting = subcommands.add_parser(
+        "format",
+        help="format C and C++ sources",
+    )
+    formatting.add_argument(
+        "--check",
+        action="store_true",
+        help="report formatting differences without changing files",
+    )
     formatting.set_defaults(handler=_format)
 
     subcommands.add_parser("lint", help="run clang-tidy").set_defaults(handler=_lint)

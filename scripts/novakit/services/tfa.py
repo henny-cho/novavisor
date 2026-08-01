@@ -206,6 +206,21 @@ def package_n1sdp(payload: Path, output_dir: Path) -> Path:
     return package
 
 
+PACKAGERS = {
+    "n1sdp": lambda payload, output: package_n1sdp(payload, output),
+}
+
+
+def package_platform(
+    platform: str,
+    payload: Path,
+    output_dir: Path | None = None,
+) -> Path:
+    """Package a BL33 payload for a supported firmware platform."""
+    output = output_dir or config.BUILD_ROOT / f"{platform}-firmware"
+    return PACKAGERS[platform](payload, output)
+
+
 # What a real BL1 -> BL2 -> BL31 -> BL33 handoff must print, in order: the
 # firmware banner, then the hypervisor reaching the same guest exit the
 # -kernel path reaches.
@@ -252,3 +267,23 @@ def verify_chain(
             verify.Sink(stream=log, diagnostics=diagnostics),
             scope="nova firmware",
         )
+
+
+VERIFIERS = {
+    "qemu-tfa": lambda **options: verify_chain(**options),
+}
+
+
+def verify_platform(
+    platform: str,
+    *,
+    build_only: bool = False,
+    payload: Path | None = None,
+    output_dir: Path | None = None,
+) -> int:
+    """Build and verify the selected platform's firmware handoff."""
+    return VERIFIERS[platform](
+        build_only=build_only,
+        payload=payload,
+        output_dir=output_dir,
+    )
