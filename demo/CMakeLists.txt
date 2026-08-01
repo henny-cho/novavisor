@@ -5,7 +5,7 @@
 # (no hypervisor CIB/ETL dependencies, no -fno-rtti/-fno-exceptions since
 # all demos are C).
 #
-# Invoked by scripts/nova demo build, verify, and verify-all.
+# Invoked by scripts/nova demo build and verify.
 
 cmake_minimum_required(VERSION 3.25)
 project(novavisor_demos LANGUAGES C ASM)

@@ -54,6 +54,34 @@ class FirmwareSourceTests(unittest.TestCase):
 
 
 class FirmwarePackagingTests(unittest.TestCase):
+    @mock.patch.object(tfa, "package_n1sdp")
+    def test_platform_dispatch_selects_the_matching_packager(self, package_n1sdp):
+        payload = Path("payload.bin")
+        output = Path("output")
+
+        tfa.package_platform("n1sdp", payload, output)
+
+        package_n1sdp.assert_called_once_with(payload, output)
+
+    @mock.patch.object(tfa, "verify_chain", return_value=0)
+    def test_platform_dispatch_selects_the_matching_verifier(self, verify_chain):
+        payload = Path("payload.bin")
+        output = Path("output")
+
+        result = tfa.verify_platform(
+            "qemu-tfa",
+            build_only=True,
+            payload=payload,
+            output_dir=output,
+        )
+
+        self.assertEqual(result, 0)
+        verify_chain.assert_called_once_with(
+            build_only=True,
+            payload=payload,
+            output_dir=output,
+        )
+
     def test_qemu_flash_places_fip_at_the_tfa_offset(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

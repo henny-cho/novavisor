@@ -1,1 +1,1 @@
-"""Subcommand surfaces: argparse wiring, human-readable output, exit codes."""
+"""CLI adapters: argparse wiring and service argument conversion."""

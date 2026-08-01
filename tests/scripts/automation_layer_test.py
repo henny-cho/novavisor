@@ -102,6 +102,15 @@ class LayerTests(unittest.TestCase):
                     with self.subTest(module=path.name):
                         self.assertEqual(siblings, [])
 
+    def test_commands_only_depend_on_services(self):
+        """CLI adapters do not own process, board, image, or workflow logic."""
+        for path in modules():
+            if layer_of(path) != "commands":
+                continue
+            reached = imported_layers(path)
+            with self.subTest(module=path.name):
+                self.assertLessEqual(reached, {"commands", "services"})
+
     def test_the_repository_root_has_one_owner(self):
         # parents[3] is an assumption about how deep the package sits, so
         # deriving it per module made moving the package a three-file edit.

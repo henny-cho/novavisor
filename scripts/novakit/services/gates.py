@@ -1,6 +1,6 @@
 """The quality gates, and the pinned tool each one needs.
 
-Two consumers ask for these: the `fmt` / `lint` / `test` commands and the CI
+Two consumers ask for these: the `format` / `lint` / `test` commands and the CI
 lane table. They live below both so a lane never reaches sideways into a
 command to find out what a gate is.
 """

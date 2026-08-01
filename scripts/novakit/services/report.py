@@ -32,7 +32,7 @@ class ArtifactPaths:
     root: Path
 
     @classmethod
-    def from_arg(cls, arg: str | None) -> "ArtifactPaths | None":
+    def from_arg(cls, arg: str | Path | None) -> "ArtifactPaths | None":
         if not arg:
             return None
         paths = cls(Path(arg))
