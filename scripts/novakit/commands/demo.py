@@ -3,117 +3,133 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
+
+import typer
 
 from ..services import demo, manifest
 
-
-def _list(_args) -> int:
-    return demo.list_demos()
-
-
-def _build(_args) -> int:
-    return demo.build()
-
-
-def _fetch(args) -> int:
-    return demo.fetch(args.name, all_demos=args.all)
+app = typer.Typer(
+    help="Manage and verify demo guests.",
+    no_args_is_help=True,
+    add_completion=False,
+    rich_markup_mode=None,
+)
 
 
-def _run(args) -> int:
-    return demo.run(args.name, debug=args.debug)
+def _demo(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return manifest.resolve_demo(value)
+    except SystemExit as error:
+        raise typer.BadParameter(str(error)) from error
 
 
-def _verify(args) -> int:
-    if args.all:
-        return demo.verify_all(args.artifacts)
-    return demo.verify_one(args.name, args.artifacts)
-
-
-def _soak(args) -> int:
-    return demo.soak(
-        args.name,
-        args.runs,
-        summary=args.summary,
-        artifact_dir=args.artifacts,
-    )
-
-
-def _scope(parser, demo_arg: dict) -> None:
-    scope = parser.add_mutually_exclusive_group(required=True)
-    scope.add_argument("name", nargs="?", **demo_arg)
-    scope.add_argument(
-        "--all",
-        action="store_true",
-        help="operate on every enabled demo",
-    )
-
-
-def register(subcommands) -> None:
-    parser = subcommands.add_parser("demo", help="manage and verify demo guests")
-    operations = parser.add_subparsers(
-        dest="demo_command",
-        required=True,
-        title="operations",
-    )
-
-    operations.add_parser("list", help="list demos and their status").set_defaults(
-        handler=_list
-    )
-    operations.add_parser("build", help="build in-tree guests").set_defaults(
-        handler=_build
-    )
-    demo_arg = {
-        "metavar": "DEMO",
-        "type": manifest.resolve_demo,
-        "help": "demo ID or directory name",
-    }
-
-    fetch = operations.add_parser("fetch", help="populate external image caches")
-    _scope(fetch, demo_arg)
-    fetch.set_defaults(handler=_fetch)
-
-    run = operations.add_parser("run", help="launch one demo interactively")
-    run.add_argument("name", **demo_arg)
-    run.add_argument(
-        "--debug",
-        action="store_true",
-        help="halt the CPU and expose a GDB server on port 1234",
-    )
-    run.set_defaults(handler=_run)
-
-    verification = operations.add_parser(
-        "verify",
-        help="check expected output from one or every enabled demo",
-    )
-    _scope(verification, demo_arg)
-    verification.add_argument(
-        "--artifacts",
-        type=Path,
-        metavar="DIR",
-        help="write failure artifacts under this directory",
-    )
-    verification.set_defaults(handler=_verify)
-
-    soak = operations.add_parser("soak", help="repeat verification of one demo")
-    soak.add_argument("name", **demo_arg)
-    soak.add_argument(
-        "--runs",
-        type=int,
-        required=True,
-        choices=range(1, 101),
+Demo = Annotated[
+    str,
+    typer.Argument(metavar="DEMO", help="Demo ID or directory name.", callback=_demo),
+]
+OptionalDemo = Annotated[
+    str | None,
+    typer.Argument(
+        metavar="[DEMO]",
+        help="Demo ID or directory name.",
+        callback=_demo,
+    ),
+]
+AllDemos = Annotated[
+    bool,
+    typer.Option("--all", help="Operate on every enabled demo."),
+]
+Artifacts = Annotated[
+    Path | None,
+    typer.Option(metavar="DIR", help="Write failure artifacts under this directory."),
+]
+Debug = Annotated[
+    bool,
+    typer.Option("--debug", help="Halt the CPU and expose a GDB server on port 1234."),
+]
+Runs = Annotated[
+    int,
+    typer.Option(
+        min=1,
+        max=100,
         metavar="N",
-        help="number of verification attempts (1-100)",
+        help="Number of verification attempts (1-100).",
+    ),
+]
+Summary = Annotated[
+    Path | None,
+    typer.Option(metavar="CSV", help="Write per-attempt results to a CSV file."),
+]
+
+
+def _finish(code: int) -> None:
+    if code:
+        raise typer.Exit(code)
+
+
+def _scope(name: str | None, all_demos: bool) -> str | None:
+    if (name is None) == (not all_demos):
+        raise typer.BadParameter("provide exactly one of DEMO or --all")
+    return name
+
+
+@app.command("list")
+def list_demos() -> None:
+    """List demos and their status."""
+    _finish(demo.list_demos())
+
+
+@app.command()
+def build() -> None:
+    """Build in-tree guests."""
+    _finish(demo.build())
+
+
+@app.command()
+def fetch(name: OptionalDemo = None, all_demos: AllDemos = False) -> None:
+    """Populate external image caches."""
+    _finish(demo.fetch(_scope(name, all_demos), all_demos=all_demos))
+
+
+@app.command()
+def run(
+    name: Demo,
+    debug: Debug = False,
+) -> None:
+    """Launch one demo interactively."""
+    _finish(demo.run(name, debug=debug))
+
+
+@app.command()
+def verify(
+    name: OptionalDemo = None,
+    all_demos: AllDemos = False,
+    artifacts: Artifacts = None,
+) -> None:
+    """Check expected output from one or every enabled demo."""
+    selected = _scope(name, all_demos)
+    code = (
+        demo.verify_all(artifacts)
+        if all_demos
+        else demo.verify_one(selected, artifacts)
     )
-    soak.add_argument(
-        "--summary",
-        type=Path,
-        metavar="CSV",
-        help="write per-attempt results to a CSV file",
-    )
-    soak.add_argument(
-        "--artifacts",
-        type=Path,
-        metavar="DIR",
-        help="write failure artifacts under this directory",
-    )
-    soak.set_defaults(handler=_soak)
+    _finish(code)
+
+
+@app.command()
+def soak(
+    name: Demo,
+    runs: Runs,
+    summary: Summary = None,
+    artifacts: Artifacts = None,
+) -> None:
+    """Repeat verification of one demo."""
+    _finish(demo.soak(name, runs, summary=summary, artifact_dir=artifacts))
+
+
+@app.command("verify-all", hidden=True)
+def verify_all(artifacts: Artifacts = None) -> None:
+    _finish(demo.verify_all(artifacts))

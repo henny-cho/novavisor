@@ -1,6 +1,13 @@
-#!/usr/bin/env python3
+#!/usr/bin/env bash
+set -euo pipefail
 
-from novakit.cli import main
+NOVA_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+NOVA_PYTHON="${NOVA_PYTHON:-${NOVA_TOOLCHAIN_DIR:-${NOVA_REPO}/.toolchain}/python/bin/python}"
 
+if [[ ! -x "${NOVA_PYTHON}" ]]; then
+    echo "nova: Python environment is missing; run scripts/bootstrap" >&2
+    exit 2
+fi
 
-raise SystemExit(main())
+export PYTHONPATH="${NOVA_REPO}/scripts${PYTHONPATH:+:${PYTHONPATH}}"
+exec "${NOVA_PYTHON}" -c 'from novakit.cli import main; main()' "$@"

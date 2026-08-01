@@ -6,6 +6,8 @@ on:
     paths:
       - containers/toolchain/Dockerfile
       - scripts/bootstrap
+      - scripts/python-env
+      - scripts/requirements-cli.txt
       - scripts/tool-versions.env
       - .github/workflows/toolchain-image.yml
   workflow_dispatch:

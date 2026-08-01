@@ -37,7 +37,7 @@ Use the automated setup script. It detects the host CPU architecture (x86_64 or 
    ```bash
    ./scripts/bootstrap
    ```
-2. The toolchain lands under `.toolchain/` at the project root, and pre-commit hooks are installed.
+2. The toolchain and pinned Typer CLI environment land under `.toolchain/`, and pre-commit hooks are installed.
 3. Each new terminal session needs the toolchain on its PATH:
    ```bash
    source .toolchain/env.sh

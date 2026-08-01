@@ -11,6 +11,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 VERSIONS = REPO / "scripts" / "tool-versions.env"
 BOOTSTRAP = REPO / "scripts" / "bootstrap"
+PYTHON_ENV = REPO / "scripts" / "python-env"
+CLI_REQUIREMENTS = REPO / "scripts" / "requirements-cli.txt"
 IMAGE = REPO / "containers" / "toolchain" / "Dockerfile"
 DEVCONTAINER = REPO / ".devcontainer" / "devcontainer.json"
 sys.path.insert(0, str(REPO / "scripts"))
@@ -58,6 +60,19 @@ class ToolVersionTests(unittest.TestCase):
             'verify_sha256 "${TOOLCHAIN_SHA256}" "${archive}"',
             BOOTSTRAP.read_text(),
         )
+
+    def test_python_cli_environment_is_reproducible(self):
+        requirements = CLI_REQUIREMENTS.read_text().splitlines()
+
+        self.assertTrue(PYTHON_ENV.stat().st_mode & 0o111)
+        self.assertTrue(requirements)
+        for requirement in requirements:
+            self.assertRegex(requirement, r"^[A-Za-z][A-Za-z0-9-]*==\d+(?:\.\d+)+$")
+        self.assertIn("typer==0.27.0", requirements)
+        self.assertIn(
+            'scripts/python-env" "${TOOLCHAIN_ROOT}/python"', BOOTSTRAP.read_text()
+        )
+        self.assertIn("scripts/requirements-cli.txt", IMAGE.read_text())
 
     def test_devcontainer_builds_the_shared_image(self):
         data = json.loads(

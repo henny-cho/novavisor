@@ -111,6 +111,23 @@ class LayerTests(unittest.TestCase):
             with self.subTest(module=path.name):
                 self.assertLessEqual(reached, {"commands", "services"})
 
+    def test_typer_owns_the_cli_boundary(self):
+        self.assertEqual(
+            modules_importing("argparse"),
+            ["image/dtb.py", "image/layout.py"],
+        )
+        self.assertEqual(
+            modules_importing("typer"),
+            [
+                "cli.py",
+                "commands/ci.py",
+                "commands/demo.py",
+                "commands/firmware.py",
+                "commands/quality.py",
+                "commands/workspace.py",
+            ],
+        )
+
     def test_the_repository_root_has_one_owner(self):
         # parents[3] is an assumption about how deep the package sits, so
         # deriving it per module made moving the package a three-file edit.
