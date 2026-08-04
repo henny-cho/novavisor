@@ -72,12 +72,21 @@ class Envelopes:
         self._clock = clock
         self._seq = 0
 
-    def make(self, topic: Topic, kind: Kind, data: dict, *, src: Src = Src.BRIDGE) -> dict:
+    def make(
+        self,
+        topic: Topic | str,
+        kind: Kind,
+        data: dict,
+        *,
+        src: Src = Src.BRIDGE,
+    ) -> dict:
+        # S-layer topics come from the observation manifest as plain
+        # strings; the fixed enum covers only the structural topics.
         self._seq += 1
         return {
             "v": PROTOCOL_VERSION,
             "seq": self._seq,
-            "topic": topic.value,
+            "topic": topic.value if isinstance(topic, Topic) else topic,
             "kind": kind.value,
             "ts": self._clock.now(),
             "src": src.value,

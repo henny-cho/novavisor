@@ -12,22 +12,32 @@ import asyncio
 from pathlib import Path
 
 from ...core import config
-from . import static
+from . import snapshot, static
 from .protocol import (
     SUPPORTED_UPLINK,
     Clock,
     Envelopes,
     Kind,
+    Src,
     Topic,
     UplinkError,
     decode_bytes,
     encode,
     parse_uplink,
 )
-from .session import Deps, Session, Surfaces, Target, initial_topology, make_surfaces
+from .session import (
+    Deps,
+    Phase,
+    Session,
+    Surfaces,
+    Target,
+    initial_topology,
+    make_surfaces,
+)
 from .store import StateStore
 
 FLUSH_INTERVAL_SECONDS = 0.05
+POLL_INTERVAL_SECONDS = 0.05
 WS_PATH = "/ws"
 
 
@@ -79,6 +89,8 @@ class Bridge:
             self._handler, host, port, process_request=process_request
         )
         self._flusher = asyncio.create_task(self._flush_loop())
+        if self.session.surfaces is not None:
+            self.spawn(self._poll_loop())
 
     @property
     def port(self) -> int:
@@ -148,6 +160,64 @@ class Bridge:
 
     def _reject(self, reason: str) -> None:
         self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "uplink-rejected", "reason": reason})
+
+    async def _poll_loop(self) -> None:
+        """Publish S-layer snapshots while a run is live.
+
+        The provider is rebuilt per run (a rebuild moves symbols) and its
+        construction — one full DWARF walk — happens off the loop. RAM
+        backend races at startup retry silently; resolution errors are
+        permanent for the run and reported once.
+        """
+        provider = None
+        poller = None
+        run_id = None
+        try:
+            while True:
+                await asyncio.sleep(POLL_INTERVAL_SECONDS)
+                session = self.session
+                if (
+                    session.phase is not Phase.RUNNING
+                    or session.elf_path is None
+                    or session.surfaces is None
+                ):
+                    continue
+                if session.run_id != run_id:
+                    if provider is not None:
+                        provider.close()
+                        provider = poller = None
+                    loop = asyncio.get_running_loop()
+                    try:
+                        provider = await loop.run_in_executor(
+                            None,
+                            snapshot.ElfRamProvider,
+                            session.elf_path,
+                            session.surfaces.shm_path,
+                        )
+                    except (FileNotFoundError, ValueError):
+                        continue  # QEMU has not sized the backend yet
+                    except (KeyError, SystemExit) as error:
+                        self.store.publish(
+                            Topic.LIFE,
+                            Kind.EVENT,
+                            {"phase": "snapshot-unavailable", "error": str(error)},
+                        )
+                        run_id = session.run_id
+                        continue
+                    poller = snapshot.SnapshotPoller(provider)
+                    run_id = session.run_id
+                if poller is None:
+                    continue
+                for obs, value in poller.tick():
+                    self.store.publish(
+                        obs.topic,
+                        Kind.SNAPSHOT,
+                        {"values": value},
+                        src=Src.SNAP,
+                    )
+        finally:
+            if provider is not None:
+                provider.close()
 
     async def _flush_loop(self) -> None:
         while True:

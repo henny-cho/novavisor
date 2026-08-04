@@ -57,7 +57,14 @@ class StateStore:
         # fresh browser is not blank until the next event.
         self._backlog: deque[dict] = deque(maxlen=backlog_limit)
 
-    def publish(self, topic: Topic, kind: Kind, data: dict, *, src: Src = Src.BRIDGE) -> dict:
+    def publish(
+        self,
+        topic: Topic | str,
+        kind: Kind,
+        data: dict,
+        *,
+        src: Src = Src.BRIDGE,
+    ) -> dict:
         frame = self._envelopes.make(topic, kind, data, src=src)
         self.window.add(frame)
         self._backlog.append(frame)

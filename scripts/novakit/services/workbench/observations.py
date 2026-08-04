@@ -27,6 +27,13 @@ class Obs:
     symbol: str
     fields: tuple[str, ...] = ()
     rate_hz: float = 10.0
+    # Register-like values travel as hex strings: JSON numbers lose
+    # exactness past 2^53 and these are bit patterns anyway.
+    hex: bool = False
+    # A fixed physical address with a hand-declared layout replaces the
+    # symbol for state that lives in guest memory (the IVC page).
+    pa: int | None = None
+    layout: str = ""
 
 
 OBSERVATIONS: tuple[Obs, ...] = (
@@ -42,6 +49,21 @@ OBSERVATIONS: tuple[Obs, ...] = (
     Obs("timer.programmed", "nova::soft_timer::(anonymous)::g_programmed"),
     Obs("timer.cntvoff", "nova::vcpu::g_cntvoff", rate_hz=2),
     Obs("vm.generation", "nova::vcpu::g_vm_generation", rate_hz=2),
+    # Context panel
+    Obs("ctx.trap", "nova::vcpu::g_vcpus", fields=("ctx",), rate_hz=2, hex=True),
+    Obs("ctx.el1", "nova::vcpu::g_vcpus", fields=("el1",), rate_hz=2, hex=True),
+    # PSCI / SMP panel
+    Obs("smp.lifecycle", "nova::smp::g_lifecycle", rate_hz=5),
+    Obs("smp.mode", "nova::smp::g_lifecycle_mode", rate_hz=5),
+    Obs("smp.online", "nova::smp::g_online", rate_hz=2),
+    Obs("smp.mail", "nova::smp::g_mail", fields=("count",), rate_hz=5),
+    Obs("smp.budget", "nova::vcpu::g_budget", rate_hz=2),
+    # Devices panel
+    Obs("dev.uart", "nova::vuart::(anonymous)::g_uart", fields=("head", "count", "imsc"), rate_hz=5),
+    Obs("dev.dma", "nova::dma_device::(anonymous)::g_registry", rate_hz=5),
+    Obs("dev.watchdog", "nova::(anonymous)::g_update_sequence", rate_hz=2),
+    # IVC panel — the shared page is guest memory, not an EL2 global.
+    Obs("ivc.page", "", pa=0x6000_0000, layout="ivc_ring_page", hex=True),
 )
 
 

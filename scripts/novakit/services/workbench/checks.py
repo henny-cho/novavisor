@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from ...core import config
-from . import elfsym
+from . import elfsym, snapshot
 from .observations import MAX_CPUS, OBSERVATIONS, timer_slot_labels
 
 
@@ -32,6 +32,10 @@ def verify_manifest(elf: Path | None = None) -> int:
     try:
         for obs in OBSERVATIONS:
             try:
+                if obs.pa is not None:
+                    if obs.layout not in snapshot.PAGE_LAYOUTS:
+                        raise KeyError(f"unknown page layout: {obs.layout!r}")
+                    continue
                 resolved = index.resolve(obs.symbol)
                 elfsym.decode(resolved.type, bytes(resolved.size), fields=obs.fields)
                 missing = set(obs.fields) - _fields_of(resolved.type)

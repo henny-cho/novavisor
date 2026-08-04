@@ -18,6 +18,7 @@ from pathlib import Path
 from ...core import board
 from .. import artifacts, expect, manifest, spawn
 from . import anchors
+from .observations import timer_slot_labels
 from .protocol import Kind, Src, Topic
 from .store import StateStore
 from .taxonomy import vocabulary
@@ -55,7 +56,20 @@ def _catalog() -> list[dict]:
 
 def initial_topology() -> dict:
     """What a client sees before any target runs: the pickable world."""
-    return {"demo": None, "guests": [], "catalog": _catalog(), "taxonomy": vocabulary()}
+    return {
+        "demo": None,
+        "guests": [],
+        "catalog": _catalog(),
+        "taxonomy": vocabulary(),
+        "timer_slots": timer_slot_labels(),
+    }
+
+
+def _kernel_of(command: list[str]) -> Path | None:
+    try:
+        return Path(command[command.index("-kernel") + 1])
+    except (ValueError, IndexError):
+        return None
 
 
 def _select_variant(demo_manifest: dict, name: str | None) -> dict:
@@ -84,6 +98,7 @@ def prepare(target: Target) -> Prepared:
         ],
         "catalog": _catalog(),
         "taxonomy": vocabulary(),
+        "timer_slots": timer_slot_labels(),
     }
     return Prepared(scenario, topology)
 
@@ -172,6 +187,10 @@ class Session:
         self.phase = Phase.IDLE
         self.scenario: expect.Scenario | None = None
         self.surfaces = surfaces
+        self.elf_path: Path | None = None
+        # Bumped on every RUNNING transition: snapshot readers key their
+        # resolved state on it, since a rebuild moves symbols.
+        self.run_id = 0
 
     def _set_phase(self, phase: Phase, **data) -> None:
         self.phase = phase
@@ -208,6 +227,8 @@ class Session:
             self._assembler = anchors.LineAssembler()
             self._fd = self._live.fileno()
             loop.add_reader(self._fd, self._on_readable)
+            self.elf_path = _kernel_of(command)
+            self.run_id += 1
             self._set_phase(Phase.RUNNING, demo=target.demo)
 
     async def _verify_locked(self, target: Target, prepared: Prepared) -> None:
@@ -233,6 +254,12 @@ class Session:
         except (Exception, SystemExit) as error:
             self._set_phase(Phase.FAILED, error=str(error))
             return
+        # The worker marshals text and matches with call_soon_threadsafe.
+        # A fast-finishing child can complete the executor future before
+        # it is even awaited, and awaiting a done future never yields —
+        # skipping the queued callbacks. One yield lets them land, so
+        # progress frames always precede the outcome frame.
+        await asyncio.sleep(0)
         for raw in self._assembler.flush():
             self._ingest(raw)
         result = run.result
