@@ -63,6 +63,7 @@ class PublicCommandContractTest(unittest.TestCase):
             ("firmware", "build", "n1sdp"),
             ("firmware", "package", "n1sdp", "--payload", "payload.bin"),
             ("firmware", "verify", "qemu-tfa"),
+            ("workbench", "serve"),
             ("ci", "host"),
         )
         for command in commands:
@@ -84,6 +85,7 @@ class PublicCommandContractTest(unittest.TestCase):
             "test",
             "demo",
             "firmware",
+            "workbench",
             "ci",
         ):
             self.assertIn(command, result.stdout)

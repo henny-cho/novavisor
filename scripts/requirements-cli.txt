@@ -8,3 +8,4 @@ PyYAML==6.0.3
 rich==15.0.0
 shellingham==1.5.4
 typer==0.27.0
+websockets==17.0.1

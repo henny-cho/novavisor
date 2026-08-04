@@ -15,6 +15,8 @@ DEFAULT_CONFIG = REPO / "configs" / "default.yml"
 DEFAULT_PAYLOADS = REPO / "configs" / "payloads.yml"
 VERSION_SOURCE = SCRIPTS / "tool-versions.env"
 HV_PRESET = os.environ.get("NOVA_HV_PRESET", "aarch64-debug")
+WEB_SIM_DIR = REPO / "web_sim"
+WORKBENCH_UI_DIR = WEB_SIM_DIR / "workbench"
 
 
 def tool_version(name: str) -> str:
