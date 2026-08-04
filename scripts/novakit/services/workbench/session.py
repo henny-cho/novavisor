@@ -236,6 +236,9 @@ class Session:
         self.scenario: expect.Scenario | None = None
         self.surfaces = surfaces
         self.elf_path: Path | None = None
+        # H-layer machine state: the bridge sets it around QMP stop/cont
+        # and every phase transition that replaces the machine clears it.
+        self.paused = False
         # Bumped on every RUNNING transition: snapshot readers key their
         # resolved state on it, since a rebuild moves symbols.
         self.run_id = 0
@@ -277,6 +280,7 @@ class Session:
             self._fd = self._live.fileno()
             loop.add_reader(self._fd, self._on_readable)
             self.elf_path = _kernel_of(command)
+            self.paused = False  # a fresh machine is running by definition
             self.run_id += 1
             self._set_phase(Phase.RUNNING, demo=target.demo)
 
@@ -373,12 +377,18 @@ class Session:
             # A child that survived SIGKILL keeps its RAM backend pinned
             # in tmpfs; say so instead of pretending the slate is clean.
             self._store.publish(Topic.LIFE, Kind.EVENT, {"phase": "stop-failed"})
+        self.paused = False
         self._set_phase(Phase.IDLE)
 
     def send_bytes(self, data: bytes) -> str | None:
         """Forward console input; the rejection reason is the reply."""
         if self.phase is not Phase.RUNNING or self._live is None:
             return f"session is {self.phase.value}"
+        if self.paused:
+            # The pty would buffer the bytes and replay them into the
+            # guest on resume — accepted input that acts later is worse
+            # than a visible rejection.
+            return "machine is paused"
         try:
             self._live.write(data)
         except OSError as error:

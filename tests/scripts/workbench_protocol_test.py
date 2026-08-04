@@ -170,13 +170,26 @@ class StateStoreTest(unittest.TestCase):
         published = store.publish(protocol.Topic.LIFE, protocol.Kind.EVENT, {"phase": "booted"})
         store.drain()  # broadcast consumed before this client connected
 
-        replay = store.connect_frames()
+        replay = store.connect_frames({"phase": "running", "paused": False})
 
         self.assertEqual(replay[0]["topic"], "topo")
-        self.assertEqual(replay[0]["data"], {"cpus": 2})
+        self.assertEqual(replay[0]["data"], {"cpus": 2, "phase": "running", "paused": False})
         self.assertEqual(replay[-1], published)
-        # Replaying to one client must not re-broadcast to the others.
-        self.assertEqual(store.drain(), [])
+        # The fresh topo carries the highest seq, so replayed older topo
+        # frames can never override its connect-time session state.
+        self.assertGreater(replay[0]["seq"], published["seq"])
+        # It is published, not private: every other client receives the
+        # same frame on the next flush instead of observing a seq hole.
+        self.assertEqual(store.drain(), [replay[0]])
+
+    def test_live_state_never_sticks_to_the_topology(self):
+        store = StateStore(envelopes())
+        store.set_topology({"cpus": 2})
+        store.connect_frames({"phase": "running"})
+
+        replay = store.connect_frames()
+
+        self.assertEqual(replay[0]["data"], {"cpus": 2})
 
 
 class StaticTest(unittest.TestCase):

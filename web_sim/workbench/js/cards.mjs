@@ -78,6 +78,18 @@ export function createCards(root) {
     card.timer = setTimeout(() => card.node.classList.remove("act"), ACTIVE_MS);
   }
 
+  /* Run boundary: the cards stay, their accumulation starts over. */
+  function reset() {
+    for (const card of cards.values()) {
+      clearTimeout(card.timer);
+      card.timer = 0;
+      card.lines = 0;
+      card.count.textContent = "0줄";
+      card.last.textContent = IDLE_TEXT;
+      card.node.classList.remove("act");
+    }
+  }
+
   function clearAll() {
     for (const card of cards.values()) clearTimeout(card.timer);
     cards.clear();
@@ -87,5 +99,5 @@ export function createCards(root) {
   }
 
   emptyState();
-  return { setGuests, touch, clearAll };
+  return { setGuests, touch, reset, clearAll };
 }

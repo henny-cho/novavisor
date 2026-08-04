@@ -153,6 +153,18 @@ class SessionTest(unittest.IsolatedAsyncioTestCase):
         session = Session(store(), deps_for(FakeLive()))
         self.assertEqual(session.send_bytes(b"x"), "session is idle")
 
+    async def test_input_is_rejected_while_paused(self):
+        live = FakeLive()
+        self.addCleanup(live.terminate)
+        session = Session(store(), deps_for(live))
+        await session.select(Target(demo="10_console_mux"))
+
+        session.paused = True
+        self.assertEqual(session.send_bytes(b"x"), "machine is paused")
+
+        session.paused = False
+        self.assertIsNone(session.send_bytes(b"x"))
+
     async def test_child_eof_publishes_the_exit_code(self):
         live = FakeLive()
         self.addCleanup(live.terminate)
@@ -623,19 +635,27 @@ class ServerSmokeTest(unittest.IsolatedAsyncioTestCase):
                     replay = json.loads(await asyncio.wait_for(connection.recv(), 2))
                     self.assertIsInstance(replay, list)
                     self.assertEqual(replay[0]["topic"], "topo")
+                    # Connect-time session state rides the fresh topo.
+                    state = replay[0]["data"]
+                    self.assertEqual(state["phase"], "idle")
+                    self.assertFalse(state["paused"])
+                    self.assertEqual(state["run_id"], 0)
+                    self.assertTrue(state["session"])
 
+                    # The connect topo was published, so the next flush
+                    # re-broadcasts it; answers are found, not indexed.
                     await connection.send('{"topic":"cmd","data":{}}')
                     frames = json.loads(await asyncio.wait_for(connection.recv(), 2))
-                    self.assertEqual(
-                        frames[0]["data"],
+                    self.assertIn(
                         {"phase": "unsupported", "topic": "cmd"},
+                        [frame["data"] for frame in frames],
                     )
 
                     await connection.send('{"topic":"qmp","data":{"cmd":"stop"}}')
                     frames = json.loads(await asyncio.wait_for(connection.recv(), 2))
-                    self.assertEqual(
-                        frames[0]["data"],
+                    self.assertIn(
                         {"phase": "uplink-rejected", "reason": "qmp: session is idle"},
+                        [frame["data"] for frame in frames],
                     )
             finally:
                 await bridge.close()

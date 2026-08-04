@@ -93,11 +93,18 @@ class StateStore:
             self.window.dropped = 0
         return frames
 
-    def connect_frames(self) -> list[dict]:
-        """Replay for a new connection: topology first, then history.
+    def connect_frames(self, live_state: dict | None = None) -> list[dict]:
+        """Replay for a new connection: fresh topology, then history.
 
-        The topo envelope is built fresh (not published) so replaying to
-        one client does not re-broadcast to every other one.
+        The topo frame is *published*, not privately minted: a private
+        frame would consume a seq every other client observes only as a
+        hole, and it is also where connect-time session state (phase,
+        paused, run identity) rides so a late joiner never has to
+        reconstruct the world from evictable events. History is captured
+        first, so the replay carries the fresh topo exactly once.
         """
-        topo = self._envelopes.make(Topic.TOPO, Kind.SNAPSHOT, self._topology)
-        return [topo, *self._backlog]
+        history = list(self._backlog)
+        topo = self.publish(
+            Topic.TOPO, Kind.SNAPSHOT, {**self._topology, **(live_state or {})}
+        )
+        return [topo, *history]

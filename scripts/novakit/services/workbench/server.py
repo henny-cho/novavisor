@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
+import uuid
 from pathlib import Path
 
 from ...core import config
@@ -74,6 +75,9 @@ class Bridge:
         self._server = None
         self._flusher: asyncio.Task | None = None
         self._halting = False
+        # Stamped into every connect topo: a changed token is the one
+        # reliable restart signal, whatever the seq counter says.
+        self._token = uuid.uuid4().hex[:8]
 
     async def open(self, host: str, port: int) -> None:
         websocket_server, headers_type, response_type = _require_websockets()
@@ -127,10 +131,21 @@ class Bridge:
             await self._server.wait_closed()
         await self.session.stop()
 
+    def _live_state(self) -> dict:
+        """Session truth a late joiner cannot recover from the backlog:
+        life events are evictable, so phase and pause state ride the
+        connect topo instead."""
+        return {
+            "session": self._token,
+            "phase": self.session.phase.value,
+            "paused": self.session.paused,
+            "run_id": self.session.run_id,
+        }
+
     async def _handler(self, connection) -> None:
         self._connections.add(connection)
         try:
-            await connection.send(encode(self.store.connect_frames()))
+            await connection.send(encode(self.store.connect_frames(self._live_state())))
             async for message in connection:
                 self._handle_uplink(message)
         finally:
@@ -210,6 +225,7 @@ class Bridge:
             loop = asyncio.get_running_loop()
             if command == "stop":
                 data = await loop.run_in_executor(None, inspector.pause)
+                self.session.paused = True
                 # Same data shape as the S-layer topics: the UI panels
                 # read every snapshot's payload from "values".
                 self.store.publish(
@@ -218,6 +234,7 @@ class Bridge:
                 self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "paused"})
             else:
                 await loop.run_in_executor(None, inspector.resume)
+                self.session.paused = False
                 self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "resumed"})
         except Exception as error:
             # This coroutine is the request boundary: any protocol fault

@@ -39,7 +39,7 @@ const PHASES = {
 let latestTs = 0;
 let clockText = "";
 let lostFrames = 0;
-let currentDemo = null;
+let currentRun = null;
 let paused = false;
 /* Snapshots may arrive out of order during connect replay; the highest
    sequence is the current world. */
@@ -134,10 +134,29 @@ function onTopo(data) {
   const taxonomy = topo.taxonomy && typeof topo.taxonomy === "object" ? topo.taxonomy : {};
   events.setBadges(taxonomy.badges);
   panels.setTopology(topo);
-  const demo = topo.demo ? String(topo.demo) : null;
-  if (demo && demo !== currentDemo) {
-    currentDemo = demo;
-    consoleView.mark(`── ${demo} ──`);
+  /* Connect-time session state: the life events that built this picture
+     may already be evicted from the backlog, so the fresh topo is the
+     only reliable carrier for a late joiner. */
+  if (topo.phase !== undefined) {
+    const phase = String(topo.phase);
+    if (phase === "running" && topo.paused) {
+      setPaused(true);
+      setPhase("running", "일시정지 (H)");
+    } else {
+      setPaused(false);
+      setPhase(phase);
+    }
+    pauseButton.hidden = phase !== "running";
+    rerunButton.hidden = phase !== "exited" && phase !== "failed";
+  }
+  if (topo.run_id !== undefined) {
+    /* A run that started while this client was away: its panels and
+       counters describe the previous machine. */
+    if (currentRun !== null && topo.run_id !== currentRun) {
+      panels.clearAll();
+      cards.reset();
+    }
+    currentRun = topo.run_id;
   }
 }
 
@@ -161,6 +180,11 @@ function onLife(ts, data) {
       setPaused(false);
       pauseButton.hidden = false;
       consoleView.setBanner(null); /* a panic banner lives until the next run */
+      /* Run boundary: measurements and counters from the previous
+         machine must not read as this one's. */
+      panels.clearAll();
+      cards.reset();
+      consoleView.mark(`── ${data.demo || "?"} ──`);
       events.addNotice(ts, `실행 중${demo}`);
       break;
     /* H layer: the machine (and its virtual clock) is stopped. */
@@ -176,6 +200,7 @@ function onLife(ts, data) {
       break;
     case "verifying":
       setPhase(phase);
+      consoleView.mark("── verify ──");
       events.addNotice(ts, "검증 중");
       break;
     case "exited":
@@ -227,7 +252,8 @@ function onLife(ts, data) {
       events.addNotice(ts, `업링크 거부: ${data.reason || "?"}`, { dim: true });
       break;
     case "frames-dropped":
-      noteLoss(Number(data.count) || 0);
+      /* The seq holes the eviction left already count these frames;
+         adding the bridge's number would double them. */
       events.addNotice(ts, `브리지 프레임 유실 ${data.count ?? "?"}건`, { dim: true });
       break;
     default:
@@ -286,7 +312,7 @@ function onReset() {
   lossBadge.hidden = true;
   bootMark.hidden = true;
   rerunButton.hidden = true;
-  currentDemo = null;
+  currentRun = null;
   setPaused(false);
   pauseButton.hidden = true;
   topoSeq = 0;
@@ -294,6 +320,11 @@ function onReset() {
   latestTs = 0;
   setPhase("idle");
   events.addNotice(0, "브리지 세션이 새로 시작되어 화면을 초기화했습니다", { dim: true });
+}
+
+/* Reconnected over a hole the backlog replay cannot fill. */
+function onGap() {
+  notify("재연결됨 — 끊긴 동안의 스트림 일부는 복원되지 않았을 수 있습니다");
 }
 
 /* ---------------- theme ---------------- */
@@ -324,4 +355,4 @@ themeButton.addEventListener("click", () => {
 });
 
 applyTheme(storedTheme() || "dark");
-connect({ onFrame, onStatus, onReset, onLoss: noteLoss });
+connect({ onFrame, onStatus, onReset, onLoss: noteLoss, onGap });
