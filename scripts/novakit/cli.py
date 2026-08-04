@@ -7,7 +7,7 @@ import sys
 
 import typer
 
-from .commands import ci, demo, firmware, quality, workspace
+from .commands import ci, demo, firmware, quality, workbench, workspace
 
 app = typer.Typer(
     name="nova",
@@ -22,6 +22,7 @@ workspace.register(app)
 quality.register(app)
 app.add_typer(demo.app, name="demo")
 app.add_typer(firmware.app, name="firmware")
+app.add_typer(workbench.app, name="workbench")
 ci.register(app)
 
 

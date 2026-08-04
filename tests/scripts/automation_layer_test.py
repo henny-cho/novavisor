@@ -81,6 +81,19 @@ class LayerTests(unittest.TestCase):
         # The verification state machine stays testable against a fake child.
         self.assertEqual(modules_importing("pexpect"), ["services/spawn.py"])
 
+    def test_only_the_bridge_server_talks_websockets(self):
+        # The frame content stays testable without a socket.
+        self.assertEqual(
+            modules_importing("websockets"),
+            ["services/workbench/server.py"],
+        )
+
+    def test_only_the_bridge_runs_an_event_loop(self):
+        self.assertEqual(
+            modules_importing("asyncio"),
+            ["services/workbench/server.py", "services/workbench/session.py"],
+        )
+
     def test_only_proc_spawns_subprocesses(self):
         # image/ programs are standalone: the build graph runs them directly,
         # so they may not reach the CLI's process boundary.
@@ -124,6 +137,7 @@ class LayerTests(unittest.TestCase):
                 "commands/demo.py",
                 "commands/firmware.py",
                 "commands/quality.py",
+                "commands/workbench.py",
                 "commands/workspace.py",
             ],
         )
