@@ -142,6 +142,28 @@ class StateStoreTest(unittest.TestCase):
         self.assertEqual(drained[-1]["data"], {"phase": "frames-dropped", "count": 1})
         self.assertEqual(store.drain(), [])
 
+    def test_reject_frames_stay_out_of_replay(self):
+        store = StateStore(envelopes())
+        frame = store.publish(
+            protocol.Topic.LIFE,
+            protocol.Kind.EVENT,
+            {"phase": "uplink-rejected"},
+            replay=False,
+        )
+
+        self.assertEqual(store.drain(), [frame])  # still broadcast live
+        self.assertNotIn(frame, store.connect_frames())
+
+    def test_dropped_notice_survives_into_replay(self):
+        store = StateStore(envelopes(), window=FrameWindow(max_frames=1))
+        store.publish(protocol.Topic.CONSOLE, protocol.Kind.EVENT, {"vm": 0})
+        store.publish(protocol.Topic.CONSOLE, protocol.Kind.EVENT, {"vm": 1})
+
+        notice = store.drain()[-1]
+
+        self.assertEqual(notice["data"]["phase"], "frames-dropped")
+        self.assertIn(notice, store.connect_frames())
+
     def test_connect_replays_topology_first(self):
         store = StateStore(envelopes())
         store.set_topology({"cpus": 2})
@@ -184,6 +206,11 @@ class StaticTest(unittest.TestCase):
 
     def test_missing_file_is_not_found(self):
         self.assertEqual(static.resolve(self.root, "/nope.js").status, 404)
+
+    def test_malformed_path_is_bad_request(self):
+        # An embedded NUL makes Path.resolve() raise; that is the
+        # requester's fault, not a 500.
+        self.assertEqual(static.resolve(self.root, "/%00").status, 400)
 
 
 if __name__ == "__main__":

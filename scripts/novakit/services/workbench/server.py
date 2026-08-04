@@ -9,6 +9,8 @@ without a socket.
 from __future__ import annotations
 
 import asyncio
+import signal
+import sys
 from pathlib import Path
 
 from ...core import config
@@ -101,7 +103,19 @@ class Bridge:
         """Run session work without dropping the task reference."""
         task = asyncio.create_task(coroutine)
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(self._reap)
+
+    def _reap(self, task: asyncio.Task) -> None:
+        self._tasks.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            # A worker that dies silently reads as a feature that just
+            # stopped; put the loss on the wire where the UI shows it.
+            self.store.publish(
+                Topic.LIFE, Kind.EVENT, {"phase": "task-failed", "error": str(error)}
+            )
 
     async def close(self) -> None:
         if self._flusher is not None:
@@ -157,6 +171,11 @@ class Bridge:
         if not demo:
             self._reject("target: missing demo")
             return
+        if self.session.phase in (Phase.BUILDING, Phase.VERIFYING):
+            # Selects queue on the session lock; accepting one per click
+            # would replay every impatient click as a build+teardown.
+            self._reject(f"target: session is {self.session.phase.value}")
+            return
         variant = uplink.data.get("variant")
         self.spawn(
             self.session.select(
@@ -169,7 +188,14 @@ class Bridge:
         )
 
     def _reject(self, reason: str) -> None:
-        self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "uplink-rejected", "reason": reason})
+        # Window only: a flood of bad uplinks must not evict the replay
+        # history every future connection depends on.
+        self.store.publish(
+            Topic.LIFE,
+            Kind.EVENT,
+            {"phase": "uplink-rejected", "reason": reason},
+            replay=False,
+        )
 
     async def _halt_command(self, command: str) -> None:
         """Pause = QMP stop + a per-CPU register sweep; the machine stays
@@ -206,8 +232,8 @@ class Bridge:
 
         The provider is rebuilt per run (a rebuild moves symbols) and its
         construction — one full DWARF walk — happens off the loop. RAM
-        backend races at startup retry silently; resolution errors are
-        permanent for the run and reported once.
+        backend races at startup retry silently; any other fault ends
+        this run's S layer, is reported once, and never kills the loop.
         """
         provider = None
         poller = None
@@ -222,39 +248,49 @@ class Bridge:
                     or session.surfaces is None
                 ):
                     continue
-                if session.run_id != run_id:
+                current = session.run_id
+                try:
+                    if current != run_id:
+                        if provider is not None:
+                            provider.close()
+                            provider = poller = None
+                        shm_path = session.surfaces.shm_path
+                        # Cheap gate: no per-retry DWARF walk while QEMU
+                        # is still creating and sizing the backend.
+                        if not shm_path.exists() or shm_path.stat().st_size == 0:
+                            continue
+                        built = await asyncio.get_running_loop().run_in_executor(
+                            None, snapshot.ElfRamProvider, session.elf_path, shm_path
+                        )
+                        if session.run_id != current:
+                            # A restart landed mid-build: this provider
+                            # maps the previous run's RAM file.
+                            built.close()
+                            continue
+                        provider = built
+                        poller = snapshot.SnapshotPoller(provider)
+                        run_id = current
+                    if poller is None:
+                        continue
+                    for obs, value in poller.tick():
+                        self.store.publish(
+                            obs.topic,
+                            Kind.SNAPSHOT,
+                            {"values": value},
+                            src=Src.SNAP,
+                        )
+                except FileNotFoundError:
+                    continue  # the backend vanished mid-step; retry next tick
+                except Exception as error:
+                    self.store.publish(
+                        Topic.LIFE,
+                        Kind.EVENT,
+                        {"phase": "snapshot-unavailable", "error": str(error)},
+                    )
                     if provider is not None:
                         provider.close()
-                        provider = poller = None
-                    loop = asyncio.get_running_loop()
-                    try:
-                        provider = await loop.run_in_executor(
-                            None,
-                            snapshot.ElfRamProvider,
-                            session.elf_path,
-                            session.surfaces.shm_path,
-                        )
-                    except (FileNotFoundError, ValueError):
-                        continue  # QEMU has not sized the backend yet
-                    except (KeyError, SystemExit) as error:
-                        self.store.publish(
-                            Topic.LIFE,
-                            Kind.EVENT,
-                            {"phase": "snapshot-unavailable", "error": str(error)},
-                        )
-                        run_id = session.run_id
-                        continue
-                    poller = snapshot.SnapshotPoller(provider)
-                    run_id = session.run_id
-                if poller is None:
-                    continue
-                for obs, value in poller.tick():
-                    self.store.publish(
-                        obs.topic,
-                        Kind.SNAPSHOT,
-                        {"values": value},
-                        src=Src.SNAP,
-                    )
+                    provider = poller = None
+                    run_id = current
         finally:
             if provider is not None:
                 provider.close()
@@ -262,23 +298,48 @@ class Bridge:
     async def _flush_loop(self) -> None:
         while True:
             await asyncio.sleep(FLUSH_INTERVAL_SECONDS)
+            if not self._connections:
+                # Leave frames in the window: the first joiner gets them
+                # on the next flush instead of a silent discard.
+                continue
             frames = self.store.drain()
-            if not frames or not self._connections:
+            if not frames:
                 continue
             payload = encode(frames)
-            for connection in tuple(self._connections):
-                try:
-                    await connection.send(payload)
-                except Exception:
-                    self._connections.discard(connection)
+            await asyncio.gather(
+                *(self._send(connection, payload) for connection in tuple(self._connections))
+            )
+
+    async def _send(self, connection, payload: str) -> None:
+        # One stalled client (suspended laptop, throttled tab) must not
+        # hold every other client's frames hostage; a second of
+        # backpressure forfeits the connection.
+        try:
+            await asyncio.wait_for(connection.send(payload), timeout=1.0)
+        except Exception:
+            self._connections.discard(connection)
+            try:
+                await asyncio.wait_for(connection.close(code=1011), timeout=1.0)
+            except Exception:
+                pass  # the transport is already beyond a clean close
 
 
 async def _serve_forever(*, host: str, port: int, target: Target | None, ui_root: Path) -> None:
+    if not ui_root.is_dir():
+        raise SystemExit(f"[workbench] UI root missing: {ui_root}")
     surfaces = make_surfaces()
     bridge = Bridge(ui_root=ui_root, surfaces=surfaces)
+    # A supervisor's SIGTERM must walk the same teardown as Ctrl-C, or
+    # QEMU (its own session, immune to the terminal) outlives the bridge
+    # with a gigabyte of tmpfs pinned.
+    asyncio.get_running_loop().add_signal_handler(
+        signal.SIGTERM, asyncio.current_task().cancel
+    )
     try:
-        await bridge.open(host, port)
+        # Topology first: a client racing the startup must never replay
+        # an empty world.
         bridge.store.set_topology(initial_topology())
+        await bridge.open(host, port)
         print(f"[workbench] serving http://{host}:{bridge.port}/ (WebSocket on {WS_PATH})")
         if target is not None:
             bridge.spawn(bridge.session.select(target))
@@ -304,6 +365,11 @@ def serve(
                 ui_root=ui_root or config.WORKBENCH_UI_DIR,
             )
         )
-    except KeyboardInterrupt:
-        pass
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass  # Ctrl-C and SIGTERM both unwound through the finally
+    except OSError as error:
+        # The bind is the only OS surface before the loop settles; a
+        # taken port deserves one line, not a traceback.
+        print(f"nova workbench: cannot serve on {host}:{port}: {error}", file=sys.stderr)
+        return 2
     return 0
