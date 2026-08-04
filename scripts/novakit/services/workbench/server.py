@@ -12,7 +12,7 @@ import asyncio
 from pathlib import Path
 
 from ...core import config
-from . import snapshot, static
+from . import halt, snapshot, static
 from .protocol import (
     SUPPORTED_UPLINK,
     Clock,
@@ -71,6 +71,7 @@ class Bridge:
         self._tasks: set[asyncio.Task] = set()
         self._server = None
         self._flusher: asyncio.Task | None = None
+        self._halting = False
 
     async def open(self, host: str, port: int) -> None:
         websocket_server, headers_type, response_type = _require_websockets()
@@ -143,6 +144,15 @@ class Bridge:
             if reason is not None:
                 self._reject(f"uart: {reason}")
             return
+        if uplink.topic is Topic.QMP:
+            command = str(uplink.data.get("cmd", ""))
+            if command not in ("stop", "cont"):
+                self._reject(f"qmp: unknown cmd {command!r}")
+            elif self.session.phase is not Phase.RUNNING or self.session.surfaces is None:
+                self._reject(f"qmp: session is {self.session.phase.value}")
+            else:
+                self.spawn(self._halt_command(command))
+            return
         demo = uplink.data.get("demo")
         if not demo:
             self._reject("target: missing demo")
@@ -160,6 +170,33 @@ class Bridge:
 
     def _reject(self, reason: str) -> None:
         self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "uplink-rejected", "reason": reason})
+
+    async def _halt_command(self, command: str) -> None:
+        """Pause = QMP stop + a per-CPU register sweep; the machine stays
+        stopped (virtual clock frozen) until the resume command."""
+        if self._halting:
+            self._reject("qmp: inspection in progress")
+            return
+        self._halting = True
+        try:
+            surfaces = self.session.surfaces
+            inspector = halt.HaltInspector(surfaces.qmp_path, surfaces.gdb_path)
+            loop = asyncio.get_running_loop()
+            if command == "stop":
+                data = await loop.run_in_executor(None, inspector.pause)
+                # Same data shape as the S-layer topics: the UI panels
+                # read every snapshot's payload from "values".
+                self.store.publish(
+                    Topic.SYSREG, Kind.SNAPSHOT, {"values": data}, src=Src.HALT
+                )
+                self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "paused"})
+            else:
+                await loop.run_in_executor(None, inspector.resume)
+                self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "resumed"})
+        except (OSError, RuntimeError, ConnectionError) as error:
+            self._reject(f"qmp: {error}")
+        finally:
+            self._halting = False
 
     async def _poll_loop(self) -> None:
         """Publish S-layer snapshots while a run is live.

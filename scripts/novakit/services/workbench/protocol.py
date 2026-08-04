@@ -25,6 +25,7 @@ class Topic(StrEnum):
     EV = "ev"
     LIFE = "life"
     VERIFY = "verify"
+    SYSREG = "sysreg"
     # uplink
     UART = "uart"
     TARGET = "target"
@@ -33,11 +34,13 @@ class Topic(StrEnum):
     PROBE = "probe"
 
 
-DOWNLINK = frozenset({Topic.TOPO, Topic.CONSOLE, Topic.EV, Topic.LIFE, Topic.VERIFY})
+DOWNLINK = frozenset(
+    {Topic.TOPO, Topic.CONSOLE, Topic.EV, Topic.LIFE, Topic.VERIFY, Topic.SYSREG}
+)
 UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.QMP, Topic.CMD, Topic.PROBE})
 # Recognised-but-deferred uplink topics are answered explicitly instead
 # of being dropped, so the UI degrades visibly.
-SUPPORTED_UPLINK = frozenset({Topic.UART, Topic.TARGET})
+SUPPORTED_UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.QMP})
 
 
 class Kind(StrEnum):

@@ -54,6 +54,7 @@ def attach_workbench(
     *,
     shm_path: Path | str,
     qmp_path: Path | str,
+    gdb_path: Path | str | None = None,
 ) -> list[str]:
     """Extend a composed command with the workbench's observation surfaces.
 
@@ -71,4 +72,6 @@ def attach_workbench(
         "-qmp",
         f"unix:{qmp_path},server=on,wait=off",
     ]
+    if gdb_path is not None:
+        argv += ["-gdb", f"unix:{gdb_path},server=on,wait=off"]
     return argv

@@ -127,9 +127,14 @@ class Surfaces:
     def qmp_path(self) -> Path:
         return self.directory / "qmp.sock"
 
+    @property
+    def gdb_path(self) -> Path:
+        return self.directory / "gdb.sock"
+
     def reset(self) -> None:
         self.shm_path.unlink(missing_ok=True)
         self.qmp_path.unlink(missing_ok=True)
+        self.gdb_path.unlink(missing_ok=True)
 
     def release(self) -> None:
         self.reset()
@@ -218,6 +223,7 @@ class Session:
                     command,
                     shm_path=self.surfaces.shm_path,
                     qmp_path=self.surfaces.qmp_path,
+                    gdb_path=self.surfaces.gdb_path,
                 )
             try:
                 self._live = self._deps.launch(tuple(command))

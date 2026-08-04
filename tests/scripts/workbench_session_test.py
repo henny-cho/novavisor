@@ -380,11 +380,18 @@ class ServerSmokeTest(unittest.IsolatedAsyncioTestCase):
                     self.assertIsInstance(replay, list)
                     self.assertEqual(replay[0]["topic"], "topo")
 
-                    await connection.send('{"topic":"qmp","data":{}}')
+                    await connection.send('{"topic":"cmd","data":{}}')
                     frames = json.loads(await asyncio.wait_for(connection.recv(), 2))
                     self.assertEqual(
                         frames[0]["data"],
-                        {"phase": "unsupported", "topic": "qmp"},
+                        {"phase": "unsupported", "topic": "cmd"},
+                    )
+
+                    await connection.send('{"topic":"qmp","data":{"cmd":"stop"}}')
+                    frames = json.loads(await asyncio.wait_for(connection.recv(), 2))
+                    self.assertEqual(
+                        frames[0]["data"],
+                        {"phase": "uplink-rejected", "reason": "qmp: session is idle"},
                     )
             finally:
                 await bridge.close()
