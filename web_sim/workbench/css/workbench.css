@@ -277,3 +277,21 @@ b{font-weight:700}
   *{transition:none!important;animation:none!important}
   .badge[data-tone="busy"] .dot{opacity:.6}
 }
+
+/* ---- live measurement panels (S layer) ---- */
+.panels { overflow: auto; max-height: 40vh; padding: 4px 8px 8px; }
+.panel-body { display: flex; flex-direction: column; gap: 4px; }
+.pfresh { color: var(--ink3); font: 11px var(--mono); text-align: right; }
+.psec-h { color: var(--ink2); font: 600 11px var(--sans); margin-top: 4px; }
+.pnote { color: var(--ink3); font: 12px var(--mono); padding: 2px 0; }
+.ptable { border-collapse: collapse; width: 100%; font: 12px var(--mono); }
+.ptable th { color: var(--ink3); font-weight: 600; text-align: left; padding: 1px 8px 1px 0; border-bottom: 1px solid var(--line); }
+.ptable td { color: var(--ink); padding: 1px 8px 1px 0; white-space: nowrap; }
+.ptable tr:nth-child(even) td { background: color-mix(in srgb, var(--panel) 60%, transparent); }
+.pslots { display: flex; gap: 4px; flex-wrap: wrap; }
+.pslot { font: 11px var(--mono); color: var(--ink2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 7px; }
+.pslot.on { color: var(--hyp); border-color: var(--hyp); font-weight: 700; }
+.pslot.off { opacity: .42; }
+.pcells { display: flex; gap: 3px; padding: 2px 0 4px; }
+.pcell { width: 15px; height: 15px; border: 1px solid var(--line2); border-radius: 3px; }
+.pcell.on { background: var(--hyp); border-color: var(--hyp); }

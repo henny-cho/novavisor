@@ -23,6 +23,8 @@
       <select id="target" class="pick" aria-label="실행할 데모 선택"></select>
       <button id="run" class="btn primary" type="button">실행</button>
       <button id="rerun" class="btn" type="button" hidden>재실행</button>
+      <button id="pause" class="btn" type="button" hidden
+              title="머신 정지 + sysreg 정밀 검사 (가상 클록도 함께 멈춤)">일시정지</button>
     </div>
 
     <div class="status">
@@ -64,6 +66,10 @@
       <section class="pane">
         <div class="pane-h">VM 카드</div>
         <div class="cards" id="cards"></div>
+      </section>
+      <section class="pane">
+        <div class="pane-h">패널<div class="tabs" id="panel-tabs" role="tablist" aria-label="실측 패널"></div></div>
+        <div class="panels" id="panels"></div>
       </section>
       <section class="pane">
         <div class="pane-h">이벤트 로그<span class="spacer"></span>

@@ -3,10 +3,11 @@
    much of the stream was lost. */
 
 import { clockLabel } from "./format.mjs";
-import { connect } from "./net.mjs";
+import { connect, send } from "./net.mjs";
 import { createCards } from "./cards.mjs";
 import { createConsole } from "./console.mjs";
 import { createEvents } from "./events.mjs";
+import { createPanels } from "./panels.mjs";
 import { createTopology } from "./topology.mjs";
 
 const THEME_KEY = "nv-wb-theme";
@@ -22,6 +23,7 @@ const lossNumber = ref("loss-n");
 const clockNode = ref("clock");
 const themeButton = ref("theme");
 const rerunButton = ref("rerun");
+const pauseButton = ref("pause");
 
 /* Session phases the bridge publishes, in this UI's words. Unknown phases
    fall through to a plain notice rather than a blank badge. */
@@ -38,6 +40,7 @@ let latestTs = 0;
 let clockText = "";
 let lostFrames = 0;
 let currentDemo = null;
+let paused = false;
 /* Snapshots may arrive out of order during connect replay; the highest
    sequence is the current world. */
 let topoSeq = 0;
@@ -52,6 +55,8 @@ const events = createEvents({
 const notify = (message) => events.addNotice(latestTs, message, { dim: true });
 
 const cards = createCards(ref("cards"));
+
+const panels = createPanels({ tabs: ref("panel-tabs"), host: ref("panels") });
 
 const consoleView = createConsole({
   tabs: ref("tabs"),
@@ -95,6 +100,15 @@ function updateClock(ts) {
   clockNode.textContent = next;
 }
 
+function setPaused(next) {
+  paused = next;
+  pauseButton.textContent = paused ? "재개" : "일시정지";
+}
+
+pauseButton.addEventListener("click", () => {
+  send("qmp", { cmd: paused ? "cont" : "stop" });
+});
+
 function noteLoss(count) {
   if (!(count > 0)) return;
   lostFrames += count;
@@ -119,6 +133,7 @@ function onTopo(data) {
   cards.setGuests(guests);
   const taxonomy = topo.taxonomy && typeof topo.taxonomy === "object" ? topo.taxonomy : {};
   events.setBadges(taxonomy.badges);
+  panels.setTopology(topo);
   const demo = topo.demo ? String(topo.demo) : null;
   if (demo && demo !== currentDemo) {
     currentDemo = demo;
@@ -143,8 +158,21 @@ function onLife(ts, data) {
     case "running":
       setPhase(phase);
       rerunButton.hidden = true;
+      setPaused(false);
+      pauseButton.hidden = false;
       consoleView.setBanner(null); /* a panic banner lives until the next run */
       events.addNotice(ts, `실행 중${demo}`);
+      break;
+    /* H layer: the machine (and its virtual clock) is stopped. */
+    case "paused":
+      setPaused(true);
+      setPhase("running", "일시정지 (H)");
+      events.addNotice(ts, "머신 정지 — sysreg 실측 갱신");
+      break;
+    case "resumed":
+      setPaused(false);
+      setPhase("running");
+      events.addNotice(ts, "머신 재개");
       break;
     case "verifying":
       setPhase(phase);
@@ -153,6 +181,7 @@ function onLife(ts, data) {
     case "exited":
       setPhase(phase, `종료 (code=${data.code ?? "?"})`);
       rerunButton.hidden = false;
+      pauseButton.hidden = true;
       events.addNotice(ts, `세션 종료 code=${data.code ?? "?"}`, {
         severity: exitSeverity(data.code),
       });
@@ -234,7 +263,10 @@ function onFrame(frame) {
       );
       break;
     default:
-      break; /* later topics are ignored, never guessed at */
+      /* S-layer snapshot topics come from the observation manifest as
+         plain strings; the panels declare which ones they consume. */
+      if (panels.accepts(frame.topic)) panels.apply(frame);
+      break;
   }
 }
 
@@ -249,11 +281,14 @@ function onReset() {
   consoleView.clearAll();
   cards.clearAll();
   events.clearAll();
+  panels.clearAll();
   lostFrames = 0;
   lossBadge.hidden = true;
   bootMark.hidden = true;
   rerunButton.hidden = true;
   currentDemo = null;
+  setPaused(false);
+  pauseButton.hidden = true;
   topoSeq = 0;
   clockText = "";
   latestTs = 0;
