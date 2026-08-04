@@ -88,6 +88,12 @@ class LayerTests(unittest.TestCase):
             ["services/workbench/server.py"],
         )
 
+    def test_only_the_symbol_reader_parses_the_image(self):
+        self.assertEqual(
+            modules_importing("elftools"),
+            ["services/workbench/elfsym.py"],
+        )
+
     def test_only_the_bridge_runs_an_event_loop(self):
         self.assertEqual(
             modules_importing("asyncio"),

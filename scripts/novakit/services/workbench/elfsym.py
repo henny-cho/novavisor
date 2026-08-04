@@ -1,0 +1,276 @@
+"""Symbol addresses and type layouts, read from the debug ELF.
+
+Resolution is two-staged on purpose (verified against the real image):
+addresses come from .symtab — never stripped, and reachable by
+self-mangling the C++ qualified name, so no demangler is needed —
+while DWARF supplies only member offsets, sizes, and enum values.
+Variables are matched to their DWARF DIE by address (DW_OP_addr), which
+sidesteps namespace walking; the definition DIE carries no type of its
+own, so DW_AT_specification is followed to the declaring DIE.
+
+The decoded view is strict about enums: a value outside the enumeration
+is a torn read, and the whole snapshot is discarded rather than shown.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+_DW_OP_ADDR = 0x03
+_ENCODING_BOOL = 0x02
+_SIGNED_ENCODINGS = (0x05, 0x06, 0x0D)
+
+
+def _require_elftools():
+    try:
+        from elftools.elf.elffile import ELFFile
+
+        return ELFFile
+    except ImportError as error:
+        raise SystemExit(
+            "symbol inspection requires the pinned pyelftools package; "
+            "run scripts/python-env"
+        ) from error
+
+
+def mangle(qualified: str) -> str:
+    """Itanium-mangle a namespaced variable name.
+
+    An anonymous namespace becomes the _GLOBAL__N_1 component and marks
+    the whole path internal, which prefixes the terminal name with L —
+    the exact shape GCC emits into .symtab.
+    """
+    parts = qualified.split("::")
+    if len(parts) == 1:
+        return qualified  # extern "C" or global scope: unmangled
+    internal = "(anonymous)" in parts
+    encoded = "".join(
+        "12_GLOBAL__N_1" if part == "(anonymous)" else f"{len(part)}{part}"
+        for part in parts[:-1]
+    )
+    last = parts[-1]
+    return f"_ZN{encoded}{'L' if internal else ''}{len(last)}{last}E"
+
+
+class TornRead(ValueError):
+    """An enum field held a value outside its enumeration."""
+
+
+@dataclass(frozen=True)
+class TypeInfo:
+    kind: str  # uint | int | bool | enum | pointer | array | struct
+    size: int
+    name: str = ""
+    fields: tuple[Field, ...] = ()  # struct
+    element: TypeInfo | None = None  # array
+    count: int = 0  # array
+    enumerators: tuple[tuple[int, str], ...] = ()  # enum
+
+
+@dataclass(frozen=True)
+class Field:
+    name: str
+    offset: int
+    type: TypeInfo
+
+
+@dataclass(frozen=True)
+class ResolvedSymbol:
+    name: str
+    address: int
+    size: int
+    type: TypeInfo
+
+
+def decode(info: TypeInfo, view: bytes | memoryview, *, fields: tuple[str, ...] = ()):
+    """Bytes to plain data. `fields` restricts a top-level struct decode."""
+    if info.kind in ("uint", "pointer"):
+        return int.from_bytes(view[: info.size], "little")
+    if info.kind == "int":
+        return int.from_bytes(view[: info.size], "little", signed=True)
+    if info.kind == "bool":
+        return view[0] != 0
+    if info.kind == "enum":
+        value = int.from_bytes(view[: info.size], "little")
+        for number, label in info.enumerators:
+            if number == value:
+                return label
+        raise TornRead(f"{info.name}: {value} is not an enumerator")
+    if info.kind == "array":
+        element = info.element
+        return [
+            decode(element, view[index * element.size : (index + 1) * element.size], fields=fields)
+            for index in range(info.count)
+        ]
+    if info.kind == "struct":
+        return {
+            member.name: decode(member.type, view[member.offset : member.offset + member.type.size])
+            for member in info.fields
+            if not fields or member.name in fields
+        }
+    raise ValueError(f"undecodable kind: {info.kind}")
+
+
+class ElfIndex:
+    """One parsed image: symtab addresses plus DWARF layouts, cached."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        elffile_type = _require_elftools()
+        self._stream = self.path.open("rb")
+        self._elf = elffile_type(self._stream)
+        symtab = self._elf.get_section_by_name(".symtab")
+        if symtab is None:
+            raise SystemExit(f"{self.path}: no .symtab")
+        self._symbols: dict[str, tuple[int, int]] = {}
+        for symbol in symtab.iter_symbols():
+            if symbol.name:
+                self._symbols[symbol.name] = (symbol["st_value"], symbol["st_size"])
+        self._variable_dies: dict[int, object] | None = None
+        self._types: dict[int, TypeInfo] = {}
+
+    def close(self) -> None:
+        self._stream.close()
+
+    def resolve(self, qualified: str) -> ResolvedSymbol:
+        mangled = mangle(qualified)
+        if mangled not in self._symbols:
+            raise KeyError(f"symbol not in .symtab: {qualified} ({mangled})")
+        address, size = self._symbols[mangled]
+        die = self._variables().get(address)
+        if die is None:
+            raise KeyError(f"no DWARF variable at {address:#x} for {qualified}")
+        info = self._type_of(die)
+        return ResolvedSymbol(qualified, address, size or info.size, info)
+
+    # ---------------- DWARF walking ----------------
+
+    def _variables(self) -> dict[int, object]:
+        """Address -> variable DIE for every namespace-level definition.
+
+        Subprogram bodies are skipped: locals have no fixed address and
+        make up most of the tree.
+        """
+        if self._variable_dies is not None:
+            return self._variable_dies
+        table: dict[int, object] = {}
+
+        def walk(die) -> None:
+            for child in die.iter_children():
+                tag = child.tag
+                if tag == "DW_TAG_variable":
+                    location = child.attributes.get("DW_AT_location")
+                    if location is None or not location.value:
+                        continue
+                    expression = location.value
+                    if expression[0] != _DW_OP_ADDR or len(expression) < 9:
+                        continue
+                    table[int.from_bytes(bytes(expression[1:9]), "little")] = child
+                elif tag in ("DW_TAG_namespace", "DW_TAG_structure_type", "DW_TAG_class_type"):
+                    walk(child)
+
+        for cu in self._elf.get_dwarf_info().iter_CUs():
+            walk(cu.get_top_DIE())
+        self._variable_dies = table
+        return table
+
+    def _type_of(self, die) -> TypeInfo:
+        # The two-DIE pattern: the defining DIE holds the location, the
+        # declaring DIE (via DW_AT_specification) holds the type.
+        while "DW_AT_type" not in die.attributes:
+            if "DW_AT_specification" not in die.attributes:
+                raise KeyError("variable DIE has neither type nor specification")
+            die = die.get_DIE_from_attribute("DW_AT_specification")
+        return self._resolve_type(die.get_DIE_from_attribute("DW_AT_type"))
+
+    def _resolve_type(self, die) -> TypeInfo:
+        cached = self._types.get(die.offset)
+        if cached is not None:
+            return cached
+        info = self._build_type(die)
+        self._types[die.offset] = info
+        return info
+
+    def _build_type(self, die) -> TypeInfo:
+        tag = die.tag
+        if tag in ("DW_TAG_typedef", "DW_TAG_const_type", "DW_TAG_volatile_type"):
+            return self._resolve_type(die.get_DIE_from_attribute("DW_AT_type"))
+        if tag == "DW_TAG_pointer_type":
+            size = die.attributes.get("DW_AT_byte_size")
+            return TypeInfo("pointer", 8 if size is None else size.value)
+        if tag == "DW_TAG_base_type":
+            size = die.attributes["DW_AT_byte_size"].value
+            encoding = die.attributes["DW_AT_encoding"].value
+            if encoding == _ENCODING_BOOL:
+                return TypeInfo("bool", size)
+            kind = "int" if encoding in _SIGNED_ENCODINGS else "uint"
+            return TypeInfo(kind, size, name=_name_of(die))
+        if tag == "DW_TAG_enumeration_type":
+            size = die.attributes["DW_AT_byte_size"].value
+            enumerators = tuple(
+                (child.attributes["DW_AT_const_value"].value, _name_of(child))
+                for child in die.iter_children()
+                if child.tag == "DW_TAG_enumerator"
+            )
+            return TypeInfo("enum", size, name=_name_of(die), enumerators=enumerators)
+        if tag == "DW_TAG_array_type":
+            element = self._resolve_type(die.get_DIE_from_attribute("DW_AT_type"))
+            count = 0
+            for child in die.iter_children():
+                if child.tag != "DW_TAG_subrange_type":
+                    continue
+                if "DW_AT_count" in child.attributes:
+                    count = child.attributes["DW_AT_count"].value
+                elif "DW_AT_upper_bound" in child.attributes:
+                    count = child.attributes["DW_AT_upper_bound"].value + 1
+            return TypeInfo("array", element.size * count, element=element, count=count)
+        if tag in ("DW_TAG_structure_type", "DW_TAG_class_type"):
+            return self._build_struct(die)
+        raise KeyError(f"unsupported DWARF type tag: {tag}")
+
+    def _build_struct(self, die) -> TypeInfo:
+        size = die.attributes.get("DW_AT_byte_size")
+        members: list[Field] = []
+        for child in die.iter_children():
+            if child.tag == "DW_TAG_inheritance":
+                base = self._resolve_type(child.get_DIE_from_attribute("DW_AT_type"))
+                offset = _member_offset(child)
+                if base.kind == "struct":
+                    members.extend(
+                        Field(inherited.name, offset + inherited.offset, inherited.type)
+                        for inherited in base.fields
+                    )
+                else:
+                    # The base already collapsed to a value (an unwrapped
+                    # __atomic_base): keep it as the inherited payload.
+                    members.append(Field("_base", offset, base))
+            elif child.tag == "DW_TAG_member" and "DW_AT_data_member_location" in child.attributes:
+                members.append(
+                    Field(
+                        _name_of(child),
+                        _member_offset(child),
+                        self._resolve_type(child.get_DIE_from_attribute("DW_AT_type")),
+                    )
+                )
+        # Transparent wrappers (std::array's _M_elems, std::atomic's _M_i,
+        # single-member models like Ownership or TimerQueue) add depth
+        # without information: a lone member at offset 0 IS the value.
+        if len(members) == 1 and members[0].offset == 0:
+            return members[0].type
+        return TypeInfo(
+            "struct",
+            0 if size is None else size.value,
+            name=_name_of(die),
+            fields=tuple(members),
+        )
+
+
+def _name_of(die) -> str:
+    attribute = die.attributes.get("DW_AT_name")
+    return attribute.value.decode() if attribute is not None else ""
+
+
+def _member_offset(die) -> int:
+    attribute = die.attributes.get("DW_AT_data_member_location")
+    return 0 if attribute is None else attribute.value
