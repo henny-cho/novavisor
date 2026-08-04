@@ -38,6 +38,7 @@ export function createPanels({ tabs, host }) {
   let timerSlots = [];
   let active = "sched";
   let ctxSlot = 0;
+  let dirty = false;
 
   const value = (topic) => latest.get(topic)?.value;
 
@@ -290,12 +291,20 @@ export function createPanels({ tabs, host }) {
       entry.body.hidden = !on;
       entry.tab.setAttribute("aria-selected", String(on));
     }
+    dirty = false;
     render(active);
+    host.scrollTop = 0; /* a different panel starts at its own beginning */
+    host.scrollLeft = 0;
   }
 
   function render(id) {
     const entry = bodies.get(id);
     if (!entry || entry.body.hidden) return;
+    /* The drawer is the scroller and this rebuild empties it, which
+       drops the reader's offset — a wide table could never be read to
+       its right edge. Restore what they were looking at. */
+    const left = host.scrollLeft;
+    const top = host.scrollTop;
     clear(entry.body);
     const newest = entry.panel.topics
       .map((topic) => latest.get(topic))
@@ -303,16 +312,18 @@ export function createPanels({ tabs, host }) {
       .reduce((a, b) => (a && a.ts > b.ts ? a : b), null);
     if (!newest) {
       entry.body.append(el("div", "pnote", "실측 대기 중 — 세션이 실행되면 채워집니다"));
-      return;
+    } else {
+      entry.body.append(el("div", "pfresh", `src ${newest.src} · ${stamp(newest.ts, 1)}`));
+      try {
+        entry.panel.render(entry.body);
+      } catch {
+        /* Values decode straight out of live guest RAM; a shape this
+           table cannot walk must not take the drawer down with it. */
+        entry.body.append(el("div", "pnote", "표시할 수 없는 값 — 다음 갱신에서 다시 그립니다"));
+      }
     }
-    entry.body.append(el("div", "pfresh", `src ${newest.src} · ${stamp(newest.ts, 1)}`));
-    try {
-      entry.panel.render(entry.body);
-    } catch {
-      /* Values decode straight out of live guest RAM; a shape this
-         table cannot walk must not take the drawer down with it. */
-      entry.body.append(el("div", "pnote", "표시할 수 없는 값 — 다음 갱신에서 다시 그립니다"));
-    }
+    host.scrollLeft = left;
+    host.scrollTop = top;
   }
 
   activate(active);
@@ -325,7 +336,16 @@ export function createPanels({ tabs, host }) {
       const data = frame.data && typeof frame.data === "object" ? frame.data : null;
       if (!data || data.values === undefined) return;
       latest.set(frame.topic, { value: data.values, ts: frame.ts, src: frame.src });
-      if (interest.get(frame.topic)?.has(active)) render(active);
+      /* Coalesced to one render per flush window: six topics at 20 Hz
+         would rebuild the same table over a hundred times a second,
+         throwing away hover, text selection and the slot picker each
+         time. The panel always draws the newest value either way. */
+      if (interest.get(frame.topic)?.has(active)) dirty = true;
+    },
+    settle() {
+      if (!dirty) return;
+      dirty = false;
+      render(active);
     },
     setTopology(topo) {
       timerSlots = Array.isArray(topo.timer_slots) ? topo.timer_slots : [];

@@ -345,6 +345,7 @@ function onGap() {
 function onBatch() {
   consoleView.settle();
   events.settle();
+  panels.settle();
 }
 
 /* ---------------- theme ---------------- */

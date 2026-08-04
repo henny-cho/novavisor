@@ -142,6 +142,10 @@ b{font-weight:700}
 }
 .tabs{display:flex;gap:5px;margin-left:auto;overflow-x:auto;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
+/* A fixed set of tabs too wide for its column: wrapping keeps every one
+   reachable in a click, where a strip with a hidden scrollbar hid half
+   of them behind a scroll gesture with no affordance. */
+.tabs.wrap{flex-wrap:wrap;justify-content:flex-end;overflow-x:visible;row-gap:4px}
 .tab{
   display:flex;align-items:baseline;gap:6px;flex:none;
   padding:3px 9px;border:1px solid var(--line);border-radius:7px;background:var(--raised);
@@ -187,11 +191,16 @@ b{font-weight:700}
 .cin input:disabled{opacity:.55}
 
 /* ---------------- right column ---------------- */
+/* Flex, not grid tracks: a pane that lands in an implicit row is sized by
+   its own content, and the event log grows without bound — it would
+   squeeze the flexible track (the panel drawer) to nothing. Here every
+   pane is content-sized behind its own scroller and only the last one
+   takes the remainder, so adding a pane cannot silently collapse another. */
 .side{
-  grid-area:side;display:grid;min-height:0;
-  grid-template-rows:minmax(0,auto) minmax(0,1fr);
+  grid-area:side;display:flex;flex-direction:column;min-height:0;
   background:var(--panel);border-left:1px solid var(--line)
 }
+.side>.pane:last-child{flex:1;min-height:0}
 .cards{overflow-y:auto;max-height:40vh;padding:9px var(--wb-pad);display:flex;flex-direction:column;gap:8px}
 .card{
   border:1px solid var(--line);border-left:2px solid var(--vmc);border-radius:var(--wb-r);
@@ -271,6 +280,7 @@ b{font-weight:700}
   .rail-sec{border-top:none;padding-top:0}
   .glist{flex-direction:row;flex-wrap:wrap}
   .cards{max-height:34vh}
+  .panels{height:28vh}
 }
 
 @media (prefers-reduced-motion:reduce){
@@ -279,7 +289,10 @@ b{font-weight:700}
 }
 
 /* ---- live measurement panels (S layer) ---- */
-.panels { overflow: auto; max-height: 40vh; padding: 4px 8px 8px; }
+/* A fixed viewport, not a content-sized one: the tables below change row
+   count every tick, and a growing/shrinking pane would walk the whole
+   column up and down 20 times a second. Changes scroll inside instead. */
+.panels { overflow: auto; height: 34vh; padding: 4px 8px 8px; }
 .panel-body { display: flex; flex-direction: column; gap: 4px; }
 .pfresh { color: var(--ink3); font: 11px var(--mono); text-align: right; }
 .psec-h { color: var(--ink2); font: 600 11px var(--sans); margin-top: 4px; }
