@@ -81,7 +81,9 @@ class ElfRamProviderTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             ram_path = Path(directory) / "guest-ram"
             with ram_path.open("wb") as ram:
-                ram.truncate(16 * 1024 * 1024)  # sparse; covers .data/.bss
+                # Sparse; must span the PA-declared IVC page (+512 MiB),
+                # which the provider's size check now covers too.
+                ram.truncate(0x6000_1000 - snapshot.RAM_BASE)
                 ram.seek(sched.address - snapshot.RAM_BASE)
                 # CpuSched: current=1, fp=kNoOwner, fp_trap=1, idling=0
                 ram.write(struct.pack("<QQ??6x", 1, (1 << 64) - 1, True, False))

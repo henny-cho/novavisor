@@ -83,6 +83,11 @@ class ElfRamProvider:
             self._index.close()
             raise
         highest = max(entry.address + entry.size for entry in self._resolved.values())
+        # PA-declared pages sit far above the image (IVC at +512 MiB);
+        # a short backend must fail here, not decode as silent zeros.
+        for obs in OBSERVATIONS:
+            if obs.pa is not None:
+                highest = max(highest, obs.pa + PAGE_LAYOUTS[obs.layout].size)
         if len(self._ram) < highest - RAM_BASE:
             self.close()
             raise ValueError("RAM backend is smaller than the observed image")

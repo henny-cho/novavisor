@@ -3,6 +3,7 @@
    are always single JSON objects. */
 
 const WS_PATH = "/ws";
+const PROTOCOL_VERSION = 1;
 const BACKOFF_MIN_MS = 500;
 const BACKOFF_MAX_MS = 5000;
 /* Duplicate memory. The bridge replays at most a few hundred frames on
@@ -20,6 +21,9 @@ let hooks = {};
 let lastSeq = 0;
 let floorSeq = 0;
 let seen = new Set();
+/* The bridge identity stamped into every connect topo; a change is the
+   one reliable restart signal, whatever the seq counter says. */
+let sessionToken = null;
 /* The next frame is the first one of a freshly opened connection. */
 let firstOfConnection = true;
 
@@ -36,6 +40,7 @@ function resetTracking() {
   lastSeq = 0;
   floorSeq = 0;
   seen = new Set();
+  sessionToken = null;
 }
 
 /* True the first time a seq is delivered; false for replayed duplicates. */
@@ -52,16 +57,31 @@ function accept(seq) {
 
 function dispatch(frame) {
   if (!frame || typeof frame.seq !== "number") return;
+  /* A forward protocol version is not ours to misread. */
+  if (frame.v !== undefined && frame.v !== PROTOCOL_VERSION) return;
   const seq = frame.seq;
+  const token = frame.topic === "topo" && frame.data ? frame.data.session : undefined;
+  if (token !== undefined) {
+    if (sessionToken !== null && token !== sessionToken) {
+      debug("new bridge", { token });
+      resetTracking();
+      hooks.onReset?.();
+    }
+    sessionToken = token;
+  }
   if (firstOfConnection) {
     firstOfConnection = false;
-    /* A restarted bridge restarts its counter. Within one bridge the
-       replayed snapshot always carries a fresh (higher) seq, so a first
-       frame at or below what we already saw can only be a new session. */
+    /* Token-less fallback: a restarted bridge restarts its counter, so
+       a first frame at or below what we saw can only be a new session. */
     if (seq <= lastSeq) {
       debug("new session", { seq, lastSeq });
       resetTracking();
       hooks.onReset?.();
+    } else if (lastSeq && seq > lastSeq + 1) {
+      /* Frames were missed while disconnected; the backlog replay
+         restores only their tail, so mark the break — a count here
+         would be a guess. */
+      hooks.onGap?.();
     }
   } else if (seq > lastSeq + 1) {
     /* Replay fills in below lastSeq and is never a loss; only a forward
@@ -69,7 +89,13 @@ function dispatch(frame) {
     hooks.onLoss?.(seq - lastSeq - 1);
   }
   if (!accept(seq)) return;
-  hooks.onFrame?.(frame);
+  try {
+    hooks.onFrame?.(frame);
+  } catch (error) {
+    /* A frame the UI cannot render must cost itself, not the batch:
+       console lines and lifecycle frames behind it still matter. */
+    debug("frame handler failed", frame.topic, error);
+  }
 }
 
 function ingest(payload) {
@@ -86,6 +112,7 @@ function ingest(payload) {
     return;
   }
   for (const frame of frames) dispatch(frame);
+  hooks.onBatch?.();
 }
 
 function scheduleRetry() {
@@ -95,24 +122,32 @@ function scheduleRetry() {
 }
 
 function open() {
-  socket = new WebSocket(endpoint());
-  socket.addEventListener("open", () => {
-    backoffMs = BACKOFF_MIN_MS;
+  const ws = new WebSocket(endpoint());
+  socket = ws;
+  let healthyTimer = 0;
+  ws.addEventListener("open", () => {
     firstOfConnection = true;
+    /* An accept-then-drop server would otherwise reset the ladder on
+       every handshake and reconnect at full rate forever; only a
+       connection that survives a while earns the minimum backoff. */
+    healthyTimer = setTimeout(() => {
+      backoffMs = BACKOFF_MIN_MS;
+    }, BACKOFF_MAX_MS);
     hooks.onStatus?.("connected");
     debug("connected");
   });
-  socket.addEventListener("message", (event) => ingest(event.data));
-  socket.addEventListener("close", () => {
-    socket = null;
+  ws.addEventListener("message", (event) => ingest(event.data));
+  ws.addEventListener("close", () => {
+    clearTimeout(healthyTimer);
+    if (socket === ws) socket = null; /* never null a successor's socket */
     hooks.onStatus?.("reconnecting");
     scheduleRetry();
   });
   /* An error is always followed by close; that path owns the retry. */
-  socket.addEventListener("error", () => debug("socket error"));
+  ws.addEventListener("error", () => debug("socket error"));
 }
 
-/* callbacks: { onFrame, onStatus, onReset, onLoss } */
+/* callbacks: { onFrame, onStatus, onReset, onLoss, onGap } */
 export function connect(callbacks) {
   hooks = callbacks || {};
   open();

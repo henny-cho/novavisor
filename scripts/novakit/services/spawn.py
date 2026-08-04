@@ -131,11 +131,14 @@ def observe(
     stream,
     clock: Callable[[], float] | None = None,
     on_match: Callable[[expect.PatternMatch], None] | None = None,
+    on_spawn: Callable[[object], None] | None = None,
 ) -> Run:
     """Run one scenario to its outcome, capturing everything the child prints.
 
     The clock is read here rather than defaulted in the signature so a test
-    can substitute one.
+    can substitute one. `on_spawn` hands the child out as soon as it
+    exists — the caller's only chance to terminate a run early, since
+    this function blocks its thread until the scenario resolves.
     """
     pexpect = _require_pexpect()
     capture = OutputCapture(stream)
@@ -147,10 +150,16 @@ def observe(
             command[1:],
             timeout=scenario.timeout_seconds,
             encoding="utf-8",
+            # Firmware console bytes are not guaranteed UTF-8: SMP cores
+            # interleave multibyte writes and SIGKILL cuts them anywhere.
+            # One bad byte must cost one �, never the verification.
+            codec_errors="replace",
         )
     except (Exception, SystemExit) as exc:
         return Run(expect.spawn_failure(exc), capture)
     child.logfile_read = capture
+    if on_spawn is not None:
+        on_spawn(child)
     try:
         result = expect.observe_output(
             child,

@@ -38,13 +38,18 @@ def _error(status: int, reason: str) -> StaticReply:
 
 
 def resolve(root: Path, target: str) -> StaticReply:
-    path = unquote(urlsplit(target).path)
-    if path.endswith("/"):
-        path += "index.html"
-    candidate = (root / path.lstrip("/")).resolve()
-    if not candidate.is_relative_to(root.resolve()):
-        return _error(403, "Forbidden")
-    if not candidate.is_file():
-        return _error(404, "Not Found")
-    content_type = _CONTENT_TYPES.get(candidate.suffix, "application/octet-stream")
-    return StaticReply(200, "OK", content_type, candidate.read_bytes())
+    try:
+        path = unquote(urlsplit(target).path)
+        if path.endswith("/"):
+            path += "index.html"
+        candidate = (root / path.lstrip("/")).resolve()
+        if not candidate.is_relative_to(root.resolve()):
+            return _error(403, "Forbidden")
+        if not candidate.is_file():
+            return _error(404, "Not Found")
+        content_type = _CONTENT_TYPES.get(candidate.suffix, "application/octet-stream")
+        return StaticReply(200, "OK", content_type, candidate.read_bytes())
+    except (ValueError, OSError):
+        # An embedded NUL (or a file racing its own deletion) is the
+        # requester's problem, not a 500 with a server-side traceback.
+        return _error(400, "Bad Request")

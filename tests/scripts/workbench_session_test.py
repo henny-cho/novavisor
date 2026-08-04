@@ -18,6 +18,7 @@ from novakit.services import expect, spawn  # noqa: E402
 from novakit.services.workbench.protocol import Clock, Envelopes  # noqa: E402
 from novakit.services.workbench.session import (  # noqa: E402
     Deps,
+    Phase,
     Prepared,
     Session,
     Surfaces,
@@ -152,6 +153,18 @@ class SessionTest(unittest.IsolatedAsyncioTestCase):
         session = Session(store(), deps_for(FakeLive()))
         self.assertEqual(session.send_bytes(b"x"), "session is idle")
 
+    async def test_input_is_rejected_while_paused(self):
+        live = FakeLive()
+        self.addCleanup(live.terminate)
+        session = Session(store(), deps_for(live))
+        await session.select(Target(demo="10_console_mux"))
+
+        session.paused = True
+        self.assertEqual(session.send_bytes(b"x"), "machine is paused")
+
+        session.paused = False
+        self.assertIsNone(session.send_bytes(b"x"))
+
     async def test_child_eof_publishes_the_exit_code(self):
         live = FakeLive()
         self.addCleanup(live.terminate)
@@ -227,6 +240,38 @@ class SessionTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(launched[0], scenario().command)
 
+    async def test_console_write_failure_is_reported_not_raised(self):
+        class BrokenPipe(FakeLive):
+            def write(self, _data: bytes) -> None:
+                raise OSError("pty gone")
+
+        live = BrokenPipe()
+        self.addCleanup(live.terminate)
+        session = Session(store(), deps_for(live))
+        await session.select(Target(demo="10_console_mux"))
+
+        reason = session.send_bytes(b"ping\n")
+
+        self.assertIsNotNone(reason)
+        self.assertIn("console write failed", reason)
+
+    async def test_stop_reports_a_child_that_survived(self):
+        class Immortal(FakeLive):
+            def terminate(self) -> bool:
+                self.terminated = True
+                return False
+
+        live = Immortal()
+        state = store()
+        session = Session(state, deps_for(live))
+        await session.select(Target(demo="10_console_mux"))
+        state.drain()
+
+        await session.stop()
+
+        phases = [frame["data"].get("phase") for frame in state.drain()]
+        self.assertEqual(phases, ["stop-failed", "idle"])
+
     async def test_select_replaces_the_previous_child(self):
         first, second = FakeLive(), FakeLive()
         self.addCleanup(second.terminate)
@@ -272,7 +317,7 @@ class VerifyStreamTest(unittest.IsolatedAsyncioTestCase):
             for index in range(1, 4)
         )
 
-        def run_verify(_scenario, stream, on_match) -> spawn.Run:
+        def run_verify(_scenario, stream, on_match, _on_spawn) -> spawn.Run:
             stream.write("[vm0] echo: ping\n[smp] ")
             stream.write("core 1 online\n")
             for match in matches:
@@ -304,7 +349,7 @@ class VerifyStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(exited[0]["code"], 0)
 
     async def test_verify_failure_reports_kind_and_pattern(self):
-        def run_verify(_scenario, _stream, _on_match) -> spawn.Run:
+        def run_verify(_scenario, _stream, _on_match, _on_spawn) -> spawn.Run:
             return spawn.Run(
                 expect.VerificationResult(
                     failure=expect.FailureKind.TIMEOUT,
@@ -336,6 +381,105 @@ class VerifyStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(exited[0]["code"], 1)
 
 
+class VerifyInterruptTest(unittest.IsolatedAsyncioTestCase):
+    async def test_stop_ends_an_active_verify_run(self):
+        """stop() must reach the verify child even though the worker
+        holds the session lock for the whole scenario."""
+        import threading
+
+        killed = threading.Event()
+
+        class Child:
+            def terminate(self, force: bool = False) -> bool:
+                del force
+                killed.set()
+                return True
+
+        def run_verify(_scenario, _stream, _on_match, on_spawn) -> spawn.Run:
+            on_spawn(Child())
+            if not killed.wait(timeout=5):
+                raise AssertionError("verify child was never terminated")
+            return spawn.Run(
+                expect.VerificationResult(failure=expect.FailureKind.EOF),
+                spawn.OutputCapture(None),
+            )
+
+        state = store()
+        session = Session(
+            state,
+            Deps(
+                prepare=lambda target: Prepared(
+                    expect.Scenario(
+                        label="demo",
+                        phase=1,
+                        command=("qemu-system-aarch64",),
+                        timeout_seconds=5,
+                        expectations=({"pattern": "a"},),
+                    ),
+                    {"demo": target.demo},
+                ),
+                launch=lambda _command: FakeLive(),
+                run_verify=run_verify,
+            ),
+        )
+
+        select = asyncio.create_task(session.select(Target(demo="10", verify=True)))
+        deadline = asyncio.get_running_loop().time() + 2
+        while session._verify_child is None:
+            self.assertLess(asyncio.get_running_loop().time(), deadline, "spawn never surfaced")
+            await asyncio.sleep(0.01)
+
+        await session.stop()
+        await select
+
+        self.assertTrue(killed.is_set())
+        phases = [frame["data"].get("phase") for frame in state.drain()]
+        self.assertIn("verify-fail", phases)
+        self.assertIn("exited", phases)
+
+
+class SurfaceSweepTest(unittest.TestCase):
+    def test_sweep_removes_only_dead_surfaces(self):
+        import os
+
+        from novakit.services.workbench.session import sweep_stale_surfaces
+
+        with tempfile.TemporaryDirectory() as base_name:
+            base = Path(base_name)
+            old = (0, 0)  # epoch: comfortably past the age gate
+
+            dead = base / "nova-wb-dead"
+            dead.mkdir()
+            (dead / "guest-ram").write_bytes(b"x")
+            os.utime(dead, old)
+
+            live = base / "nova-wb-live"
+            live.mkdir()
+            (live / "guest-ram").write_bytes(b"x")
+            listener = socket.socket(socket.AF_UNIX)
+            listener.bind(str(live / "qmp.sock"))
+            listener.listen(1)
+            os.utime(live, old)
+
+            young = base / "nova-wb-young"
+            young.mkdir()
+            (young / "guest-ram").write_bytes(b"x")
+
+            idle = base / "nova-wb-idle"
+            idle.mkdir()
+            os.utime(idle, old)
+
+            try:
+                sweep_stale_surfaces(base)
+            finally:
+                listener.close()
+
+            self.assertFalse(dead.exists(), "a dead session's RAM file must be reclaimed")
+            self.assertTrue(live.exists(), "an answering QMP socket marks a live bridge")
+            self.assertTrue(young.exists(), "a starting bridge is never swept")
+            self.assertTrue(idle.exists(), "an idle bridge holds no RAM file to reclaim")
+
+
 class InitialTopologyTest(unittest.TestCase):
     def test_lists_the_pickable_world(self):
         from novakit.services.workbench.session import initial_topology
@@ -346,6 +490,118 @@ class InitialTopologyTest(unittest.TestCase):
         names = [entry["name"] for entry in topology["catalog"]]
         self.assertIn("10_console_mux", names)
         self.assertIn("badges", topology["taxonomy"])
+
+
+class PollLoopTest(unittest.IsolatedAsyncioTestCase):
+    """The S-layer loop against scripted providers: faults and restarts
+    must end one run's polling, never the loop."""
+
+    def bridge_with_run(self, directory: Path):
+        from novakit.services.workbench.server import Bridge
+
+        surfaces = Surfaces(directory)
+        surfaces.shm_path.write_bytes(b"ram")
+        bridge = Bridge(ui_root=directory, surfaces=surfaces)
+        bridge.session.phase = Phase.RUNNING
+        bridge.session.elf_path = directory / "novavisor.elf"
+        bridge.session.run_id = 1
+        return bridge
+
+    async def drain_until(self, bridge, predicate, timeout: float = 2.0) -> list[dict]:
+        frames: list[dict] = []
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            frames.extend(bridge.store.drain())
+            if predicate(frames):
+                return frames
+            await asyncio.sleep(0.01)
+        self.fail(f"condition not met; frames={frames}")
+
+    async def test_provider_fault_ends_the_run_not_the_loop(self):
+        from unittest import mock
+
+        from novakit.services.workbench import server as server_module
+
+        class GoodProvider:
+            def __init__(self):
+                self.closed = False
+
+            def read(self, _obs):
+                return {"n": 1}
+
+            def close(self):
+                self.closed = True
+
+        state = {"fail": True}
+
+        def factory(_elf, _shm):
+            if state["fail"]:
+                raise RuntimeError("boom")
+            return GoodProvider()
+
+        with tempfile.TemporaryDirectory() as name:
+            bridge = self.bridge_with_run(Path(name))
+            with mock.patch.object(server_module.snapshot, "ElfRamProvider", factory):
+                poll = asyncio.create_task(bridge._poll_loop())
+                try:
+                    await self.drain_until(
+                        bridge,
+                        lambda seen: any(
+                            frame["data"].get("phase") == "snapshot-unavailable"
+                            for frame in seen
+                        ),
+                    )
+                    # The fault ended run 1's S layer; run 2 must poll again.
+                    state["fail"] = False
+                    bridge.session.run_id = 2
+                    await self.drain_until(
+                        bridge,
+                        lambda seen: any(frame["topic"] == "sched.cpu" for frame in seen),
+                    )
+                finally:
+                    poll.cancel()
+
+    async def test_restart_during_build_discards_the_stale_provider(self):
+        from unittest import mock
+
+        from novakit.services.workbench import server as server_module
+
+        class Provider:
+            def __init__(self):
+                self.closed = False
+
+            def read(self, _obs):
+                return {"n": 1}
+
+            def close(self):
+                self.closed = True
+
+        instances: list[Provider] = []
+
+        def factory(_elf, _shm):
+            provider = Provider()
+            instances.append(provider)
+            if len(instances) == 1:
+                # A restart lands while the DWARF walk is still running:
+                # this provider maps the previous run's RAM file.
+                bridge.session.run_id = 2
+            return provider
+
+        with tempfile.TemporaryDirectory() as name:
+            bridge = self.bridge_with_run(Path(name))
+            with mock.patch.object(server_module.snapshot, "ElfRamProvider", factory):
+                poll = asyncio.create_task(bridge._poll_loop())
+                try:
+                    await self.drain_until(
+                        bridge,
+                        lambda seen: any(frame["topic"] == "sched.cpu" for frame in seen),
+                    )
+                finally:
+                    poll.cancel()
+
+        self.assertEqual(len(instances), 2)
+        self.assertTrue(instances[0].closed, "the mid-build provider must be dropped")
+        self.assertFalse(instances[1].closed)
 
 
 @unittest.skipUnless(importlib.util.find_spec("websockets"), "websockets is not installed")
@@ -379,19 +635,27 @@ class ServerSmokeTest(unittest.IsolatedAsyncioTestCase):
                     replay = json.loads(await asyncio.wait_for(connection.recv(), 2))
                     self.assertIsInstance(replay, list)
                     self.assertEqual(replay[0]["topic"], "topo")
+                    # Connect-time session state rides the fresh topo.
+                    state = replay[0]["data"]
+                    self.assertEqual(state["phase"], "idle")
+                    self.assertFalse(state["paused"])
+                    self.assertEqual(state["run_id"], 0)
+                    self.assertTrue(state["session"])
 
+                    # The connect topo was published, so the next flush
+                    # re-broadcasts it; answers are found, not indexed.
                     await connection.send('{"topic":"cmd","data":{}}')
                     frames = json.loads(await asyncio.wait_for(connection.recv(), 2))
-                    self.assertEqual(
-                        frames[0]["data"],
+                    self.assertIn(
                         {"phase": "unsupported", "topic": "cmd"},
+                        [frame["data"] for frame in frames],
                     )
 
                     await connection.send('{"topic":"qmp","data":{"cmd":"stop"}}')
                     frames = json.loads(await asyncio.wait_for(connection.recv(), 2))
-                    self.assertEqual(
-                        frames[0]["data"],
+                    self.assertIn(
                         {"phase": "uplink-rejected", "reason": "qmp: session is idle"},
+                        [frame["data"] for frame in frames],
                     )
             finally:
                 await bridge.close()

@@ -25,6 +25,11 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
   /* Badges the user switched off. */
   const muted = new Set();
   const chips = new Map();
+  let stick = true;
+  let dirty = false;
+  list.addEventListener("scroll", () => {
+    stick = atBottom(list);
+  });
 
   const accent = (name) => (name === LIFE ? "var(--ink3)" : ACCENTS[paletteIndex(name, ACCENTS.length)]);
 
@@ -58,7 +63,10 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
   function setBadges(badges) {
     const names = (Array.isArray(badges) ? badges : []).map(String);
     for (const name of [...muted]) {
-      if (name !== LIFE && !names.includes(name)) muted.delete(name);
+      if (name !== LIFE && !names.includes(name)) {
+        muted.delete(name);
+        apply(name); /* its chip is gone; its rows must not stay hidden */
+      }
     }
     clear(filters);
     chips.clear();
@@ -83,10 +91,16 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
       }
     }
     row.hidden = muted.has(name);
-    const pinned = atBottom(list);
     list.append(row);
     trim(list, ROW_CAP);
-    if (pinned) toBottom(list);
+    dirty = true;
+  }
+
+  /* One scroll write per batch; `stick` follows the scroll listener. */
+  function settle() {
+    if (!dirty) return;
+    dirty = false;
+    if (stick) toBottom(list);
   }
 
   /* A classified console event straight off the wire. */
@@ -127,5 +141,5 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
   clearButton.addEventListener("click", clearAll);
 
   placeholder();
-  return { setBadges, addEvent, addNotice, clearAll };
+  return { setBadges, addEvent, addNotice, settle, clearAll };
 }

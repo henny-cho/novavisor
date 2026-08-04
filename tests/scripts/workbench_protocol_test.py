@@ -142,19 +142,54 @@ class StateStoreTest(unittest.TestCase):
         self.assertEqual(drained[-1]["data"], {"phase": "frames-dropped", "count": 1})
         self.assertEqual(store.drain(), [])
 
+    def test_reject_frames_stay_out_of_replay(self):
+        store = StateStore(envelopes())
+        frame = store.publish(
+            protocol.Topic.LIFE,
+            protocol.Kind.EVENT,
+            {"phase": "uplink-rejected"},
+            replay=False,
+        )
+
+        self.assertEqual(store.drain(), [frame])  # still broadcast live
+        self.assertNotIn(frame, store.connect_frames())
+
+    def test_dropped_notice_survives_into_replay(self):
+        store = StateStore(envelopes(), window=FrameWindow(max_frames=1))
+        store.publish(protocol.Topic.CONSOLE, protocol.Kind.EVENT, {"vm": 0})
+        store.publish(protocol.Topic.CONSOLE, protocol.Kind.EVENT, {"vm": 1})
+
+        notice = store.drain()[-1]
+
+        self.assertEqual(notice["data"]["phase"], "frames-dropped")
+        self.assertIn(notice, store.connect_frames())
+
     def test_connect_replays_topology_first(self):
         store = StateStore(envelopes())
         store.set_topology({"cpus": 2})
         published = store.publish(protocol.Topic.LIFE, protocol.Kind.EVENT, {"phase": "booted"})
         store.drain()  # broadcast consumed before this client connected
 
-        replay = store.connect_frames()
+        replay = store.connect_frames({"phase": "running", "paused": False})
 
         self.assertEqual(replay[0]["topic"], "topo")
-        self.assertEqual(replay[0]["data"], {"cpus": 2})
+        self.assertEqual(replay[0]["data"], {"cpus": 2, "phase": "running", "paused": False})
         self.assertEqual(replay[-1], published)
-        # Replaying to one client must not re-broadcast to the others.
-        self.assertEqual(store.drain(), [])
+        # The fresh topo carries the highest seq, so replayed older topo
+        # frames can never override its connect-time session state.
+        self.assertGreater(replay[0]["seq"], published["seq"])
+        # It is published, not private: every other client receives the
+        # same frame on the next flush instead of observing a seq hole.
+        self.assertEqual(store.drain(), [replay[0]])
+
+    def test_live_state_never_sticks_to_the_topology(self):
+        store = StateStore(envelopes())
+        store.set_topology({"cpus": 2})
+        store.connect_frames({"phase": "running"})
+
+        replay = store.connect_frames()
+
+        self.assertEqual(replay[0]["data"], {"cpus": 2})
 
 
 class StaticTest(unittest.TestCase):
@@ -184,6 +219,11 @@ class StaticTest(unittest.TestCase):
 
     def test_missing_file_is_not_found(self):
         self.assertEqual(static.resolve(self.root, "/nope.js").status, 404)
+
+    def test_malformed_path_is_bad_request(self):
+        # An embedded NUL makes Path.resolve() raise; that is the
+        # requester's fault, not a 500.
+        self.assertEqual(static.resolve(self.root, "/%00").status, 400)
 
 
 if __name__ == "__main__":

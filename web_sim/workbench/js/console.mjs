@@ -3,7 +3,7 @@
    (vm === null means a hypervisor line), so this module only renders. */
 
 import { send } from "./net.mjs";
-import { atBottom, clear, el, toBottom, trim, vmSlot } from "./format.mjs";
+import { MAX_VM_SLOT, atBottom, clear, el, toBottom, trim, vmSlot } from "./format.mjs";
 
 const LINE_CAP = 5000; /* per tab; oldest lines drop out */
 const MERGED = "all";
@@ -16,6 +16,7 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, on
   const views = new Map();
   let active = MERGED;
   let signature = null;
+  let dirty = false;
 
   const slot = (index) => `v${index % VM_SLOTS}`;
 
@@ -96,27 +97,36 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, on
     const row = el("div", vm === null ? "cline hyp" : `cline guest ${slot(vm)}`);
     row.append(el("span", "cg", vm === null ? "EL2" : `vm${vm}`));
     row.append(el("span", "ct", text === undefined || text === null ? "" : text));
-    const pinned = view.pane.hidden ? view.stick : atBottom(view.pane);
     view.pane.append(row);
     trim(view.pane, LINE_CAP);
-    view.stick = pinned;
-    if (pinned && !view.pane.hidden) toBottom(view.pane);
+    dirty = true;
+  }
+
+  /* One scroll write per batch instead of a forced layout per line —
+     a boot burst carries thousands of lines in one flush. `stick` is
+     maintained solely by each pane's scroll listener. */
+  function settle() {
+    if (!dirty) return;
+    dirty = false;
+    for (const view of views.values()) {
+      if (!view.pane.hidden && view.stick) toBottom(view.pane);
+    }
   }
 
   function append(line) {
     const vm = Number.isInteger(line.vm) ? line.vm : null;
     push(merged(), vm, line.text);
-    if (vm !== null) push(guestView(vm), vm, line.text);
+    /* A tab is a slot the board can host; guest text that merely looks
+       like a tag stays in the merged log and mints nothing. */
+    if (vm !== null && vm >= 0 && vm < MAX_VM_SLOT) push(guestView(vm), vm, line.text);
   }
 
   /* Session divider in the merged log, so two runs never read as one. */
   function mark(text) {
     const view = merged();
-    const row = el("div", "cline mark", text);
-    const pinned = view.pane.hidden ? view.stick : atBottom(view.pane);
-    view.pane.append(row);
+    view.pane.append(el("div", "cline mark", text));
     trim(view.pane, LINE_CAP);
-    if (pinned && !view.pane.hidden) toBottom(view.pane);
+    dirty = true;
   }
 
   function setBanner(text) {
@@ -144,14 +154,16 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, on
   }
 
   function transmit(bytes) {
-    if (!bytes) return; /* never send an empty payload */
-    if (!send("uart", { bytes })) onNotice?.("브리지에 연결되지 않아 입력을 보내지 못했습니다");
+    if (!bytes) return false; /* never send an empty payload */
+    if (send("uart", { bytes })) return true;
+    onNotice?.("브리지에 연결되지 않아 입력을 보내지 못했습니다");
+    return false;
   }
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    transmit(`${input.value}\n`); /* Enter appends the newline */
-    input.value = "";
+    /* Enter appends the newline; failed input stays put for a retry. */
+    if (transmit(`${input.value}\n`)) input.value = "";
   });
 
   input.addEventListener("keydown", (event) => {
@@ -169,5 +181,5 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, on
 
   merged();
   activate(MERGED);
-  return { setGuests, append, mark, setBanner, clearAll };
+  return { setGuests, append, mark, setBanner, settle, clearAll };
 }

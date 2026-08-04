@@ -2,7 +2,7 @@
    the two pieces of UI state the wire does not carry — the theme and how
    much of the stream was lost. */
 
-import { clockLabel } from "./format.mjs";
+import { MAX_VM_SLOT, clockLabel } from "./format.mjs";
 import { connect, send } from "./net.mjs";
 import { createCards } from "./cards.mjs";
 import { createConsole } from "./console.mjs";
@@ -22,6 +22,7 @@ const lossBadge = ref("loss");
 const lossNumber = ref("loss-n");
 const clockNode = ref("clock");
 const themeButton = ref("theme");
+const runButton = ref("run");
 const rerunButton = ref("rerun");
 const pauseButton = ref("pause");
 
@@ -39,7 +40,7 @@ const PHASES = {
 let latestTs = 0;
 let clockText = "";
 let lostFrames = 0;
-let currentDemo = null;
+let currentRun = null;
 let paused = false;
 /* Snapshots may arrive out of order during connect replay; the highest
    sequence is the current world. */
@@ -75,6 +76,9 @@ const topology = createTopology({
   pane: ref("topo"),
   onStart: (demo) => {
     rerunButton.hidden = true;
+    /* One start per click storm: the next terminal phase (or a
+       rejection) re-arms the button. */
+    runButton.disabled = true;
     events.addNotice(latestTs, `실행 요청 — ${demo}`);
   },
   onNotice: notify,
@@ -86,6 +90,9 @@ function setPhase(phase, override) {
   const info = PHASES[phase];
   phaseBadge.dataset.tone = info ? info.tone : "idle";
   phaseText.textContent = override || (info ? info.text : phase || "—");
+  /* Only a running machine can be paused; every other phase offering
+     the button would send stop to a machine that no longer exists. */
+  pauseButton.hidden = phase !== "running";
 }
 
 /* Connect replay hands the fresh snapshot over before the older backlog,
@@ -106,7 +113,9 @@ function setPaused(next) {
 }
 
 pauseButton.addEventListener("click", () => {
-  send("qmp", { cmd: paused ? "cont" : "stop" });
+  if (!send("qmp", { cmd: paused ? "cont" : "stop" })) {
+    notify("브리지에 연결되지 않아 요청을 보내지 못했습니다");
+  }
 });
 
 function noteLoss(count) {
@@ -134,10 +143,28 @@ function onTopo(data) {
   const taxonomy = topo.taxonomy && typeof topo.taxonomy === "object" ? topo.taxonomy : {};
   events.setBadges(taxonomy.badges);
   panels.setTopology(topo);
-  const demo = topo.demo ? String(topo.demo) : null;
-  if (demo && demo !== currentDemo) {
-    currentDemo = demo;
-    consoleView.mark(`── ${demo} ──`);
+  /* Connect-time session state: the life events that built this picture
+     may already be evicted from the backlog, so the fresh topo is the
+     only reliable carrier for a late joiner. */
+  if (topo.phase !== undefined) {
+    const phase = String(topo.phase);
+    if (phase === "running" && topo.paused) {
+      setPaused(true);
+      setPhase("running", "일시정지 (H)");
+    } else {
+      setPaused(false);
+      setPhase(phase);
+    }
+    rerunButton.hidden = phase !== "exited" && phase !== "failed";
+  }
+  if (topo.run_id !== undefined) {
+    /* A run that started while this client was away: its panels and
+       counters describe the previous machine. */
+    if (currentRun !== null && topo.run_id !== currentRun) {
+      panels.clearAll();
+      cards.reset();
+    }
+    currentRun = topo.run_id;
   }
 }
 
@@ -147,6 +174,7 @@ function onLife(ts, data) {
   switch (phase) {
     case "idle":
       setPhase(phase);
+      runButton.disabled = false;
       events.addNotice(ts, "세션 대기");
       break;
     case "building":
@@ -157,10 +185,15 @@ function onLife(ts, data) {
       break;
     case "running":
       setPhase(phase);
+      runButton.disabled = false;
       rerunButton.hidden = true;
       setPaused(false);
-      pauseButton.hidden = false;
       consoleView.setBanner(null); /* a panic banner lives until the next run */
+      /* Run boundary: measurements and counters from the previous
+         machine must not read as this one's. */
+      panels.clearAll();
+      cards.reset();
+      consoleView.mark(`── ${data.demo || "?"} ──`);
       events.addNotice(ts, `실행 중${demo}`);
       break;
     /* H layer: the machine (and its virtual clock) is stopped. */
@@ -176,18 +209,20 @@ function onLife(ts, data) {
       break;
     case "verifying":
       setPhase(phase);
+      consoleView.mark("── verify ──");
       events.addNotice(ts, "검증 중");
       break;
     case "exited":
       setPhase(phase, `종료 (code=${data.code ?? "?"})`);
+      runButton.disabled = false;
       rerunButton.hidden = false;
-      pauseButton.hidden = true;
       events.addNotice(ts, `세션 종료 code=${data.code ?? "?"}`, {
         severity: exitSeverity(data.code),
       });
       break;
     case "failed":
       setPhase(phase);
+      runButton.disabled = false;
       rerunButton.hidden = false;
       events.addNotice(ts, `실패: ${data.error || "원인 미상"}`, { severity: "CRIT" });
       break;
@@ -224,10 +259,12 @@ function onLife(ts, data) {
       events.addNotice(ts, `미지원 업링크 토픽: ${data.topic || "?"}`, { dim: true });
       break;
     case "uplink-rejected":
+      runButton.disabled = false; /* a rejected select ends its attempt */
       events.addNotice(ts, `업링크 거부: ${data.reason || "?"}`, { dim: true });
       break;
     case "frames-dropped":
-      noteLoss(Number(data.count) || 0);
+      /* The seq holes the eviction left already count these frames;
+         adding the bridge's number would double them. */
       events.addNotice(ts, `브리지 프레임 유실 ${data.count ?? "?"}건`, { dim: true });
       break;
     default:
@@ -247,7 +284,9 @@ function onFrame(frame) {
       break;
     case "console":
       consoleView.append(data);
-      if (Number.isInteger(data.vm)) cards.touch(data.vm, data.text);
+      if (Number.isInteger(data.vm) && data.vm >= 0 && data.vm < MAX_VM_SLOT) {
+        cards.touch(data.vm, data.text);
+      }
       break;
     case "ev":
       events.addEvent(frame.ts, data);
@@ -285,15 +324,27 @@ function onReset() {
   lostFrames = 0;
   lossBadge.hidden = true;
   bootMark.hidden = true;
+  runButton.disabled = false;
   rerunButton.hidden = true;
-  currentDemo = null;
+  currentRun = null;
   setPaused(false);
-  pauseButton.hidden = true;
   topoSeq = 0;
   clockText = "";
   latestTs = 0;
   setPhase("idle");
   events.addNotice(0, "브리지 세션이 새로 시작되어 화면을 초기화했습니다", { dim: true });
+}
+
+/* Reconnected over a hole the backlog replay cannot fill. */
+function onGap() {
+  notify("재연결됨 — 끊긴 동안의 스트림 일부는 복원되지 않았을 수 있습니다");
+}
+
+/* End of one 50ms flush window: settle the scroll work the views
+   deferred, one layout per batch instead of one per line. */
+function onBatch() {
+  consoleView.settle();
+  events.settle();
 }
 
 /* ---------------- theme ---------------- */
@@ -324,4 +375,4 @@ themeButton.addEventListener("click", () => {
 });
 
 applyTheme(storedTheme() || "dark");
-connect({ onFrame, onStatus, onReset, onLoss: noteLoss });
+connect({ onFrame, onStatus, onReset, onLoss: noteLoss, onGap, onBatch });

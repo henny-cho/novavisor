@@ -9,7 +9,10 @@ default executor so the event loop keeps serving connections.
 from __future__ import annotations
 
 import asyncio
+import shutil
+import socket
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -103,9 +106,16 @@ def prepare(target: Target) -> Prepared:
     return Prepared(scenario, topology)
 
 
-def _run_verify(scenario: expect.Scenario, stream, on_match) -> spawn.Run:
+def _run_verify(scenario: expect.Scenario, stream, on_match, on_spawn) -> spawn.Run:
     """Blocking: one verification child, its console tee'd into `stream`."""
-    return spawn.observe(scenario, stream=stream, on_match=on_match)
+    return spawn.observe(scenario, stream=stream, on_match=on_match, on_spawn=on_spawn)
+
+
+def _kill(child) -> None:
+    try:
+        child.terminate(force=True)
+    except Exception:
+        pass  # already gone
 
 
 @dataclass(frozen=True)
@@ -144,10 +154,42 @@ class Surfaces:
             pass
 
 
+def sweep_stale_surfaces(base: Path, min_age_seconds: float = 60.0) -> None:
+    """Remove observation directories whose bridge died without cleanup.
+
+    A killed bridge (SIGKILL, a crashed terminal) leaves its RAM backend
+    pinned in tmpfs — a gigabyte per Linux guest — until /dev/shm fills
+    and every later QEMU launch fails. A directory is dead when its RAM
+    file exists but nothing answers on its QMP socket; young directories
+    are skipped so a bridge that is still starting is never swept.
+    """
+    now = time.time()
+    for directory in base.glob("nova-wb-*"):
+        try:
+            if not (directory / "guest-ram").exists():
+                continue
+            if now - directory.stat().st_mtime < min_age_seconds:
+                continue
+            probe = directory / "qmp.sock"
+            if probe.exists():
+                with socket.socket(socket.AF_UNIX) as sock:
+                    sock.settimeout(0.2)
+                    try:
+                        sock.connect(str(probe))
+                        continue  # a live QEMU still answers here
+                    except OSError:
+                        pass
+            shutil.rmtree(directory, ignore_errors=True)
+        except OSError:
+            continue
+
+
 def make_surfaces() -> Surfaces:
     """tmpfs keeps the RAM file's dirtied pages off the disk; fall back
     to the default temp directory where /dev/shm is unavailable."""
     base = Path("/dev/shm")
+    if base.is_dir():
+        sweep_stale_surfaces(base)
     root = tempfile.mkdtemp(prefix="nova-wb-", dir=base if base.is_dir() else None)
     return Surfaces(Path(root))
 
@@ -188,11 +230,15 @@ class Session:
         self._lock = asyncio.Lock()
         self._assembler = anchors.LineAssembler()
         self._live: spawn.LiveSession | None = None
+        self._verify_child = None
         self._fd: int | None = None
         self.phase = Phase.IDLE
         self.scenario: expect.Scenario | None = None
         self.surfaces = surfaces
         self.elf_path: Path | None = None
+        # H-layer machine state: the bridge sets it around QMP stop/cont
+        # and every phase transition that replaces the machine clears it.
+        self.paused = False
         # Bumped on every RUNNING transition: snapshot readers key their
         # resolved state on it, since a rebuild moves symbols.
         self.run_id = 0
@@ -234,6 +280,7 @@ class Session:
             self._fd = self._live.fileno()
             loop.add_reader(self._fd, self._on_readable)
             self.elf_path = _kernel_of(command)
+            self.paused = False  # a fresh machine is running by definition
             self.run_id += 1
             self._set_phase(Phase.RUNNING, demo=target.demo)
 
@@ -253,13 +300,24 @@ class Session:
         def on_match(match: expect.PatternMatch) -> None:
             loop.call_soon_threadsafe(self._publish_match, match, total)
 
+        def on_spawn(child) -> None:
+            # The worker owns this child and holds the session lock for
+            # the whole scenario; publishing the handle is what lets
+            # stop() reach in and end the run early.
+            loop.call_soon_threadsafe(setattr, self, "_verify_child", child)
+
         try:
             run = await loop.run_in_executor(
-                None, self._deps.run_verify, prepared.scenario, writer, on_match
+                None, self._deps.run_verify, prepared.scenario, writer, on_match, on_spawn
             )
         except (Exception, SystemExit) as error:
+            self._verify_child = None
             self._set_phase(Phase.FAILED, error=str(error))
             return
+        # Deliberately not a finally: on cancellation the worker thread
+        # is still inside the scenario, and the handle is the only way
+        # stop() can end it before the timeout.
+        self._verify_child = None
         # The worker marshals text and matches with call_soon_threadsafe.
         # A fast-finishing child can complete the executor future before
         # it is even awaited, and awaiting a done future never yields —
@@ -299,6 +357,12 @@ class Session:
             self._ingest(raw)
 
     async def stop(self) -> None:
+        child, self._verify_child = self._verify_child, None
+        if child is not None:
+            # A verify run holds the lock for its whole scenario; ending
+            # the child is what makes the worker — and the lock — come
+            # back now instead of at the scenario timeout.
+            await asyncio.get_running_loop().run_in_executor(None, _kill, child)
         async with self._lock:
             await self._stop_locked()
 
@@ -308,14 +372,29 @@ class Session:
         self._detach_reader()
         live, self._live = self._live, None
         # terminate() blocks on the child's demise; keep the loop alive.
-        await asyncio.get_running_loop().run_in_executor(None, live.terminate)
+        dead = await asyncio.get_running_loop().run_in_executor(None, live.terminate)
+        if not dead:
+            # A child that survived SIGKILL keeps its RAM backend pinned
+            # in tmpfs; say so instead of pretending the slate is clean.
+            self._store.publish(Topic.LIFE, Kind.EVENT, {"phase": "stop-failed"})
+        self.paused = False
         self._set_phase(Phase.IDLE)
 
     def send_bytes(self, data: bytes) -> str | None:
         """Forward console input; the rejection reason is the reply."""
         if self.phase is not Phase.RUNNING or self._live is None:
             return f"session is {self.phase.value}"
-        self._live.write(data)
+        if self.paused:
+            # The pty would buffer the bytes and replay them into the
+            # guest on resume — accepted input that acts later is worse
+            # than a visible rejection.
+            return "machine is paused"
+        try:
+            self._live.write(data)
+        except OSError as error:
+            # The child died between the phase check and the write; a
+            # dead pty must cost this request, not the connection.
+            return f"console write failed: {error}"
         return None
 
     def _detach_reader(self) -> None:
@@ -333,7 +412,14 @@ class Session:
             live, self._live = self._live, None
             for raw in self._assembler.flush():
                 self._ingest(raw)
-            self._set_phase(Phase.EXITED, code=live.poll_exit())
+            code = live.poll_exit()
+            if code is None:
+                # A pty error with the child still alive: reap it off
+                # the loop instead of leaving it to the GC finalizer,
+                # which sleeps inside this reader callback.
+                future = asyncio.get_running_loop().run_in_executor(None, live.terminate)
+                future.add_done_callback(lambda done: done.exception())
+            self._set_phase(Phase.EXITED, code=code)
             return
         for raw in self._assembler.feed(chunk):
             self._ingest(raw)

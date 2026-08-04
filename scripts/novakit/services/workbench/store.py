@@ -64,10 +64,14 @@ class StateStore:
         data: dict,
         *,
         src: Src = Src.BRIDGE,
+        replay: bool = True,
     ) -> dict:
+        """`replay=False` keeps a frame out of the connect backlog — for
+        per-request noise (rejections) that must not evict history."""
         frame = self._envelopes.make(topic, kind, data, src=src)
         self.window.add(frame)
-        self._backlog.append(frame)
+        if replay:
+            self._backlog.append(frame)
         return frame
 
     def set_topology(self, data: dict) -> dict:
@@ -77,21 +81,30 @@ class StateStore:
     def drain(self) -> list[dict]:
         frames = self.window.drain()
         if self.window.dropped:
-            frames.append(
-                self._envelopes.make(
-                    Topic.LIFE,
-                    Kind.EVENT,
-                    {"phase": "frames-dropped", "count": self.window.dropped},
-                )
+            notice = self._envelopes.make(
+                Topic.LIFE,
+                Kind.EVENT,
+                {"phase": "frames-dropped", "count": self.window.dropped},
             )
+            # Late joiners replay the backlog; the loss must be part of
+            # the history it punched a hole into.
+            self._backlog.append(notice)
+            frames.append(notice)
             self.window.dropped = 0
         return frames
 
-    def connect_frames(self) -> list[dict]:
-        """Replay for a new connection: topology first, then history.
+    def connect_frames(self, live_state: dict | None = None) -> list[dict]:
+        """Replay for a new connection: fresh topology, then history.
 
-        The topo envelope is built fresh (not published) so replaying to
-        one client does not re-broadcast to every other one.
+        The topo frame is *published*, not privately minted: a private
+        frame would consume a seq every other client observes only as a
+        hole, and it is also where connect-time session state (phase,
+        paused, run identity) rides so a late joiner never has to
+        reconstruct the world from evictable events. History is captured
+        first, so the replay carries the fresh topo exactly once.
         """
-        topo = self._envelopes.make(Topic.TOPO, Kind.SNAPSHOT, self._topology)
-        return [topo, *self._backlog]
+        history = list(self._backlog)
+        topo = self.publish(
+            Topic.TOPO, Kind.SNAPSHOT, {**self._topology, **(live_state or {})}
+        )
+        return [topo, *history]

@@ -82,28 +82,40 @@ def handle_gdb(payload: str, documents: dict[str, str]) -> str:
     return ""
 
 
-def serve_qmp(listener: socket.socket, log: list[str]) -> None:
+def serve_qmp(listener: socket.socket, log: list[str], sessions: int = 1) -> None:
+    for _ in range(sessions):
+        connection, _ = listener.accept()
+        connection.settimeout(5)
+        connection.sendall(b'{"QMP": {"version": {}}}\n')
+        reader = connection.makefile("r")
+        for line in reader:
+            request = json.loads(line)
+            log.append(request["execute"])
+            if request["execute"] == "query-status":
+                connection.sendall(b'{"return": {"running": true}}\n')
+            else:
+                connection.sendall(b'{"event": "SOMETHING"}\n{"return": {}}\n')
+        connection.close()
+
+
+def serve_eof(listener: socket.socket) -> None:
+    """Accept one client and hang up without sending a byte."""
     connection, _ = listener.accept()
-    connection.settimeout(5)
-    connection.sendall(b'{"QMP": {"version": {}}}\n')
-    reader = connection.makefile("r")
-    for line in reader:
-        request = json.loads(line)
-        log.append(request["execute"])
-        if request["execute"] == "query-status":
-            connection.sendall(b'{"return": {"running": true}}\n')
-        else:
-            connection.sendall(b'{"event": "SOMETHING"}\n{"return": {}}\n')
     connection.close()
+
+
+def unix_listener(path: Path) -> socket.socket:
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(str(path))
+    listener.listen(1)
+    return listener
 
 
 class GdbClientTest(unittest.TestCase):
     def test_layout_threads_and_reads(self):
         with tempfile.TemporaryDirectory(dir="/dev/shm") as directory:
             path = Path(directory) / "gdb.sock"
-            listener = socket.socket(socket.AF_UNIX)
-            listener.bind(str(path))
-            listener.listen(1)
+            listener = unix_listener(path)
             thread = threading.Thread(target=serve_gdb, args=(listener,), daemon=True)
             thread.start()
 
@@ -127,9 +139,7 @@ class QmpClientTest(unittest.TestCase):
     def test_handshake_commands_and_event_skipping(self):
         with tempfile.TemporaryDirectory(dir="/dev/shm") as directory:
             path = Path(directory) / "qmp.sock"
-            listener = socket.socket(socket.AF_UNIX)
-            listener.bind(str(path))
-            listener.listen(1)
+            listener = unix_listener(path)
             log: list[str] = []
             thread = threading.Thread(target=serve_qmp, args=(listener, log), daemon=True)
             thread.start()
@@ -143,6 +153,58 @@ class QmpClientTest(unittest.TestCase):
                 client.close()
                 listener.close()
             self.assertEqual(log, ["qmp_capabilities", "stop", "query-status", "cont"])
+
+
+class DeadPeerTest(unittest.TestCase):
+    """EOF from a dying QEMU must surface as ConnectionError, never as a
+    JSON decode error or an infinite recv loop."""
+
+    def test_qmp_eof_raises_connection_error(self):
+        with tempfile.TemporaryDirectory(dir="/dev/shm") as directory:
+            path = Path(directory) / "qmp.sock"
+            listener = unix_listener(path)
+            thread = threading.Thread(target=serve_eof, args=(listener,), daemon=True)
+            thread.start()
+            try:
+                with self.assertRaises(ConnectionError):
+                    halt.QmpClient(path)
+            finally:
+                listener.close()
+
+    def test_gdb_eof_raises_connection_error(self):
+        with tempfile.TemporaryDirectory(dir="/dev/shm") as directory:
+            path = Path(directory) / "gdb.sock"
+            listener = unix_listener(path)
+            thread = threading.Thread(target=serve_eof, args=(listener,), daemon=True)
+            thread.start()
+            try:
+                with self.assertRaises(ConnectionError):
+                    halt.GdbClient(path)
+            finally:
+                listener.close()
+
+
+class PauseRollbackTest(unittest.TestCase):
+    def test_failed_sweep_resumes_the_machine(self):
+        """stop lands, the gdb surface is gone: pause() must roll the
+        stop back (cont) before re-raising, or the machine stays frozen
+        with the UI still reading "running"."""
+        with tempfile.TemporaryDirectory(dir="/dev/shm") as directory:
+            qmp_path = Path(directory) / "qmp.sock"
+            listener = unix_listener(qmp_path)
+            log: list[str] = []
+            thread = threading.Thread(
+                target=serve_qmp, args=(listener, log, 2), daemon=True
+            )
+            thread.start()
+
+            inspector = halt.HaltInspector(qmp_path, Path(directory) / "absent.sock")
+            try:
+                with self.assertRaises(OSError):
+                    inspector.pause()
+            finally:
+                listener.close()
+            self.assertEqual(log, ["qmp_capabilities", "stop", "qmp_capabilities", "cont"])
 
 
 if __name__ == "__main__":
