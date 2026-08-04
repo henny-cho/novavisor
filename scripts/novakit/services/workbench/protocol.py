@@ -25,6 +25,7 @@ class Topic(StrEnum):
     EV = "ev"
     LIFE = "life"
     VERIFY = "verify"
+    SYSREG = "sysreg"
     # uplink
     UART = "uart"
     TARGET = "target"
@@ -33,11 +34,13 @@ class Topic(StrEnum):
     PROBE = "probe"
 
 
-DOWNLINK = frozenset({Topic.TOPO, Topic.CONSOLE, Topic.EV, Topic.LIFE, Topic.VERIFY})
+DOWNLINK = frozenset(
+    {Topic.TOPO, Topic.CONSOLE, Topic.EV, Topic.LIFE, Topic.VERIFY, Topic.SYSREG}
+)
 UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.QMP, Topic.CMD, Topic.PROBE})
 # Recognised-but-deferred uplink topics are answered explicitly instead
 # of being dropped, so the UI degrades visibly.
-SUPPORTED_UPLINK = frozenset({Topic.UART, Topic.TARGET})
+SUPPORTED_UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.QMP})
 
 
 class Kind(StrEnum):
@@ -72,12 +75,21 @@ class Envelopes:
         self._clock = clock
         self._seq = 0
 
-    def make(self, topic: Topic, kind: Kind, data: dict, *, src: Src = Src.BRIDGE) -> dict:
+    def make(
+        self,
+        topic: Topic | str,
+        kind: Kind,
+        data: dict,
+        *,
+        src: Src = Src.BRIDGE,
+    ) -> dict:
+        # S-layer topics come from the observation manifest as plain
+        # strings; the fixed enum covers only the structural topics.
         self._seq += 1
         return {
             "v": PROTOCOL_VERSION,
             "seq": self._seq,
-            "topic": topic.value,
+            "topic": topic.value if isinstance(topic, Topic) else topic,
             "kind": kind.value,
             "ts": self._clock.now(),
             "src": src.value,

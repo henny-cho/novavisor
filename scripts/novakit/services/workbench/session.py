@@ -9,12 +9,16 @@ default executor so the event loop keeps serving connections.
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
+from ...core import board
 from .. import artifacts, expect, manifest, spawn
 from . import anchors
+from .observations import timer_slot_labels
 from .protocol import Kind, Src, Topic
 from .store import StateStore
 from .taxonomy import vocabulary
@@ -52,7 +56,20 @@ def _catalog() -> list[dict]:
 
 def initial_topology() -> dict:
     """What a client sees before any target runs: the pickable world."""
-    return {"demo": None, "guests": [], "catalog": _catalog(), "taxonomy": vocabulary()}
+    return {
+        "demo": None,
+        "guests": [],
+        "catalog": _catalog(),
+        "taxonomy": vocabulary(),
+        "timer_slots": timer_slot_labels(),
+    }
+
+
+def _kernel_of(command: list[str]) -> Path | None:
+    try:
+        return Path(command[command.index("-kernel") + 1])
+    except (ValueError, IndexError):
+        return None
 
 
 def _select_variant(demo_manifest: dict, name: str | None) -> dict:
@@ -81,6 +98,7 @@ def prepare(target: Target) -> Prepared:
         ],
         "catalog": _catalog(),
         "taxonomy": vocabulary(),
+        "timer_slots": timer_slot_labels(),
     }
     return Prepared(scenario, topology)
 
@@ -88,6 +106,50 @@ def prepare(target: Target) -> Prepared:
 def _run_verify(scenario: expect.Scenario, stream, on_match) -> spawn.Run:
     """Blocking: one verification child, its console tee'd into `stream`."""
     return spawn.observe(scenario, stream=stream, on_match=on_match)
+
+
+@dataclass(frozen=True)
+class Surfaces:
+    """Filesystem endpoints of one bridge's observation surfaces.
+
+    The owner (the server) creates and releases them; the session only
+    attaches them to the QEMU command and resets them between runs so a
+    restart never reads the previous run's RAM.
+    """
+
+    directory: Path
+
+    @property
+    def shm_path(self) -> Path:
+        return self.directory / "guest-ram"
+
+    @property
+    def qmp_path(self) -> Path:
+        return self.directory / "qmp.sock"
+
+    @property
+    def gdb_path(self) -> Path:
+        return self.directory / "gdb.sock"
+
+    def reset(self) -> None:
+        self.shm_path.unlink(missing_ok=True)
+        self.qmp_path.unlink(missing_ok=True)
+        self.gdb_path.unlink(missing_ok=True)
+
+    def release(self) -> None:
+        self.reset()
+        try:
+            self.directory.rmdir()
+        except OSError:
+            pass
+
+
+def make_surfaces() -> Surfaces:
+    """tmpfs keeps the RAM file's dirtied pages off the disk; fall back
+    to the default temp directory where /dev/shm is unavailable."""
+    base = Path("/dev/shm")
+    root = tempfile.mkdtemp(prefix="nova-wb-", dir=base if base.is_dir() else None)
+    return Surfaces(Path(root))
 
 
 @dataclass(frozen=True)
@@ -115,7 +177,12 @@ class _LoopWriter:
 
 
 class Session:
-    def __init__(self, store: StateStore, deps: Deps | None = None):
+    def __init__(
+        self,
+        store: StateStore,
+        deps: Deps | None = None,
+        surfaces: Surfaces | None = None,
+    ):
         self._store = store
         self._deps = deps or Deps()
         self._lock = asyncio.Lock()
@@ -124,6 +191,11 @@ class Session:
         self._fd: int | None = None
         self.phase = Phase.IDLE
         self.scenario: expect.Scenario | None = None
+        self.surfaces = surfaces
+        self.elf_path: Path | None = None
+        # Bumped on every RUNNING transition: snapshot readers key their
+        # resolved state on it, since a rebuild moves symbols.
+        self.run_id = 0
 
     def _set_phase(self, phase: Phase, **data) -> None:
         self.phase = phase
@@ -144,14 +216,25 @@ class Session:
             if target.verify:
                 await self._verify_locked(target, prepared)
                 return
+            command = list(prepared.scenario.command)
+            if self.surfaces is not None:
+                self.surfaces.reset()
+                command = board.attach_workbench(
+                    command,
+                    shm_path=self.surfaces.shm_path,
+                    qmp_path=self.surfaces.qmp_path,
+                    gdb_path=self.surfaces.gdb_path,
+                )
             try:
-                self._live = self._deps.launch(prepared.scenario.command)
+                self._live = self._deps.launch(tuple(command))
             except (Exception, SystemExit) as error:
                 self._set_phase(Phase.FAILED, error=str(error))
                 return
             self._assembler = anchors.LineAssembler()
             self._fd = self._live.fileno()
             loop.add_reader(self._fd, self._on_readable)
+            self.elf_path = _kernel_of(command)
+            self.run_id += 1
             self._set_phase(Phase.RUNNING, demo=target.demo)
 
     async def _verify_locked(self, target: Target, prepared: Prepared) -> None:
@@ -177,6 +260,12 @@ class Session:
         except (Exception, SystemExit) as error:
             self._set_phase(Phase.FAILED, error=str(error))
             return
+        # The worker marshals text and matches with call_soon_threadsafe.
+        # A fast-finishing child can complete the executor future before
+        # it is even awaited, and awaiting a done future never yields —
+        # skipping the queued callbacks. One yield lets them land, so
+        # progress frames always precede the outcome frame.
+        await asyncio.sleep(0)
         for raw in self._assembler.flush():
             self._ingest(raw)
         result = run.result

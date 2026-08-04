@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from ..core import actions, config, proc
 from . import cmake, gates, report, suite, tfa
+from .workbench import checks
 
 RUNTIME_PRESETS = (
     "aarch64-release",
@@ -46,6 +47,11 @@ def _static() -> int:
     return gates.static_analysis()
 
 
+def _manifest() -> int:
+    # Runs after static-analysis, whose lint pass built the debug ELF.
+    return checks.verify_manifest()
+
+
 def _presets() -> int:
     for preset in RUNTIME_PRESETS:
         cmake.build(cmake.BuildSpec.of(preset=preset))
@@ -72,7 +78,7 @@ def _recheck() -> int:
 
 LANES = (
     Lane("host", (("format", _format), ("tests", _tests))),
-    Lane("static", (("static-analysis", _static),)),
+    Lane("static", (("static-analysis", _static), ("manifest", _manifest))),
     Lane(
         "runtime",
         (

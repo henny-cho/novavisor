@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ..core import board, proc
 from . import cmake
+from .workbench import checks
 
 INSPECTORS: dict[str, Callable[[Path], list[str]]] = {
     "size": lambda elf: ["aarch64-none-elf-size", str(elf)],
@@ -43,3 +44,8 @@ def run(spec: cmake.BuildSpec, *, debug: bool = False) -> int:
 def inspect(spec: cmake.BuildSpec, operation: str) -> int:
     elf = cmake.resolve_elf(spec, rebuild=False)
     return proc.call(INSPECTORS[operation](elf))
+
+
+def inspect_symbols(spec: cmake.BuildSpec) -> int:
+    """In-process, unlike INSPECTORS: the reader is our own manifest."""
+    return checks.describe_symbols(cmake.resolve_elf(spec, rebuild=False))

@@ -20,6 +20,7 @@ from novakit.services.workbench.session import (  # noqa: E402
     Deps,
     Prepared,
     Session,
+    Surfaces,
     Target,
 )
 from novakit.services.workbench.store import StateStore  # noqa: E402
@@ -181,6 +182,51 @@ class SessionTest(unittest.IsolatedAsyncioTestCase):
         phases = [frame["data"].get("phase") for frame in state.drain()]
         self.assertIn("failed", phases)
 
+    async def test_surfaces_attach_observation_args_to_the_launch(self):
+        board_scenario = expect.Scenario(
+            label="demo",
+            phase=1,
+            command=("qemu-system-aarch64", "-machine", "virt", "-m", "1024"),
+            timeout_seconds=5,
+            expectations=(),
+        )
+        live = FakeLive()
+        self.addCleanup(live.terminate)
+        launched: list[tuple[str, ...]] = []
+
+        def launch(command):
+            launched.append(command)
+            return live
+
+        with tempfile.TemporaryDirectory() as directory:
+            surfaces = Surfaces(Path(directory))
+            deps = Deps(
+                prepare=lambda target: Prepared(board_scenario, {"demo": target.demo}),
+                launch=launch,
+            )
+            session = Session(store(), deps, surfaces)
+
+            await session.select(Target(demo="10_console_mux"))
+
+            joined = " ".join(launched[0])
+            self.assertIn("memory-backend-file,id=wbram,size=1024M", joined)
+            self.assertIn(str(surfaces.shm_path), joined)
+            self.assertIn(f"unix:{surfaces.qmp_path},server=on,wait=off", joined)
+            self.assertIn("virt,memory-backend=wbram", joined)
+
+    async def test_without_surfaces_the_command_is_untouched(self):
+        live = FakeLive()
+        self.addCleanup(live.terminate)
+        launched: list[tuple[str, ...]] = []
+        deps = Deps(
+            prepare=lambda target: Prepared(scenario(), {"demo": target.demo}),
+            launch=lambda command: (launched.append(command), live)[1],
+        )
+
+        await Session(store(), deps).select(Target(demo="10_console_mux"))
+
+        self.assertEqual(launched[0], scenario().command)
+
     async def test_select_replaces_the_previous_child(self):
         first, second = FakeLive(), FakeLive()
         self.addCleanup(second.terminate)
@@ -334,11 +380,18 @@ class ServerSmokeTest(unittest.IsolatedAsyncioTestCase):
                     self.assertIsInstance(replay, list)
                     self.assertEqual(replay[0]["topic"], "topo")
 
-                    await connection.send('{"topic":"qmp","data":{}}')
+                    await connection.send('{"topic":"cmd","data":{}}')
                     frames = json.loads(await asyncio.wait_for(connection.recv(), 2))
                     self.assertEqual(
                         frames[0]["data"],
-                        {"phase": "unsupported", "topic": "qmp"},
+                        {"phase": "unsupported", "topic": "cmd"},
+                    )
+
+                    await connection.send('{"topic":"qmp","data":{"cmd":"stop"}}')
+                    frames = json.loads(await asyncio.wait_for(connection.recv(), 2))
+                    self.assertEqual(
+                        frames[0]["data"],
+                        {"phase": "uplink-rejected", "reason": "qmp: session is idle"},
                     )
             finally:
                 await bridge.close()

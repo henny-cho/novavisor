@@ -47,3 +47,31 @@ def command(
     if bios is not None:
         argv += ["-bios", str(bios)]
     return argv
+
+
+def attach_workbench(
+    command: list[str],
+    *,
+    shm_path: Path | str,
+    qmp_path: Path | str,
+    gdb_path: Path | str | None = None,
+) -> list[str]:
+    """Extend a composed command with the workbench's observation surfaces.
+
+    Guest RAM becomes a shareable file the bridge can mmap read-only, and
+    a QMP socket exposes machine-level control. The frozen MACHINE_ARGS
+    stay untouched: the memory size is read back from the command's own
+    -m value, and the backend is merged into its -machine string.
+    """
+    argv = list(command)
+    memory_mib = argv[argv.index("-m") + 1]
+    argv[argv.index("-machine") + 1] += ",memory-backend=wbram"
+    argv += [
+        "-object",
+        f"memory-backend-file,id=wbram,size={memory_mib}M,mem-path={shm_path},share=on",
+        "-qmp",
+        f"unix:{qmp_path},server=on,wait=off",
+    ]
+    if gdb_path is not None:
+        argv += ["-gdb", f"unix:{gdb_path},server=on,wait=off"]
+    return argv

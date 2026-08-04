@@ -12,22 +12,32 @@ import asyncio
 from pathlib import Path
 
 from ...core import config
-from . import static
+from . import halt, snapshot, static
 from .protocol import (
     SUPPORTED_UPLINK,
     Clock,
     Envelopes,
     Kind,
+    Src,
     Topic,
     UplinkError,
     decode_bytes,
     encode,
     parse_uplink,
 )
-from .session import Deps, Session, Target, initial_topology
+from .session import (
+    Deps,
+    Phase,
+    Session,
+    Surfaces,
+    Target,
+    initial_topology,
+    make_surfaces,
+)
 from .store import StateStore
 
 FLUSH_INTERVAL_SECONDS = 0.05
+POLL_INTERVAL_SECONDS = 0.05
 WS_PATH = "/ws"
 
 
@@ -47,14 +57,21 @@ def _require_websockets():
 class Bridge:
     """A running bridge: the store, the session, and the serving socket."""
 
-    def __init__(self, *, ui_root: Path, deps: Deps | None = None):
+    def __init__(
+        self,
+        *,
+        ui_root: Path,
+        deps: Deps | None = None,
+        surfaces: Surfaces | None = None,
+    ):
         self.store = StateStore(Envelopes(Clock()))
-        self.session = Session(self.store, deps)
+        self.session = Session(self.store, deps, surfaces)
         self._ui_root = ui_root
         self._connections: set = set()
         self._tasks: set[asyncio.Task] = set()
         self._server = None
         self._flusher: asyncio.Task | None = None
+        self._halting = False
 
     async def open(self, host: str, port: int) -> None:
         websocket_server, headers_type, response_type = _require_websockets()
@@ -73,6 +90,8 @@ class Bridge:
             self._handler, host, port, process_request=process_request
         )
         self._flusher = asyncio.create_task(self._flush_loop())
+        if self.session.surfaces is not None:
+            self.spawn(self._poll_loop())
 
     @property
     def port(self) -> int:
@@ -125,6 +144,15 @@ class Bridge:
             if reason is not None:
                 self._reject(f"uart: {reason}")
             return
+        if uplink.topic is Topic.QMP:
+            command = str(uplink.data.get("cmd", ""))
+            if command not in ("stop", "cont"):
+                self._reject(f"qmp: unknown cmd {command!r}")
+            elif self.session.phase is not Phase.RUNNING or self.session.surfaces is None:
+                self._reject(f"qmp: session is {self.session.phase.value}")
+            else:
+                self.spawn(self._halt_command(command))
+            return
         demo = uplink.data.get("demo")
         if not demo:
             self._reject("target: missing demo")
@@ -143,6 +171,91 @@ class Bridge:
     def _reject(self, reason: str) -> None:
         self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "uplink-rejected", "reason": reason})
 
+    async def _halt_command(self, command: str) -> None:
+        """Pause = QMP stop + a per-CPU register sweep; the machine stays
+        stopped (virtual clock frozen) until the resume command."""
+        if self._halting:
+            self._reject("qmp: inspection in progress")
+            return
+        self._halting = True
+        try:
+            surfaces = self.session.surfaces
+            inspector = halt.HaltInspector(surfaces.qmp_path, surfaces.gdb_path)
+            loop = asyncio.get_running_loop()
+            if command == "stop":
+                data = await loop.run_in_executor(None, inspector.pause)
+                # Same data shape as the S-layer topics: the UI panels
+                # read every snapshot's payload from "values".
+                self.store.publish(
+                    Topic.SYSREG, Kind.SNAPSHOT, {"values": data}, src=Src.HALT
+                )
+                self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "paused"})
+            else:
+                await loop.run_in_executor(None, inspector.resume)
+                self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "resumed"})
+        except (OSError, RuntimeError, ConnectionError) as error:
+            self._reject(f"qmp: {error}")
+        finally:
+            self._halting = False
+
+    async def _poll_loop(self) -> None:
+        """Publish S-layer snapshots while a run is live.
+
+        The provider is rebuilt per run (a rebuild moves symbols) and its
+        construction — one full DWARF walk — happens off the loop. RAM
+        backend races at startup retry silently; resolution errors are
+        permanent for the run and reported once.
+        """
+        provider = None
+        poller = None
+        run_id = None
+        try:
+            while True:
+                await asyncio.sleep(POLL_INTERVAL_SECONDS)
+                session = self.session
+                if (
+                    session.phase is not Phase.RUNNING
+                    or session.elf_path is None
+                    or session.surfaces is None
+                ):
+                    continue
+                if session.run_id != run_id:
+                    if provider is not None:
+                        provider.close()
+                        provider = poller = None
+                    loop = asyncio.get_running_loop()
+                    try:
+                        provider = await loop.run_in_executor(
+                            None,
+                            snapshot.ElfRamProvider,
+                            session.elf_path,
+                            session.surfaces.shm_path,
+                        )
+                    except (FileNotFoundError, ValueError):
+                        continue  # QEMU has not sized the backend yet
+                    except (KeyError, SystemExit) as error:
+                        self.store.publish(
+                            Topic.LIFE,
+                            Kind.EVENT,
+                            {"phase": "snapshot-unavailable", "error": str(error)},
+                        )
+                        run_id = session.run_id
+                        continue
+                    poller = snapshot.SnapshotPoller(provider)
+                    run_id = session.run_id
+                if poller is None:
+                    continue
+                for obs, value in poller.tick():
+                    self.store.publish(
+                        obs.topic,
+                        Kind.SNAPSHOT,
+                        {"values": value},
+                        src=Src.SNAP,
+                    )
+        finally:
+            if provider is not None:
+                provider.close()
+
     async def _flush_loop(self) -> None:
         while True:
             await asyncio.sleep(FLUSH_INTERVAL_SECONDS)
@@ -158,16 +271,18 @@ class Bridge:
 
 
 async def _serve_forever(*, host: str, port: int, target: Target | None, ui_root: Path) -> None:
-    bridge = Bridge(ui_root=ui_root)
-    await bridge.open(host, port)
-    bridge.store.set_topology(initial_topology())
-    print(f"[workbench] serving http://{host}:{bridge.port}/ (WebSocket on {WS_PATH})")
-    if target is not None:
-        bridge.spawn(bridge.session.select(target))
+    surfaces = make_surfaces()
+    bridge = Bridge(ui_root=ui_root, surfaces=surfaces)
     try:
+        await bridge.open(host, port)
+        bridge.store.set_topology(initial_topology())
+        print(f"[workbench] serving http://{host}:{bridge.port}/ (WebSocket on {WS_PATH})")
+        if target is not None:
+            bridge.spawn(bridge.session.select(target))
         await asyncio.Future()
     finally:
         await bridge.close()
+        surfaces.release()
 
 
 def serve(

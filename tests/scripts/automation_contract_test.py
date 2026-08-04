@@ -50,6 +50,7 @@ class PublicCommandContractTest(unittest.TestCase):
             ("run",),
             ("clean",),
             ("inspect", "size"),
+            ("inspect", "symbols"),
             ("inspect", "disassemble"),
             ("format",),
             ("lint",),
@@ -97,7 +98,7 @@ class PublicCommandContractTest(unittest.TestCase):
         result = run(str(NOVA), "inspect", "--help")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        for operation in ("size", "disassemble"):
+        for operation in ("size", "symbols", "disassemble"):
             self.assertTrue(listed(result.stdout, operation))
 
     def test_demo_help_exposes_every_public_operation(self):
@@ -167,6 +168,28 @@ class PublicCommandContractTest(unittest.TestCase):
                 "1024",
             ],
         )
+
+    def test_workbench_attachment_leaves_the_board_model_frozen(self):
+        base = board.command(kernel=Path("novavisor.elf"))
+        attached = board.attach_workbench(
+            list(base),
+            shm_path="/dev/shm/wb.ram",
+            qmp_path="/tmp/wb.qmp",
+            gdb_path="/tmp/wb.gdb",
+        )
+
+        machine = attached[attached.index("-machine") + 1]
+        self.assertTrue(machine.endswith(",memory-backend=wbram"))
+        self.assertIn(
+            "memory-backend-file,id=wbram,size=1024M,mem-path=/dev/shm/wb.ram,share=on",
+            attached,
+        )
+        self.assertIn("unix:/tmp/wb.qmp,server=on,wait=off", attached)
+        self.assertIn("unix:/tmp/wb.gdb,server=on,wait=off", attached)
+        # The observation surfaces are additive: the original command and
+        # the frozen tuple are both left untouched.
+        self.assertEqual(base, board.command(kernel=Path("novavisor.elf")))
+        self.assertNotIn("memory-backend", " ".join(board.MACHINE_ARGS))
 
     def test_removed_compatibility_commands_are_rejected(self):
         commands = (
