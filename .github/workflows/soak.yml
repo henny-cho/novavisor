@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ matrix.timeout }}
     container:
-      image: ghcr.io/henny-cho/novavisor-toolchain@sha256:8859ea5e15bae6c10c800c827e10118ef40ab97e595741af4adbcdeb9cf69b09
+      image: ghcr.io/henny-cho/novavisor-toolchain@sha256:a72b1e6277287e27f432924016828d9e58eb99e96ee8add1eff6dc78de9a1619
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
