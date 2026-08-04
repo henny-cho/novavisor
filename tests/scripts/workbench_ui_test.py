@@ -52,6 +52,51 @@ class UiStructureTest(unittest.TestCase):
                     self.assertNotIn(f"'{badge.value}'", text)
 
 
+SIDE_COLUMN = re.compile(r'<aside class="side">(.*?)</aside>', re.S)
+SIDE_RULE = re.compile(r"\.side\s*\{([^}]*)\}")
+GRID_ROWS = re.compile(r"grid-template-rows:([^;}]*)")
+TRACK = re.compile(r"minmax\([^)]*\)|\S+")
+
+
+class SideColumnLayoutTest(unittest.TestCase):
+    """The right column stacks independent panes; each needs a size."""
+
+    def test_every_pane_is_sized_explicitly(self):
+        # A pane that falls into an implicit grid row is sized by its own
+        # content, and the event log grows without bound — it squeezed the
+        # flexible track (the panel drawer) to nothing, so the panels
+        # blinked in and out and their tab strip lost its scroll offset.
+        side = SIDE_COLUMN.search((UI / "index.html").read_text())
+        self.assertIsNotNone(side, "side column markup not found")
+        panes = len(re.findall(r'<section class="pane"', side.group(1)))
+        self.assertGreaterEqual(panes, 3)
+
+        css = (UI / "css" / "workbench.css").read_text()
+        rule = SIDE_RULE.search(css)
+        self.assertIsNotNone(rule, ".side rule not found")
+        declarations = rule.group(1).replace(" ", "")
+        rows = GRID_ROWS.search(declarations)
+        if rows:
+            tracks = len(TRACK.findall(rows.group(1)))
+            self.assertGreaterEqual(
+                tracks, panes, f"{panes} panes but {tracks} row tracks"
+            )
+        else:
+            self.assertIn("display:flex", declarations)
+            self.assertRegex(css, r"\.side\s*>\s*\.pane:last-child\s*\{[^}]*flex:\s*1")
+
+    def test_the_panel_tab_strip_wraps(self):
+        # Unlike the console tabs (data-driven, at most a few), the panel
+        # tabs are a fixed set wider than the column. Scrolling them is
+        # invisible — `.tabs` hides its scrollbar — so they must wrap.
+        markup = (UI / "index.html").read_text()
+        strip = re.search(r'<div class="([^"]*)" id="panel-tabs"', markup)
+        self.assertIsNotNone(strip, "panel tab strip not found")
+        self.assertIn("wrap", strip.group(1).split())
+        css = (UI / "css" / "workbench.css").read_text()
+        self.assertRegex(css, r"\.tabs\.wrap\s*\{[^}]*flex-wrap:\s*wrap")
+
+
 class TokenParityTest(unittest.TestCase):
     """tokens.css is authoritative; the frozen sim must agree with it."""
 

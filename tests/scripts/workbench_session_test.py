@@ -604,6 +604,59 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(instances[1].closed)
 
 
+class ConnectionHandlerTest(unittest.IsolatedAsyncioTestCase):
+    """The socket handler against a scripted connection: a client that
+    dies is not a server fault, and one bad message is not a disconnect."""
+
+    class FakeConnection:
+        def __init__(self, messages=(), error=None):
+            self.sent: list[str] = []
+            self._messages = list(messages)
+            self._error = error
+
+        async def send(self, payload: str) -> None:
+            self.sent.append(payload)
+
+        async def __aiter__(self):
+            for message in self._messages:
+                yield message
+            if self._error is not None:
+                raise self._error
+
+    def bridge(self):
+        from novakit.services.workbench.server import Bridge
+
+        return Bridge(ui_root=Path("/nonexistent"))
+
+    async def test_hard_close_ends_the_connection_quietly(self):
+        # websockets re-raises a non-clean close (a keepalive timeout, a
+        # reset) out of the message iterator.
+        bridge = self.bridge()
+        connection = self.FakeConnection(error=ConnectionResetError("keepalive ping timeout"))
+
+        await bridge._handler(connection)
+
+        self.assertEqual(len(connection.sent), 1)  # the replay still went out
+        self.assertNotIn(connection, bridge._connections)
+
+    async def test_a_failing_message_costs_a_reply_not_the_socket(self):
+        bridge = self.bridge()
+        # A non-text frame reaches json.loads as a non-buffer: a TypeError
+        # no uplink parser claims.
+        connection = self.FakeConnection(messages=[5, '{"topic":"uart","data":{"bytes":"x"}}'])
+
+        await bridge._handler(connection)
+
+        phases = [
+            frame["data"].get("reason", "")
+            for frame in bridge.store.drain()
+            if frame["data"].get("phase") == "uplink-rejected"
+        ]
+        self.assertTrue(any("uplink failed" in reason for reason in phases), phases)
+        # Iteration continued: the second message was still delivered.
+        self.assertTrue(any("session is idle" in reason for reason in phases), phases)
+
+
 @unittest.skipUnless(importlib.util.find_spec("websockets"), "websockets is not installed")
 class ServerSmokeTest(unittest.IsolatedAsyncioTestCase):
     """Runs only where the pinned websockets package is installed."""
