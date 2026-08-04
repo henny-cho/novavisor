@@ -50,6 +50,7 @@ class PublicCommandContractTest(unittest.TestCase):
             ("run",),
             ("clean",),
             ("inspect", "size"),
+            ("inspect", "symbols"),
             ("inspect", "disassemble"),
             ("format",),
             ("lint",),
@@ -97,7 +98,7 @@ class PublicCommandContractTest(unittest.TestCase):
         result = run(str(NOVA), "inspect", "--help")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        for operation in ("size", "disassemble"):
+        for operation in ("size", "symbols", "disassemble"):
             self.assertTrue(listed(result.stdout, operation))
 
     def test_demo_help_exposes_every_public_operation(self):

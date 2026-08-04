@@ -6,6 +6,8 @@ it also guards local `nova test` runs whenever the ELF is present.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 import unittest
 from pathlib import Path
@@ -22,6 +24,14 @@ ELF = REPO / "build" / "aarch64-debug" / "novavisor.elf"
 class ManifestResolutionTest(unittest.TestCase):
     def test_every_observation_resolves(self):
         self.assertEqual(checks.verify_manifest(ELF), 0)
+
+    def test_symbols_report_covers_every_topic(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(checks.describe_symbols(ELF), 0)
+        lines = output.getvalue().splitlines()
+        topics = {line.split()[0] for line in lines[1:]}
+        self.assertEqual(topics, {obs.topic for obs in observations.OBSERVATIONS})
 
     def test_scheduler_layout_matches_the_firmware(self):
         index = elfsym.ElfIndex(ELF)

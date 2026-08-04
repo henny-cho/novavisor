@@ -110,6 +110,17 @@ def size(
     _finish(workspace.inspect(_spec(release, preset, config, payloads), "size"))
 
 
+@inspect_app.command("symbols")
+def symbols(
+    release: Release = False,
+    preset: Preset = None,
+    config: Config = None,
+    payloads: Payloads = None,
+) -> None:
+    """Resolve the workbench observation manifest against the image."""
+    _finish(workspace.inspect_symbols(_spec(release, preset, config, payloads)))
+
+
 @inspect_app.command("disassemble")
 def disassemble(
     release: Release = False,

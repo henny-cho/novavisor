@@ -16,6 +16,55 @@ def _fields_of(info: elfsym.TypeInfo) -> set[str]:
     return {member.name for member in info.fields} if info.kind == "struct" else set()
 
 
+def _shape(info: elfsym.TypeInfo) -> str:
+    if info.kind == "array":
+        return f"{_shape(info.element)}[{info.count}]"
+    if info.kind == "struct":
+        members = ",".join(member.name for member in info.fields)
+        return f"{info.name or 'struct'}{{{members}}}"
+    if info.kind in ("enum", "bool"):
+        return info.name or info.kind
+    return f"{info.kind}{info.size * 8}"
+
+
+def describe_symbols(elf: Path | None = None) -> int:
+    """Print where every observation lives in the image.
+
+    The terminal twin of the S layer: the same manifest, the same
+    resolution the poller uses, laid out for a human.
+    """
+    path = elf if elf is not None else config.BUILD_ROOT / config.HV_PRESET / "novavisor.elf"
+    if not Path(path).is_file():
+        print(f"[workbench] symbols: missing ELF {path}", file=sys.stderr)
+        return 1
+    index = elfsym.ElfIndex(Path(path))
+    try:
+        rows = []
+        for obs in OBSERVATIONS:
+            if obs.pa is not None:
+                layout = snapshot.PAGE_LAYOUTS[obs.layout]
+                rows.append((obs.topic, obs.pa, layout.size, obs.rate_hz, _shape(layout)))
+                continue
+            resolved = index.resolve(obs.symbol)
+            picked = obs.fields and f" -> {','.join(obs.fields)}" or ""
+            rows.append(
+                (
+                    obs.topic,
+                    resolved.address,
+                    resolved.size,
+                    obs.rate_hz,
+                    _shape(resolved.type) + picked,
+                )
+            )
+    finally:
+        index.close()
+    width = max(len(row[0]) for row in rows)
+    print(f"{'topic':<{width}}  {'address':>10}  {'size':>6}  {'hz':>4}  shape")
+    for topic, address, size, rate, shape in rows:
+        print(f"{topic:<{width}}  {address:#010x}  {size:>6}  {rate:>4g}  {shape}")
+    return 0
+
+
 def verify_manifest(elf: Path | None = None) -> int:
     """Resolve every observation against the built debug ELF.
 
