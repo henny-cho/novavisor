@@ -24,7 +24,7 @@ from .protocol import (
     encode,
     parse_uplink,
 )
-from .session import Deps, Session, Target, initial_topology
+from .session import Deps, Session, Surfaces, Target, initial_topology, make_surfaces
 from .store import StateStore
 
 FLUSH_INTERVAL_SECONDS = 0.05
@@ -47,9 +47,15 @@ def _require_websockets():
 class Bridge:
     """A running bridge: the store, the session, and the serving socket."""
 
-    def __init__(self, *, ui_root: Path, deps: Deps | None = None):
+    def __init__(
+        self,
+        *,
+        ui_root: Path,
+        deps: Deps | None = None,
+        surfaces: Surfaces | None = None,
+    ):
         self.store = StateStore(Envelopes(Clock()))
-        self.session = Session(self.store, deps)
+        self.session = Session(self.store, deps, surfaces)
         self._ui_root = ui_root
         self._connections: set = set()
         self._tasks: set[asyncio.Task] = set()
@@ -158,16 +164,18 @@ class Bridge:
 
 
 async def _serve_forever(*, host: str, port: int, target: Target | None, ui_root: Path) -> None:
-    bridge = Bridge(ui_root=ui_root)
-    await bridge.open(host, port)
-    bridge.store.set_topology(initial_topology())
-    print(f"[workbench] serving http://{host}:{bridge.port}/ (WebSocket on {WS_PATH})")
-    if target is not None:
-        bridge.spawn(bridge.session.select(target))
+    surfaces = make_surfaces()
+    bridge = Bridge(ui_root=ui_root, surfaces=surfaces)
     try:
+        await bridge.open(host, port)
+        bridge.store.set_topology(initial_topology())
+        print(f"[workbench] serving http://{host}:{bridge.port}/ (WebSocket on {WS_PATH})")
+        if target is not None:
+            bridge.spawn(bridge.session.select(target))
         await asyncio.Future()
     finally:
         await bridge.close()
+        surfaces.release()
 
 
 def serve(

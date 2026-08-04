@@ -9,10 +9,13 @@ default executor so the event loop keeps serving connections.
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
+from ...core import board
 from .. import artifacts, expect, manifest, spawn
 from . import anchors
 from .protocol import Kind, Src, Topic
@@ -91,6 +94,45 @@ def _run_verify(scenario: expect.Scenario, stream, on_match) -> spawn.Run:
 
 
 @dataclass(frozen=True)
+class Surfaces:
+    """Filesystem endpoints of one bridge's observation surfaces.
+
+    The owner (the server) creates and releases them; the session only
+    attaches them to the QEMU command and resets them between runs so a
+    restart never reads the previous run's RAM.
+    """
+
+    directory: Path
+
+    @property
+    def shm_path(self) -> Path:
+        return self.directory / "guest-ram"
+
+    @property
+    def qmp_path(self) -> Path:
+        return self.directory / "qmp.sock"
+
+    def reset(self) -> None:
+        self.shm_path.unlink(missing_ok=True)
+        self.qmp_path.unlink(missing_ok=True)
+
+    def release(self) -> None:
+        self.reset()
+        try:
+            self.directory.rmdir()
+        except OSError:
+            pass
+
+
+def make_surfaces() -> Surfaces:
+    """tmpfs keeps the RAM file's dirtied pages off the disk; fall back
+    to the default temp directory where /dev/shm is unavailable."""
+    base = Path("/dev/shm")
+    root = tempfile.mkdtemp(prefix="nova-wb-", dir=base if base.is_dir() else None)
+    return Surfaces(Path(root))
+
+
+@dataclass(frozen=True)
 class Deps:
     """Injection seam: tests swap the blocking edges, never the flow."""
 
@@ -115,7 +157,12 @@ class _LoopWriter:
 
 
 class Session:
-    def __init__(self, store: StateStore, deps: Deps | None = None):
+    def __init__(
+        self,
+        store: StateStore,
+        deps: Deps | None = None,
+        surfaces: Surfaces | None = None,
+    ):
         self._store = store
         self._deps = deps or Deps()
         self._lock = asyncio.Lock()
@@ -124,6 +171,7 @@ class Session:
         self._fd: int | None = None
         self.phase = Phase.IDLE
         self.scenario: expect.Scenario | None = None
+        self.surfaces = surfaces
 
     def _set_phase(self, phase: Phase, **data) -> None:
         self.phase = phase
@@ -144,8 +192,16 @@ class Session:
             if target.verify:
                 await self._verify_locked(target, prepared)
                 return
+            command = list(prepared.scenario.command)
+            if self.surfaces is not None:
+                self.surfaces.reset()
+                command = board.attach_workbench(
+                    command,
+                    shm_path=self.surfaces.shm_path,
+                    qmp_path=self.surfaces.qmp_path,
+                )
             try:
-                self._live = self._deps.launch(prepared.scenario.command)
+                self._live = self._deps.launch(tuple(command))
             except (Exception, SystemExit) as error:
                 self._set_phase(Phase.FAILED, error=str(error))
                 return

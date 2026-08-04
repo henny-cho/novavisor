@@ -168,6 +168,26 @@ class PublicCommandContractTest(unittest.TestCase):
             ],
         )
 
+    def test_workbench_attachment_leaves_the_board_model_frozen(self):
+        base = board.command(kernel=Path("novavisor.elf"))
+        attached = board.attach_workbench(
+            list(base),
+            shm_path="/dev/shm/wb.ram",
+            qmp_path="/tmp/wb.qmp",
+        )
+
+        machine = attached[attached.index("-machine") + 1]
+        self.assertTrue(machine.endswith(",memory-backend=wbram"))
+        self.assertIn(
+            "memory-backend-file,id=wbram,size=1024M,mem-path=/dev/shm/wb.ram,share=on",
+            attached,
+        )
+        self.assertIn("unix:/tmp/wb.qmp,server=on,wait=off", attached)
+        # The observation surfaces are additive: the original command and
+        # the frozen tuple are both left untouched.
+        self.assertEqual(base, board.command(kernel=Path("novavisor.elf")))
+        self.assertNotIn("memory-backend", " ".join(board.MACHINE_ARGS))
+
     def test_removed_compatibility_commands_are_rejected(self):
         commands = (
             ("debug",),
