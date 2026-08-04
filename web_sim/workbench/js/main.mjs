@@ -2,7 +2,7 @@
    the two pieces of UI state the wire does not carry — the theme and how
    much of the stream was lost. */
 
-import { clockLabel } from "./format.mjs";
+import { MAX_VM_SLOT, clockLabel } from "./format.mjs";
 import { connect, send } from "./net.mjs";
 import { createCards } from "./cards.mjs";
 import { createConsole } from "./console.mjs";
@@ -22,6 +22,7 @@ const lossBadge = ref("loss");
 const lossNumber = ref("loss-n");
 const clockNode = ref("clock");
 const themeButton = ref("theme");
+const runButton = ref("run");
 const rerunButton = ref("rerun");
 const pauseButton = ref("pause");
 
@@ -75,6 +76,9 @@ const topology = createTopology({
   pane: ref("topo"),
   onStart: (demo) => {
     rerunButton.hidden = true;
+    /* One start per click storm: the next terminal phase (or a
+       rejection) re-arms the button. */
+    runButton.disabled = true;
     events.addNotice(latestTs, `실행 요청 — ${demo}`);
   },
   onNotice: notify,
@@ -86,6 +90,9 @@ function setPhase(phase, override) {
   const info = PHASES[phase];
   phaseBadge.dataset.tone = info ? info.tone : "idle";
   phaseText.textContent = override || (info ? info.text : phase || "—");
+  /* Only a running machine can be paused; every other phase offering
+     the button would send stop to a machine that no longer exists. */
+  pauseButton.hidden = phase !== "running";
 }
 
 /* Connect replay hands the fresh snapshot over before the older backlog,
@@ -106,7 +113,9 @@ function setPaused(next) {
 }
 
 pauseButton.addEventListener("click", () => {
-  send("qmp", { cmd: paused ? "cont" : "stop" });
+  if (!send("qmp", { cmd: paused ? "cont" : "stop" })) {
+    notify("브리지에 연결되지 않아 요청을 보내지 못했습니다");
+  }
 });
 
 function noteLoss(count) {
@@ -146,7 +155,6 @@ function onTopo(data) {
       setPaused(false);
       setPhase(phase);
     }
-    pauseButton.hidden = phase !== "running";
     rerunButton.hidden = phase !== "exited" && phase !== "failed";
   }
   if (topo.run_id !== undefined) {
@@ -166,6 +174,7 @@ function onLife(ts, data) {
   switch (phase) {
     case "idle":
       setPhase(phase);
+      runButton.disabled = false;
       events.addNotice(ts, "세션 대기");
       break;
     case "building":
@@ -176,9 +185,9 @@ function onLife(ts, data) {
       break;
     case "running":
       setPhase(phase);
+      runButton.disabled = false;
       rerunButton.hidden = true;
       setPaused(false);
-      pauseButton.hidden = false;
       consoleView.setBanner(null); /* a panic banner lives until the next run */
       /* Run boundary: measurements and counters from the previous
          machine must not read as this one's. */
@@ -205,14 +214,15 @@ function onLife(ts, data) {
       break;
     case "exited":
       setPhase(phase, `종료 (code=${data.code ?? "?"})`);
+      runButton.disabled = false;
       rerunButton.hidden = false;
-      pauseButton.hidden = true;
       events.addNotice(ts, `세션 종료 code=${data.code ?? "?"}`, {
         severity: exitSeverity(data.code),
       });
       break;
     case "failed":
       setPhase(phase);
+      runButton.disabled = false;
       rerunButton.hidden = false;
       events.addNotice(ts, `실패: ${data.error || "원인 미상"}`, { severity: "CRIT" });
       break;
@@ -249,6 +259,7 @@ function onLife(ts, data) {
       events.addNotice(ts, `미지원 업링크 토픽: ${data.topic || "?"}`, { dim: true });
       break;
     case "uplink-rejected":
+      runButton.disabled = false; /* a rejected select ends its attempt */
       events.addNotice(ts, `업링크 거부: ${data.reason || "?"}`, { dim: true });
       break;
     case "frames-dropped":
@@ -273,7 +284,9 @@ function onFrame(frame) {
       break;
     case "console":
       consoleView.append(data);
-      if (Number.isInteger(data.vm)) cards.touch(data.vm, data.text);
+      if (Number.isInteger(data.vm) && data.vm >= 0 && data.vm < MAX_VM_SLOT) {
+        cards.touch(data.vm, data.text);
+      }
       break;
     case "ev":
       events.addEvent(frame.ts, data);
@@ -311,10 +324,10 @@ function onReset() {
   lostFrames = 0;
   lossBadge.hidden = true;
   bootMark.hidden = true;
+  runButton.disabled = false;
   rerunButton.hidden = true;
   currentRun = null;
   setPaused(false);
-  pauseButton.hidden = true;
   topoSeq = 0;
   clockText = "";
   latestTs = 0;
@@ -325,6 +338,13 @@ function onReset() {
 /* Reconnected over a hole the backlog replay cannot fill. */
 function onGap() {
   notify("재연결됨 — 끊긴 동안의 스트림 일부는 복원되지 않았을 수 있습니다");
+}
+
+/* End of one 50ms flush window: settle the scroll work the views
+   deferred, one layout per batch instead of one per line. */
+function onBatch() {
+  consoleView.settle();
+  events.settle();
 }
 
 /* ---------------- theme ---------------- */
@@ -355,4 +375,4 @@ themeButton.addEventListener("click", () => {
 });
 
 applyTheme(storedTheme() || "dark");
-connect({ onFrame, onStatus, onReset, onLoss: noteLoss, onGap });
+connect({ onFrame, onStatus, onReset, onLoss: noteLoss, onGap, onBatch });

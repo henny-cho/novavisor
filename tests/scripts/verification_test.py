@@ -1,5 +1,6 @@
 import contextlib
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -685,6 +686,27 @@ class DemoRunnerVerificationTest(unittest.TestCase):
                 "succeeded": False,
                 "error": "not attempted: process was not started",
             })
+
+
+@unittest.skipUnless(importlib.util.find_spec("pexpect"), "pexpect is not installed")
+class InvalidOutputBytesTest(unittest.TestCase):
+    def test_invalid_utf8_output_does_not_fail_the_drain(self):
+        """Firmware console bytes are not guaranteed UTF-8: SMP cores
+        interleave multibyte writes and a SIGKILL cuts them anywhere.
+        The verifier must decode such output rather than turn a fully
+        matched run into a post-termination exception."""
+        scenario = expect.Scenario(
+            label="demo",
+            phase=1,
+            command=("/bin/sh", "-c", "printf 'ok\\nabc\\342zz\\n'; sleep 5"),
+            timeout_seconds=5,
+            expectations=({"pattern": "ok"},),
+            forbidden_patterns=("NEVER",),
+        )
+
+        run = spawn.observe(scenario, stream=None)
+
+        self.assertTrue(run.result.ok, run.result)
 
 
 if __name__ == "__main__":

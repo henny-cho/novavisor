@@ -150,6 +150,10 @@ def observe(
             command[1:],
             timeout=scenario.timeout_seconds,
             encoding="utf-8",
+            # Firmware console bytes are not guaranteed UTF-8: SMP cores
+            # interleave multibyte writes and SIGKILL cuts them anywhere.
+            # One bad byte must cost one �, never the verification.
+            codec_errors="replace",
         )
     except (Exception, SystemExit) as exc:
         return Run(expect.spawn_failure(exc), capture)

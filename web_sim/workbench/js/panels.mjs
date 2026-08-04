@@ -306,7 +306,13 @@ export function createPanels({ tabs, host }) {
       return;
     }
     entry.body.append(el("div", "pfresh", `src ${newest.src} · ${stamp(newest.ts, 1)}`));
-    entry.panel.render(entry.body);
+    try {
+      entry.panel.render(entry.body);
+    } catch {
+      /* Values decode straight out of live guest RAM; a shape this
+         table cannot walk must not take the drawer down with it. */
+      entry.body.append(el("div", "pnote", "표시할 수 없는 값 — 다음 갱신에서 다시 그립니다"));
+    }
   }
 
   activate(active);
@@ -314,16 +320,21 @@ export function createPanels({ tabs, host }) {
   return {
     accepts: (topic) => interest.has(topic),
     apply(frame) {
-      latest.set(frame.topic, { value: frame.data.values, ts: frame.ts, src: frame.src });
+      /* Snapshots only: a future delta would clobber the whole value. */
+      if (frame.kind !== "snapshot") return;
+      const data = frame.data && typeof frame.data === "object" ? frame.data : null;
+      if (!data || data.values === undefined) return;
+      latest.set(frame.topic, { value: data.values, ts: frame.ts, src: frame.src });
       if (interest.get(frame.topic)?.has(active)) render(active);
     },
     setTopology(topo) {
       timerSlots = Array.isArray(topo.timer_slots) ? topo.timer_slots : [];
+      render(active); /* owner labels may resolve without a new frame */
     },
     clearAll() {
       latest.clear();
+      ctxSlot = 0; /* the new run may not have the old slot */
       render(active);
     },
-    activate,
   };
 }

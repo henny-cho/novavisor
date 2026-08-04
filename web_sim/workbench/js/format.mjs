@@ -2,7 +2,11 @@
    Nothing here touches the wire or the layout. */
 
 const NS_PER_SECOND = 1e9;
-const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+
+/* Console lines carry a firmware-tagged VM slot; anything the board
+   cannot host is guest text that merely looks like a tag, and must not
+   mint tabs or cards. */
+export const MAX_VM_SLOT = 8;
 
 /* Protocol timestamps are session-monotonic nanoseconds. */
 export function stamp(ns, digits = 3) {
@@ -14,12 +18,6 @@ export function stamp(ns, digits = 3) {
 /* Top-bar session clock: one decimal is enough to read at a glance. */
 export function clockLabel(ns) {
   return stamp(ns, 1);
-}
-
-/* Only for the rare case where a string must be spliced into markup;
-   every render path in this UI prefers textContent. */
-export function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (char) => ESCAPES[char]);
 }
 
 /* Element factory: text always lands in textContent, so firmware output
