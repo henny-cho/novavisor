@@ -220,8 +220,10 @@ class VerifyStreamTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_verify_streams_progress_console_and_outcome(self):
+        # expect.observe_output numbers expectations from 1.
         matches = tuple(
-            expect.PatternMatch(index, f"p{index}", 1.0 + index, 0.5, 4.0) for index in range(3)
+            expect.PatternMatch(index, f"p{index}", float(index), 0.5, 4.0)
+            for index in range(1, 4)
         )
 
         def run_verify(_scenario, stream, on_match) -> spawn.Run:
@@ -247,7 +249,7 @@ class VerifyStreamTest(unittest.IsolatedAsyncioTestCase):
         )
         progress = [frame["data"] for frame in frames if frame["topic"] == "verify"]
         self.assertEqual(len(progress), 3)
-        self.assertEqual(progress[0], {"index": 0, "total": 3, "pattern": "p0", "elapsed": 1.0})
+        self.assertEqual(progress[0], {"index": 1, "total": 3, "pattern": "p1", "elapsed": 1.0})
         console = [frame["data"] for frame in frames if frame["topic"] == "console"]
         self.assertEqual(console[0], {"vm": 0, "text": "echo: ping"})
         events = [frame["data"] for frame in frames if frame["topic"] == "ev"]

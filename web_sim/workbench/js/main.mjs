@@ -226,11 +226,11 @@ function onFrame(frame) {
     case "life":
       onLife(frame.ts, data);
       break;
-    /* One matched expectation of a --verify run. */
+    /* One matched expectation of a --verify run; index is 1-based. */
     case "verify":
       events.addNotice(
         frame.ts,
-        `검증 진행 ${Number(data.index) + 1}/${data.total ?? "?"} — ${data.pattern ?? ""}`,
+        `검증 진행 ${data.index ?? "?"}/${data.total ?? "?"} — ${data.pattern ?? ""}`,
       );
       break;
     default:
