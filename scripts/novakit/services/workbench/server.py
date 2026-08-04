@@ -24,7 +24,7 @@ from .protocol import (
     encode,
     parse_uplink,
 )
-from .session import Deps, Session, Target
+from .session import Deps, Session, Target, initial_topology
 from .store import StateStore
 
 FLUSH_INTERVAL_SECONDS = 0.05
@@ -156,6 +156,7 @@ class Bridge:
 async def _serve_forever(*, host: str, port: int, target: Target | None, ui_root: Path) -> None:
     bridge = Bridge(ui_root=ui_root)
     await bridge.open(host, port)
+    bridge.store.set_topology(initial_topology())
     print(f"[workbench] serving http://{host}:{bridge.port}/ (WebSocket on {WS_PATH})")
     if target is not None:
         bridge.spawn(bridge.session.select(target))

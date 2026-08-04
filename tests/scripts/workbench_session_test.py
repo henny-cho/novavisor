@@ -201,6 +201,18 @@ class SessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(second.terminated)
 
 
+class InitialTopologyTest(unittest.TestCase):
+    def test_lists_the_pickable_world(self):
+        from novakit.services.workbench.session import initial_topology
+
+        topology = initial_topology()
+
+        self.assertIsNone(topology["demo"])
+        names = [entry["name"] for entry in topology["catalog"]]
+        self.assertIn("10_console_mux", names)
+        self.assertIn("badges", topology["taxonomy"])
+
+
 @unittest.skipUnless(importlib.util.find_spec("websockets"), "websockets is not installed")
 class ServerSmokeTest(unittest.IsolatedAsyncioTestCase):
     """Runs only where the pinned websockets package is installed."""

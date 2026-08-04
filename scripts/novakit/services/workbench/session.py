@@ -42,6 +42,19 @@ class Prepared:
     topology: dict
 
 
+def _catalog() -> list[dict]:
+    return [
+        {"id": manifest.demo_id(name), "name": name}
+        for name, demo_manifest in manifest.iter_demos()
+        if demo_manifest.get("enabled", False)
+    ]
+
+
+def initial_topology() -> dict:
+    """What a client sees before any target runs: the pickable world."""
+    return {"demo": None, "guests": [], "catalog": _catalog(), "taxonomy": vocabulary()}
+
+
 def _select_variant(demo_manifest: dict, name: str | None) -> dict:
     variants = manifest.manifest_variants(demo_manifest)
     if name is None:
@@ -66,6 +79,7 @@ def prepare(target: Target) -> Prepared:
             {"name": guest.get("name"), "vcpus": guest.get("vcpus")}
             for guest in demo_manifest.get("guests", [])
         ],
+        "catalog": _catalog(),
         "taxonomy": vocabulary(),
     }
     return Prepared(scenario, topology)
