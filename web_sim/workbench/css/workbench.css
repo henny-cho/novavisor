@@ -1,0 +1,279 @@
+/* Workbench layout and components. Every colour comes from tokens.css;
+   the only new custom properties here are geometry and two per-element
+   hooks (--vmc, --chipc) that JS fills in so no palette decision ever
+   leaks into a class name. */
+
+:root{
+  --wb-top:50px;        /* top bar height */
+  --wb-rail:244px;      /* topology column */
+  --wb-side:396px;      /* cards + event log column */
+  --wb-pad:11px;
+  --wb-r:9px;           /* corner radius */
+  --chipc:var(--ink3);  /* per-chip accent, set inline by JS */
+  --vmc:var(--hyp);     /* per-VM accent, set inline by JS */
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font-family:var(--sans);font-size:12.5px;
+  overflow:hidden;
+}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+button:disabled{cursor:not-allowed;opacity:.42}
+button:not(:disabled):active{transform:translateY(1px)}
+button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{
+  outline:2px solid var(--hyp);outline-offset:1px
+}
+b{font-weight:700}
+
+.app{display:grid;grid-template-rows:var(--wb-top) minmax(0,1fr);height:100dvh;min-width:960px}
+
+/* ---------------- top bar ---------------- */
+.top{
+  display:flex;align-items:center;gap:14px;padding:0 14px;
+  background:var(--panel);border-bottom:1px solid var(--line);
+}
+.brand{display:flex;align-items:baseline;gap:8px;white-space:nowrap}
+.brand .nv{font-weight:750;letter-spacing:.14em;font-size:13.5px}
+.brand .nv i{color:var(--hyp);font-style:normal}
+.brand .sub{
+  font-size:9.5px;color:var(--ink3);letter-spacing:.12em;text-transform:uppercase;font-weight:650
+}
+
+.launch{display:flex;align-items:center;gap:7px;min-width:0}
+.launch .lb{
+  font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink3);font-weight:650
+}
+.pick{
+  max-width:250px;min-width:150px;
+  background:var(--sunken);border:1px solid var(--line2);border-radius:7px;
+  color:var(--ink);font-family:var(--mono);font-size:11.5px;padding:5px 7px;
+}
+.btn{
+  padding:5px 11px;border:1px solid var(--line2);border-radius:7px;background:var(--raised);
+  font-size:11.5px;white-space:nowrap;transition:border-color .15s,background .15s,color .15s
+}
+.btn:hover:not(:disabled){border-color:var(--hyp);background:var(--hyp-dim)}
+.btn.primary{border-color:var(--hyp);color:var(--hyp);font-weight:650}
+.btn.ghost{background:none;color:var(--ink2)}
+.btn[hidden]{display:none}
+
+.status{display:flex;align-items:center;gap:7px;margin-left:auto;min-width:0}
+.badge{
+  display:inline-flex;align-items:center;gap:6px;flex:none;
+  padding:3px 9px;border:1px solid var(--line2);border-radius:99px;
+  font-size:10.5px;color:var(--ink2);white-space:nowrap;background:var(--raised)
+}
+.badge .dot{width:7px;height:7px;border-radius:50%;background:var(--ink3);flex:none}
+.badge.sm{font-size:9.5px;padding:2px 8px}
+.badge[data-tone="live"]{color:var(--good);border-color:var(--good)}
+.badge[data-tone="live"] .dot{background:var(--good);box-shadow:0 0 6px var(--good)}
+.badge[data-tone="busy"]{color:var(--warn);border-color:var(--warn)}
+.badge[data-tone="busy"] .dot{background:var(--warn);animation:pulse 1.1s ease-in-out infinite}
+.badge[data-tone="crit"]{color:var(--crit);border-color:var(--crit)}
+.badge[data-tone="crit"] .dot{background:var(--crit)}
+.badge[data-tone="idle"]{color:var(--ink2)}
+.badge[hidden]{display:none}
+.loss{color:var(--warn);border-color:var(--warn);font-family:var(--mono);cursor:pointer}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+.clock{
+  font-family:var(--mono);font-size:12px;color:var(--hyp);
+  min-width:66px;text-align:right;font-variant-numeric:tabular-nums
+}
+
+/* ---------------- main grid ---------------- */
+.main{
+  display:grid;min-height:0;
+  grid-template-columns:var(--wb-rail) minmax(0,1fr) var(--wb-side);
+  grid-template-areas:"topo console side";
+}
+.pane{display:flex;flex-direction:column;min-height:0}
+.pane-h{
+  display:flex;align-items:center;gap:8px;flex:none;
+  padding:7px var(--wb-pad) 6px;border-bottom:1px solid var(--line);
+  font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink3);font-weight:650;background:var(--panel)
+}
+.pane-h .spacer{margin-left:auto}
+.mini{
+  font-size:9.5px;letter-spacing:.04em;color:var(--ink3);
+  border:1px solid var(--line);border-radius:5px;padding:1px 6px
+}
+.mini:hover{border-color:var(--hyp);color:var(--hyp)}
+.empty{padding:10px var(--wb-pad);font-size:11.5px;color:var(--ink3);line-height:1.6}
+
+/* VM accent by slot index (index % 4), applied by JS as a class so no
+   colour ever has to be written into a script. */
+.v0{--vmc:var(--vm0)}
+.v1{--vmc:var(--vm1)}
+.v2{--vmc:var(--vm2)}
+.v3{--vmc:var(--vm3)}
+
+/* ---------------- topology rail ---------------- */
+.rail{
+  grid-area:topo;display:flex;flex-direction:column;min-height:0;
+  background:var(--panel);border-right:1px solid var(--line)
+}
+.rail-body{overflow-y:auto;padding:9px var(--wb-pad) 14px;display:flex;flex-direction:column;gap:9px}
+.demo-id{font-family:var(--mono);font-size:10px;color:var(--hyp)}
+.demo-name{font-size:12.5px;font-weight:700;word-break:break-all;margin-top:2px}
+.demo-desc{font-size:11px;color:var(--ink2);line-height:1.55}
+.rail-sec{
+  font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink3);font-weight:650;border-top:1px solid var(--line);padding-top:8px
+}
+.glist{display:flex;flex-direction:column;gap:5px}
+.gitem{
+  display:flex;align-items:baseline;gap:7px;
+  padding:5px 8px;border:1px solid var(--line);border-radius:7px;background:var(--sunken);
+  border-left:2px solid var(--vmc)
+}
+.gitem .gi{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--vmc);flex:none}
+.gitem .gn{font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gitem .gv{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--ink3);flex:none}
+
+/* ---------------- console ---------------- */
+.center{
+  grid-area:console;display:flex;flex-direction:column;min-height:0;
+  background:radial-gradient(900px 380px at 50% -60px,var(--glow),transparent 65%),var(--bg)
+}
+.tabs{display:flex;gap:5px;margin-left:auto;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{
+  display:flex;align-items:baseline;gap:6px;flex:none;
+  padding:3px 9px;border:1px solid var(--line);border-radius:7px;background:var(--raised);
+  font-family:var(--mono);font-size:10.5px;color:var(--ink3);text-transform:none;letter-spacing:0
+}
+.tab:hover{border-color:var(--line2)}
+.tab[aria-selected="true"]{color:var(--vmc);border-color:var(--vmc);background:var(--panel);font-weight:700}
+.tab .tn{font-family:var(--sans);font-size:10px;color:var(--ink3);max-width:88px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+
+.banner{
+  flex:none;display:flex;align-items:center;gap:9px;
+  margin:8px var(--wb-pad) 0;padding:7px 10px;border-radius:var(--wb-r);
+  border:1px solid var(--crit);background:color-mix(in srgb,var(--crit) 13%,var(--panel));
+  color:var(--crit);font-family:var(--mono);font-size:11.5px;line-height:1.5;word-break:break-all
+}
+.banner[hidden]{display:none}
+.banner .bl{font-weight:700;letter-spacing:.06em;flex:none}
+
+.logs{flex:1;min-height:0;position:relative;margin:8px var(--wb-pad);display:flex}
+.log{
+  flex:1;min-width:0;overflow-y:auto;overflow-x:hidden;
+  padding:7px 10px;border:1px solid var(--line);border-radius:var(--wb-r);background:var(--sunken);
+  font-family:var(--mono);font-size:11.5px;line-height:1.62
+}
+.log[hidden]{display:none}
+.cline{display:flex;gap:8px;align-items:baseline}
+.cline .cg{
+  flex:none;width:30px;text-align:right;font-size:9px;color:var(--ink3);
+  opacity:.75;user-select:none
+}
+.cline .ct{min-width:0;white-space:pre-wrap;word-break:break-all}
+.cline.hyp .ct{color:var(--ink3)}
+.cline.guest .cg{color:var(--vmc);opacity:1}
+.cline.mark{color:var(--hyp);font-weight:700;margin:6px 0 2px;opacity:.9}
+
+.cin{flex:none;display:flex;gap:6px;padding:0 var(--wb-pad) 10px}
+.cin input{
+  flex:1;min-width:0;background:var(--sunken);border:1px solid var(--line2);border-radius:7px;
+  color:var(--ink);font-family:var(--mono);font-size:12px;padding:6px 9px
+}
+.cin input::placeholder{color:var(--ink3)}
+.cin input:disabled{opacity:.55}
+
+/* ---------------- right column ---------------- */
+.side{
+  grid-area:side;display:grid;min-height:0;
+  grid-template-rows:minmax(0,auto) minmax(0,1fr);
+  background:var(--panel);border-left:1px solid var(--line)
+}
+.cards{overflow-y:auto;max-height:40vh;padding:9px var(--wb-pad);display:flex;flex-direction:column;gap:8px}
+.card{
+  border:1px solid var(--line);border-left:2px solid var(--vmc);border-radius:var(--wb-r);
+  background:var(--raised);box-shadow:var(--blk-sh);overflow:hidden
+}
+.card .ch{display:flex;align-items:baseline;gap:7px;padding:7px 10px 0}
+.card .cvm{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--vmc)}
+.card .cnm{font-size:12px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card .cvc{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--ink3);flex:none}
+.card .cl{
+  margin:5px 10px 0;padding:4px 7px;border-radius:6px;background:var(--sunken);
+  font-family:var(--mono);font-size:10.5px;color:var(--ink2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis
+}
+.card .cf{
+  display:flex;align-items:center;gap:7px;padding:4px 10px 7px;
+  font-family:var(--mono);font-size:9.5px;color:var(--ink3)
+}
+.card .cf .live{width:6px;height:6px;border-radius:50%;background:var(--line2);margin-left:auto;flex:none}
+.card.act .cf .live{background:var(--vmc);box-shadow:0 0 6px var(--vmc);transition:background .3s}
+
+/* ---------------- event log ---------------- */
+.filters{
+  flex:none;display:flex;flex-wrap:wrap;gap:4px;
+  padding:7px var(--wb-pad);border-bottom:1px solid var(--line);background:var(--panel)
+}
+.fchip{
+  font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.04em;
+  padding:1px 6px;border-radius:5px;border:1px solid var(--chipc);color:var(--chipc);
+  transition:opacity .15s
+}
+.fchip[aria-pressed="false"]{opacity:.3;border-color:var(--line2);color:var(--ink3)}
+.elog{
+  flex:1;min-height:0;overflow-y:auto;padding:6px 8px;
+  background:var(--sunken);font-family:var(--mono);font-size:10.5px;line-height:1.55
+}
+.erow{
+  display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;
+  padding:1px 5px 1px 6px;border-left:2px solid transparent;border-radius:3px
+}
+.erow[hidden]{display:none}
+.erow .et{
+  flex:none;min-width:52px;text-align:right;font-size:9.5px;color:var(--ink3);
+  font-variant-numeric:tabular-nums
+}
+.erow .eb{
+  flex:none;min-width:40px;text-align:center;font-size:8.5px;font-weight:700;letter-spacing:.04em;
+  padding:0 5px;border-radius:4px;border:1px solid var(--chipc);color:var(--chipc)
+}
+.erow .em{min-width:0;color:var(--ink2);word-break:break-all}
+.erow .ef{
+  flex:none;font-size:9px;color:var(--ink3);
+  padding:0 4px;border:1px solid var(--line);border-radius:4px;background:var(--panel)
+}
+.erow[data-sev="WARN"]{border-left-color:var(--warn)}
+.erow[data-sev="WARN"] .em{color:var(--ink)}
+.erow[data-sev="CRIT"]{
+  border-left-color:var(--crit);background:color-mix(in srgb,var(--crit) 9%,transparent)
+}
+.erow[data-sev="CRIT"] .em{color:var(--crit);font-weight:650}
+.erow.dim .em{color:var(--ink3)}
+
+/* ---------------- degradation ---------------- */
+@media (max-width:1240px){
+  :root{--wb-rail:212px;--wb-side:352px;--wb-pad:9px}
+}
+@media (max-width:1080px){
+  /* Two columns: the topology summary folds into a strip on top. */
+  .main{
+    grid-template-columns:minmax(0,1fr) var(--wb-side);
+    grid-template-rows:auto minmax(0,1fr);
+    grid-template-areas:"topo topo" "console side";
+  }
+  .rail{border-right:none;border-bottom:1px solid var(--line);max-height:132px}
+  .rail-body{flex-direction:row;flex-wrap:wrap;align-items:flex-start;gap:8px 14px}
+  .rail-body>*{max-width:340px}
+  .rail-sec{border-top:none;padding-top:0}
+  .glist{flex-direction:row;flex-wrap:wrap}
+  .cards{max-height:34vh}
+}
+
+@media (prefers-reduced-motion:reduce){
+  *{transition:none!important;animation:none!important}
+  .badge[data-tone="busy"] .dot{opacity:.6}
+}

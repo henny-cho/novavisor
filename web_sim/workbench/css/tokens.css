@@ -1,0 +1,36 @@
+/* Design tokens — the single palette shared with the frozen simulator
+   (web_sim/novavisor-sim.html). Names and values are identical on both
+   sides so a colour decision is made exactly once; a contract test
+   compares them. Nothing but custom properties and the theme switch
+   belongs in this file.
+
+   The default block is the light theme; the workbench boots with
+   data-nv-theme="dark" on <html>, so the dark block below is what a
+   first-time visitor sees. */
+:root{
+  /* light (default) */
+  --bg:#eef1f4; --panel:#ffffff; --raised:#f4f7f9; --sunken:#e8edf1;
+  --line:#d9e1e8; --line2:#c3cfd9;
+  --ink:#182430; --ink2:#4d6070; --ink3:#7b8fa0;
+  --hyp:#0c7fae; --hyp-dim:rgba(12,127,174,.09);
+  --vm0:#2a78d6; --vm1:#eb6834; --vm2:#1baf7a; --vm3:#eda100;
+  --good:#178a52; --warn:#a8770a; --crit:#d4383e; --violet:#4a3aa7;
+  --accent-ink:#ffffff; --chip-ink:#ffffff;
+  --glow:rgba(12,127,174,.05);
+  --blk-sh:0 1px 2px rgba(23,42,58,.06);
+  --mono:ui-monospace,'SF Mono','Cascadia Code',Consolas,'Liberation Mono',monospace;
+  --sans:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans KR',sans-serif;
+  color-scheme:light;
+}
+html[data-nv-theme="dark"]{
+  --bg:#0a0e13; --panel:#101720; --raised:#16202b; --sunken:#0d131b;
+  --line:#1f2d3a; --line2:#2a3b4b;
+  --ink:#d9e4ee; --ink2:#93a7ba; --ink3:#5d7286;
+  --hyp:#53c6ec; --hyp-dim:rgba(83,198,236,.13);
+  --vm0:#3987e5; --vm1:#d95926; --vm2:#199e70; --vm3:#c98500;
+  --good:#63d39a; --warn:#e8c468; --crit:#f2555a; --violet:#9085e9;
+  --accent-ink:#0a0e13; --chip-ink:#ffffff;
+  --glow:rgba(83,198,236,.05);
+  --blk-sh:none;
+  color-scheme:dark;
+}

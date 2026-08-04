@@ -122,6 +122,12 @@ Each roadmap phase is validated by a **demo** in `demo/NN_name/`. A demo consist
 Before a phase is complete its demo has `enabled: false` in the manifest, and
 `demo verify --all` skips it. Full details live in [`demo/README.md`](demo/README.md).
 
+### Live workbench
+
+```bash
+./scripts/nova workbench serve 10     # live console/event UI on http://127.0.0.1:8787/
+```
+
 ### Format & lint
 
 ```bash
