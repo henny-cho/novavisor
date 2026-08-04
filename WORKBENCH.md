@@ -112,6 +112,13 @@ The `일시정지` (pause) button appears while a session runs:
    CNTV_CVAL_EL0, ELR_EL2, SPSR_EL2` — published to the **Sysreg** panel.
 3. The machine **stays stopped** until you press `재개` (resume).
 
+While paused, console input is rejected (the pty would buffer it and replay
+it into the guest on resume). If the register sweep fails after the stop
+already landed — say the gdb socket is taken by an external debugger — the
+bridge rolls the stop back and resumes the machine, so a failed pause never
+leaves a silently frozen machine. Reloading the page while paused is safe:
+the pause state (and the 재개 button) is restored on connect.
+
 Known limit: QEMU's gdbstub exposes no `ICH_*`/`ICC_*` registers, so GIC and
 list-register state is not part of the halt sweep; the S-layer vGIC shadow is
 the source for interrupt state.
@@ -213,8 +220,12 @@ flushed every 50 ms:
 
 - `seq` is monotonic per bridge; clients drop duplicates (a frame may be seen
   twice across connect replay and the next flush).
-- On connect a client receives the current topology snapshot plus a bounded
-  backlog — a late joiner is never blank.
+- On connect a client receives a freshly **published** topology snapshot plus
+  a bounded backlog — a late joiner is never blank. The connect topo also
+  carries live session state the evictable backlog cannot guarantee:
+  `session` (a per-bridge token — a change means the bridge restarted),
+  `phase`, `paused`, and `run_id` (a change is a run boundary; the client
+  clears panel values and counters).
 - Structural downlink topics are fixed (`topo, console, ev, life, verify,
   sysreg`); **S-layer topics are plain strings taken from the manifest**, so
   adding an observation adds a topic without touching the protocol.
