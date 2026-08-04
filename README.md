@@ -128,6 +128,12 @@ Before a phase is complete its demo has `enabled: false` in the manifest, and
 ./scripts/nova workbench serve 10     # live console/event UI on http://127.0.0.1:8787/
 ```
 
+A browser UI over a live QEMU session: per-VM consoles with UART input,
+classified event log, live firmware-state panels polled straight out of guest
+RAM, and a pause button that freezes the machine to read EL2 system registers.
+The full manual — user guide and developer guide — lives in
+[`WORKBENCH.md`](WORKBENCH.md).
+
 ### Format & lint
 
 ```bash
