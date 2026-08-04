@@ -132,7 +132,11 @@ class Bridge:
         variant = uplink.data.get("variant")
         self.spawn(
             self.session.select(
-                Target(demo=str(demo), variant=None if variant is None else str(variant))
+                Target(
+                    demo=str(demo),
+                    variant=None if variant is None else str(variant),
+                    verify=bool(uplink.data.get("verify", False)),
+                )
             )
         )
 

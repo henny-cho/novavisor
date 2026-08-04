@@ -14,7 +14,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit.services import expect  # noqa: E402
+from novakit.services import expect, spawn  # noqa: E402
 from novakit.services.workbench.protocol import Clock, Envelopes  # noqa: E402
 from novakit.services.workbench.session import (  # noqa: E402
     Deps,
@@ -199,6 +199,93 @@ class SessionTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(first.terminated)
         self.assertFalse(second.terminated)
+
+
+class VerifyStreamTest(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def verify_scenario() -> expect.Scenario:
+        return expect.Scenario(
+            label="demo",
+            phase=1,
+            command=("qemu-system-aarch64",),
+            timeout_seconds=5,
+            expectations=({"pattern": "a"}, {"pattern": "b"}, {"pattern": "c"}),
+        )
+
+    def deps_with(self, run_verify) -> Deps:
+        return Deps(
+            prepare=lambda target: Prepared(self.verify_scenario(), {"demo": target.demo}),
+            launch=lambda _command: FakeLive(),
+            run_verify=run_verify,
+        )
+
+    async def test_verify_streams_progress_console_and_outcome(self):
+        matches = tuple(
+            expect.PatternMatch(index, f"p{index}", 1.0 + index, 0.5, 4.0) for index in range(3)
+        )
+
+        def run_verify(_scenario, stream, on_match) -> spawn.Run:
+            stream.write("[vm0] echo: ping\n[smp] ")
+            stream.write("core 1 online\n")
+            for match in matches:
+                on_match(match)
+            return spawn.Run(
+                expect.VerificationResult(matches=matches),
+                spawn.OutputCapture(None),
+            )
+
+        state = store()
+        session = Session(state, self.deps_with(run_verify))
+
+        await session.select(Target(demo="10_console_mux", verify=True))
+
+        frames = state.drain()
+        phases = [frame["data"].get("phase") for frame in frames if frame["topic"] == "life"]
+        self.assertEqual(
+            phases,
+            ["building", "verifying", "verify-pass", "exited"],
+        )
+        progress = [frame["data"] for frame in frames if frame["topic"] == "verify"]
+        self.assertEqual(len(progress), 3)
+        self.assertEqual(progress[0], {"index": 0, "total": 3, "pattern": "p0", "elapsed": 1.0})
+        console = [frame["data"] for frame in frames if frame["topic"] == "console"]
+        self.assertEqual(console[0], {"vm": 0, "text": "echo: ping"})
+        events = [frame["data"] for frame in frames if frame["topic"] == "ev"]
+        self.assertEqual(events[0]["badge"], "SMP")
+        exited = [frame["data"] for frame in frames if frame["data"].get("phase") == "exited"]
+        self.assertEqual(exited[0]["code"], 0)
+
+    async def test_verify_failure_reports_kind_and_pattern(self):
+        def run_verify(_scenario, _stream, _on_match) -> spawn.Run:
+            return spawn.Run(
+                expect.VerificationResult(
+                    failure=expect.FailureKind.TIMEOUT,
+                    pattern="echo: ping",
+                ),
+                spawn.OutputCapture(None),
+            )
+
+        state = store()
+        session = Session(state, self.deps_with(run_verify))
+
+        await session.select(Target(demo="10_console_mux", verify=True))
+
+        frames = state.drain()
+        outcome = [
+            frame["data"] for frame in frames if frame["data"].get("phase") == "verify-fail"
+        ]
+        self.assertEqual(
+            outcome[0],
+            {
+                "phase": "verify-fail",
+                "matched": 0,
+                "total": 3,
+                "failure": "timeout",
+                "pattern": "echo: ping",
+            },
+        )
+        exited = [frame["data"] for frame in frames if frame["data"].get("phase") == "exited"]
+        self.assertEqual(exited[0]["code"], 1)
 
 
 class InitialTopologyTest(unittest.TestCase):

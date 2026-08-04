@@ -85,12 +85,33 @@ def prepare(target: Target) -> Prepared:
     return Prepared(scenario, topology)
 
 
+def _run_verify(scenario: expect.Scenario, stream, on_match) -> spawn.Run:
+    """Blocking: one verification child, its console tee'd into `stream`."""
+    return spawn.observe(scenario, stream=stream, on_match=on_match)
+
+
 @dataclass(frozen=True)
 class Deps:
     """Injection seam: tests swap the blocking edges, never the flow."""
 
     prepare: Callable[[Target], Prepared] = prepare
     launch: Callable[[tuple[str, ...]], spawn.LiveSession] = spawn.launch
+    run_verify: Callable[..., spawn.Run] = _run_verify
+
+
+class _LoopWriter:
+    """File-like tee for OutputCapture: text written by the verification
+    worker thread is marshalled onto the loop that owns the store."""
+
+    def __init__(self, loop: asyncio.AbstractEventLoop, callback: Callable[[str], None]):
+        self._loop = loop
+        self._callback = callback
+
+    def write(self, text: str) -> None:
+        self._loop.call_soon_threadsafe(self._callback, text)
+
+    def flush(self) -> None:
+        return None
 
 
 class Session:
@@ -120,6 +141,9 @@ class Session:
                 return
             self.scenario = prepared.scenario
             self._store.set_topology(prepared.topology)
+            if target.verify:
+                await self._verify_locked(target, prepared)
+                return
             try:
                 self._live = self._deps.launch(prepared.scenario.command)
             except (Exception, SystemExit) as error:
@@ -129,6 +153,61 @@ class Session:
             self._fd = self._live.fileno()
             loop.add_reader(self._fd, self._on_readable)
             self._set_phase(Phase.RUNNING, demo=target.demo)
+
+    async def _verify_locked(self, target: Target, prepared: Prepared) -> None:
+        """Run the demo's verification scenario in its own child.
+
+        `observe` always terminates its child, so a verify run never
+        shares the interactive pty; its console text still flows through
+        the same assembler and anchor pipeline.
+        """
+        self._set_phase(Phase.VERIFYING, demo=target.demo)
+        loop = asyncio.get_running_loop()
+        self._assembler = anchors.LineAssembler()
+        writer = _LoopWriter(loop, self._ingest_text)
+        total = len(prepared.scenario.expectations)
+
+        def on_match(match: expect.PatternMatch) -> None:
+            loop.call_soon_threadsafe(self._publish_match, match, total)
+
+        try:
+            run = await loop.run_in_executor(
+                None, self._deps.run_verify, prepared.scenario, writer, on_match
+            )
+        except (Exception, SystemExit) as error:
+            self._set_phase(Phase.FAILED, error=str(error))
+            return
+        for raw in self._assembler.flush():
+            self._ingest(raw)
+        result = run.result
+        data = {
+            "phase": "verify-pass" if result.ok else "verify-fail",
+            "matched": len(result.matches),
+            "total": total,
+        }
+        if not result.ok:
+            data["failure"] = result.failure.value if result.failure else "unknown"
+            if result.pattern:
+                data["pattern"] = result.pattern
+        self._store.publish(Topic.LIFE, Kind.EVENT, data, src=Src.SERIAL)
+        self._set_phase(Phase.EXITED, code=0 if result.ok else 1)
+
+    def _publish_match(self, match: expect.PatternMatch, total: int) -> None:
+        self._store.publish(
+            Topic.VERIFY,
+            Kind.EVENT,
+            {
+                "index": match.index,
+                "total": total,
+                "pattern": match.pattern,
+                "elapsed": match.elapsed_seconds,
+            },
+            src=Src.SERIAL,
+        )
+
+    def _ingest_text(self, text: str) -> None:
+        for raw in self._assembler.feed(text.encode("utf-8")):
+            self._ingest(raw)
 
     async def stop(self) -> None:
         async with self._lock:

@@ -40,6 +40,10 @@ Port = Annotated[
     typer.Option(min=1, max=65535, help="TCP port serving both HTTP and WebSocket."),
 ]
 Variant = Annotated[str | None, typer.Option(metavar="NAME", help="Demo variant name.")]
+Verify = Annotated[
+    bool,
+    typer.Option("--verify", help="Run the verification scenario, streaming its progress."),
+]
 
 
 @app.command()
@@ -48,9 +52,10 @@ def serve(
     host: Host = "127.0.0.1",
     port: Port = 8787,
     variant: Variant = None,
+    verify: Verify = False,
 ) -> None:
     """Serve the workbench UI against a live QEMU session."""
-    target = session.Target(demo=demo, variant=variant) if demo else None
+    target = session.Target(demo=demo, variant=variant, verify=verify) if demo else None
     code = server.serve(host=host, port=port, target=target)
     if code:
         raise typer.Exit(code)
