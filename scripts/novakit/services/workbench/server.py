@@ -147,7 +147,18 @@ class Bridge:
         try:
             await connection.send(encode(self.store.connect_frames(self._live_state())))
             async for message in connection:
-                self._handle_uplink(message)
+                try:
+                    self._handle_uplink(message)
+                except Exception as error:
+                    # One unhandled message costs its own reply, never the
+                    # connection: a browser that loses its socket also
+                    # loses the console it was reading.
+                    self._reject(f"uplink failed: {error}")
+        except Exception:
+            # Everything else here is transport: a tab that navigated
+            # away, slept, or missed the keepalive deadline ends its
+            # connection, which is not a server fault to report.
+            pass
         finally:
             self._connections.discard(connection)
 
