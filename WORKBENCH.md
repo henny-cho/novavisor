@@ -43,6 +43,12 @@ nova workbench serve [DEMO] [--host ADDR] [--port N] [--variant NAME] [--verify]
 - One QEMU session per bridge. Run several bridges on different ports if you
   need parallel targets.
 
+To stop the server, press `Ctrl-C` in the terminal running `serve` (or send
+`SIGINT` to a backgrounded bridge: `kill -INT <pid>`). Shutdown tears the whole
+session down: the QEMU child is terminated and the observation surfaces under
+`/dev/shm/nova-wb-*` are removed. Closing the browser tab only drops that
+client — the bridge and QEMU keep running for the next connection.
+
 ### The screen
 
 ```text
