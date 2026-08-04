@@ -44,17 +44,29 @@ class QmpClient:
     def __init__(self, path: Path, timeout: float = 5.0):
         self._sock = socket.socket(socket.AF_UNIX)
         self._sock.settimeout(timeout)
-        self._sock.connect(str(path))
-        self._reader = self._sock.makefile("r")
-        banner = json.loads(self._reader.readline())
-        if "QMP" not in banner:
-            raise ConnectionError(f"not a QMP socket: {banner}")
-        self.execute("qmp_capabilities")
+        try:
+            self._sock.connect(str(path))
+            self._reader = self._sock.makefile("r")
+            banner = self._readline()
+            if "QMP" not in banner:
+                raise ConnectionError(f"not a QMP socket: {banner}")
+            self.execute("qmp_capabilities")
+        except BaseException:
+            self._sock.close()
+            raise
+
+    def _readline(self) -> dict:
+        line = self._reader.readline()
+        if not line:
+            # readline() returns '' on EOF and after a socket timeout;
+            # json.loads('') would blur both into a decode error.
+            raise ConnectionError("QMP connection closed")
+        return json.loads(line)
 
     def execute(self, command: str) -> dict:
         self._sock.sendall(json.dumps({"execute": command}).encode() + b"\n")
         while True:
-            reply = json.loads(self._reader.readline())
+            reply = self._readline()
             if "event" in reply:
                 continue  # asynchronous events interleave freely
             if "error" in reply:
@@ -86,11 +98,15 @@ class GdbClient:
     def __init__(self, path: Path, timeout: float = 5.0):
         self._sock = socket.socket(socket.AF_UNIX)
         self._sock.settimeout(timeout)
-        self._sock.connect(str(path))
-        self._buffer = b""
-        self._exchange("qSupported:xmlRegisters=aarch64")
-        self.registers = self._read_layout()
-        self.threads = self._read_threads()
+        try:
+            self._sock.connect(str(path))
+            self._buffer = b""
+            self._exchange("qSupported:xmlRegisters=aarch64")
+            self.registers = self._read_layout()
+            self.threads = self._read_threads()
+        except BaseException:
+            self._sock.close()
+            raise
 
     # -------- packet framing (ack mode) --------
 
@@ -105,7 +121,13 @@ class GdbClient:
                 self._buffer = self._buffer[end + 3 :]
                 self._sock.sendall(b"+")
                 return packet
-            self._buffer += self._sock.recv(65536)
+            chunk = self._sock.recv(65536)
+            if not chunk:
+                # A dying stub returns b'' forever; without this the loop
+                # would spin an executor thread at 100% for the process
+                # lifetime and block interpreter exit.
+                raise ConnectionError("gdb stub closed the connection")
+            self._buffer += chunk
 
     def _read_document(self, annex: str) -> str:
         text = ""
@@ -173,6 +195,19 @@ class HaltInspector:
             qmp.stop()
         finally:
             qmp.close()
+        try:
+            return self._sweep()
+        except BaseException:
+            # The stop already landed. Reporting a failure while leaving
+            # the machine silently frozen would strand the UI on a live
+            # pause button, so roll the stop back first.
+            try:
+                self.resume()
+            except Exception:
+                pass  # the machine is gone; there is nothing to resume
+            raise
+
+    def _sweep(self) -> dict:
         gdb = GdbClient(self._gdb_path)
         try:
             cpus = []

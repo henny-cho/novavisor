@@ -193,7 +193,10 @@ class Bridge:
             else:
                 await loop.run_in_executor(None, inspector.resume)
                 self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "resumed"})
-        except (OSError, RuntimeError, ConnectionError) as error:
+        except Exception as error:
+            # This coroutine is the request boundary: any protocol fault
+            # (bad JSON, corrupt RSP hex, a missing XML attribute) must
+            # become a reply, not an unretrieved task exception.
             self._reject(f"qmp: {error}")
         finally:
             self._halting = False
