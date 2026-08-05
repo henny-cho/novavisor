@@ -192,7 +192,7 @@ Bridge modules (`scripts/novakit/services/workbench/`):
 | `halt.py` | `QmpClient`, `GdbClient` (RSP), `HaltInspector` |
 | `checks.py` | manifest-vs-image contract (CI step) and the `inspect symbols` report |
 
-UI modules (`web_sim/workbench/js/`): `main.mjs` (wiring), `net.mjs`
+UI modules (`web/workbench/js/`): `main.mjs` (wiring), `net.mjs`
 (reconnect + seq dedup), `topology.mjs`, `console.mjs`, `cards.mjs`,
 `events.mjs`, `panels.mjs` (measurement panels), `format.mjs`.
 
@@ -352,6 +352,7 @@ Run everything with `./scripts/nova test`; the same suites run in the CI
   any new executor + marshalling pattern.
 - **Connect replay is newest-first for topology**: clients dedup by `seq`,
   and topology snapshots carry the highest `seq` wins semantics (`topoSeq`).
-- The frozen HTML simulator (`web_sim/novavisor-sim.html`) is local-only and
-  not tracked; only `web_sim/workbench/` is under version control, and
-  `tokens.css` is the authoritative palette both agree on.
+- The served UI lives in `web/workbench/`; the design mock it came from
+  (`web_sim/novavisor-sim.html`) is local-only and never tracked, so
+  `tokens.css` is the authoritative palette and a parity test compares the
+  two whenever the mock is present.

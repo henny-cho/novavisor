@@ -16,7 +16,8 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 from novakit.services.workbench.taxonomy import Badge  # noqa: E402
 
-UI = REPO / "web_sim" / "workbench"
+UI = REPO / "web" / "workbench"
+# The design mock the palette came from: local-only, never tracked.
 SIM = REPO / "web_sim" / "novavisor-sim.html"
 
 HTML_REFERENCE = re.compile(r'(?:src|href)="([^"]+)"')
