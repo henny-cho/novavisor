@@ -1,5 +1,5 @@
-/* Design tokens — the single palette shared with the frozen simulator
-   (web_sim/novavisor-sim.html). Names and values are identical on both
+/* Design tokens — the single palette shared with the design mock this UI
+   came from (local-only). Names and values are identical on both
    sides so a colour decision is made exactly once; a contract test
    compares them. Nothing but custom properties and the theme switch
    belongs in this file.
