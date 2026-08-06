@@ -60,10 +60,9 @@ class Edge:
 EDGES: tuple[Edge, ...] = (
     Edge("trap", BAND_EL1, "trap", GRADE_POLL, "ctx.syndrome", (Badge.TRAP,)),
     Edge("phys", "gicd", BAND_PE, GRADE_CONSOLE, badges=(Badge.IRQ, Badge.GIC)),
-    # The hop between a device posting and the list register taking it.
-    # Nothing observes it yet: g_spi_tokens is not in the manifest, so
-    # the path is drawn and left unlit rather than guessed at.
-    Edge("post", "gicd", "vgic", GRADE_NONE),
+    # The hop between a device posting and the list register taking it,
+    # read from the token store the post writes and the refill empties.
+    Edge("post", "gicd", "vgic", GRADE_POLL, "vgic.token"),
     Edge("inject", "vgic", BAND_EL1, GRADE_POLL, "vgic.lr"),
     Edge("mmio", BAND_EL1, "vgic", GRADE_CONSOLE, badges=(Badge.VGIC,)),
     Edge("dma", BAND_DEV, "smmu", GRADE_POLL, "dev.dma", (Badge.DMA,)),

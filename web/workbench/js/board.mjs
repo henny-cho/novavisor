@@ -47,6 +47,7 @@ const TOPICS = {
   "vm.generation": ["guests"],
   "ctx.syndrome": ["trap"],
   "vgic.lr": ["lrs"],
+  "vgic.token": ["vgic"],
   "vgic.capacity": ["lrs", "vgic"],
   "vgic.dist": ["vgic"],
   "vgic.resident": ["lrs", "routes"],
@@ -1165,9 +1166,18 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
           const carried = bySlot.get(at);
           put(cell, carried ? LR_GLYPH[carried.state] || "?" : "·");
           cell.classList.toggle("held", Boolean(carried));
+          /* Where the interrupt came from, when the firmware knows. A
+             bound EoI token means real silicon is still waiting to be
+             deactivated; no token means the hypervisor made this one up
+             — a timer, a doorbell, a vSGI — and there is no physical
+             number to show. Inventing one would be the easy lie. */
+          const origin = carried?.pintid === undefined
+            ? "하이퍼바이저 생성 · 물리 대응 없음"
+            : `물리 SPI ${carried.pintid} · gen ${carried.generation}`;
           const tip = carried
             ? `LR${at} vINTID ${carried.vintid} · ${carried.state} · prio ${carried.prio}` +
-              ` · ${carried.group1 ? "Group1" : "Group0"}${carried.eoi ? " · EoI 유지보수" : ""}`
+              ` · ${carried.group1 ? "Group1" : "Group0"}${carried.eoi ? " · EoI 유지보수" : ""}` +
+              ` · ${origin}`
             : `LR${at} 비어 있음`;
           if (cell.title !== tip) cell.title = tip;
         });
@@ -1183,12 +1193,19 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
       .map((vm, index) => ({ index, bits: Number.parseInt(String(vm?.spi_pending ?? "0"), 16) }))
       .filter((vm) => vm.bits)
       .map((vm) => `vm${vm.index} SPI 0b${vm.bits.toString(2)}`);
+    /* Tracked SPIs a device has posted that no register has taken yet.
+       refill() moves the token out, so this and the in-flight count
+       never double-count the same interrupt: together they read as one
+       journey, distributor then register. */
+    const posted = (value("vgic.token") || []).reduce((sum, list) => sum + list.length, 0);
     put(
       live.chips.vgic,
       capacity
-        ? [`LR ${carried}/${capacity}`, ...(pending.length ? pending : ["SPI pending 없음"])].join(
-            " · ",
-          )
+        ? [
+            `LR ${carried}/${capacity}`,
+            ...(posted ? [`posted ${posted}`] : []),
+            ...(pending.length ? pending : ["SPI pending 없음"]),
+          ].join(" · ")
         : "vGIC 관측 대기",
     );
   }

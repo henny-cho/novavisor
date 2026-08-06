@@ -72,6 +72,21 @@ def none_if_unset(value: object, info: elfsym.TypeInfo) -> object:
     return value
 
 
+def _binding(token: object) -> dict:
+    """The physical interrupt an EoI token is holding open, if any.
+
+    An absent token is not missing data. Three call sites post a virtual
+    interrupt and only one binds a token — post_spi_tracked, for a device
+    SPI whose physical deactivation is owed until the guest EoIs. A
+    timer or a doorbell has no physical interrupt behind it at all, so
+    the fields are left out rather than nulled: "no physical origin" and
+    "origin unknown" must not look the same.
+    """
+    if not isinstance(token, dict) or not token.get("generation"):
+        return {}
+    return {"pintid": token["physical_intid"], "generation": token["generation"]}
+
+
 def vgic_inflight(value: object, info: elfsym.TypeInfo) -> object:
     """The list-register shadow as the interrupts it is carrying.
 
@@ -81,11 +96,17 @@ def vgic_inflight(value: object, info: elfsym.TypeInfo) -> object:
     entries actually in flight, so only those travel — and the change
     gate then fires on injections rather than on rewrites that carry the
     same set.
+
+    The EoI token rides with the register it belongs to. An entry and its
+    physical binding are one fact, and joining them here means no reader
+    has to correlate two topics by slot to learn which silicon an
+    interrupt came from.
     """
     del info  # the shape is fixed by the register, not by the type
     per_vcpu = []
     for cpu in value:
         live = []
+        tokens = cpu.get("lr_token") or []
         for slot, raw in enumerate(cpu["lr"]):
             state = _STATE[(raw & _LR["NOVA_ICH_LR_STATE_MASK"]) >> _STATE_SHIFT]
             if state is None:  # 00: the entry holds nothing
@@ -99,9 +120,39 @@ def vgic_inflight(value: object, info: elfsym.TypeInfo) -> object:
                     "prio": (raw >> _LR["NOVA_ICH_LR_PRIORITY_SHIFT"]) & 0xFF,
                     "eoi": bool(raw & _LR["NOVA_ICH_LR_EOI"]),
                 }
+                | _binding(tokens[slot] if slot < len(tokens) else None)
             )
         per_vcpu.append(live)
     return per_vcpu
+
+
+def vgic_posted(value: object, info: elfsym.TypeInfo) -> object:
+    """SPI tokens bound but not yet taken into a list register.
+
+    This is one hop of the injection path made directly observable.
+    post_spi_tracked() writes the token here; refill() *moves* it into
+    the vCPU's lr_token, clearing the source. So a valid token is in
+    exactly one of the two places at any instant, and which one says
+    where the interrupt has got to: still pending in the emulated
+    distributor, or already in a register the guest can take.
+
+    Only bound tokens travel, so an idle machine sends an empty list per
+    VM and the change gate emits it once.
+    """
+    del info
+    return [
+        [
+            {
+                "spi": index,
+                "vintid": token["virtual_intid"],
+                "pintid": token["physical_intid"],
+                "generation": token["generation"],
+            }
+            for index, token in enumerate(vm)
+            if token.get("generation")
+        ]
+        for vm in value
+    ]
 
 
 def trap_syndrome(value: object, info: elfsym.TypeInfo) -> object:

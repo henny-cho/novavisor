@@ -74,8 +74,14 @@ OBSERVATIONS: tuple[Obs, ...] = (
     Obs("smp.budget", "nova::vcpu::g_budget", rate_hz=2),
     # vGIC panel — injection state, the only route to it. The gdb stub's
     # register set carries no ICH_*, so the EL2 shadow is all there is.
-    Obs("vgic.lr", "nova::vgic::(anonymous)::g_cpu", fields=("lr",), rate_hz=10,
+    Obs("vgic.lr", "nova::vgic::(anonymous)::g_cpu", fields=("lr", "lr_token"), rate_hz=10,
         shape=derive.vgic_inflight),
+    # The hop before that one: posted by a device, not yet refilled into a
+    # register. refill() moves the token rather than copying it, so this
+    # list and the in-flight one are disjoint by construction — which is
+    # what makes the position readable from a single snapshot.
+    Obs("vgic.token", "nova::vgic::(anonymous)::g_spi_tokens", rate_hz=5,
+        shape=derive.vgic_posted),
     Obs("vgic.dist", "nova::vgic::(anonymous)::g_dist",
         fields=("ctlr", "spi_group", "spi_enabled", "spi_pending"), rate_hz=5, hex=True),
     Obs("vgic.resident", "nova::vgic::(anonymous)::g_resident", rate_hz=5,

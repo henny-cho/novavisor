@@ -108,9 +108,22 @@ class VgicInflightTest(unittest.TestCase):
             raw |= derive._LR["NOVA_ICH_LR_EOI"]
         return raw
 
-    def shadow(self, *rows):
+    @staticmethod
+    def token(vintid, pintid, generation=1):
+        return {"virtual_intid": vintid, "physical_intid": pintid, "generation": generation}
+
+    #: An untracked slot: what post_private and post_spi leave behind.
+    BARE = {"virtual_intid": 0, "physical_intid": 0, "generation": 0}
+
+    def shadow(self, *rows, tokens=None):
         array = elfsym.TypeInfo("array", 8 * 16, element=U64, count=16)
-        cpus = [{"lr": list(row) + [0] * (16 - len(row))} for row in rows]
+        cpus = []
+        for at, row in enumerate(rows):
+            held = (tokens or {}).get(at, {})
+            cpus.append({
+                "lr": list(row) + [0] * (16 - len(row)),
+                "lr_token": [held.get(slot, self.BARE) for slot in range(16)],
+            })
         return derive.vgic_inflight(cpus, array)
 
     def test_only_entries_in_flight_travel(self):
@@ -145,6 +158,74 @@ class VgicInflightTest(unittest.TestCase):
         idle, busy = self.shadow([], [self.lr(30, 1)])
         self.assertEqual(idle, [])
         self.assertEqual([entry["vintid"] for entry in busy], [30])
+
+    def test_a_tracked_interrupt_carries_the_silicon_it_came_from(self):
+        # The whole point of the passthrough demos: which physical SPI is
+        # behind the number the guest sees.
+        (live,) = self.shadow([self.lr(37, 1)], tokens={0: {0: self.token(37, 106, 4)}})
+        self.assertEqual(live[0]["vintid"], 37)
+        self.assertEqual(live[0]["pintid"], 106)
+        self.assertEqual(live[0]["generation"], 4)
+
+    def test_an_untracked_interrupt_says_nothing_rather_than_null(self):
+        # post_private and post_spi bind no token because there is no
+        # physical interrupt behind them. Absent and null would read the
+        # same on the wire, and they are not the same fact: one is "the
+        # hypervisor made this", the other "we do not know".
+        (live,) = self.shadow([self.lr(27, 1)])
+        self.assertNotIn("pintid", live[0])
+        self.assertNotIn("generation", live[0])
+
+    def test_the_token_is_read_from_the_slot_it_belongs_to(self):
+        # Tokens are indexed by list register, not by position in the
+        # in-flight list. Reading them in order would attach the wrong
+        # physical interrupt to the wrong virtual one.
+        (live,) = self.shadow(
+            [0, self.lr(37, 1), 0, self.lr(38, 2)],
+            tokens={0: {1: self.token(37, 106), 3: self.token(38, 108)}},
+        )
+        self.assertEqual([(e["vintid"], e["pintid"]) for e in live], [(37, 106), (38, 108)])
+
+    def test_a_shadow_with_no_token_array_still_decodes(self):
+        # The manifest asks for both fields, but a decode that hard-fails
+        # on a missing one turns a firmware rename into a blank panel
+        # instead of a caught error.
+        array = elfsym.TypeInfo("array", 8 * 16, element=U64, count=16)
+        (live,) = derive.vgic_inflight([{"lr": [self.lr(27, 1)]}], array)
+        self.assertEqual(live[0]["vintid"], 27)
+        self.assertNotIn("pintid", live[0])
+
+
+class VgicPostedTest(unittest.TestCase):
+    """The hop before a list register: posted, not yet refilled."""
+
+    SPIS = elfsym.TypeInfo("array", 0, element=U64, count=32)
+
+    @staticmethod
+    def bank(**bound):
+        empty = {"virtual_intid": 0, "physical_intid": 0, "generation": 0}
+        return [
+            bound.get(f"s{spi}", empty)
+            for spi in range(32)
+        ]
+
+    def test_only_bound_tokens_travel(self):
+        vm0 = self.bank(s5={"virtual_intid": 37, "physical_intid": 106, "generation": 2})
+        (posted, idle) = derive.vgic_posted([vm0, self.bank()], self.SPIS)
+        self.assertEqual(
+            posted, [{"spi": 5, "vintid": 37, "pintid": 106, "generation": 2}]
+        )
+        self.assertEqual(idle, [])
+
+    def test_an_idle_machine_sends_an_empty_list_per_vm(self):
+        self.assertEqual(derive.vgic_posted([self.bank()] * 4, self.SPIS), [[], [], [], []])
+
+    def test_the_spi_index_is_the_bank_position(self):
+        # The bank is indexed by SPI number minus the private range, and
+        # the position is what lets a reader name the interrupt.
+        vm0 = self.bank(s31={"virtual_intid": 63, "physical_intid": 200, "generation": 9})
+        (posted, *_) = derive.vgic_posted([vm0], self.SPIS)
+        self.assertEqual(posted[0]["spi"], 31)
 
 
 if __name__ == "__main__":
