@@ -302,7 +302,10 @@ function onFrame(frame) {
       }
       break;
     case "ev":
+      /* The same event, read two ways: the log takes it as a row, the
+         board as evidence that a path was used. */
       events.addEvent(frame.ts, data);
+      boardView.note(frame.ts, data);
       break;
     case "life":
       onLife(frame.ts, data);

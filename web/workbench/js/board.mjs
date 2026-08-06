@@ -14,7 +14,7 @@
    carries and says which layer it came from; what is not observed today
    says so rather than being filled in plausibly. */
 
-import { accentOf, clear, el, vmSlot } from "./format.mjs";
+import { accentOf, clear, el, stamp, vmSlot } from "./format.mjs";
 
 const SIZE_KEY = "nv-wb-view-h";
 const FOLD_KEY = "nv-wb-view-folded";
@@ -153,6 +153,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
   let where = new Map(); // vcpu slot -> cpu index it is resident on
   let whereSig = null;
   let byTopic = new Map(); // topic -> paths it is evidence for
+  let byBadge = new Map(); // console badge -> paths it is evidence for
   const lit = new Set(); // topics that arrived this batch
   let topology = null;
   let signature = null;
@@ -468,6 +469,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
   function buildEdges() {
     live.edges = [];
     byTopic = new Map();
+    byBadge = new Map();
     const specs = topology?.board?.edges || [];
     /* Two paths may join the same pair of blocks in opposite directions
        — the guest's MMIO out and the vGIC's injection back. Drawn on one
@@ -505,6 +507,12 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
       if (spec.topic) {
         if (!byTopic.has(spec.topic)) byTopic.set(spec.topic, []);
         byTopic.get(spec.topic).push(edge);
+      }
+      /* A badge may reach more than one path: an unclaimed MMIO really
+         is both a trap and an emulation miss, so both light. */
+      for (const badge of spec.badges || []) {
+        if (!byBadge.has(badge)) byBadge.set(badge, []);
+        byBadge.get(badge).push(edge);
       }
     }
   }
@@ -600,17 +608,38 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     }
   }
 
-  /* What the path is, and how well it is seen. Never how often: the
-     syndrome latches only the last trap and the in-flight list is a
-     sample, so a count here would be a number nobody measured. */
+  /* What the path is, how well it is seen, and what it last carried.
+
+     Never how often. The syndrome latches only the last trap and the
+     in-flight list is a sample, so a count here would be a number
+     nobody measured. A time is not a count: "last seen at" is exactly
+     as much as the evidence supports. */
   function edgeTitle(edge) {
     const name = EDGE_TEXT[edge.id] || edge.id;
-    if (edge.grade === "console") return `${name} — 콘솔 이벤트 · 시각 정확`;
+    const seen = edge.last ? ` · 마지막 ${stamp(edge.last.ts)} ${edge.last.message || ""}` : "";
+    if (edge.grade === "console") return `${name} — 콘솔 이벤트 · 시각 정확${seen}`;
     if (edge.grade === "poll") {
       const hz = rate(edge.topic);
-      return `${name} — ${edge.topic} 표본${hz ? ` · S ${hz}Hz` : ""}`;
+      return `${name} — ${edge.topic} 표본${hz ? ` · S ${hz}Hz` : ""}${seen}`;
     }
     return `${name} — 관측 없음 · 구조만 표시`;
+  }
+
+  /* A classified console line, routed to the paths it is evidence for.
+
+     The board holds no regex. Reading the firmware's text is the
+     bridge's job and one contract test already ties every rule there to
+     a real firmware string; a second parser here would sit outside it. */
+  function note(ts, data) {
+    const edges = byBadge.get(String(data && data.badge));
+    if (!edges) return;
+    for (const edge of edges) {
+      edge.last = { ts, message: data.message };
+      put(edge.tip, edgeTitle(edge));
+      /* Exact motion even on a sampled path: for this one pulse the
+         console is the better evidence, and it should look like it. */
+      if (!folded()) flash(edge, true);
+    }
   }
 
   /* ---------------- skeleton ---------------- */
@@ -1323,6 +1352,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
        path was used, and some for both. `smp.mail` paints nothing and
        still has to arrive, or the crosscall never lights. */
     accepts: (topic) => topic in TOPICS || byTopic.has(topic),
+    note,
     apply(frame) {
       if (frame.kind !== "snapshot") return;
       const data = frame.data && typeof frame.data === "object" ? frame.data : null;
@@ -1380,6 +1410,11 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     clearAll() {
       latest.clear();
       dirty.clear();
+      lit.clear();
+      /* The topology may come back identical, in which case the paths
+         are never rebuilt — so what they last saw has to go from here,
+         or the new session opens showing the old one's last event. */
+      for (const edge of live.edges || []) edge.last = null;
       whereSig = null;
       paintAll();
     },

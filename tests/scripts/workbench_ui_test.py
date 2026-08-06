@@ -302,6 +302,35 @@ class BoardAnchorTest(unittest.TestCase):
         self.assertEqual({edge.id for edge in paths.EDGES}, captioned)
 
 
+class ConsoleReachTest(unittest.TestCase):
+    """One event, two readers, one parser."""
+
+    def test_a_classified_event_reaches_the_board_as_well_as_the_log(self):
+        # A path whose only evidence is a console line stays dark unless
+        # the board is handed the event, and nothing about the screen
+        # says why.
+        main = (UI / "js" / "main.mjs").read_text()
+        block = re.search(r'case "ev":(.*?)break;', main, re.S)
+        self.assertIsNotNone(block, "no console-event case in the frame dispatch")
+        self.assertIn("events.addEvent", block.group(1))
+        self.assertIn("boardView.note", block.group(1))
+
+    def test_the_board_does_not_read_console_text_itself(self):
+        # Interpreting the firmware's log is the bridge's, and a contract
+        # test already ties every rule there to a real firmware string. A
+        # pattern here would be a second parser outside that contract,
+        # drifting on its own. The board routes the badge and shows the
+        # message; it never asks what the message says.
+        source = (UI / "js" / "board.mjs").read_text()
+        blank = strip_js(source)
+        for applied in re.findall(r"\.(match|matchAll|exec|test|search)\s*\(", blank):
+            self.fail(f"board.mjs applies a pattern with .{applied}()")
+        body = function_bodies(source)["note"]
+        self.assertIn("byBadge", body, "the console path stopped routing by badge")
+        for literal in re.findall(r"/(?![/*])(?:[^/\\\n]|\\.)+/[gimsuy]*", strip_js(body)):
+            self.fail(f"the console path carries a regular expression: {literal}")
+
+
 PULSE_RULE = re.compile(r"\.edge\.([\w-]+)\s*\{\s*animation:\s*([\w-]+)")
 KEYFRAMES = re.compile(r"@keyframes\s+([\w-]+)")
 
