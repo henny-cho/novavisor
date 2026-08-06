@@ -65,6 +65,17 @@ OBSERVATIONS: tuple[Obs, ...] = (
     Obs("smp.online", "nova::smp::g_online", rate_hz=2),
     Obs("smp.mail", "nova::smp::g_mail", fields=("count",), rate_hz=5),
     Obs("smp.budget", "nova::vcpu::g_budget", rate_hz=2),
+    # vGIC panel — injection state, the only route to it. The gdb stub's
+    # register set carries no ICH_*, so the EL2 shadow is all there is.
+    Obs("vgic.lr", "nova::vgic::(anonymous)::g_cpu", fields=("lr",), rate_hz=10,
+        shape=derive.vgic_inflight),
+    Obs("vgic.dist", "nova::vgic::(anonymous)::g_dist",
+        fields=("ctlr", "spi_group", "spi_enabled", "spi_pending"), rate_hz=5, hex=True),
+    Obs("vgic.resident", "nova::vgic::(anonymous)::g_resident", rate_hz=5,
+        shape=derive.none_if_unset),
+    # Settled in EL2 init, after topo is published — hence polled, and
+    # constant thereafter, so the change gate emits it once.
+    Obs("vgic.capacity", "nova::vgic::(anonymous)::g_lr_count", rate_hz=2),
     # Devices panel
     Obs("dev.uart", "nova::vuart::(anonymous)::g_uart", fields=("head", "count", "imsc"), rate_hz=5),
     Obs("dev.dma", "nova::dma_device::(anonymous)::g_registry", rate_hz=5,

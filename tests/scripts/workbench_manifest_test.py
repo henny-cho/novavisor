@@ -90,6 +90,31 @@ class ManifestResolutionTest(unittest.TestCase):
         labels = dict(published.type.element.enumerators)
         self.assertEqual(labels, {0: "kOff", 1: "kOnPending", 2: "kOn"})
 
+    def test_vgic_state_is_banked_the_way_the_manifest_reads_it(self):
+        index = elfsym.ElfIndex(ELF)
+        self.addCleanup(index.close)
+
+        extents = {
+            "nova::vgic::(anonymous)::g_cpu": observations.MAX_VCPUS,
+            "nova::vgic::(anonymous)::g_dist": observations.MAX_GUESTS,
+            "nova::vgic::(anonymous)::g_resident": observations.MAX_CPUS,
+        }
+        for symbol, count in extents.items():
+            with self.subTest(symbol=symbol):
+                self.assertEqual(index.resolve(symbol).type.count, count)
+
+        # The shadow is sized for the architectural maximum; how many of
+        # its entries the machine actually has is what g_lr_count holds,
+        # and it cannot exceed the array it indexes.
+        lr = {
+            field.name: field
+            for field in index.resolve("nova::vgic::(anonymous)::g_cpu").type.element.fields
+        }["lr"]
+        self.assertEqual(lr.type.element.size, 8)
+        capacity = index.resolve("nova::vgic::(anonymous)::g_lr_count")
+        self.assertEqual(capacity.type.kind, "uint")
+        self.assertGreaterEqual(lr.type.count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

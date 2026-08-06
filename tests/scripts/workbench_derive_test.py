@@ -65,5 +65,59 @@ class NoneIfUnsetTest(unittest.TestCase):
             self.assertNotIn(topic, wearing)
 
 
+class VgicInflightTest(unittest.TestCase):
+    """A list register decoded as the interrupt it is carrying."""
+
+    # Built the way the firmware builds one (make_lr, vgic_delivery.hpp),
+    # from the same header, so the test states meaning and not bits.
+    @staticmethod
+    def lr(vintid, state, priority=0xA0, group1=True, eoi=False):
+        raw = state << derive._STATE_SHIFT | vintid
+        raw |= priority << derive._LR["NOVA_ICH_LR_PRIORITY_SHIFT"]
+        if group1:
+            raw |= derive._LR["NOVA_ICH_LR_GROUP1"]
+        if eoi:
+            raw |= derive._LR["NOVA_ICH_LR_EOI"]
+        return raw
+
+    def shadow(self, *rows):
+        array = elfsym.TypeInfo("array", 8 * 16, element=U64, count=16)
+        cpus = [{"lr": list(row) + [0] * (16 - len(row))} for row in rows]
+        return derive.vgic_inflight(cpus, array)
+
+    def test_only_entries_in_flight_travel(self):
+        # The shadow is sized for the architectural 16 while the machine
+        # reports four; sending it whole is 128 mostly-zero words.
+        (live,) = self.shadow([self.lr(27, 1), 0, self.lr(33, 2), 0])
+        self.assertEqual([entry["slot"] for entry in live], [0, 2])
+        self.assertEqual([entry["vintid"] for entry in live], [27, 33])
+
+    def test_every_state_encoding_is_named(self):
+        (live,) = self.shadow([self.lr(1, 1), self.lr(2, 2), self.lr(3, 3)])
+        self.assertEqual(
+            [entry["state"] for entry in live], ["pending", "active", "pending+active"]
+        )
+        self.assertEqual(self.shadow([self.lr(4, 0)]), [[]])  # 00 holds nothing
+
+    def test_the_fields_land_where_the_register_puts_them(self):
+        (live,) = self.shadow([self.lr(27, 1, priority=0x80, group1=True, eoi=True)])
+        self.assertEqual(
+            live[0],
+            {
+                "slot": 0,
+                "vintid": 27,
+                "state": "pending",
+                "group1": True,
+                "prio": 0x80,
+                "eoi": True,
+            },
+        )
+
+    def test_each_vcpu_keeps_its_own_list(self):
+        idle, busy = self.shadow([], [self.lr(30, 1)])
+        self.assertEqual(idle, [])
+        self.assertEqual([entry["vintid"] for entry in busy], [30])
+
+
 if __name__ == "__main__":
     unittest.main()
