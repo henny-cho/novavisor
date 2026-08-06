@@ -46,10 +46,22 @@ const TOPICS = {
   "timer.programmed": ["cores"],
   "vm.generation": ["guests"],
   "ctx.syndrome": ["trap"],
+  "vgic.lr": ["lrs"],
+  "vgic.capacity": ["lrs", "vgic"],
+  "vgic.dist": ["vgic"],
+  "vgic.resident": ["lrs", "routes"],
   "dev.uart": ["vuart"],
   "dev.dma": ["devices"],
   "ivc.page": ["ivc"],
   "smp.online": ["routes", "cores"],
+};
+
+/* A list register's state, as a mark that survives being printed in
+   one colour. The bridge names the states; these are the marks. */
+const LR_GLYPH = {
+  pending: "▲",
+  active: "■",
+  "pending+active": "◆",
 };
 
 /* Address-map segment captions, keyed by the kind the bridge assigns.
@@ -404,9 +416,11 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
       right.append(core, detail);
       const flow = el("span", "route-flow");
       flow.setAttribute("aria-hidden", "true");
-      route.append(left, flow, right);
+      const disagree = el("span", "disagree");
+      disagree.hidden = true;
+      route.append(left, flow, right, disagree);
       band.append(route);
-      live.routes.push({ route, who, state, detail });
+      live.routes.push({ route, who, state, detail, disagree });
     }
   }
 
@@ -445,18 +459,17 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
         const dot = el("i", "dot");
         const state = el("span", "", "—");
         const affinity = el("span", "vaf", "");
+        /* How many cells is the machine's answer, not a guess: it
+           arrives in vgic.capacity once EL2 has read ICH_VTR. Until
+           then there is nothing honest to draw. */
         const lrs = el("span", "lrs");
-        lrs.append(el("span", "ll", "LR"));
-        for (let cell = 0; cell < 4; cell += 1) lrs.append(el("span", "lr"));
-        /* The LR shadow is an EL2 global nobody observes yet, and the
-           gdb stub carries no ICH_* registers, so there is no second
-           route to it either. Saying so beats four empty cells. */
-        const pending = el("span", "pending", "미관측");
-        pending.title = "vGIC LR 섀도는 아직 관측 대상이 아닙니다";
-        lrs.append(pending);
+        const label = el("span", "ll", "LR");
+        const waiting = el("span", "pending", "대기");
+        waiting.title = "EL2가 ICH_VTR을 읽으면 칸 수가 정해집니다";
+        lrs.append(label, waiting);
         row.append(el("span", "vn", `s${slot}`), dot, state, affinity, lrs);
         node.append(row);
-        vcpus.push({ slot, row, dot, state, affinity });
+        vcpus.push({ slot, row, dot, state, affinity, lrs, waiting, cells: [] });
       }
       band.append(node);
       live.guests.push({ guest, node, meta, vcpus });
@@ -487,9 +500,6 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
        third line makes the whole EL2 row taller than its neighbours. */
     live.trapLines = [el("em"), el("br"), el("em")];
     live.chips.trap.append(...live.trapLines);
-    /* ICH_VTR is not readable from either layer: the S manifest has no
-       vGIC entry and the gdb stub's register set has no ICH_*. */
-    live.chips.vgic.append(el("span", "pending", "LR · SPI 미관측"));
   }
 
   function buildCores() {
@@ -739,6 +749,20 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
       );
       const fp = cpu && present(cpu.fp) ? `FP s${cpu.fp}` : "FP —";
       put(entry.detail, `${fp}${cpu?.fp_trap ? " · trap" : ""}`);
+      /* Two independent views of the same fact: the scheduler's own
+         current slot and the one the vGIC switched its state to. They
+         cannot legitimately differ, so a difference is the finding —
+         the reasserted-INTID loss behind demo 14's flakiness was
+         exactly this kind, and nothing on screen would have shown it. */
+      const claimed = (value("vgic.resident") || [])[index];
+      const agree = (claimed ?? null) === current;
+      entry.disagree.hidden = agree;
+      if (!agree) {
+        const tip = `스케줄러 ${current === null ? "없음" : `s${current}`}` +
+          ` / vGIC ${claimed == null ? "없음" : `s${claimed}`}`;
+        put(entry.disagree, "불일치");
+        if (entry.disagree.title !== tip) entry.disagree.title = tip;
+      }
     });
   }
 
@@ -800,6 +824,68 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     };
   }
 
+  /* Cell count is geometry, and it settles once: EL2 reads ICH_VTR at
+     init and the answer never moves again. Resizing here rather than at
+     build time is what lets the row wait for the machine's answer
+     instead of guessing one. */
+  function fitCells(vcpu, capacity) {
+    if (vcpu.cells.length === capacity) return;
+    vcpu.waiting.hidden = capacity > 0;
+    while (vcpu.cells.length > capacity) vcpu.lrs.removeChild(vcpu.cells.pop());
+    while (vcpu.cells.length < capacity) {
+      const cell = el("span", "lr", "·");
+      vcpu.lrs.append(cell);
+      vcpu.cells.push(cell);
+    }
+    invalidate();
+  }
+
+  function renderLrs() {
+    const inflight = value("vgic.lr") || [];
+    const capacity = Number(value("vgic.capacity")) || 0;
+    const resident = value("vgic.resident") || [];
+    for (const entry of live.guests || []) {
+      for (const vcpu of entry.vcpus) {
+        fitCells(vcpu, capacity);
+        /* While a vCPU is resident its shadow is whatever EL2 last
+           wrote: sync_resident_lrs() reads the hardware back only on
+           the next entry. Marking the row is the honest alternative to
+           showing a stale value as if it were current. */
+        vcpu.lrs.classList.toggle("stale", resident.includes(vcpu.slot));
+        const held = inflight[vcpu.slot] || [];
+        const bySlot = new Map(held.map((entry_) => [entry_.slot, entry_]));
+        vcpu.cells.forEach((cell, at) => {
+          const carried = bySlot.get(at);
+          put(cell, carried ? LR_GLYPH[carried.state] || "?" : "·");
+          cell.classList.toggle("held", Boolean(carried));
+          const tip = carried
+            ? `LR${at} vINTID ${carried.vintid} · ${carried.state} · prio ${carried.prio}` +
+              ` · ${carried.group1 ? "Group1" : "Group0"}${carried.eoi ? " · EoI 유지보수" : ""}`
+            : `LR${at} 비어 있음`;
+          if (cell.title !== tip) cell.title = tip;
+        });
+      }
+    }
+  }
+
+  function renderVgic() {
+    const capacity = Number(value("vgic.capacity")) || 0;
+    const carried = (value("vgic.lr") || []).reduce((sum, list) => sum + list.length, 0);
+    const dist = value("vgic.dist") || [];
+    const pending = dist
+      .map((vm, index) => ({ index, bits: Number.parseInt(String(vm?.spi_pending ?? "0"), 16) }))
+      .filter((vm) => vm.bits)
+      .map((vm) => `vm${vm.index} SPI 0b${vm.bits.toString(2)}`);
+    put(
+      live.chips.vgic,
+      capacity
+        ? [`LR ${carried}/${capacity}`, ...(pending.length ? pending : ["SPI pending 없음"])].join(
+            " · ",
+          )
+        : "vGIC 관측 대기",
+    );
+  }
+
   function renderTrap() {
     const { lines, title } = trapText();
     const [first, brk, second] = live.trapLines;
@@ -822,11 +908,15 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
 
   function renderTimer() {
     const queues = value("timer.queue") || [];
-    const armed = queues.map((slots) => (slots || []).filter((slot) => slot?.armed).length);
     const total = queues[0]?.length ?? 0;
+    /* Per core, named: joined by a slash the two counts read as one
+       fraction of the slot table, which is not what they are. */
+    const armed = queues.map(
+      (slots, cpu) => `cpu${cpu} ${(slots || []).filter((slot) => slot?.armed).length}`,
+    );
     put(
       live.chips.timer,
-      armed.length ? `armed ${armed.join(" / ")} of ${total}` : "타이머 관측 없음",
+      armed.length ? `${armed.join(" · ")} / ${total} armed` : "타이머 관측 없음",
     );
   }
 
@@ -910,6 +1000,8 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     vuart: renderVuart,
     ivc: renderIvc,
     cores: renderCores,
+    lrs: renderLrs,
+    vgic: renderVgic,
     devices: renderDevices,
   };
 
