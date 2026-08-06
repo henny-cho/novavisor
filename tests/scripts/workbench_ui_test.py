@@ -157,6 +157,115 @@ class BoardViewTest(unittest.TestCase):
         self.assertEqual(painters, claimed, f"painters no topic reaches: {painters - claimed}")
 
 
+def strip_js(source: str) -> str:
+    """Blank out comments and string bodies, keeping every offset.
+
+    Brace matching below has to skip a `{` that lives in a comment or a
+    template literal. Replacing rather than deleting keeps the text the
+    same length, so a reported position still points at real source.
+    """
+    out = list(source)
+    at, end = 0, len(source)
+    while at < end:
+        char = source[at]
+        if char == "/" and at + 1 < end and source[at + 1] in "/*":
+            block = source[at + 1] == "*"
+            close = source.find("*/", at + 2) if block else source.find("\n", at)
+            stop = end if close < 0 else close + (2 if block else 0)
+            for i in range(at, stop):
+                if out[i] != "\n":
+                    out[i] = " "
+            at = stop
+            continue
+        if char in "\"'`":
+            at += 1
+            while at < end and source[at] != char:
+                at += 2 if source[at] == "\\" else 1
+                if at <= end:
+                    continue
+            # The literal's body is blanked; nested ${} is balanced anyway.
+            at += 1
+            continue
+        at += 1
+    text = "".join(out)
+    for quote in "\"'`":
+        text = re.sub(
+            rf"{quote}(?:[^{quote}\\\n]|\\.)*{quote}",
+            lambda hit: " " * len(hit.group(0)),
+            text,
+        )
+    return text
+
+
+def function_bodies(source: str) -> dict[str, str]:
+    """Every `function name(...) {...}` body, by name."""
+    blank = strip_js(source)
+    bodies: dict[str, str] = {}
+    for head in re.finditer(r"\bfunction\s+(\w+)\s*\(", blank):
+        open_brace = blank.find("{", head.end())
+        if open_brace < 0:
+            continue
+        depth, at = 0, open_brace
+        while at < len(blank):
+            if blank[at] == "{":
+                depth += 1
+            elif blank[at] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            at += 1
+        bodies[head.group(1)] = source[open_brace : at + 1]
+    return bodies
+
+
+# Anything that makes the browser reflow to answer.
+LAYOUT_READ = re.compile(
+    r"\b(?:getBoundingClientRect|offset(?:Width|Height|Top|Left)"
+    r"|client(?:Width|Height|Top|Left)|scroll(?:Width|Height)|getComputedStyle)\b"
+)
+# Functions a snapshot can reach. Sizing and drag handlers are allowed to
+# measure: they run on a gesture, not on a value.
+DRAW_PATH = re.compile(r"^(?:render|paint|draw|flash|note|relink|residency|put)")
+
+
+class BoardDrawPathTest(unittest.TestCase):
+    """A snapshot must never make the browser reflow.
+
+    The board separates measuring from writing: geometry is read in
+    measure() and cached, and everything a topic can reach only writes
+    text. One getBoundingClientRect on that path costs a forced layout
+    per changed value — fourteen a batch, measured, before it was
+    separated — and nothing about the screen looks wrong when it does.
+    """
+
+    def test_no_function_a_snapshot_reaches_reads_layout(self):
+        bodies = function_bodies((UI / "js" / "board.mjs").read_text())
+        self.assertIn("measure", bodies, "board measure() not found")
+        self.assertRegex(bodies["measure"], LAYOUT_READ, "measure() stopped measuring")
+        reached = [name for name in bodies if DRAW_PATH.match(name)]
+        self.assertTrue(reached, "no draw-path functions found")
+        for name in sorted(reached):
+            with self.subTest(function=name):
+                self.assertNotRegex(bodies[name], LAYOUT_READ)
+
+
+class BoardAnchorTest(unittest.TestCase):
+    """Endpoints are named, and the names are registered."""
+
+    def test_every_endpoint_a_wire_uses_is_an_anchor_id(self):
+        # A wire end is an anchor id, not a node, so the draw path never
+        # touches the document. An id nothing registered measures to
+        # undefined and the line quietly collapses onto the origin.
+        source = (UI / "js" / "board.mjs").read_text()
+        self.assertRegex(source, r"function anchor\(id, node\)")
+        self.assertRegex(source, r"live\.anchors\.push\(\{ id, node \}\)")
+        # The registry is reset with the skeleton, before anything fills it.
+        self.assertRegex(source, r"live = \{ anchors: \[\] \}")
+        bodies = function_bodies(source)
+        self.assertNotRegex(bodies["measure"], r"live\.links\[|\.node\.getBounding")
+        self.assertRegex(bodies["measure"], r"for \(const \{ id, node \} of live\.anchors")
+
+
 TYPE_SCALE = ("--fs-title", "--fs-body", "--fs-meta", "--fs-label")
 # `font-size: X` and the size slot of the `font:` shorthand.
 FONT_SIZE = re.compile(r"font-size:\s*([^;}]+)|font:\s*(?:[\w\s]*?\s)?((?:var\(--fs-[\w-]+\)|[\d.]+px))")

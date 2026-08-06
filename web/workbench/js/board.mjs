@@ -114,7 +114,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
   const dirty = new Set(); // section names awaiting a repaint
   /* Measured geometry, kept until something that can move it happens.
      Null means "re-measure on the next draw". */
-  let anchors = null;
+  let geometry = null;
   let where = new Map(); // vcpu slot -> cpu index it is resident on
   let whereSig = null;
   let topology = null;
@@ -193,7 +193,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
   }
 
   function invalidate() {
-    anchors = null;
+    geometry = null;
   }
 
   /* Wires and height both depend on the laid-out box, which is only
@@ -235,19 +235,39 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
 
   /* ---------------- wiring ---------------- */
 
+  /* Where each block sits, relative to the grid's own origin. Keeping
+     both edges and the centre means a caller picks an endpoint without
+     measuring again. */
+  function boxOf(node, base) {
+    const box = node.getBoundingClientRect();
+    return {
+      cx: box.left - base.left + box.width / 2,
+      top: box.top - base.top,
+      bottom: box.bottom - base.top,
+      left: box.left - base.left,
+      right: box.right - base.left,
+    };
+  }
+
+  const endpoint = (box, bottom) => (box ? [box.cx, bottom ? box.bottom : box.top] : null);
+
   /* The board is measured here and nowhere else, so a snapshot can
      never force a layout. What is read: the grid's own box, the EL2
      band the wires thread through, the gaps between its chips, and one
-     endpoint per vCPU row and per core. */
+     box per registered block.
+
+     Blocks register unconditionally at build time, so which boxes exist
+     follows the topology and never a value. A box that appeared only
+     while some badge was shown would turn that badge's every flicker
+     into a full re-measure — which is exactly how the injection-mismatch
+     badge cost fourteen forced layouts a batch before B2. */
   function measure() {
     const hyp = live.hypBand;
     if (!hyp) return null;
     const base = bands.getBoundingClientRect();
     const band = hyp.getBoundingClientRect();
-    const at = (node, bottom) => {
-      const box = node.getBoundingClientRect();
-      return [box.left - base.left + box.width / 2, (bottom ? box.bottom : box.top) - base.top];
-    };
+    const at = {};
+    for (const { id, node } of live.anchors || []) at[id] = boxOf(node, base);
     const gaps = [];
     const kids = [...hyp.children].map((kid) => kid.getBoundingClientRect());
     for (let i = 1; i < kids.length; i += 1) {
@@ -261,8 +281,9 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
       top: band.top - base.top - 3,
       bottom: band.bottom - base.top + 3,
       gaps,
-      from: (live.links || []).map((link) => at(link.from, true)),
-      cores: (live.cores || []).map((core) => at(core.node, false)),
+      at,
+      from: (live.links || []).map((link) => endpoint(at[link.anchor], true)),
+      cores: (live.cores || []).map((core) => endpoint(at[core.anchor], false)),
     };
   }
 
@@ -271,7 +292,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
      them is left alone. */
   function lane(want) {
     let best = null;
-    for (const [left, right] of anchors.gaps) {
+    for (const [left, right] of geometry.gaps) {
       if (want > left && want < right) return want;
       const at = (left + right) / 2;
       if (best === null || Math.abs(at - want) < Math.abs(best - want)) best = at;
@@ -321,22 +342,22 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
 
   function drawWires() {
     if (!wires || folded()) return;
-    if (!anchors) anchors = measure();
+    if (!geometry) geometry = measure();
     const links = live.links || [];
-    if (!anchors) {
+    if (!geometry) {
       for (const link of links) showWire(link, false);
       return;
     }
     /* Rewriting the viewBox invalidates the whole overlay even when the
        value is identical, so it is only touched when it moves. */
-    const box = `0 0 ${anchors.width} ${anchors.height}`;
+    const box = `0 0 ${geometry.width} ${geometry.height}`;
     if (wires.getAttribute("viewBox") !== box) wires.setAttribute("viewBox", box);
-    const { top, bottom } = anchors;
+    const { top, bottom } = geometry;
     links.forEach((link, index) => {
       /* A vCPU that is not resident anywhere has no core to point at,
          and an absent edge is the honest drawing of that. */
-      const start = anchors.from[index];
-      const end = link.cpu === null ? null : anchors.cores[link.cpu];
+      const start = geometry.from[index];
+      const end = link.cpu === null ? null : geometry.cores[link.cpu];
       if (!start || !end) {
         showWire(link, false);
         return;
@@ -399,6 +420,18 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
   const cpuCount = () => Number(topology?.board?.cpus) || 1;
   const slotOf = (vm, index) => vm * stride() + index;
   const vmOfSlot = (slot) => Math.floor(slot / stride());
+
+  /* Name a block so something can point at it later.
+
+     Called once per block while building, never from a paint: the set
+     of geometry is a property of the machine, not of what it is doing.
+     An id registered here is the only kind of endpoint a wire or an
+     edge may name, so a typo fails at build rather than drawing a line
+     to the origin. */
+  function anchor(id, node) {
+    live.anchors.push({ id, node });
+    return id;
+  }
 
   function buildRoutes() {
     const band = layer("LIVE", "RESIDENCY", "map-layer");
@@ -469,19 +502,23 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
         lrs.append(label, waiting);
         row.append(el("span", "vn", `s${slot}`), dot, state, affinity, lrs);
         node.append(row);
-        vcpus.push({ slot, row, dot, state, affinity, lrs, waiting, cells: [] });
+        vcpus.push({ slot, row, dot, state, affinity, lrs, waiting, cells: [], anchor: anchor(`vcpu${slot}`, row) });
       }
       band.append(node);
+      anchor(`vm${guest.slot}`, node);
       live.guests.push({ guest, node, meta, vcpus });
     }
   }
 
-  function chip(band, title) {
+  /* The chip's body is what a paint writes into; its outer node is what
+     an edge points at. Returning the body keeps every caller unchanged. */
+  function chip(band, id, title) {
     const node = el("div", "chip c2");
     node.append(el("div", "bc", title));
     const body = el("div", "cv");
     node.append(body);
     band.append(node);
+    anchor(id, node);
     return body;
   }
 
@@ -489,12 +526,12 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     const band = layer("EL2", "HYPERVISOR", "hyp-layer");
     live.hypBand = band;
     live.chips = {
-      trap: chip(band, "trap_router"),
-      sched: chip(band, "scheduler"),
-      timer: chip(band, "soft_timer"),
-      vgic: chip(band, "vgic"),
-      vuart: chip(band, "vuart"),
-      ivc: chip(band, "ivc"),
+      trap: chip(band, "trap", "trap_router"),
+      sched: chip(band, "sched", "scheduler"),
+      timer: chip(band, "timer", "soft_timer"),
+      vgic: chip(band, "vgic", "vgic"),
+      vuart: chip(band, "vuart", "vuart"),
+      ivc: chip(band, "ivc", "ivc"),
     };
     /* Two trap lines, built once: the chip is a sixth of the band and a
        third line makes the whole EL2 row taller than its neighbours. */
@@ -516,10 +553,13 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
       const row = el("div", "perow");
       node.append(body, row);
       band.append(node);
-      live.cores.push({ node, home, rest, row });
+      live.cores.push({ node, home, rest, row, anchor: anchor(`core${cpu}`, node) });
     }
   }
 
+  /* A block the board did not invent: its id is the one the bridge
+     assigned in topo.board, so an edge naming `gicd` or `smmu` names
+     the same thing the platform headers do. */
   function staticBlock(band, block, span) {
     const node = el("div", `blk ${span}`);
     const detail = [];
@@ -527,6 +567,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     if (block.size) detail.push(`+${bytes(block.size)}`);
     blockHead(node, block.label, detail.join(" "), null);
     band.append(node);
+    anchor(String(block.id), node);
     return node;
   }
 
@@ -618,8 +659,16 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     const row = el("div", "striprow");
     row.append(el("div", "sl", label));
     const bar = el("div", "strip");
+    /* One anchor per kind of segment, the first of its kind. A caller
+       wanting "where does shared memory sit" gets an answer without
+       knowing how many guests split the window this run. */
+    const named = new Set();
     for (const region of regions) {
       const seg = el("div", "seg");
+      if (region.kind && !named.has(region.kind)) {
+        named.add(region.kind);
+        anchor(`${label.toLowerCase()}:${region.kind}`, seg);
+      }
       if (region.kind === "hole") seg.classList.add("hole");
       if (region.slot !== undefined) {
         seg.classList.add("vm", `v${region.slot % VM_SLOTS}`);
@@ -644,6 +693,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     );
     column.append(head);
     band.append(column);
+    anchor("mem", column);
     strip(column, "PA", physicalSegments());
     /* The IPA regions already name themselves; what the reader cannot
        see is how each is mapped, so only that is appended. */
@@ -666,7 +716,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
   function build() {
     clear(bands);
     bands.append(wires);
-    live = {};
+    live = { anchors: [] };
     if (!topology?.board) {
       bands.append(el("div", "empty", "보드 정보를 기다리는 중입니다."));
       return;
@@ -678,12 +728,12 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     buildInterconnect();
     buildDevices();
     buildMemory();
-    /* One wire per vCPU, its lower end assigned by residency. The row
-       is held here so the draw path never queries the document. */
+    /* One wire per vCPU, its lower end assigned by residency. Both ends
+       are anchor ids, so the draw path never queries the document. */
     live.links = [];
     for (const entry of live.guests || []) {
       for (const vcpu of entry.vcpus) {
-        live.links.push({ from: vcpu.row, cpu: null, slot: vcpu.slot, title: "" });
+        live.links.push({ anchor: vcpu.anchor, cpu: null, slot: vcpu.slot, title: "" });
       }
     }
     buildWires();
