@@ -56,6 +56,8 @@ class UiStructureTest(unittest.TestCase):
 VIEW_HEADER = re.compile(r'<div class="view-h">(.*?)</div>\s*<div class="board"', re.S)
 # Any literal that looks like a hardware address or an interrupt number.
 HARD_ADDRESS = re.compile(r"0x[0-9a-fA-F]{6,}")
+# `"topic": { hz: N, paints: ["a", "b"] }`
+PAINTS = re.compile(r'"([\w.]+)":\s*\{[^}]*paints:\s*\[([^\]]*)\]')
 
 
 class BoardViewTest(unittest.TestCase):
@@ -92,6 +94,29 @@ class BoardViewTest(unittest.TestCase):
         self.assertTrue(wanted)
         published = {obs.topic for obs in OBSERVATIONS}
         self.assertLessEqual(wanted, published, f"unpublished: {wanted - published}")
+
+    def test_a_topic_repaints_named_sections_and_nothing_more(self):
+        # Twenty scheduler samples a second must not redraw the address
+        # strip, so each topic declares the sections it can change. A
+        # section with no painter behind it is a silent no-op, and a
+        # painter no topic names is a value that stopped arriving.
+        source = (UI / "js" / "board.mjs").read_text()
+        table = re.search(r"const TOPICS = \{(.*?)\n\};", source, re.S)
+        self.assertIsNotNone(table, "board topic table not found")
+        painters = set(re.findall(r"^ {4}(\w+): render\w+,$", source, re.M))
+        self.assertTrue(painters, "board painter table not found")
+        entries = PAINTS.findall(table.group(1))
+        self.assertEqual(
+            len(entries), len(re.findall(r'"[\w.]+":', table.group(1))), "a topic paints nothing"
+        )
+        claimed = set()
+        for topic, listed in entries:
+            sections = set(re.findall(r'"(\w+)"', listed))
+            with self.subTest(topic=topic):
+                self.assertTrue(sections, "subscribed but paints nothing")
+                self.assertLessEqual(sections, painters, f"no painter: {sections - painters}")
+            claimed |= sections
+        self.assertEqual(painters, claimed, f"painters no topic reaches: {painters - claimed}")
 
 
 TYPE_SCALE = ("--fs-title", "--fs-body", "--fs-meta", "--fs-label")
