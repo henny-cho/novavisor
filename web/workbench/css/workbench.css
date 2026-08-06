@@ -152,7 +152,11 @@ b{font-weight:700}
   font-family:var(--mono);font-size:10.5px;color:var(--ink3);text-transform:none;letter-spacing:0
 }
 .tab:hover{border-color:var(--line2)}
-.tab[aria-selected="true"]{color:var(--vmc);border-color:var(--vmc);background:var(--panel);font-weight:700}
+/* Selected (console tabs, single choice) and pressed (panel toggles,
+   several at once) mean the same thing to the eye. */
+.tab[aria-selected="true"],.tab[aria-pressed="true"]{
+  color:var(--vmc);border-color:var(--vmc);background:var(--panel);font-weight:700
+}
 .tab .tn{font-family:var(--sans);font-size:10px;color:var(--ink3);max-width:88px;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
 
@@ -294,7 +298,14 @@ b{font-weight:700}
    column up and down 20 times a second. Changes scroll inside instead. */
 .panels { overflow: auto; height: 34vh; padding: 4px 8px 8px; }
 .panel-body { display: flex; flex-direction: column; gap: 4px; }
-.pfresh { color: var(--ink3); font: 11px var(--mono); text-align: right; }
+/* Stacked panels name themselves; the stamp shares the header row. */
+.phead {
+  display: flex; align-items: baseline; gap: 8px; margin-top: 6px;
+  border-bottom: 1px solid var(--line2); padding-bottom: 2px;
+}
+.panel-body:first-of-type .phead { margin-top: 0; }
+.phead .pt { font: 700 11px var(--sans); letter-spacing: .04em; color: var(--ink2); }
+.pfresh { color: var(--ink3); font: 11px var(--mono); text-align: right; margin-left: auto; }
 .psec-h { color: var(--ink2); font: 600 11px var(--sans); margin-top: 4px; }
 .pnote { color: var(--ink3); font: 12px var(--mono); padding: 2px 0; }
 .ptable { border-collapse: collapse; width: 100%; font: 12px var(--mono); }

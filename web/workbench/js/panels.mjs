@@ -2,7 +2,13 @@
    exactly as decoded (field names come from the firmware's own debug
    info); the only display rule is that a saturated 64-bit sentinel reads
    as "—". Panels re-render from the latest per-topic value, so frame
-   order and rate never matter here. */
+   order and rate never matter here.
+
+   Panels are independent toggles rather than tabs: the sizes differ by an
+   order of magnitude (Sysreg is ten rows and only moves on a pause, the
+   context dump is forty), so which ones fit together is the reader's
+   call, not a fixed cap. Only visible panels render, and only those a
+   changed topic actually feeds. */
 
 import { clear, el, stamp } from "./format.mjs";
 
@@ -33,12 +39,33 @@ function section(title) {
   return el("div", "psec-h", title);
 }
 
+/* Which panels were open, so a reload does not undo the choice. */
+const OPEN_KEY = "nv-wb-panels";
+
 export function createPanels({ tabs, host }) {
   const latest = new Map(); // topic -> {value, ts, src}
+  const visible = new Set(); // panels switched on; screen order is PANELS order
+  const dirty = new Set(); // panels whose topics changed since the last settle
   let timerSlots = [];
-  let active = "sched";
   let ctxSlot = 0;
-  let dirty = false;
+
+  function restore(known) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(OPEN_KEY) || "[]");
+      const kept = Array.isArray(saved) ? saved.filter((id) => known.includes(id)) : [];
+      return kept.length ? kept : ["sched"];
+    } catch (error) {
+      return ["sched"];
+    }
+  }
+
+  function remember() {
+    try {
+      localStorage.setItem(OPEN_KEY, JSON.stringify([...visible]));
+    } catch (error) {
+      /* private mode: the choice simply lasts this session */
+    }
+  }
 
   const value = (topic) => latest.get(topic)?.value;
 
@@ -271,30 +298,43 @@ export function createPanels({ tabs, host }) {
 
   const bodies = new Map();
   for (const panel of PANELS) {
-    const tab = el("button", "tab");
-    tab.type = "button";
-    tab.setAttribute("role", "tab");
-    tab.append(el("span", "tt", panel.title));
-    tab.addEventListener("click", () => activate(panel.id));
-    tabs.append(tab);
+    /* A toggle, not a tab: several panels may be open at once, so the
+       control reports aria-pressed and the strip is a plain group. */
+    const chip = el("button", "tab");
+    chip.type = "button";
+    chip.setAttribute("aria-pressed", "false");
+    chip.title = `${panel.title} 표시 전환`;
+    chip.append(el("span", "tt", panel.title));
+    chip.addEventListener("click", () => toggle(panel.id));
+    tabs.append(chip);
 
     const body = el("div", "panel-body");
     body.hidden = true;
     host.append(body);
-    bodies.set(panel.id, { panel, tab, body, fresh: null });
+    bodies.set(panel.id, { panel, tab: chip, body });
   }
 
-  function activate(id) {
-    active = id;
-    for (const [panelId, entry] of bodies) {
-      const on = panelId === active;
+  /* Bodies sit in declaration order, so what is on screen always reads
+     top-to-bottom in that order however the panels were switched on. */
+  const placeholder = el("div", "pnote", "표시할 패널을 위에서 선택하세요");
+  host.append(placeholder);
+
+  function sync() {
+    for (const [id, entry] of bodies) {
+      const on = visible.has(id);
       entry.body.hidden = !on;
-      entry.tab.setAttribute("aria-selected", String(on));
+      entry.tab.setAttribute("aria-pressed", String(on));
+      if (!on) clear(entry.body); /* a hidden panel keeps no stale DOM */
     }
-    dirty = false;
-    render(active);
-    host.scrollTop = 0; /* a different panel starts at its own beginning */
-    host.scrollLeft = 0;
+    placeholder.hidden = visible.size > 0;
+  }
+
+  function toggle(id) {
+    if (visible.has(id)) visible.delete(id);
+    else visible.add(id);
+    remember();
+    sync();
+    if (visible.has(id)) render(id);
   }
 
   function render(id) {
@@ -310,10 +350,15 @@ export function createPanels({ tabs, host }) {
       .map((topic) => latest.get(topic))
       .filter(Boolean)
       .reduce((a, b) => (a && a.ts > b.ts ? a : b), null);
+    /* Stacked panels need to name themselves; the freshness stamp rides
+       the same line so a panel costs one header row, not two. */
+    const head = el("div", "phead");
+    head.append(el("span", "pt", entry.panel.title));
+    if (newest) head.append(el("span", "pfresh", `src ${newest.src} · ${stamp(newest.ts, 1)}`));
+    entry.body.append(head);
     if (!newest) {
       entry.body.append(el("div", "pnote", "실측 대기 중 — 세션이 실행되면 채워집니다"));
     } else {
-      entry.body.append(el("div", "pfresh", `src ${newest.src} · ${stamp(newest.ts, 1)}`));
       try {
         entry.panel.render(entry.body);
       } catch {
@@ -326,7 +371,14 @@ export function createPanels({ tabs, host }) {
     host.scrollTop = top;
   }
 
-  activate(active);
+  function renderAll() {
+    for (const id of visible) render(id);
+    dirty.clear();
+  }
+
+  for (const id of restore(PANELS.map((panel) => panel.id))) visible.add(id);
+  sync();
+  renderAll();
 
   return {
     accepts: (topic) => interest.has(topic),
@@ -336,25 +388,28 @@ export function createPanels({ tabs, host }) {
       const data = frame.data && typeof frame.data === "object" ? frame.data : null;
       if (!data || data.values === undefined) return;
       latest.set(frame.topic, { value: data.values, ts: frame.ts, src: frame.src });
-      /* Coalesced to one render per flush window: six topics at 20 Hz
-         would rebuild the same table over a hundred times a second,
+      /* Coalesced to one render per flush window, and only for the
+         panels this topic actually feeds: six topics at 20 Hz would
+         otherwise rebuild the same table over a hundred times a second,
          throwing away hover, text selection and the slot picker each
-         time. The panel always draws the newest value either way. */
-      if (interest.get(frame.topic)?.has(active)) dirty = true;
+         time. Every panel still draws the newest value. */
+      for (const id of interest.get(frame.topic) ?? []) {
+        if (visible.has(id)) dirty.add(id);
+      }
     },
     settle() {
-      if (!dirty) return;
-      dirty = false;
-      render(active);
+      if (!dirty.size) return;
+      for (const id of dirty) render(id);
+      dirty.clear();
     },
     setTopology(topo) {
       timerSlots = Array.isArray(topo.timer_slots) ? topo.timer_slots : [];
-      render(active); /* owner labels may resolve without a new frame */
+      renderAll(); /* owner labels may resolve without a new frame */
     },
     clearAll() {
       latest.clear();
       ctxSlot = 0; /* the new run may not have the old slot */
-      render(active);
+      renderAll();
     },
   };
 }
