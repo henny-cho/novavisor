@@ -118,12 +118,15 @@ class ElfRamProvider:
             value = elfsym.decode(info, self._ram[offset : offset + info.size])
         else:
             resolved = self._resolved[obs.topic]
+            info = resolved.type
             offset = resolved.address - self._base
             value = elfsym.decode(
-                resolved.type,
-                self._ram[offset : offset + resolved.size],
-                fields=obs.fields,
+                info, self._ram[offset : offset + resolved.size], fields=obs.fields
             )
+        # Encodings become meanings before the wire, so no reader has to
+        # know the width of a "none" or the layout of a packed word.
+        if obs.shape is not None:
+            value = obs.shape(value, info)
         return _hexify(value) if obs.hex else value
 
     def close(self) -> None:

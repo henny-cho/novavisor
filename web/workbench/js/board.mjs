@@ -20,9 +20,6 @@ const SIZE_KEY = "nv-wb-view-h";
 const FOLD_KEY = "nv-wb-view-folded";
 const VM_SLOTS = 4; /* accent classes v0..v3 cycle */
 const NS = "http://www.w3.org/2000/svg";
-/* JSON numbers past 2^53 lost precision anyway; every such value in the
-   observed structs is a "none" sentinel (kNoVcpu, kNoOwner). */
-const SENTINEL = 9e15;
 const MIN_HEIGHT = 200;
 /* What the console keeps when the board opens itself: its header, a
    readable number of lines, and the input row. Dragging the split may
@@ -93,7 +90,9 @@ function bytes(value) {
   return `${Number.isInteger(scaled) ? scaled : scaled.toFixed(1)} ${units[at]}`;
 }
 
-const present = (value) => value !== undefined && value !== null && value < SENTINEL;
+/* The bridge decodes the firmware's all-bits-set "none" to null, so
+   there is one thing to test for and no width to know. */
+const present = (value) => value !== undefined && value !== null;
 
 /* Text is written through here so an unchanged tick costs no layout:
    twenty snapshots a second would otherwise rebuild the whole board. */

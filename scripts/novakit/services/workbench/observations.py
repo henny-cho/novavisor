@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ...image import abi
-from . import hardware
+from . import derive, hardware
 
 # Board facts the labels below derive from, read from the headers that
 # define them; the manifest check then asserts the derived extents
@@ -22,9 +22,6 @@ MAX_CPUS = _BOARD["NOVA_BOARD_SMP_CPUS"]
 MAX_GUESTS = abi.MAX_GUESTS
 # vCPU slots are flat: every guest owns a fixed stride of them.
 MAX_VCPUS = abi.MAX_GUESTS * abi.MAX_VCPUS_PER_VM
-
-# Deadline value that means "not armed" in soft_timer's queue.
-NO_DEADLINE = (1 << 64) - 1
 
 
 @dataclass(frozen=True)
@@ -40,19 +37,23 @@ class Obs:
     # symbol for state that lives in guest memory (the IVC page).
     pa: int | None = None
     layout: str = ""
+    # Turns a firmware encoding into what it means, before the wire.
+    shape: derive.Shape | None = None
 
 
 OBSERVATIONS: tuple[Obs, ...] = (
     # Scheduler panel
-    Obs("sched.cpu", "nova::vcpu::g_sched", rate_hz=20),
+    Obs("sched.cpu", "nova::vcpu::g_sched", rate_hz=20, shape=derive.none_if_unset),
     Obs("sched.slots", "nova::vcpu::g_published_state", rate_hz=20),
     Obs("sched.run", "nova::vcpu::g_vcpus", fields=("state",), rate_hz=20),
     Obs("sched.affinity", "nova::vcpu::g_affinity", rate_hz=2),
     Obs("sched.valid", "nova::vcpu::g_slot_valid", rate_hz=2),
     Obs("sched.slice", "nova::vcpu::g_slice_ticks", rate_hz=10),
     # Timer panel
-    Obs("timer.queue", "nova::soft_timer::(anonymous)::g_queue", fields=("deadline", "armed")),
-    Obs("timer.programmed", "nova::soft_timer::(anonymous)::g_programmed"),
+    Obs("timer.queue", "nova::soft_timer::(anonymous)::g_queue", fields=("deadline", "armed"),
+        shape=derive.none_if_unset),
+    Obs("timer.programmed", "nova::soft_timer::(anonymous)::g_programmed",
+        shape=derive.none_if_unset),
     Obs("timer.cntvoff", "nova::vcpu::g_cntvoff", rate_hz=2),
     Obs("vm.generation", "nova::vcpu::g_vm_generation", rate_hz=2),
     # Context panel
@@ -66,7 +67,8 @@ OBSERVATIONS: tuple[Obs, ...] = (
     Obs("smp.budget", "nova::vcpu::g_budget", rate_hz=2),
     # Devices panel
     Obs("dev.uart", "nova::vuart::(anonymous)::g_uart", fields=("head", "count", "imsc"), rate_hz=5),
-    Obs("dev.dma", "nova::dma_device::(anonymous)::g_registry", rate_hz=5),
+    Obs("dev.dma", "nova::dma_device::(anonymous)::g_registry", rate_hz=5,
+        shape=derive.none_if_unset),
     Obs("dev.watchdog", "nova::(anonymous)::g_update_sequence", rate_hz=2),
     # IVC panel — the shared page is guest memory, not an EL2 global.
     Obs("ivc.page", "", pa=_BOARD["NOVA_BOARD_IVC_SHM_PA"], layout="ivc_ring_page", hex=True),

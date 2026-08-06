@@ -12,13 +12,8 @@
 
 import { clear, el, stamp } from "./format.mjs";
 
-/* JSON numbers past 2^53 lost precision anyway; every such value in the
-   observed structs is a "none" sentinel (kNoVcpu, kNoOwner, kNoDeadline). */
-const SENTINEL = 9e15;
-
 function fmt(value) {
   if (typeof value === "boolean") return value ? "●" : "·";
-  if (typeof value === "number") return value >= SENTINEL ? "—" : String(value);
   return String(value ?? "—");
 }
 

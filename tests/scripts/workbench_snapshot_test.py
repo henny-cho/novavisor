@@ -104,9 +104,11 @@ class ElfRamProviderTest(unittest.TestCase):
             observed = {obs.topic: obs for obs in OBSERVATIONS}
             cpus = provider.read(observed["sched.cpu"])
 
+        # kNoOwner reaches the wire as null, not as a number a JSON
+        # reader would have to recognise.
         self.assertEqual(
             cpus[0],
-            {"current": 1, "fp": (1 << 64) - 1, "fp_trap": True, "idling": False},
+            {"current": 1, "fp": None, "fp_trap": True, "idling": False},
         )
         self.assertEqual(
             cpus[1],

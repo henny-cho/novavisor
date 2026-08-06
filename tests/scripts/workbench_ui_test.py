@@ -23,6 +23,8 @@ SIM = REPO / "web_sim" / "novavisor-sim.html"
 HTML_REFERENCE = re.compile(r'(?:src|href)="([^"]+)"')
 MODULE_IMPORT = re.compile(r'(?:import|from)\s+"(\./[^"]+)"')
 CUSTOM_PROPERTY = re.compile(r"(--[\w-]+)\s*:\s*([^;]+);")
+# A number no observed value legitimately reaches: a sentinel compare.
+BIG_LITERAL = re.compile(r"\b(?:\d{16,}|\d(?:\.\d+)?e(?:1[5-9]|[2-9]\d))\b")
 
 
 class UiStructureTest(unittest.TestCase):
@@ -42,6 +44,15 @@ class UiStructureTest(unittest.TestCase):
             for target in MODULE_IMPORT.findall(module.read_text()):
                 with self.subTest(module=module.name, target=target):
                     self.assertTrue((module.parent / target).is_file(), target)
+
+    def test_no_module_tests_for_a_firmware_sentinel(self):
+        # The bridge decodes the firmware's all-bits-set "none" to null.
+        # A UI comparing against 9e15 instead is relying on JSON losing
+        # precision past 2^53 — right by accident, and only until a
+        # sentinel narrower than 53 bits appears.
+        for module in sorted((UI / "js").glob("*.mjs")):
+            with self.subTest(module=module.name):
+                self.assertFalse(BIG_LITERAL.findall(module.read_text()))
 
     def test_no_module_hardcodes_a_taxonomy_badge(self):
         # The thin-client rule: vocabulary arrives in the topo snapshot.
