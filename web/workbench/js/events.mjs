@@ -3,23 +3,11 @@
    the topology snapshot and its chip colour is derived from the name, so
    adding a subsystem needs no change here. */
 
-import { atBottom, clear, el, paletteIndex, stamp, toBottom, trim } from "./format.mjs";
+import { accentOf, atBottom, clear, el, stamp, toBottom, trim } from "./format.mjs";
 
 const ROW_CAP = 2000;
 /* UI-local chip for lifecycle rows: not part of the bridge taxonomy. */
 const LIFE = "LIFE";
-/* Derived chip accents. Severity keeps its own colours, so the crit red
-   is deliberately absent from this rotation. */
-const ACCENTS = [
-  "var(--hyp)",
-  "var(--warn)",
-  "var(--violet)",
-  "var(--good)",
-  "var(--vm0)",
-  "var(--vm1)",
-  "var(--vm2)",
-  "var(--vm3)",
-];
 
 export function createEvents({ list, filters, resetButton, clearButton }) {
   /* Badges the user switched off. */
@@ -31,7 +19,7 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
     stick = atBottom(list);
   });
 
-  const accent = (name) => (name === LIFE ? "var(--ink3)" : ACCENTS[paletteIndex(name, ACCENTS.length)]);
+  const accent = (name) => (name === LIFE ? "var(--ink3)" : accentOf(name));
 
   function placeholder() {
     if (list.childElementCount) return;

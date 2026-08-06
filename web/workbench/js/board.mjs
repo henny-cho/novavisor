@@ -14,7 +14,7 @@
    carries and says which layer it came from; what is not observed today
    says so rather than being filled in plausibly. */
 
-import { clear, el, vmSlot } from "./format.mjs";
+import { accentOf, clear, el, vmSlot } from "./format.mjs";
 
 const SIZE_KEY = "nv-wb-view-h";
 const FOLD_KEY = "nv-wb-view-folded";
@@ -62,6 +62,24 @@ const LR_GLYPH = {
   pending: "▲",
   active: "■",
   "pending+active": "◆",
+};
+
+/* What each path is called, keyed by the edge id the bridge assigns.
+   Same split as the segment captions below: the bridge states which
+   blocks a path joins and what watches it, the UI supplies the words.
+   An edge with no caption here still draws — it just goes unnamed. */
+const EDGE_TEXT = {
+  trap: "게스트 트랩 → EL2",
+  phys: "물리 IRQ → PE",
+  post: "장치 SPI → 분배기",
+  inject: "vIRQ 주입 → 게스트",
+  mmio: "MMIO 트랩 → 에뮬레이션",
+  dma: "장치 DMA → SMMU",
+  walk: "SMMU 변환 → 메모리",
+  cross: "코어 간 크로스콜",
+  ivc: "IVC 도어벨 → 공유 페이지",
+  psci: "PSCI 기동 → PE",
+  uart: "vuart → 물리 UART",
 };
 
 /* Address-map segment captions, keyed by the kind the bridge assigns.
@@ -149,7 +167,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
         /* private mode: the size simply does not persist */
       }
     }
-    drawWires();
+    drawOverlay();
   }
 
   /* Open to what the content needs, capped at most of the column. A
@@ -206,7 +224,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
      moving `bands`. */
   const watch = new ResizeObserver(() => {
     invalidate();
-    drawWires();
+    drawOverlay();
     fitHeight();
   });
 
@@ -275,12 +293,35 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
       const right = kids[i].left - base.left;
       if (right - left >= 4) gaps.push([left, right]);
     }
+    /* Each band and the columns in it nothing occupies. A path crossing
+       a band drops down one of those columns instead of over a block,
+       and the horizontal jogs happen between bands, where there is
+       nothing to cross by construction. */
+    const rows = [];
+    for (const { id, node } of live.anchors || []) {
+      if (!id.startsWith("band:")) continue;
+      const box = at[id];
+      const spans = [...node.children]
+        .map((kid) => kid.getBoundingClientRect())
+        .map((kid) => [kid.left - base.left, kid.right - base.left])
+        .sort((a, b) => a[0] - b[0]);
+      const free = [];
+      let edge = box.left;
+      for (const [left, right] of spans) {
+        if (left - edge >= 7) free.push([edge, left]);
+        edge = Math.max(edge, right);
+      }
+      if (box.right - edge >= 7) free.push([edge, box.right]);
+      rows.push({ top: box.top, bottom: box.bottom, free });
+    }
+    rows.sort((a, b) => a.top - b.top);
     return {
       width: base.width,
       height: base.height,
       top: band.top - base.top - 3,
       bottom: band.bottom - base.top + 3,
       gaps,
+      rows,
       at,
       from: (live.links || []).map((link) => endpoint(at[link.anchor], true)),
       cores: (live.cores || []).map((core) => endpoint(at[core.anchor], false)),
@@ -340,20 +381,29 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     for (const node of link.nodes) node.style.display = on ? "" : "none";
   }
 
-  function drawWires() {
+  /* The overlay is two layers over one geometry: residency wires, which
+     say where a vCPU lives, and paths, which say what the machine can
+     do. Measuring once here means neither layer can force a layout of
+     its own, and both stay in the same coordinate space. */
+  function drawOverlay() {
     if (!wires || folded()) return;
     if (!geometry) geometry = measure();
-    const links = live.links || [];
     if (!geometry) {
-      for (const link of links) showWire(link, false);
+      for (const link of live.links || []) showWire(link, false);
+      for (const edge of live.edges || []) showEdge(edge, false);
       return;
     }
     /* Rewriting the viewBox invalidates the whole overlay even when the
        value is identical, so it is only touched when it moves. */
     const box = `0 0 ${geometry.width} ${geometry.height}`;
     if (wires.getAttribute("viewBox") !== box) wires.setAttribute("viewBox", box);
+    drawWires();
+    drawEdges();
+  }
+
+  function drawWires() {
     const { top, bottom } = geometry;
-    links.forEach((link, index) => {
+    (live.links || []).forEach((link, index) => {
       /* A vCPU that is not resident anywhere has no core to point at,
          and an absent edge is the honest drawing of that. */
       const start = geometry.from[index];
@@ -391,13 +441,150 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     });
   }
 
+  /* ---------------- paths ---------------- */
+
+  /* One thin path per edge, appended after the wires so it draws in
+     front of them. Which blocks it joins and what watches it arrive in
+     topo.board; only the caption and the drawing are decided here. */
+  function buildEdges() {
+    live.edges = [];
+    const specs = topology?.board?.edges || [];
+    /* Two paths may join the same pair of blocks in opposite directions
+       — the guest's MMIO out and the vGIC's injection back. Drawn on one
+       column they would be a single line, so each pair is counted and
+       its members fanned apart. */
+    const crowd = new Map();
+    const key = (spec) => [spec.from, spec.to].sort().join("|");
+    for (const spec of specs) crowd.set(key(spec), (crowd.get(key(spec)) || 0) + 1);
+    const seen = new Map();
+    for (const spec of specs) {
+      const group = key(spec);
+      const rank = seen.get(group) || 0;
+      seen.set(group, rank + 1);
+      const line = document.createElementNS(NS, "path");
+      line.setAttribute("class", `edge ${spec.grade}`);
+      line.setAttribute("fill", "none");
+      /* The colour of the badge whose rows explain it, so a reader
+         crossing between board and log follows one colour. An edge with
+         no badge takes the board's own line colour. */
+      if (spec.badges?.length) line.style.setProperty("--ec", accentOf(spec.badges[0]));
+      const tip = document.createElementNS(NS, "title");
+      line.append(tip);
+      wires.append(line);
+      live.edges.push({
+        ...spec,
+        line,
+        tip,
+        shown: false,
+        d: "",
+        /* Centred on zero: one path stays straight, two split evenly. */
+        fan: (rank - (crowd.get(group) - 1) / 2) * 11,
+      });
+    }
+  }
+
+  /* A band spans its whole row, so pinning a path to the band's centre
+     would stack every path touching that layer on one column. The block
+     end supplies the x instead: each drop is vertical, separate, and
+     still lands inside the layer it names. */
+  const spans = (id) => id.startsWith("band:") || id === "mem";
+
+  /* The column of a band nearest `want` that no block sits in. */
+  function freeColumn(row, want) {
+    let best = null;
+    for (const [left, right] of row.free) {
+      if (want > left + 2 && want < right - 2) return want;
+      const at = (left + right) / 2;
+      if (best === null || Math.abs(at - want) < Math.abs(best - want)) best = at;
+    }
+    return best === null ? want : best;
+  }
+
+  function routeEdge(edge, from, to) {
+    const ay = (from.top + from.bottom) / 2;
+    const by = (to.top + to.bottom) / 2;
+    const x1 = (spans(edge.from) ? to.cx : from.cx) + edge.fan;
+    const x2 = (spans(edge.to) ? from.cx : to.cx) + edge.fan;
+    if (Math.abs(ay - by) < 8) {
+      /* Same row: an arc below both, rather than a line straight through
+         whatever sits between them. */
+      const under = Math.max(from.bottom, to.bottom) + 14;
+      return `M${x1},${from.bottom} Q${(x1 + x2) / 2},${under} ${x2},${to.bottom}`;
+    }
+    const down = ay < by;
+    const y1 = down ? from.bottom : from.top;
+    const y2 = down ? to.top : to.bottom;
+    const lo = Math.min(y1, y2);
+    const hi = Math.max(y1, y2);
+    /* Bands wholly between the two ends: the ones this path has to get
+       past. Adjacent blocks cross none, and the loop below collapses to
+       a single jog in the gutter between them. */
+    const crossed = geometry.rows.filter((row) => row.top > lo + 2 && row.bottom < hi - 2);
+    if (!down) crossed.reverse();
+    let cursor = y1;
+    let x = x1;
+    let d = `M${x1},${y1}`;
+    for (const row of crossed) {
+      const column = freeColumn(row, x);
+      if (Math.abs(column - x) > 1) {
+        d += ` V${(cursor + (down ? row.top : row.bottom)) / 2} H${column}`;
+        x = column;
+      }
+      cursor = down ? row.bottom : row.top;
+    }
+    if (Math.abs(x - x2) > 1) d += ` V${(cursor + y2) / 2} H${x2}`;
+    return `${d} V${y2}`;
+  }
+
+  function showEdge(edge, on) {
+    if (edge.shown === on) return;
+    edge.shown = on;
+    edge.line.style.display = on ? "" : "none";
+  }
+
+  function drawEdges() {
+    for (const edge of live.edges || []) {
+      const from = geometry.at[edge.from];
+      const to = geometry.at[edge.to];
+      if (!from || !to) {
+        showEdge(edge, false);
+        continue;
+      }
+      const d = routeEdge(edge, from, to);
+      if (edge.d !== d) {
+        edge.d = d;
+        edge.line.setAttribute("d", d);
+      }
+      put(edge.tip, edgeTitle(edge));
+      showEdge(edge, true);
+    }
+  }
+
+  /* What the path is, and how well it is seen. Never how often: the
+     syndrome latches only the last trap and the in-flight list is a
+     sample, so a count here would be a number nobody measured. */
+  function edgeTitle(edge) {
+    const name = EDGE_TEXT[edge.id] || edge.id;
+    if (edge.grade === "console") return `${name} — 콘솔 이벤트 · 시각 정확`;
+    if (edge.grade === "poll") {
+      const hz = rate(edge.topic);
+      return `${name} — ${edge.topic} 표본${hz ? ` · S ${hz}Hz` : ""}`;
+    }
+    return `${name} — 관측 없음 · 구조만 표시`;
+  }
+
   /* ---------------- skeleton ---------------- */
 
+  /* A band is an anchor too. A path that belongs to a whole privilege
+     layer — every guest traps — points at the band rather than at eight
+     rows, because eight lines saying the same thing hide the one thing
+     they have in common. */
   function layer(title, caption, className) {
     const label = el("div", `layer-label${className === "live" ? " live" : ""}`, title);
     label.append(el("small", "", caption));
     const band = el("div", `band${className ? ` ${className}` : ""}`);
     bands.append(label, band);
+    anchor(`band:${title.toLowerCase()}`, band);
     return band;
   }
 
@@ -737,6 +924,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
       }
     }
     buildWires();
+    buildEdges();
     whereSig = null;
     invalidate();
     watch.disconnect();
@@ -1062,7 +1250,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     /* A vCPU that is nowhere loses its wire until the next switch-in. */
     if (moved) {
       relink();
-      drawWires();
+      drawOverlay();
     }
   }
 

@@ -265,6 +265,42 @@ class BoardAnchorTest(unittest.TestCase):
         self.assertNotRegex(bodies["measure"], r"live\.links\[|\.node\.getBounding")
         self.assertRegex(bodies["measure"], r"for \(const \{ id, node \} of live\.anchors")
 
+    def test_the_board_registers_every_anchor_the_bridge_points_at(self):
+        # The bridge names endpoints; the board has to have them. An id
+        # nothing registered resolves to no box and the path is dropped
+        # without a word — the exact silence the table exists to break.
+        from novakit.services.workbench import paths
+
+        source = (UI / "js" / "board.mjs").read_text()
+        registered = set(re.findall(r'anchor\("([\w:]+)"', source))
+        # Bands take their id from the layer's own title.
+        registered |= {f"band:{title.lower()}" for title in re.findall(r'layer\("(\w+)"', source)}
+        registered |= set(re.findall(r'chip\(band, "(\w+)"', source))
+        # Strip segments are `<strip label>:<region kind>`, and the kinds
+        # are exactly the ones the caption table knows — read from that
+        # table alone, so a caption for something else cannot stand in
+        # for a segment the board never actually anchors.
+        labels = [label.lower() for label in re.findall(r'strip\(column, "(\w+)"', source)]
+        table = re.search(r"const KIND_TEXT = \{(.*?)\n\};", source, re.S)
+        self.assertIsNotNone(table, "segment caption table not found")
+        kinds = re.findall(r"^  (\w+):", table.group(1), re.M)
+        self.assertRegex(source, r"anchor\(`\$\{label\.toLowerCase\(\)\}:\$\{region\.kind\}`")
+        registered |= {f"{label}:{kind}" for label in labels for kind in kinds}
+        for name in (*paths.BANDS, *paths.CHIPS, *paths.SEGMENTS):
+            with self.subTest(anchor=name):
+                self.assertIn(name, registered)
+
+    def test_every_path_the_bridge_publishes_has_a_caption(self):
+        # An uncaptioned edge still draws; its tooltip just reads as an
+        # internal id, which is the UI leaking its wire format.
+        from novakit.services.workbench import paths
+
+        source = (UI / "js" / "board.mjs").read_text()
+        table = re.search(r"const EDGE_TEXT = \{(.*?)\n\};", source, re.S)
+        self.assertIsNotNone(table, "edge caption table not found")
+        captioned = set(re.findall(r"^  (\w+):", table.group(1), re.M))
+        self.assertEqual({edge.id for edge in paths.EDGES}, captioned)
+
 
 TYPE_SCALE = ("--fs-title", "--fs-body", "--fs-meta", "--fs-label")
 # `font-size: X` and the size slot of the `font:` shorthand.

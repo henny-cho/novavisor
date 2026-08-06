@@ -259,6 +259,14 @@ b{font-weight:700}
 .pe-layer{background:color-mix(in srgb,var(--raised) 64%,transparent);border-color:var(--line)}
 .mem-layer{padding-bottom:4px}
 .wires{position:absolute;inset:0;pointer-events:none;z-index:3}
+/* Paths through the machine. Thin and quiet next to the residency wires:
+   a wire says where a vCPU lives right now, a path says what the machine
+   can do, and the two must not read as the same kind of statement.
+   The stroke states the grade — see the header legend. */
+.edge{stroke:var(--ec,var(--ink3));fill:none;stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}
+.edge.console{opacity:.5}
+.edge.poll{opacity:.42;stroke-dasharray:3 3}
+.edge.none{opacity:.22;stroke:var(--ink3);stroke-dasharray:1 4}
 
 /* The residency summary: which vCPU is on which core, first, because it
    is the one fact the rest of the board is read against. */
