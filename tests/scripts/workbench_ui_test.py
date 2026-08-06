@@ -53,6 +53,47 @@ class UiStructureTest(unittest.TestCase):
                     self.assertNotIn(f"'{badge.value}'", text)
 
 
+TYPE_SCALE = ("--fs-title", "--fs-body", "--fs-meta", "--fs-label")
+# `font-size: X` and the size slot of the `font:` shorthand.
+FONT_SIZE = re.compile(r"font-size:\s*([^;}]+)|font:\s*(?:[\w\s]*?\s)?((?:var\(--fs-[\w-]+\)|[\d.]+px))")
+# A wordmark is not text on the page; it is allowed its own size.
+SCALE_EXEMPT = (".brand .nv",)
+
+
+class TypeScaleTest(unittest.TestCase):
+    """Four sizes, no fifth.
+
+    A dense screen reads as noise long before any single value is too
+    small, and the drift is invisible in review — the numbers differ by
+    half a pixel. Naming the four roles makes a fifth size fail here.
+    """
+
+    def test_the_scale_is_declared_once(self):
+        css = (UI / "css" / "workbench.css").read_text()
+        declared = dict(CUSTOM_PROPERTY.findall(css))
+        for name in TYPE_SCALE:
+            with self.subTest(token=name):
+                self.assertIn(name, declared)
+        values = [declared[name].strip() for name in TYPE_SCALE]
+        self.assertEqual(len(set(values)), len(values), f"duplicate steps: {values}")
+
+    def test_every_rule_picks_a_step(self):
+        css = (UI / "css" / "workbench.css").read_text()
+        for rule in css.split("}"):
+            selector = rule.rsplit("{", 1)[0].strip().splitlines()[-1:] or [""]
+            if selector[0].strip() in SCALE_EXEMPT:
+                continue
+            for explicit, shorthand in FONT_SIZE.findall(rule):
+                size = (explicit or shorthand).strip()
+                if not size or size == "inherit":
+                    continue
+                with self.subTest(selector=selector[0].strip(), size=size):
+                    self.assertTrue(
+                        any(f"var({name})" in size for name in TYPE_SCALE),
+                        f"{size} is not a step of the scale",
+                    )
+
+
 SIDE_COLUMN = re.compile(r'<aside class="side">(.*?)</aside>', re.S)
 SIDE_RULE = re.compile(r"\.side\s*\{([^}]*)\}")
 GRID_ROWS = re.compile(r"grid-template-rows:([^;}]*)")
