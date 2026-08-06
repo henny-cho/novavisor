@@ -534,7 +534,7 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
 
         state = {"fail": True}
 
-        def factory(_elf, _shm):
+        def factory(_elf, _shm, _base):
             if state["fail"]:
                 raise RuntimeError("boom")
             return GoodProvider()
@@ -578,7 +578,7 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
 
         instances: list[Provider] = []
 
-        def factory(_elf, _shm):
+        def factory(_elf, _shm, _base):
             provider = Provider()
             instances.append(provider)
             if len(instances) == 1:

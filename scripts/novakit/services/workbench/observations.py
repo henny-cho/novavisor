@@ -11,11 +11,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# Board facts the labels below derive from; the manifest check asserts
-# the derived extents against the DWARF so drift cannot hide here.
-MAX_CPUS = 2
-MAX_GUESTS = 4
-MAX_VCPUS = 8
+from ...image import abi
+from . import hardware
+
+# Board facts the labels below derive from, read from the headers that
+# define them; the manifest check then asserts the derived extents
+# against the DWARF, so a rebuilt firmware cannot drift from either.
+_BOARD = hardware.platform()
+MAX_CPUS = _BOARD["NOVA_BOARD_SMP_CPUS"]
+MAX_GUESTS = abi.MAX_GUESTS
+# vCPU slots are flat: every guest owns a fixed stride of them.
+MAX_VCPUS = abi.MAX_GUESTS * abi.MAX_VCPUS_PER_VM
 
 # Deadline value that means "not armed" in soft_timer's queue.
 NO_DEADLINE = (1 << 64) - 1
@@ -63,7 +69,7 @@ OBSERVATIONS: tuple[Obs, ...] = (
     Obs("dev.dma", "nova::dma_device::(anonymous)::g_registry", rate_hz=5),
     Obs("dev.watchdog", "nova::(anonymous)::g_update_sequence", rate_hz=2),
     # IVC panel — the shared page is guest memory, not an EL2 global.
-    Obs("ivc.page", "", pa=0x6000_0000, layout="ivc_ring_page", hex=True),
+    Obs("ivc.page", "", pa=_BOARD["NOVA_BOARD_IVC_SHM_PA"], layout="ivc_ring_page", hex=True),
 )
 
 

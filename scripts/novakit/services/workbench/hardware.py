@@ -51,6 +51,30 @@ def inventory_path(board: str = DEFAULT_BOARD) -> Path:
     return BOARD_DIR / board / "device_inventory.yml"
 
 
+def platform(board: str = DEFAULT_BOARD) -> dict[str, int]:
+    """The board numbers the observation layer needs before there is any
+    picture to draw: where the machine's RAM aperture starts (QEMU backs
+    exactly that span with the file the bridge mmaps, so a physical
+    address is an offset into it), how many PEs the scheduler runs on,
+    and where the IVC page sits.
+
+    Same headers `board_map` reads — a value typed into the bridge
+    instead would read the wrong offset on any board but this one.
+    """
+    try:
+        return abi.read_defines(
+            board_layout_header(board),
+            [
+                "NOVA_BOARD_PHYS_RAM_BASE",
+                "NOVA_BOARD_PHYS_RAM_SIZE",
+                "NOVA_BOARD_SMP_CPUS",
+                "NOVA_BOARD_IVC_SHM_PA",
+            ],
+        )
+    except ValueError as error:
+        sys.exit(f"nova workbench: {error}")
+
+
 def load_inventory(path: Path) -> dict:
     try:
         import yaml

@@ -15,9 +15,52 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit.services.workbench import checks, elfsym, observations  # noqa: E402
+from novakit.services.workbench import (  # noqa: E402
+    checks,
+    elfsym,
+    hardware,
+    observations,
+    snapshot,
+)
 
 ELF = REPO / "build" / "aarch64-debug" / "novavisor.elf"
+
+
+class PageLayoutTest(unittest.TestCase):
+    """Guest memory carries no DWARF, so the one layout the decoder is
+    told rather than shown has to be held to the board map instead."""
+
+    def test_a_pa_declared_page_sits_in_a_published_region(self):
+        # An address the bridge reads that the board never claims is a
+        # window into whatever happens to be there.
+        regions = hardware.board_map()["regions"]["pa"]
+        for obs in observations.OBSERVATIONS:
+            if obs.pa is None:
+                continue
+            size = snapshot.PAGE_LAYOUTS[obs.layout].size
+            with self.subTest(topic=obs.topic):
+                home = [
+                    region
+                    for region in regions
+                    if region["base"] <= obs.pa
+                    and obs.pa + size <= region["base"] + region["size"]
+                ]
+                self.assertEqual(len(home), 1, f"{obs.pa:#x} +{size:#x} is in no one region")
+                self.assertEqual(home[0]["kind"], hardware.KIND_SHARED)
+
+    def test_the_ivc_rings_tile_the_shared_page(self):
+        # Both rings inside the page, neither overlapping the other: the
+        # firmware's own invariant, checked against its own header.
+        page = snapshot.PAGE_LAYOUTS["ivc_ring_page"]
+        rings = sorted(page.fields, key=lambda field: field.offset)
+        self.assertEqual([field.name for field in rings], ["ring0", "ring1"])
+        for ahead, behind in zip(rings, rings[1:], strict=False):
+            self.assertLessEqual(ahead.offset + ahead.type.size, behind.offset)
+        last = rings[-1]
+        self.assertLessEqual(last.offset + last.type.size, page.size)
+        slots = {field.name: field for field in last.type.fields}["slots"]
+        # Capacity == slot count, and the indices wrap by truncation.
+        self.assertEqual(slots.type.count & (slots.type.count - 1), 0)
 
 
 @unittest.skipUnless(ELF.is_file(), "debug ELF not built")

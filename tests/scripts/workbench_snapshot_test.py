@@ -11,10 +11,20 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit.services.workbench import elfsym, snapshot  # noqa: E402
+from novakit.services.workbench import elfsym, hardware, snapshot  # noqa: E402
 from novakit.services.workbench.observations import OBSERVATIONS, Obs  # noqa: E402
 
 ELF = REPO / "build" / "aarch64-debug" / "novavisor.elf"
+RAM_BASE = hardware.platform()["NOVA_BOARD_PHYS_RAM_BASE"]
+
+
+def _observed_top() -> int:
+    """Highest physical address any observation reaches."""
+    return max(
+        obs.pa + snapshot.PAGE_LAYOUTS[obs.layout].size
+        for obs in OBSERVATIONS
+        if obs.pa is not None
+    )
 
 
 class FakeProvider:
@@ -81,14 +91,15 @@ class ElfRamProviderTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             ram_path = Path(directory) / "guest-ram"
             with ram_path.open("wb") as ram:
-                # Sparse; must span the PA-declared IVC page (+512 MiB),
-                # which the provider's size check now covers too.
-                ram.truncate(0x6000_1000 - snapshot.RAM_BASE)
-                ram.seek(sched.address - snapshot.RAM_BASE)
+                # Sparse; must span the PA-declared IVC page, which the
+                # provider's size check covers too. Both ends come from
+                # the manifest, so neither is a number typed in here.
+                ram.truncate(_observed_top() - RAM_BASE)
+                ram.seek(sched.address - RAM_BASE)
                 # CpuSched: current=1, fp=kNoOwner, fp_trap=1, idling=0
                 ram.write(struct.pack("<QQ??6x", 1, (1 << 64) - 1, True, False))
 
-            provider = snapshot.ElfRamProvider(ELF, ram_path)
+            provider = snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE)
             self.addCleanup(provider.close)
             observed = {obs.topic: obs for obs in OBSERVATIONS}
             cpus = provider.read(observed["sched.cpu"])
@@ -107,7 +118,7 @@ class ElfRamProviderTest(unittest.TestCase):
             ram_path = Path(directory) / "guest-ram"
             ram_path.write_bytes(b"\0" * 4096)
             with self.assertRaises(ValueError):
-                snapshot.ElfRamProvider(ELF, ram_path)
+                snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE)
 
 
 if __name__ == "__main__":
