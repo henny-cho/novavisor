@@ -68,7 +68,9 @@
         <div class="cards" id="cards"></div>
       </section>
       <section class="pane">
-        <div class="pane-h">패널<div class="tabs wrap" id="panel-tabs" role="tablist" aria-label="실측 패널"></div></div>
+        <!-- A group of toggles, not a tablist: more than one panel may be
+             open at a time, which single-selection semantics cannot state. -->
+        <div class="pane-h">패널<div class="tabs wrap" id="panel-tabs" role="group" aria-label="실측 패널"></div></div>
         <div class="panels" id="panels"></div>
       </section>
       <section class="pane">

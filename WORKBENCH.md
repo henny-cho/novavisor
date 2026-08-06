@@ -82,6 +82,13 @@ Panels render firmware globals decoded straight out of guest RAM while the
 machine runs. Field names come from the firmware's own debug info; values
 refresh at each topic's polling rate and only when they change.
 
+The buttons above the drawer are **independent toggles, not tabs** — switch
+on as many as you want and they stack in the order listed below, each with
+its own header and freshness stamp. Sizes differ by an order of magnitude
+(Sysreg is ten rows and only moves on a pause; the context dump is forty),
+so which combination fits is your call. The choice survives a reload, and
+only the panels you have open are rendered.
+
 | Panel | What it shows |
 |---|---|
 | **Scheduler** | per-pCPU current vCPU, FP ownership/trap, idling; per-slot power (`kOff/kOnPending/kOn`), run state, affinity, validity; slice ticks |
@@ -320,11 +327,16 @@ Rules the tests enforce and the design assumes:
   (`workbench_ui_test.py` greps for them).
 - A topic may feed several panels (the interest map is `topic → Set`;
   `sched.valid` feeds both Scheduler and Context).
+- **Open panels are a set, not a selection.** The strip is `role="group"` of
+  `aria-pressed` toggles — a `tablist` would promise single selection that
+  the drawer does not honour. A frame marks only the *visible* panels its
+  topic feeds (`dirty` is a `Set`), and `settle()` redraws exactly those
+  once per flush window, so cost tracks what changed, not what is open.
 - Display rules live in `fmt()`: sentinel `≥ 9e15` → `—`, booleans → `●`/`·`.
 
 Adding a panel = one more entry in `PANELS` (plus CSS if it needs new
-primitives). The drawer, tab wiring, freshness line, and topic routing are
-generic.
+primitives). The drawer, toggle wiring, header, freshness stamp and topic
+routing are generic.
 
 ### Testing and contracts
 

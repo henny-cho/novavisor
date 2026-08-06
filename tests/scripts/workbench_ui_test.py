@@ -86,16 +86,32 @@ class SideColumnLayoutTest(unittest.TestCase):
             self.assertIn("display:flex", declarations)
             self.assertRegex(css, r"\.side\s*>\s*\.pane:last-child\s*\{[^}]*flex:\s*1")
 
-    def test_the_panel_tab_strip_wraps(self):
-        # Unlike the console tabs (data-driven, at most a few), the panel
-        # tabs are a fixed set wider than the column. Scrolling them is
-        # invisible — `.tabs` hides its scrollbar — so they must wrap.
+
+class PanelStripTest(unittest.TestCase):
+    """The control strip over the measurement drawer."""
+
+    def strip(self) -> str:
         markup = (UI / "index.html").read_text()
-        strip = re.search(r'<div class="([^"]*)" id="panel-tabs"', markup)
-        self.assertIsNotNone(strip, "panel tab strip not found")
-        self.assertIn("wrap", strip.group(1).split())
+        found = re.search(r'<div class="([^"]*)" id="panel-tabs"[^>]*>', markup)
+        self.assertIsNotNone(found, "panel strip not found")
+        return found.group(0)
+
+    def test_the_strip_wraps(self):
+        # Unlike the console tabs (data-driven, at most a few), the panel
+        # controls are a fixed set wider than the column. Scrolling them is
+        # invisible — `.tabs` hides its scrollbar — so they must wrap.
+        self.assertIn("wrap", re.search(r'class="([^"]*)"', self.strip()).group(1).split())
         css = (UI / "css" / "workbench.css").read_text()
         self.assertRegex(css, r"\.tabs\.wrap\s*\{[^}]*flex-wrap:\s*wrap")
+
+    def test_the_strip_is_a_toggle_group(self):
+        # Several panels may be open at once. role="tablist" promises
+        # single selection to assistive tech and would be a lie the moment
+        # a second panel is switched on.
+        self.assertIn('role="group"', self.strip())
+        panels = (UI / "js" / "panels.mjs").read_text()
+        self.assertIn("aria-pressed", panels)
+        self.assertNotIn("aria-selected", panels)
 
 
 class TokenParityTest(unittest.TestCase):
