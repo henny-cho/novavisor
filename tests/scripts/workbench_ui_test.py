@@ -64,6 +64,23 @@ class UiStructureTest(unittest.TestCase):
                     self.assertNotIn(f"'{badge.value}'", text)
 
 
+class PanelReachTest(unittest.TestCase):
+    """Every published observation is on screen without being drawn."""
+
+    def test_unclaimed_topics_fall_to_a_panel_fed_by_the_manifest(self):
+        # Otherwise the default is that an observation is invisible until
+        # somebody writes a table for it, and a value can be polled for
+        # months with nobody able to see it. The fallback's topic list
+        # has to come from the manifest, not from a second list here.
+        source = (UI / "js" / "panels.mjs").read_text()
+        self.assertRegex(
+            source,
+            r"FALLBACK\.topics\s*=\s*Object\.keys\(topo\.observations",
+            "the fallback panel does not follow the observation manifest",
+        )
+        self.assertRegex(source, r"filter\(\(topic\)\s*=>\s*!claimed\.has\(topic\)\)")
+
+
 VIEW_HEADER = re.compile(r'<div class="view-h">(.*?)</div>\s*<div class="board"', re.S)
 # Any literal that looks like a hardware address or an interrupt number.
 HARD_ADDRESS = re.compile(r"0x[0-9a-fA-F]{6,}")
