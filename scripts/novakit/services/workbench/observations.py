@@ -53,7 +53,7 @@ OBSERVATIONS: tuple[Obs, ...] = (
     Obs("sched.slice", "nova::vcpu::g_slice_ticks", rate_hz=10),
     # Timer panel
     Obs("timer.queue", "nova::soft_timer::(anonymous)::g_queue", fields=("deadline", "armed"),
-        shape=derive.none_if_unset),
+        shape=derive.timer_armed),
     Obs("timer.programmed", "nova::soft_timer::(anonymous)::g_programmed",
         shape=derive.none_if_unset),
     Obs("timer.cntvoff", "nova::vcpu::g_cntvoff", rate_hz=2),

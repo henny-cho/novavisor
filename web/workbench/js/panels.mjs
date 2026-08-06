@@ -131,16 +131,13 @@ export function createPanels({ tabs, host }) {
         const programmed = value("timer.programmed") || [];
         queues.forEach((slots, cpu) => {
           body.append(section(`cpu${cpu} — programmed ${fmt(programmed[cpu])}`));
-          const armed = slots
-            .map((slot, index) => ({ ...slot, index }))
-            .filter((slot) => slot.armed);
           body.append(
             table(
               ["slot", "owner", "deadline"],
-              armed.map((slot) => [slot.index, timerSlots[slot.index] ?? "?", slot.deadline]),
+              slots.map((slot) => [slot.slot, timerSlots[slot.slot] ?? "?", slot.deadline]),
             ),
           );
-          if (!armed.length) body.append(el("div", "pnote", "armed 슬롯 없음"));
+          if (!slots.length) body.append(el("div", "pnote", "armed 슬롯 없음"));
         });
         const cntvoff = value("timer.cntvoff") || [];
         const generation = value("vm.generation") || [];

@@ -161,3 +161,27 @@ def syndrome_vocabulary(elf: Path) -> dict[str, dict[int, str]]:
         return {}
     finally:
         index.close()
+
+
+def timer_armed(value: object, info: elfsym.TypeInfo) -> object:
+    """The soft-timer queue as the deadlines it is actually holding.
+
+    Twenty-two slots per core travelled to report the two that were
+    armed — the rest are a kNoDeadline and a false, and every reader
+    dropped them on arrival. Only the armed ones travel now, each
+    carrying the slot it sits in so its owner label still resolves: the
+    slot table is published once in the topology, not per snapshot.
+
+    A deadline is passed through as it stands. An armed slot holding
+    kNoDeadline would be a firmware fault, and hiding it would be the
+    wrong favour.
+    """
+    del info
+    return [
+        [
+            {"slot": index, "deadline": slot.get("deadline")}
+            for index, slot in enumerate(cpu)
+            if slot.get("armed")
+        ]
+        for cpu in value
+    ]

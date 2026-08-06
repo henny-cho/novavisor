@@ -908,12 +908,12 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
 
   function renderTimer() {
     const queues = value("timer.queue") || [];
-    const total = queues[0]?.length ?? 0;
+    /* Only armed slots travel, so the size of the table they sit in
+       comes from the slot list the topology already publishes. */
+    const total = (topology?.timer_slots || []).length;
     /* Per core, named: joined by a slash the two counts read as one
        fraction of the slot table, which is not what they are. */
-    const armed = queues.map(
-      (slots, cpu) => `cpu${cpu} ${(slots || []).filter((slot) => slot?.armed).length}`,
-    );
+    const armed = queues.map((slots, cpu) => `cpu${cpu} ${(slots || []).length}`);
     put(
       live.chips.timer,
       armed.length ? `${armed.join(" · ")} / ${total} armed` : "타이머 관측 없음",

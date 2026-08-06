@@ -65,6 +65,34 @@ class NoneIfUnsetTest(unittest.TestCase):
             self.assertNotIn(topic, wearing)
 
 
+class TimerArmedTest(unittest.TestCase):
+    """The queue as the deadlines it holds, not as its whole table."""
+
+    QUEUE = elfsym.TypeInfo("array", 0, element=U64, count=22)
+
+    def test_only_armed_slots_travel_and_keep_their_index(self):
+        # The owner label is looked up by slot, so dropping the unarmed
+        # ones must not renumber the rest.
+        queue = [{"deadline": None, "armed": False}] * 22
+        queue[0] = {"deadline": 0x1A2B, "armed": True}
+        queue[14] = {"deadline": 0x3C4D, "armed": True}
+        (cpu,) = derive.timer_armed([queue], self.QUEUE)
+        self.assertEqual(cpu, [{"slot": 0, "deadline": 0x1A2B}, {"slot": 14, "deadline": 0x3C4D}])
+
+    def test_an_idle_core_sends_an_empty_list(self):
+        self.assertEqual(
+            derive.timer_armed([[{"deadline": None, "armed": False}] * 22], self.QUEUE), [[]]
+        )
+
+    def test_an_armed_slot_keeps_whatever_deadline_it_holds(self):
+        # An armed slot holding kNoDeadline is a firmware fault, and
+        # hiding it would be the wrong favour.
+        (cpu,) = derive.timer_armed(
+            [[{"deadline": (1 << 64) - 1, "armed": True}]], self.QUEUE
+        )
+        self.assertEqual(cpu, [{"slot": 0, "deadline": (1 << 64) - 1}])
+
+
 class VgicInflightTest(unittest.TestCase):
     """A list register decoded as the interrupt it is carrying."""
 
