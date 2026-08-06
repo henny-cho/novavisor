@@ -157,6 +157,261 @@ class BoardViewTest(unittest.TestCase):
         self.assertEqual(painters, claimed, f"painters no topic reaches: {painters - claimed}")
 
 
+def strip_js(source: str) -> str:
+    """Blank out comments and string bodies, keeping every offset.
+
+    Brace matching below has to skip a `{` that lives in a comment or a
+    template literal. Replacing rather than deleting keeps the text the
+    same length, so a reported position still points at real source.
+    """
+    out = list(source)
+    at, end = 0, len(source)
+    while at < end:
+        char = source[at]
+        if char == "/" and at + 1 < end and source[at + 1] in "/*":
+            block = source[at + 1] == "*"
+            close = source.find("*/", at + 2) if block else source.find("\n", at)
+            stop = end if close < 0 else close + (2 if block else 0)
+            for i in range(at, stop):
+                if out[i] != "\n":
+                    out[i] = " "
+            at = stop
+            continue
+        if char in "\"'`":
+            at += 1
+            while at < end and source[at] != char:
+                at += 2 if source[at] == "\\" else 1
+                if at <= end:
+                    continue
+            # The literal's body is blanked; nested ${} is balanced anyway.
+            at += 1
+            continue
+        at += 1
+    text = "".join(out)
+    for quote in "\"'`":
+        text = re.sub(
+            rf"{quote}(?:[^{quote}\\\n]|\\.)*{quote}",
+            lambda hit: " " * len(hit.group(0)),
+            text,
+        )
+    return text
+
+
+def function_bodies(source: str) -> dict[str, str]:
+    """Every `function name(...) {...}` body, by name."""
+    blank = strip_js(source)
+    bodies: dict[str, str] = {}
+    for head in re.finditer(r"\bfunction\s+(\w+)\s*\(", blank):
+        open_brace = blank.find("{", head.end())
+        if open_brace < 0:
+            continue
+        depth, at = 0, open_brace
+        while at < len(blank):
+            if blank[at] == "{":
+                depth += 1
+            elif blank[at] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            at += 1
+        bodies[head.group(1)] = source[open_brace : at + 1]
+    return bodies
+
+
+# Anything that makes the browser reflow to answer.
+LAYOUT_READ = re.compile(
+    r"\b(?:getBoundingClientRect|offset(?:Width|Height|Top|Left)"
+    r"|client(?:Width|Height|Top|Left)|scroll(?:Width|Height)|getComputedStyle)\b"
+)
+# Functions a snapshot can reach. Sizing and drag handlers are allowed to
+# measure: they run on a gesture, not on a value.
+DRAW_PATH = re.compile(r"^(?:render|paint|draw|flash|note|relink|residency|put)")
+
+
+class BoardDrawPathTest(unittest.TestCase):
+    """A snapshot must never make the browser reflow.
+
+    The board separates measuring from writing: geometry is read in
+    measure() and cached, and everything a topic can reach only writes
+    text. One getBoundingClientRect on that path costs a forced layout
+    per changed value — fourteen a batch, measured, before it was
+    separated — and nothing about the screen looks wrong when it does.
+    """
+
+    def test_no_function_a_snapshot_reaches_reads_layout(self):
+        bodies = function_bodies((UI / "js" / "board.mjs").read_text())
+        self.assertIn("measure", bodies, "board measure() not found")
+        self.assertRegex(bodies["measure"], LAYOUT_READ, "measure() stopped measuring")
+        reached = [name for name in bodies if DRAW_PATH.match(name)]
+        self.assertTrue(reached, "no draw-path functions found")
+        for name in sorted(reached):
+            with self.subTest(function=name):
+                self.assertNotRegex(bodies[name], LAYOUT_READ)
+
+
+class BoardAnchorTest(unittest.TestCase):
+    """Endpoints are named, and the names are registered."""
+
+    def test_every_endpoint_a_wire_uses_is_an_anchor_id(self):
+        # A wire end is an anchor id, not a node, so the draw path never
+        # touches the document. An id nothing registered measures to
+        # undefined and the line quietly collapses onto the origin.
+        source = (UI / "js" / "board.mjs").read_text()
+        self.assertRegex(source, r"function anchor\(id, node\)")
+        self.assertRegex(source, r"live\.anchors\.push\(\{ id, node \}\)")
+        # The registry is reset with the skeleton, before anything fills it.
+        self.assertRegex(source, r"live = \{ anchors: \[\] \}")
+        bodies = function_bodies(source)
+        self.assertNotRegex(bodies["measure"], r"live\.links\[|\.node\.getBounding")
+        self.assertRegex(bodies["measure"], r"for \(const \{ id, node \} of live\.anchors")
+
+    def test_the_board_registers_every_anchor_the_bridge_points_at(self):
+        # The bridge names endpoints; the board has to have them. An id
+        # nothing registered resolves to no box and the path is dropped
+        # without a word — the exact silence the table exists to break.
+        from novakit.services.workbench import paths
+
+        source = (UI / "js" / "board.mjs").read_text()
+        registered = set(re.findall(r'anchor\("([\w:]+)"', source))
+        # Bands take their id from the layer's own title.
+        registered |= {f"band:{title.lower()}" for title in re.findall(r'layer\("(\w+)"', source)}
+        registered |= set(re.findall(r'chip\(band, "(\w+)"', source))
+        # Strip segments are `<strip label>:<region kind>`, and the kinds
+        # are exactly the ones the caption table knows — read from that
+        # table alone, so a caption for something else cannot stand in
+        # for a segment the board never actually anchors.
+        labels = [label.lower() for label in re.findall(r'strip\(column, "(\w+)"', source)]
+        table = re.search(r"const KIND_TEXT = \{(.*?)\n\};", source, re.S)
+        self.assertIsNotNone(table, "segment caption table not found")
+        kinds = re.findall(r"^  (\w+):", table.group(1), re.M)
+        self.assertRegex(source, r"anchor\(`\$\{label\.toLowerCase\(\)\}:\$\{region\.kind\}`")
+        registered |= {f"{label}:{kind}" for label in labels for kind in kinds}
+        for name in (*paths.BANDS, *paths.CHIPS, *paths.SEGMENTS):
+            with self.subTest(anchor=name):
+                self.assertIn(name, registered)
+
+    def test_every_path_the_bridge_publishes_has_a_caption(self):
+        # An uncaptioned edge still draws; its tooltip just reads as an
+        # internal id, which is the UI leaking its wire format.
+        from novakit.services.workbench import paths
+
+        source = (UI / "js" / "board.mjs").read_text()
+        table = re.search(r"const EDGE_TEXT = \{(.*?)\n\};", source, re.S)
+        self.assertIsNotNone(table, "edge caption table not found")
+        captioned = set(re.findall(r"^  (\w+):", table.group(1), re.M))
+        self.assertEqual({edge.id for edge in paths.EDGES}, captioned)
+
+
+class FocusLayerTest(unittest.TestCase):
+    """Two reasons to hide a row, kept apart."""
+
+    def test_the_board_narrowing_is_not_the_readers_muting(self):
+        # Folded into one set, clearing the focus would un-mute chips the
+        # reader had switched off themselves — their state lost silently,
+        # looking like the log misbehaving rather than the board.
+        source = (UI / "js" / "events.mjs").read_text()
+        self.assertRegex(source, r"const muted = new Set\(\)")
+        self.assertRegex(source, r"let narrowed = null")
+        self.assertRegex(
+            source,
+            r"muted\.has\(name\)\s*\|\|\s*\(narrowed !== null && !narrowed\.has\(name\)\)",
+            "hiding no longer consults both layers",
+        )
+        # narrow() must never touch the reader's set.
+        body = function_bodies(source)["narrow"]
+        self.assertNotIn("muted", body, "narrowing writes the reader's own filter")
+
+    def test_focus_derives_its_badges_from_the_published_paths(self):
+        # A hand-written block-to-subsystem table would be a second copy
+        # of what the path table already says, drifting the moment an
+        # edge is added.
+        source = (UI / "js" / "board.mjs").read_text()
+        body = function_bodies(source)["badgesAt"]
+        self.assertIn("live.edges", body)
+        self.assertIn("edge.badges", body)
+
+
+class ConsoleReachTest(unittest.TestCase):
+    """One event, two readers, one parser."""
+
+    def test_a_classified_event_reaches_the_board_as_well_as_the_log(self):
+        # A path whose only evidence is a console line stays dark unless
+        # the board is handed the event, and nothing about the screen
+        # says why.
+        main = (UI / "js" / "main.mjs").read_text()
+        block = re.search(r'case "ev":(.*?)break;', main, re.S)
+        self.assertIsNotNone(block, "no console-event case in the frame dispatch")
+        self.assertIn("events.addEvent", block.group(1))
+        self.assertIn("boardView.note", block.group(1))
+
+    def test_the_board_does_not_read_console_text_itself(self):
+        # Interpreting the firmware's log is the bridge's, and a contract
+        # test already ties every rule there to a real firmware string. A
+        # pattern here would be a second parser outside that contract,
+        # drifting on its own. The board routes the badge and shows the
+        # message; it never asks what the message says.
+        source = (UI / "js" / "board.mjs").read_text()
+        blank = strip_js(source)
+        for applied in re.findall(r"\.(match|matchAll|exec|test|search)\s*\(", blank):
+            self.fail(f"board.mjs applies a pattern with .{applied}()")
+        body = function_bodies(source)["note"]
+        self.assertIn("byBadge", body, "the console path stopped routing by badge")
+        for literal in re.findall(r"/(?![/*])(?:[^/\\\n]|\\.)+/[gimsuy]*", strip_js(body)):
+            self.fail(f"the console path carries a regular expression: {literal}")
+
+
+PULSE_RULE = re.compile(r"\.edge\.([\w-]+)\s*\{\s*animation:\s*([\w-]+)")
+KEYFRAMES = re.compile(r"@keyframes\s+([\w-]+)")
+
+
+class PulseRestartTest(unittest.TestCase):
+    """A second piece of evidence has to show.
+
+    Re-adding a class an element already has does not restart a CSS
+    animation, so the board alternates between two. The catch is that an
+    animation is identified by its *name*: two classes resolving to one
+    set of keyframes leave the running animation untouched, and the
+    second pulse is invisible. Nothing throws — the board just quietly
+    stops reporting, which is why this is held here rather than left to
+    a browser nobody runs in CI.
+    """
+
+    def rules(self) -> dict[str, str]:
+        css = (UI / "css" / "workbench.css").read_text()
+        return dict(PULSE_RULE.findall(css))
+
+    def test_the_js_and_css_agree_on_the_class_names(self):
+        source = (UI / "js" / "board.mjs").read_text()
+        listed = re.search(r"const PULSE = \[(.*?)\];", source, re.S)
+        self.assertIsNotNone(listed, "pulse class list not found")
+        names = set(re.findall(r'"([\w-]+)"', listed.group(1)))
+        self.assertTrue(names)
+        self.assertEqual(names, set(self.rules()), "a pulse class nothing styles, or the reverse")
+
+    def test_each_pulse_class_names_its_own_animation(self):
+        animations = list(self.rules().values())
+        self.assertTrue(animations)
+        self.assertEqual(
+            len(animations), len(set(animations)),
+            f"two pulse classes share an animation name, so one cannot restart: {animations}",
+        )
+
+    def test_every_named_animation_exists(self):
+        css = (UI / "css" / "workbench.css").read_text()
+        declared = set(KEYFRAMES.findall(css))
+        for klass, animation in self.rules().items():
+            with self.subTest(pulse=klass):
+                self.assertIn(animation, declared)
+
+    def test_the_pulse_respects_reduced_motion(self):
+        css = (UI / "css" / "workbench.css").read_text()
+        block = re.search(r"@media \(prefers-reduced-motion:\s*reduce\)\s*\{(.*?)\n\}", css, re.S)
+        self.assertIsNotNone(block, "no reduced-motion rule for the pulse")
+        for klass in self.rules():
+            with self.subTest(pulse=klass):
+                self.assertIn(f".edge.{klass}", block.group(1))
+
+
 TYPE_SCALE = ("--fs-title", "--fs-body", "--fs-meta", "--fs-label")
 # `font-size: X` and the size slot of the `font:` shorthand.
 FONT_SIZE = re.compile(r"font-size:\s*([^;}]+)|font:\s*(?:[\w\s]*?\s)?((?:var\(--fs-[\w-]+\)|[\d.]+px))")

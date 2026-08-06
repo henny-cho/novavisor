@@ -58,6 +58,25 @@ export function vmSlot(guest, index) {
   return match ? Number(match[1]) : index;
 }
 
+/* Accents a subsystem name can be given. Severity keeps its own colours,
+   so the crit red is deliberately absent from this rotation.
+
+   Shared, because the event log and the board must agree: an edge is
+   drawn in the colour of the badge whose rows explain it, and a reader
+   crossing between the two is following one colour, not two. */
+export const ACCENTS = [
+  "var(--hyp)",
+  "var(--warn)",
+  "var(--violet)",
+  "var(--good)",
+  "var(--vm0)",
+  "var(--vm1)",
+  "var(--vm2)",
+  "var(--vm3)",
+];
+
+export const accentOf = (name) => ACCENTS[paletteIndex(name, ACCENTS.length)];
+
 /* Stable string → index into a small palette (FNV-1a). Chip colours are
    derived, never mapped by name, so a vocabulary change needs no UI edit. */
 export function paletteIndex(name, size) {

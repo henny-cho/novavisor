@@ -3,35 +3,31 @@
    the topology snapshot and its chip colour is derived from the name, so
    adding a subsystem needs no change here. */
 
-import { atBottom, clear, el, paletteIndex, stamp, toBottom, trim } from "./format.mjs";
+import { accentOf, atBottom, clear, el, stamp, toBottom, trim } from "./format.mjs";
 
 const ROW_CAP = 2000;
 /* UI-local chip for lifecycle rows: not part of the bridge taxonomy. */
 const LIFE = "LIFE";
-/* Derived chip accents. Severity keeps its own colours, so the crit red
-   is deliberately absent from this rotation. */
-const ACCENTS = [
-  "var(--hyp)",
-  "var(--warn)",
-  "var(--violet)",
-  "var(--good)",
-  "var(--vm0)",
-  "var(--vm1)",
-  "var(--vm2)",
-  "var(--vm3)",
-];
 
 export function createEvents({ list, filters, resetButton, clearButton }) {
   /* Badges the user switched off. */
   const muted = new Set();
+  /* Badges the board is asking to see, or null for "no narrowing".
+
+     A separate layer from `muted` on purpose: folding the board's choice
+     into the user's would mean clearing the focus restores chips the
+     user had switched off themselves. Two reasons to hide a row, kept
+     apart, so undoing one leaves the other exactly as it was. */
+  let narrowed = null;
   const chips = new Map();
+  const hidden = (name) => muted.has(name) || (narrowed !== null && !narrowed.has(name));
   let stick = true;
   let dirty = false;
   list.addEventListener("scroll", () => {
     stick = atBottom(list);
   });
 
-  const accent = (name) => (name === LIFE ? "var(--ink3)" : ACCENTS[paletteIndex(name, ACCENTS.length)]);
+  const accent = (name) => (name === LIFE ? "var(--ink3)" : accentOf(name));
 
   function placeholder() {
     if (list.childElementCount) return;
@@ -39,8 +35,18 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
   }
 
   function apply(name) {
-    const off = muted.has(name);
+    const off = hidden(name);
     for (const row of list.querySelectorAll(`[data-badge="${CSS.escape(name)}"]`)) row.hidden = off;
+  }
+
+  /* Show only these badges, or pass null to stop narrowing. What the
+     user muted stays muted either way. */
+  function narrow(names) {
+    narrowed = names === null ? null : new Set(names);
+    for (const row of list.children) {
+      if (row.dataset.badge) row.hidden = hidden(row.dataset.badge);
+    }
+    filters.classList.toggle("narrowed", narrowed !== null);
   }
 
   function makeChip(name) {
@@ -90,7 +96,7 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
         row.append(el("span", "ef", `${key}=${value}`));
       }
     }
-    row.hidden = muted.has(name);
+    row.hidden = hidden(name);
     list.append(row);
     trim(list, ROW_CAP);
     dirty = true;
@@ -141,5 +147,5 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
   clearButton.addEventListener("click", clearAll);
 
   placeholder();
-  return { setBadges, addEvent, addNotice, settle, clearAll };
+  return { setBadges, addEvent, addNotice, settle, clearAll, narrow };
 }

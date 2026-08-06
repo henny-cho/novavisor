@@ -259,6 +259,50 @@ b{font-weight:700}
 .pe-layer{background:color-mix(in srgb,var(--raised) 64%,transparent);border-color:var(--line)}
 .mem-layer{padding-bottom:4px}
 .wires{position:absolute;inset:0;pointer-events:none;z-index:3}
+/* Paths through the machine. Thin and quiet next to the residency wires:
+   a wire says where a vCPU lives right now, a path says what the machine
+   can do, and the two must not read as the same kind of statement.
+   The stroke states the grade — see the header legend. */
+.edge{stroke:var(--ec,var(--ink3));fill:none;stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}
+.edge.console{opacity:.5}
+.edge.poll{opacity:.42;stroke-dasharray:3 3}
+.edge.none{opacity:.22;stroke:var(--ink3);stroke-dasharray:1 4}
+/* A pulse: one shot, added as a class and gone when it ends. No frame
+   loop exists, so a board with nothing arriving animates nothing.
+
+   Two motions for two grades — a sampled delta marches in steps because
+   that is what a poll is, a console line runs smooth because its
+   timestamp is exact.
+
+   Each grade is written twice under two keyframe names, and the pair
+   must differ by NAME, not merely by selector. A CSS animation is
+   identified by its animation-name: swap the class for another that
+   resolves to the same name and the browser keeps the animation it
+   already has, mid-flight, so a second piece of evidence shows nothing.
+   Measured before this was split — the clock read 216ms, then 316ms,
+   never restarting. The duplication is the price of restarting without
+   the forced layout the usual trick needs. */
+/* Focus: everything not touching the chosen block steps back rather
+   than disappearing, so the reader keeps the shape of the machine while
+   reading one part of it. */
+.bands.focusing .blk,.bands.focusing .chip,.bands.focusing .seg{cursor:pointer}
+.bands .blk.dim,.bands .chip.dim,.bands .seg.dim{opacity:.28}
+.bands .blk.on,.bands .chip.on,.bands .seg.on{outline:1px solid var(--hyp);outline-offset:1px}
+.edge.off{opacity:.05}
+.filters.narrowed{border-left:2px solid var(--hyp);padding-left:5px}
+.edge.lit-a{animation:nv-lit-a 640ms steps(8,end) 1}
+.edge.lit-b{animation:nv-lit-b 640ms steps(8,end) 1}
+.edge.hit-a{animation:nv-hit-a 420ms ease-out 1}
+.edge.hit-b{animation:nv-hit-b 420ms ease-out 1}
+@keyframes nv-lit-a{from{stroke-dashoffset:48;opacity:.95;stroke-width:2}
+  to{stroke-dashoffset:0;opacity:.42;stroke-width:1.25}}
+@keyframes nv-lit-b{from{stroke-dashoffset:48;opacity:.95;stroke-width:2}
+  to{stroke-dashoffset:0;opacity:.42;stroke-width:1.25}}
+@keyframes nv-hit-a{from{opacity:.95;stroke-width:3}to{opacity:.5;stroke-width:1.25}}
+@keyframes nv-hit-b{from{opacity:.95;stroke-width:3}to{opacity:.5;stroke-width:1.25}}
+@media (prefers-reduced-motion:reduce){
+  .edge.lit-a,.edge.lit-b,.edge.hit-a,.edge.hit-b{animation-duration:1ms}
+}
 
 /* The residency summary: which vCPU is on which core, first, because it
    is the one fact the rest of the board is read against. */

@@ -20,6 +20,7 @@ from pathlib import Path
 
 from ...core import config
 from ...image import abi, dtb
+from . import paths
 
 BOARD_DIR = config.REPO / "src" / "hal" / "board"
 DEFAULT_BOARD = "qemu_virt"
@@ -229,6 +230,7 @@ def board_map(board: str = DEFAULT_BOARD) -> dict:
             values[define] = abi.read_define(layout_header, define)
         except ValueError:
             pass  # the board simply does not have this peripheral
+    blocks = _blocks(values, load_inventory(inventory_path(board)))
     return {
         "name": name,
         "cpus": values["NOVA_BOARD_SMP_CPUS"],
@@ -238,7 +240,8 @@ def board_map(board: str = DEFAULT_BOARD) -> dict:
         "max_guests": abi.MAX_GUESTS,
         "vcpu_stride": abi.MAX_VCPUS_PER_VM,
         "dtb_reserve": values["NOVA_GUEST_DTB_SIZE"],
-        "blocks": _blocks(values, load_inventory(inventory_path(board))),
+        "blocks": blocks,
+        "edges": paths.edges(values["NOVA_BOARD_SMP_CPUS"], [block["id"] for block in blocks]),
         "regions": {
             "pa": _physical_regions(values),
             "ipa": _intermediate_regions(values),
