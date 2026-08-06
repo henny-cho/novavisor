@@ -302,6 +302,58 @@ class BoardAnchorTest(unittest.TestCase):
         self.assertEqual({edge.id for edge in paths.EDGES}, captioned)
 
 
+PULSE_RULE = re.compile(r"\.edge\.([\w-]+)\s*\{\s*animation:\s*([\w-]+)")
+KEYFRAMES = re.compile(r"@keyframes\s+([\w-]+)")
+
+
+class PulseRestartTest(unittest.TestCase):
+    """A second piece of evidence has to show.
+
+    Re-adding a class an element already has does not restart a CSS
+    animation, so the board alternates between two. The catch is that an
+    animation is identified by its *name*: two classes resolving to one
+    set of keyframes leave the running animation untouched, and the
+    second pulse is invisible. Nothing throws — the board just quietly
+    stops reporting, which is why this is held here rather than left to
+    a browser nobody runs in CI.
+    """
+
+    def rules(self) -> dict[str, str]:
+        css = (UI / "css" / "workbench.css").read_text()
+        return dict(PULSE_RULE.findall(css))
+
+    def test_the_js_and_css_agree_on_the_class_names(self):
+        source = (UI / "js" / "board.mjs").read_text()
+        listed = re.search(r"const PULSE = \[(.*?)\];", source, re.S)
+        self.assertIsNotNone(listed, "pulse class list not found")
+        names = set(re.findall(r'"([\w-]+)"', listed.group(1)))
+        self.assertTrue(names)
+        self.assertEqual(names, set(self.rules()), "a pulse class nothing styles, or the reverse")
+
+    def test_each_pulse_class_names_its_own_animation(self):
+        animations = list(self.rules().values())
+        self.assertTrue(animations)
+        self.assertEqual(
+            len(animations), len(set(animations)),
+            f"two pulse classes share an animation name, so one cannot restart: {animations}",
+        )
+
+    def test_every_named_animation_exists(self):
+        css = (UI / "css" / "workbench.css").read_text()
+        declared = set(KEYFRAMES.findall(css))
+        for klass, animation in self.rules().items():
+            with self.subTest(pulse=klass):
+                self.assertIn(animation, declared)
+
+    def test_the_pulse_respects_reduced_motion(self):
+        css = (UI / "css" / "workbench.css").read_text()
+        block = re.search(r"@media \(prefers-reduced-motion:\s*reduce\)\s*\{(.*?)\n\}", css, re.S)
+        self.assertIsNotNone(block, "no reduced-motion rule for the pulse")
+        for klass in self.rules():
+            with self.subTest(pulse=klass):
+                self.assertIn(f".edge.{klass}", block.group(1))
+
+
 TYPE_SCALE = ("--fs-title", "--fs-body", "--fs-meta", "--fs-label")
 # `font-size: X` and the size slot of the `font:` shorthand.
 FONT_SIZE = re.compile(r"font-size:\s*([^;}]+)|font:\s*(?:[\w\s]*?\s)?((?:var\(--fs-[\w-]+\)|[\d.]+px))")

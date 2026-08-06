@@ -82,6 +82,23 @@ const EDGE_TEXT = {
   uart: "vuart → 물리 UART",
 };
 
+/* The classes a pulse cycles through: two per grade.
+
+   It alternates because re-adding a class the element already has does
+   not restart a CSS animation — the style change is coalesced and the
+   browser sees nothing change. The usual fix is to read a layout
+   property in between, which is the one thing this view never does.
+
+   Each class must resolve to a *differently named* set of keyframes, not
+   just a different selector: an animation is identified by its name, so
+   two classes sharing one name leave the running animation alone. The
+   CSS carries the pair; this only decides which is next.
+
+   The failure without it is silent — a second piece of evidence during a
+   pulse would show nothing, and the screen would read as though nothing
+   had happened. */
+const PULSE = ["lit-a", "lit-b", "hit-a", "hit-b"];
+
 /* Address-map segment captions, keyed by the kind the bridge assigns.
    The map states structure; the words for it belong to the UI. */
 const KIND_TEXT = {
@@ -135,6 +152,8 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
   let geometry = null;
   let where = new Map(); // vcpu slot -> cpu index it is resident on
   let whereSig = null;
+  let byTopic = new Map(); // topic -> paths it is evidence for
+  const lit = new Set(); // topics that arrived this batch
   let topology = null;
   let signature = null;
   let userSized = false;
@@ -448,6 +467,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
      topo.board; only the caption and the drawing are decided here. */
   function buildEdges() {
     live.edges = [];
+    byTopic = new Map();
     const specs = topology?.board?.edges || [];
     /* Two paths may join the same pair of blocks in opposite directions
        — the guest's MMIO out and the vGIC's injection back. Drawn on one
@@ -471,16 +491,36 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
       const tip = document.createElementNS(NS, "title");
       line.append(tip);
       wires.append(line);
-      live.edges.push({
+      const edge = {
         ...spec,
         line,
         tip,
         shown: false,
         d: "",
+        turn: 0,
         /* Centred on zero: one path stays straight, two split evenly. */
         fan: (rank - (crowd.get(group) - 1) / 2) * 11,
-      });
+      };
+      live.edges.push(edge);
+      if (spec.topic) {
+        if (!byTopic.has(spec.topic)) byTopic.set(spec.topic, []);
+        byTopic.get(spec.topic).push(edge);
+      }
     }
+  }
+
+  /* Light a path because evidence for it just arrived.
+
+     `exact` picks the motion, not the colour: a console line is precise
+     in time and runs smooth, while a snapshot delta marches in steps
+     because that is what a sample is. A path graded as polled still
+     gets the smooth motion when a console line is what lit it — the
+     better evidence wins for that one pulse. */
+  function flash(edge, exact) {
+    edge.turn ^= 1;
+    const next = PULSE[(exact ? 2 : 0) + edge.turn];
+    edge.line.classList.remove(...PULSE);
+    edge.line.classList.add(next);
   }
 
   /* A band spans its whole row, so pinning a path to the band's centre
@@ -1270,20 +1310,42 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
   }
   if (!folded() && window.innerHeight < SHORT_WINDOW) setFolded(true, false);
 
+  /* One listener for the whole overlay rather than one per path: a pulse
+     drops its own class when it ends, so nothing accumulates. Swapping
+     classes mid-flight cancels rather than ends an animation, so this
+     never fires for a pulse that has already been replaced. */
+  wires.addEventListener("animationend", (event) => {
+    if (event.target.classList.contains("edge")) event.target.classList.remove(...PULSE);
+  });
+
   return {
-    accepts: (topic) => topic in TOPICS,
+    /* Some topics are read for their value, some only as evidence that a
+       path was used, and some for both. `smp.mail` paints nothing and
+       still has to arrive, or the crosscall never lights. */
+    accepts: (topic) => topic in TOPICS || byTopic.has(topic),
     apply(frame) {
       if (frame.kind !== "snapshot") return;
       const data = frame.data && typeof frame.data === "object" ? frame.data : null;
       if (!data || data.values === undefined) return;
       latest.set(frame.topic, data.values);
-      /* A folded board costs nothing: no paint, no layout, no wires.
-         Unfolding paints every section from `latest`, so nothing is
-         lost by not tracking sections while hidden. */
+      /* A folded board costs nothing: no paint, no layout, no wires, and
+         no animation. Unfolding paints every section from `latest`, so
+         nothing is lost by not tracking sections while hidden — and a
+         pulse missed while hidden is a pulse nobody could have seen. */
       if (folded()) return;
       for (const section of TOPICS[frame.topic] || []) dirty.add(section);
+      /* Arrival is the delta. The bridge's change gate only sends a
+         topic whose value moved, so there is nothing to compare here. */
+      if (byTopic.has(frame.topic)) lit.add(frame.topic);
     },
     settle() {
+      /* At most one pulse per path per batch, which falls out of the
+         batch being the unit: fifty milliseconds of evidence is one
+         piece of news. */
+      for (const topic of lit) {
+        for (const edge of byTopic.get(topic) || []) flash(edge, false);
+      }
+      lit.clear();
       if (!dirty.size) return;
       const sections = [...dirty];
       dirty.clear();
