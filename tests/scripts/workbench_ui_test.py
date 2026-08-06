@@ -302,6 +302,35 @@ class BoardAnchorTest(unittest.TestCase):
         self.assertEqual({edge.id for edge in paths.EDGES}, captioned)
 
 
+class FocusLayerTest(unittest.TestCase):
+    """Two reasons to hide a row, kept apart."""
+
+    def test_the_board_narrowing_is_not_the_readers_muting(self):
+        # Folded into one set, clearing the focus would un-mute chips the
+        # reader had switched off themselves — their state lost silently,
+        # looking like the log misbehaving rather than the board.
+        source = (UI / "js" / "events.mjs").read_text()
+        self.assertRegex(source, r"const muted = new Set\(\)")
+        self.assertRegex(source, r"let narrowed = null")
+        self.assertRegex(
+            source,
+            r"muted\.has\(name\)\s*\|\|\s*\(narrowed !== null && !narrowed\.has\(name\)\)",
+            "hiding no longer consults both layers",
+        )
+        # narrow() must never touch the reader's set.
+        body = function_bodies(source)["narrow"]
+        self.assertNotIn("muted", body, "narrowing writes the reader's own filter")
+
+    def test_focus_derives_its_badges_from_the_published_paths(self):
+        # A hand-written block-to-subsystem table would be a second copy
+        # of what the path table already says, drifting the moment an
+        # edge is added.
+        source = (UI / "js" / "board.mjs").read_text()
+        body = function_bodies(source)["badgesAt"]
+        self.assertIn("live.edges", body)
+        self.assertIn("edge.badges", body)
+
+
 class ConsoleReachTest(unittest.TestCase):
     """One event, two readers, one parser."""
 

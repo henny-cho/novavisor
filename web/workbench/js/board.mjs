@@ -142,7 +142,7 @@ function evidence(kind, label) {
   return el("span", `src ${kind}`, label);
 }
 
-export function createBoard({ view, board, bands, wires, split, foldButton }) {
+export function createBoard({ view, board, bands, wires, split, foldButton, onFocus }) {
   const latest = new Map(); // topic -> value
   /* Nodes the tick writes into, filled in while the skeleton is built.
      Rebuilding markup instead would drop hover, selection and focus. */
@@ -156,6 +156,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
   let byTopic = new Map(); // topic -> paths it is evidence for
   let byBadge = new Map(); // console badge -> paths it is evidence for
   const lit = new Set(); // topics that arrived this batch
+  let focused = null; // anchor id the reader is looking at
   let topology = null;
   let signature = null;
   let userSized = false;
@@ -687,7 +688,52 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
      to the origin. */
   function anchor(id, node) {
     live.anchors.push({ id, node });
+    node.dataset.anchor = id;
     return id;
+  }
+
+  /* ---------------- focus ---------------- */
+
+  /* What a path joins, read off the published table. Focusing a block
+     keeps its neighbours lit; naming a band keeps everything in that
+     band lit, because a path to a layer is a path to all of it. */
+  function neighbours(id) {
+    const near = new Set([id]);
+    for (const edge of live.edges || []) {
+      if (edge.from === id) near.add(edge.to);
+      else if (edge.to === id) near.add(edge.from);
+    }
+    return near;
+  }
+
+  /* Badges of every path touching the block, so the log can be narrowed
+     to the subsystems that explain it. Derived from the same table the
+     lines are drawn from — a second list here would drift from it. */
+  function badgesAt(id) {
+    const names = new Set();
+    for (const edge of live.edges || []) {
+      if (edge.from !== id && edge.to !== id) continue;
+      for (const badge of edge.badges || []) names.add(badge);
+    }
+    return [...names];
+  }
+
+  function setFocus(id) {
+    focused = id;
+    bands.classList.toggle("focusing", Boolean(id));
+    const near = id ? neighbours(id) : null;
+    for (const entry of live.anchors || []) {
+      const node = entry.node;
+      if (node.classList.contains("band")) continue;
+      const band = node.parentElement?.dataset?.anchor;
+      const lit = !near || near.has(entry.id) || (band && near.has(band));
+      node.classList.toggle("dim", !lit);
+      node.classList.toggle("on", Boolean(id) && entry.id === id);
+    }
+    for (const edge of live.edges || []) {
+      edge.line.classList.toggle("off", Boolean(id) && edge.from !== id && edge.to !== id);
+    }
+    if (onFocus) onFocus(id ? badgesAt(id) : null);
   }
 
   function buildRoutes() {
@@ -974,6 +1020,8 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     clear(bands);
     bands.append(wires);
     live = { anchors: [] };
+    focused = null;
+    bands.classList.remove("focusing");
     if (!topology?.board) {
       bands.append(el("div", "empty", "보드 정보를 기다리는 중입니다."));
       return;
@@ -1362,6 +1410,21 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
      never fires for a pulse that has already been replaced. */
   wires.addEventListener("animationend", (event) => {
     if (event.target.classList.contains("edge")) event.target.classList.remove(...PULSE);
+  });
+
+  /* Click a block to see only what touches it; click the background or
+     press Escape to put everything back. Delegated, so blocks built and
+     rebuilt with the skeleton need no listeners of their own. */
+  bands.addEventListener("click", (event) => {
+    const hit = event.target.closest?.("[data-anchor]");
+    const id = hit && !hit.classList.contains("band") ? hit.dataset.anchor : null;
+    setFocus(id === focused ? null : id);
+  });
+  view.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && focused) {
+      event.stopPropagation();
+      setFocus(null);
+    }
   });
 
   return {

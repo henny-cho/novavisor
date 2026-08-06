@@ -282,6 +282,14 @@ b{font-weight:700}
    Measured before this was split — the clock read 216ms, then 316ms,
    never restarting. The duplication is the price of restarting without
    the forced layout the usual trick needs. */
+/* Focus: everything not touching the chosen block steps back rather
+   than disappearing, so the reader keeps the shape of the machine while
+   reading one part of it. */
+.bands.focusing .blk,.bands.focusing .chip,.bands.focusing .seg{cursor:pointer}
+.bands .blk.dim,.bands .chip.dim,.bands .seg.dim{opacity:.28}
+.bands .blk.on,.bands .chip.on,.bands .seg.on{outline:1px solid var(--hyp);outline-offset:1px}
+.edge.off{opacity:.05}
+.filters.narrowed{border-left:2px solid var(--hyp);padding-left:5px}
 .edge.lit-a{animation:nv-lit-a 640ms steps(8,end) 1}
 .edge.lit-b{animation:nv-lit-b 640ms steps(8,end) 1}
 .edge.hit-a{animation:nv-hit-a 420ms ease-out 1}

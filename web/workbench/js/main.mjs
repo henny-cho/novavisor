@@ -65,6 +65,10 @@ const boardView = createBoard({
   wires: ref("wires"),
   split: ref("split"),
   foldButton: ref("fold"),
+  /* Focusing a block narrows the log to the subsystems that explain it.
+     The board decides which those are, from the paths touching it; the
+     log keeps that separate from what the reader muted by hand. */
+  onFocus: (badges) => events.narrow(badges),
 });
 
 const panels = createPanels({ tabs: ref("panel-tabs"), host: ref("panels") });
