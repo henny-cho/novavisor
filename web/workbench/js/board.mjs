@@ -32,24 +32,26 @@ const DRAG_FLOOR = 220;
 /* Below this the console has no room left worth sharing. */
 const SHORT_WINDOW = 800;
 
-/* S-layer topics the board reads. Each is listed with the rate the
-   observation manifest polls it at, because a block that shows a
-   sampled value has to be able to say how coarse the sample is. */
+/* S-layer topics the board reads. Each carries the rate the observation
+   manifest polls it at — a block showing a sampled value has to be able
+   to say how coarse the sample is — and the sections it can change.
+
+   A snapshot repaints those sections and nothing else. Twenty scheduler
+   samples a second must not rewrite the address strip, and a topic that
+   paints nothing has no business being subscribed at all. */
 const TOPICS = {
-  "sched.cpu": 20,
-  "sched.slots": 20,
-  "sched.run": 20,
-  "sched.affinity": 2,
-  "sched.valid": 2,
-  "sched.slice": 10,
-  "timer.queue": 10,
-  "timer.programmed": 10,
-  "vm.generation": 2,
-  "ctx.trap": 2,
-  "dev.uart": 5,
-  "dev.dma": 5,
-  "ivc.page": 10,
-  "smp.online": 2,
+  "sched.cpu": { hz: 20, paints: ["routes", "vcpus", "cores"] },
+  "sched.run": { hz: 20, paints: ["vcpus"] },
+  "sched.affinity": { hz: 2, paints: ["vcpus"] },
+  "sched.slice": { hz: 10, paints: ["sched"] },
+  "timer.queue": { hz: 10, paints: ["timer"] },
+  "timer.programmed": { hz: 10, paints: ["cores"] },
+  "vm.generation": { hz: 2, paints: ["guests"] },
+  "ctx.trap": { hz: 2, paints: ["trap"] },
+  "dev.uart": { hz: 5, paints: ["vuart"] },
+  "dev.dma": { hz: 5, paints: ["devices"] },
+  "ivc.page": { hz: 10, paints: ["ivc"] },
+  "smp.online": { hz: 2, paints: ["routes", "cores"] },
 };
 
 /* Exception classes worth naming on sight; anything else shows its raw
@@ -109,7 +111,12 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
   /* Nodes the tick writes into, filled in while the skeleton is built.
      Rebuilding markup instead would drop hover, selection and focus. */
   let live = {};
-  let dirty = false;
+  const dirty = new Set(); // section names awaiting a repaint
+  /* Measured geometry, kept until something that can move it happens.
+     Null means "re-measure on the next draw". */
+  let anchors = null;
+  let where = new Map(); // vcpu slot -> cpu index it is resident on
+  let whereSig = null;
   let topology = null;
   let signature = null;
   let userSized = false;
@@ -168,10 +175,30 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
       }
     }
     if (!on) {
-      render();
+      /* Everything was measured at zero while the body was hidden. */
+      invalidate();
+      paintAll();
       fitHeight();
     }
   }
+
+  function invalidate() {
+    anchors = null;
+  }
+
+  /* Wires and height both depend on the laid-out box, which is only
+     right after the browser has reflowed — a resize handler that reads
+     it synchronously catches the previous frame's geometry, and
+     widening the window never fires a second event to correct it.
+
+     Blocks are watched alongside the grid: a band can keep its height
+     while a block inside it shrinks, which moves an anchor without
+     moving `bands`. */
+  const watch = new ResizeObserver(() => {
+    invalidate();
+    drawWires();
+    fitHeight();
+  });
 
   let dragging = false;
   split.addEventListener("pointerdown", (event) => {
@@ -198,16 +225,43 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
 
   /* ---------------- wiring ---------------- */
 
-  /* Route through the widest gap between blocks rather than over them:
-     a straight drop crosses the EL2 chips mid-word. A line already
-     clear of them is left alone. */
-  function channel(band, base, want) {
-    const kids = [...band.children].map((kid) => kid.getBoundingClientRect());
-    let best = null;
+  /* The board is measured here and nowhere else, so a snapshot can
+     never force a layout. What is read: the grid's own box, the EL2
+     band the wires thread through, the gaps between its chips, and one
+     endpoint per vCPU row and per core. */
+  function measure() {
+    const hyp = live.hypBand;
+    if (!hyp) return null;
+    const base = bands.getBoundingClientRect();
+    const band = hyp.getBoundingClientRect();
+    const at = (node, bottom) => {
+      const box = node.getBoundingClientRect();
+      return [box.left - base.left + box.width / 2, (bottom ? box.bottom : box.top) - base.top];
+    };
+    const gaps = [];
+    const kids = [...hyp.children].map((kid) => kid.getBoundingClientRect());
     for (let i = 1; i < kids.length; i += 1) {
       const left = kids[i - 1].right - base.left;
       const right = kids[i].left - base.left;
-      if (right - left < 4) continue;
+      if (right - left >= 4) gaps.push([left, right]);
+    }
+    return {
+      width: base.width,
+      height: base.height,
+      top: band.top - base.top - 3,
+      bottom: band.bottom - base.top + 3,
+      gaps,
+      from: (live.links || []).map((link) => at(link.from, true)),
+      cores: (live.cores || []).map((core) => at(core.node, false)),
+    };
+  }
+
+  /* Route through the widest gap between the EL2 chips rather than over
+     them: a straight drop crosses one mid-word. A line already clear of
+     them is left alone. */
+  function lane(want) {
+    let best = null;
+    for (const [left, right] of anchors.gaps) {
       if (want > left && want < right) return want;
       const at = (left + right) / 2;
       if (best === null || Math.abs(at - want) < Math.abs(best - want)) best = at;
@@ -223,64 +277,87 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     path.setAttribute("opacity", dashed ? ".8" : ".9");
   }
 
+  /* One set of SVG nodes per wire, created with the skeleton. A redraw
+     then rewrites `d` and two centres and nothing else: rebuilding
+     sixteen elements on every context switch is exactly the churn `put`
+     exists to avoid. */
+  function buildWires() {
+    clear(wires);
+    for (const link of live.links) {
+      const casing = document.createElementNS(NS, "path");
+      /* A casing in the background colour first, so the line stays
+         legible where it passes over a block. */
+      stroke(casing, "var(--bg)", false);
+      const line = document.createElementNS(NS, "path");
+      stroke(line, "var(--hyp)", true);
+      const tip = document.createElementNS(NS, "title");
+      line.append(tip);
+      const dots = [0, 1].map(() => {
+        const dot = document.createElementNS(NS, "circle");
+        dot.setAttribute("r", "2.4");
+        dot.setAttribute("fill", "var(--hyp)");
+        return dot;
+      });
+      Object.assign(link, { casing, line, tip, dots, nodes: [casing, line, ...dots] });
+      wires.append(...link.nodes);
+    }
+  }
+
+  function showWire(link, on) {
+    if (link.shown === on) return;
+    link.shown = on;
+    for (const node of link.nodes) node.style.display = on ? "" : "none";
+  }
+
   function drawWires() {
     if (!wires || folded()) return;
-    clear(wires);
+    if (!anchors) anchors = measure();
     const links = live.links || [];
-    const hyp = live.hypBand;
-    if (!links.length || !hyp) return;
-    const base = bands.getBoundingClientRect();
-    wires.setAttribute("viewBox", `0 0 ${base.width} ${base.height}`);
-    const band = hyp.getBoundingClientRect();
-    for (const link of links) {
+    if (!anchors) {
+      for (const link of links) showWire(link, false);
+      return;
+    }
+    /* Rewriting the viewBox invalidates the whole overlay even when the
+       value is identical, so it is only touched when it moves. */
+    const box = `0 0 ${anchors.width} ${anchors.height}`;
+    if (wires.getAttribute("viewBox") !== box) wires.setAttribute("viewBox", box);
+    const { top, bottom } = anchors;
+    links.forEach((link, index) => {
       /* A vCPU that is not resident anywhere has no core to point at,
          and an absent edge is the honest drawing of that. */
-      if (!link.to) continue;
-      const from = link.from.getBoundingClientRect();
-      const to = link.to.getBoundingClientRect();
-      const x1 = from.left - base.left + from.width / 2;
-      const y1 = from.bottom - base.top;
-      const x2 = to.left - base.left + to.width / 2;
-      const y2 = to.top - base.top;
+      const start = anchors.from[index];
+      const end = link.cpu === null ? null : anchors.cores[link.cpu];
+      if (!start || !end) {
+        showWire(link, false);
+        return;
+      }
+      const [x1, y1] = start;
+      const [x2, y2] = end;
       /* Right angles with filleted corners, laid in the gaps between
          bands: a diagonal jog reads as a stray mark and a sharp corner
          reads as a bracket, but a fillet reads as wiring. */
-      const top = band.top - base.top - 3;
-      const bottom = band.bottom - base.top + 3;
-      const lane = channel(hyp, base, (x1 + x2) / 2);
+      const gap = lane((x1 + x2) / 2);
       const r = 6;
       const bend = (x, y, target, dir) =>
         `Q${x},${y} ${x + dir * r},${y} H${target - dir * r} Q${target},${y} ${target},${y + r}`;
       const d =
-        Math.abs(lane - x1) < 2 * r || Math.abs(x2 - lane) < 2 * r
+        Math.abs(gap - x1) < 2 * r || Math.abs(x2 - gap) < 2 * r
           ? `M${x1},${y1} V${y2}`
-          : `M${x1},${y1} V${top - r} ${bend(x1, top, lane, Math.sign(lane - x1))}` +
-            ` V${bottom - r} ${bend(lane, bottom, x2, Math.sign(x2 - lane))} V${y2}`;
+          : `M${x1},${y1} V${top - r} ${bend(x1, top, gap, Math.sign(gap - x1))}` +
+            ` V${bottom - r} ${bend(gap, bottom, x2, Math.sign(x2 - gap))} V${y2}`;
 
-      /* A casing in the background colour first, so the line stays
-         legible where it passes over a block. */
-      const casing = document.createElementNS(NS, "path");
-      casing.setAttribute("d", d);
-      stroke(casing, "var(--bg)", false);
-      wires.append(casing);
-
-      const path = document.createElementNS(NS, "path");
-      path.setAttribute("d", d);
-      stroke(path, "var(--hyp)", true);
-      const tip = document.createElementNS(NS, "title");
-      tip.textContent = link.title;
-      path.append(tip);
-      wires.append(path);
-
-      for (const [cx, cy] of [[x1, y1], [x2, y2]]) {
-        const dot = document.createElementNS(NS, "circle");
-        dot.setAttribute("cx", cx);
-        dot.setAttribute("cy", cy);
-        dot.setAttribute("r", "2.4");
-        dot.setAttribute("fill", "var(--hyp)");
-        wires.append(dot);
+      if (link.d !== d) {
+        link.d = d;
+        link.casing.setAttribute("d", d);
+        link.line.setAttribute("d", d);
+        [[x1, y1], [x2, y2]].forEach(([cx, cy], side) => {
+          link.dots[side].setAttribute("cx", cx);
+          link.dots[side].setAttribute("cy", cy);
+        });
       }
-    }
+      put(link.tip, link.title);
+      showWire(link, true);
+    });
   }
 
   /* ---------------- skeleton ---------------- */
@@ -348,7 +425,19 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
       const node = el("div", `blk vmc ${span} v${guest.slot % VM_SLOTS}`);
       const name = String(guest.name || `vm${guest.slot}`);
       const meta = blockHead(node, `VM${guest.slot} ${name}`, "", evidence("s", "S 2Hz"));
+      /* Where the guest was loaded is a property of the run, not of any
+         sample: it is written once here and never touched by a tick. */
       const placement = el("div", "bv");
+      if (Number.isFinite(Number(guest.ipa))) {
+        placement.append(
+          document.createTextNode("IPA "),
+          el("em", "", hex(guest.ipa)),
+          document.createTextNode(` +${bytes(guest.size)} → PA `),
+          el("em", "", hex(guest.pa)),
+        );
+      } else {
+        placement.textContent = "창 정보 없음";
+      }
       node.append(placement);
       const vcpus = [];
       const count = Math.max(1, Number(guest.vcpus) || 1);
@@ -372,7 +461,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
         vcpus.push({ slot, row, dot, state, affinity });
       }
       band.append(node);
-      live.guests.push({ guest, node, meta, placement, vcpus });
+      live.guests.push({ guest, node, meta, vcpus });
     }
   }
 
@@ -396,6 +485,13 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
       vuart: chip(band, "vuart"),
       ivc: chip(band, "ivc"),
     };
+    /* Two trap lines, built once: the chip is a sixth of the band and a
+       third line makes the whole EL2 row taller than its neighbours. */
+    live.trapLines = [el("em"), el("br"), el("em")];
+    live.chips.trap.append(...live.trapLines);
+    /* ICH_VTR is not readable from either layer: the S manifest has no
+       vGIC entry and the gdb stub's register set has no ICH_*. */
+    live.chips.vgic.append(el("span", "pending", "LR · SPI 미관측"));
   }
 
   function buildCores() {
@@ -406,10 +502,13 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
       const node = el("div", `blk ${span}`);
       blockHead(node, `pCPU${cpu}`, topology?.board?.cpu || "", evidence("s", "S 20Hz"));
       const body = el("div", "bv");
+      const home = el("em", "", "없음");
+      const rest = document.createTextNode("");
+      body.append(document.createTextNode("거주 "), home, rest);
       const row = el("div", "perow");
       node.append(body, row);
       band.append(node);
-      live.cores.push({ node, body, row });
+      live.cores.push({ node, home, rest, row });
     }
   }
 
@@ -571,25 +670,55 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     buildInterconnect();
     buildDevices();
     buildMemory();
-    /* Anchor pairs for the residency wires, resolved once here so the
-       draw path never queries the document. */
+    /* One wire per vCPU, its lower end assigned by residency. The row
+       is held here so the draw path never queries the document. */
     live.links = [];
     for (const entry of live.guests || []) {
       for (const vcpu of entry.vcpus) {
-        live.links.push({ from: vcpu.row, to: null, slot: vcpu.slot, title: "" });
+        live.links.push({ from: vcpu.row, cpu: null, slot: vcpu.slot, title: "" });
       }
     }
+    buildWires();
+    whereSig = null;
+    invalidate();
+    watch.disconnect();
+    watch.observe(bands);
+    if (live.hypBand) watch.observe(live.hypBand);
+    for (const entry of live.guests || []) watch.observe(entry.node);
+    for (const core of live.cores || []) watch.observe(core.node);
   }
 
   /* ---------------- measured values ---------------- */
 
+  /* Residency is the one measured value that moves geometry: it decides
+     which core each wire lands on. Refreshing it here lets a paint tell
+     whether the wires need touching at all, so twenty identical
+     scheduler samples a second redraw nothing. */
   function residency() {
     const cpus = value("sched.cpu") || [];
-    const map = new Map(); // vcpu slot -> cpu index
+    const next = new Map(); // vcpu slot -> cpu index
+    const parts = [];
     cpus.forEach((cpu, index) => {
-      if (present(cpu?.current)) map.set(Number(cpu.current), index);
+      const current = present(cpu?.current) ? Number(cpu.current) : null;
+      if (current !== null) next.set(current, index);
+      parts.push(current === null ? "-" : current);
     });
-    return map;
+    where = next;
+    const sig = parts.join(",");
+    if (sig === whereSig) return false;
+    whereSig = sig;
+    return true;
+  }
+
+  function relink() {
+    for (const link of live.links || []) {
+      const cpu = where.get(link.slot);
+      link.cpu = cpu === undefined ? null : cpu;
+      link.title =
+        cpu === undefined
+          ? ""
+          : `s${link.slot} 거주 @ pCPU${cpu} — sched.cpu[${cpu}].current (S ${TOPICS["sched.cpu"].hz}Hz)`;
+    }
   }
 
   function renderRoutes() {
@@ -615,31 +744,28 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     });
   }
 
-  function renderGuests(where) {
+  function renderGuestMeta() {
     const generation = value("vm.generation") || [];
-    const run = value("sched.run") || [];
-    const power = value("sched.slots") || [];
-    const affinity = value("sched.affinity") || [];
     for (const entry of live.guests || []) {
       const { guest } = entry;
       const bits = [`vm${guest.slot}`];
       if (present(generation[guest.slot])) bits.push(`gen ${generation[guest.slot]}`);
       if (guest.uart && guest.uart !== "none") bits.push(guest.uart);
       put(entry.meta, bits.join(" · "));
-      clear(entry.placement);
-      if (Number.isFinite(Number(guest.ipa))) {
-        entry.placement.append(
-          document.createTextNode("IPA "),
-          el("em", "", hex(guest.ipa)),
-          document.createTextNode(` +${bytes(guest.size)} → PA `),
-          el("em", "", hex(guest.pa)),
-        );
-      } else {
-        entry.placement.textContent = "창 정보 없음";
-      }
+    }
+  }
+
+  /* The cell shows the scheduler's own run state and nothing else.
+     Falling back to the published power state would substitute a
+     different fact under the same word — the Scheduler panel keeps the
+     two in separate columns, which is where the comparison belongs. */
+  function renderVcpus() {
+    const run = value("sched.run") || [];
+    const affinity = value("sched.affinity") || [];
+    for (const entry of live.guests || []) {
       for (const vcpu of entry.vcpus) {
         const cpu = where.get(vcpu.slot);
-        const state = run[vcpu.slot]?.state ?? power[vcpu.slot] ?? "—";
+        const state = run[vcpu.slot]?.state ?? "—";
         put(vcpu.state, String(state).replace(/^k/, ""));
         const pinned = affinity[vcpu.slot];
         put(
@@ -655,8 +781,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     }
   }
 
-  /* One line per vCPU, at most two: the chip is a sixth of the band and
-     a third line makes the whole EL2 row taller than its neighbours. */
+  /* One line per vCPU, at most two — see the chip's two prebuilt rows. */
   function trapText() {
     const traps = value("ctx.trap") || [];
     const seen = [];
@@ -681,72 +806,72 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     };
   }
 
-  function renderChips() {
-    const chips = live.chips;
-    if (!chips) return;
-
-    const trap = trapText();
-    clear(chips.trap);
-    trap.lines.forEach((line, index) => {
-      if (index) chips.trap.append(el("br"));
-      chips.trap.append(el("em", "", line));
-    });
-    chips.trap.parentElement.title = trap.title
-      ? `${trap.title}\n\n각 vCPU의 마지막 트랩만 래치됩니다 — 빈도가 아닙니다.`
+  function renderTrap() {
+    const { lines, title } = trapText();
+    const [first, brk, second] = live.trapLines;
+    const more = lines.length > 1;
+    put(first, lines[0] || "");
+    if (more) put(second, lines[1]);
+    brk.hidden = !more;
+    second.hidden = !more;
+    const tip = title
+      ? `${title}\n\n각 vCPU의 마지막 트랩만 래치됩니다 — 빈도가 아닙니다.`
       : "";
+    const chip = live.chips.trap.parentElement;
+    if (chip.title !== tip) chip.title = tip;
+  }
 
+  function renderSched() {
     const slice = value("sched.slice");
-    put(chips.sched, present(slice) ? `RR · slice ${slice} ticks` : "RR");
+    put(live.chips.sched, present(slice) ? `RR · slice ${slice} ticks` : "RR");
+  }
 
+  function renderTimer() {
     const queues = value("timer.queue") || [];
     const armed = queues.map((slots) => (slots || []).filter((slot) => slot?.armed).length);
     const total = queues[0]?.length ?? 0;
     put(
-      chips.timer,
+      live.chips.timer,
       armed.length ? `armed ${armed.join(" / ")} of ${total}` : "타이머 관측 없음",
     );
+  }
 
-    /* ICH_VTR is not readable from either layer: the S manifest has no
-       vGIC entry and the gdb stub's register set has no ICH_*. */
-    clear(chips.vgic);
-    chips.vgic.append(el("span", "pending", "LR · SPI 미관측"));
-
+  function renderVuart() {
     const uarts = value("dev.uart") || [];
     const busy = uarts
       .map((uart, vm) => ({ vm, count: Number(uart?.count) || 0 }))
       .filter((entry) => entry.count > 0);
     put(
-      chips.vuart,
+      live.chips.vuart,
       busy.length ? busy.map((entry) => `vm${entry.vm} FIFO ${entry.count}`).join(" · ") : "FIFO 비어 있음",
     );
-
-    const page = value("ivc.page");
-    if (page) {
-      const rings = Object.entries(page).map(([name, ring]) => {
-        const width = ring.slots?.length || 0;
-        const used = (parseInt(ring.widx, 16) - parseInt(ring.ridx, 16)) >>> 0;
-        return `${name} ${Math.min(used, width)}/${width}`;
-      });
-      put(chips.ivc, rings.join(" · "));
-    } else {
-      put(chips.ivc, "IVC 관측 없음");
-    }
   }
 
-  function renderCores(where) {
+  function renderIvc() {
+    const page = value("ivc.page");
+    if (!page) {
+      put(live.chips.ivc, "IVC 관측 없음");
+      return;
+    }
+    const rings = Object.entries(page).map(([name, ring]) => {
+      const width = ring.slots?.length || 0;
+      const used = (parseInt(ring.widx, 16) - parseInt(ring.ridx, 16)) >>> 0;
+      return `${name} ${Math.min(used, width)}/${width}`;
+    });
+    put(live.chips.ivc, rings.join(" · "));
+  }
+
+  function renderCores() {
     const cpus = value("sched.cpu") || [];
     const online = value("smp.online") || [];
     const programmed = value("timer.programmed") || [];
     (live.cores || []).forEach((entry, index) => {
       const cpu = cpus[index] || {};
       const resident = [...where.entries()].find(([, at]) => at === index);
-      clear(entry.body);
-      entry.body.append(
-        document.createTextNode("거주 "),
-        el("em", "", resident ? `vm${vmOfSlot(resident[0])}.s${resident[0]}` : "없음"),
-        document.createTextNode(
-          ` · FP ${present(cpu.fp) ? `s${cpu.fp}` : "—"} · idling ${cpu.idling ? "예" : "아니오"}`,
-        ),
+      put(entry.home, resident ? `vm${vmOfSlot(resident[0])}.s${resident[0]}` : "없음");
+      put(
+        entry.rest,
+        ` · FP ${present(cpu.fp) ? `s${cpu.fp}` : "—"} · idling ${cpu.idling ? "예" : "아니오"}`,
       );
       const deadline = programmed[index];
       put(
@@ -777,35 +902,37 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     }
   }
 
-  function render() {
+  /* The sections a snapshot can repaint, and the only place a topic is
+     turned into work. Adding a value to the board means adding a
+     painter here and naming it in TOPICS — never widening an existing
+     one until it redraws the whole machine again. */
+  const painters = {
+    routes: renderRoutes,
+    guests: renderGuestMeta,
+    vcpus: renderVcpus,
+    trap: renderTrap,
+    sched: renderSched,
+    timer: renderTimer,
+    vuart: renderVuart,
+    ivc: renderIvc,
+    cores: renderCores,
+    devices: renderDevices,
+  };
+
+  function paint(sections) {
     if (folded() || !live.routes) return;
-    const where = residency();
-    renderRoutes();
-    renderGuests(where);
-    renderChips();
-    renderCores(where);
-    renderDevices();
-    /* Residency changes which core each wire points at, and a vCPU that
-       is nowhere loses its wire until the next switch-in. */
-    for (const link of live.links || []) {
-      const cpu = where.get(link.slot);
-      link.to = cpu === undefined ? null : live.cores[cpu]?.node;
-      link.title =
-        cpu === undefined
-          ? ""
-          : `s${link.slot} 거주 @ pCPU${cpu} — sched.cpu[${cpu}].current (S ${TOPICS["sched.cpu"]}Hz)`;
+    const moved = residency();
+    for (const name of sections) painters[name]();
+    /* A vCPU that is nowhere loses its wire until the next switch-in. */
+    if (moved) {
+      relink();
+      drawWires();
     }
-    drawWires();
   }
 
-  /* Wires and height both depend on the laid-out box, which is only
-     right after the browser has reflowed — a resize handler that reads
-     it synchronously catches the previous frame's geometry, and
-     widening the window never fires a second event to correct it. */
-  new ResizeObserver(() => {
-    drawWires();
-    fitHeight();
-  }).observe(bands);
+  function paintAll() {
+    paint(Object.keys(painters));
+  }
 
   try {
     const saved = Number(localStorage.getItem(SIZE_KEY));
@@ -826,19 +953,24 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
       const data = frame.data && typeof frame.data === "object" ? frame.data : null;
       if (!data || data.values === undefined) return;
       latest.set(frame.topic, data.values);
-      /* A folded board costs nothing: no render, no layout, no wires. */
-      if (!folded()) dirty = true;
+      /* A folded board costs nothing: no paint, no layout, no wires.
+         Unfolding paints every section from `latest`, so nothing is
+         lost by not tracking sections while hidden. */
+      if (folded()) return;
+      for (const section of TOPICS[frame.topic]?.paints || []) dirty.add(section);
     },
     settle() {
-      if (!dirty) return;
-      dirty = false;
+      if (!dirty.size) return;
+      const sections = [...dirty];
+      dirty.clear();
       try {
-        render();
+        paint(sections);
       } catch (error) {
         /* Values decode straight out of live guest RAM; a shape the
            board cannot walk redraws on the next tick instead of taking
-           the whole view down. */
-        clear(wires);
+           the whole view down. The wires go rather than stay pointing
+           at a residency that was never finished being read. */
+        for (const link of live.links || []) showWire(link, false);
       }
     },
     setTopology(topo) {
@@ -856,12 +988,14 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
       if (next === signature) return;
       signature = next;
       build();
-      render();
+      paintAll();
       fitHeight();
     },
     clearAll() {
       latest.clear();
-      render();
+      dirty.clear();
+      whereSig = null;
+      paintAll();
     },
   };
 }
