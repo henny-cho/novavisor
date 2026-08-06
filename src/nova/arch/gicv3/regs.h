@@ -97,6 +97,22 @@
 #define NOVA_GICR_ICFGR1     (NOVA_GICR_SGI_FRAME + 0x0C04)
 #define NOVA_GICR_IGRPMODR0  (NOVA_GICR_SGI_FRAME + 0x0D00)
 
+/* Virtual CPU interface list registers: ICH_LR<n>_EL2 (IHI 0069 §9.4.6).
+ * The state field is the entire contract between whatever fills a list
+ * register and whatever reads one back — the delivery logic that writes
+ * them, the entry path that loads them into hardware, and the bridge
+ * that decodes the shadow copy for a reader.
+ *
+ * Bare hex: no ULL suffix survives the assembler, so bit positions stay
+ * in the comments. */
+#define NOVA_ICH_LR_STATE_MASK     0xC000000000000000 /* bits 63:62; 00 = inactive */
+#define NOVA_ICH_LR_STATE_PENDING  0x4000000000000000
+#define NOVA_ICH_LR_STATE_ACTIVE   0x8000000000000000 /* acknowledged, not deactivated */
+#define NOVA_ICH_LR_GROUP1         0x1000000000000000 /* bit 60 */
+#define NOVA_ICH_LR_EOI            0x0000020000000000 /* bit 41: maintenance on EOI */
+#define NOVA_ICH_LR_PRIORITY_SHIFT 48
+#define NOVA_ICH_LR_VINTID_MASK    0xFFFFFFFF
+
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
 #endif /* NOVA_GICV3_REGS_H */

@@ -22,15 +22,19 @@ namespace nova::vgic {
 
 inline constexpr std::size_t kMaxLrs = 16; // architectural maximum
 
-// --- ICH_LR<n>_EL2 field encoding (Arm IHI 0069 §9.4.6) --------------------
+// --- ICH_LR<n>_EL2 field encoding --------------------------------------------
+// Field positions are architecture, so they live in the GICv3 register
+// header everything that programs or emulates a frame already shares.
+// Anything that reads a list register back — including the workbench
+// bridge, which cannot see this file — decodes from that one definition.
 
-inline constexpr std::uint64_t kLrStateMask     = 3ULL << 62U; // 00 = inactive
-inline constexpr std::uint64_t kLrStatePending  = 1ULL << 62U;
-inline constexpr std::uint64_t kLrStateActive   = 2ULL << 62U; // guest acknowledged, not yet deactivated
-inline constexpr std::uint64_t kLrGroup1        = 1ULL << 60U;
-inline constexpr std::uint64_t kLrPriorityShift = 48U;
-inline constexpr std::uint64_t kLrEoi           = 1ULL << 41U;
-inline constexpr std::uint64_t kLrVintidMask    = 0xFFFF'FFFFULL;
+inline constexpr std::uint64_t kLrStateMask     = NOVA_ICH_LR_STATE_MASK;
+inline constexpr std::uint64_t kLrStatePending  = NOVA_ICH_LR_STATE_PENDING;
+inline constexpr std::uint64_t kLrStateActive   = NOVA_ICH_LR_STATE_ACTIVE;
+inline constexpr std::uint64_t kLrGroup1        = NOVA_ICH_LR_GROUP1;
+inline constexpr std::uint64_t kLrPriorityShift = NOVA_ICH_LR_PRIORITY_SHIFT;
+inline constexpr std::uint64_t kLrEoi           = NOVA_ICH_LR_EOI;
+inline constexpr std::uint64_t kLrVintidMask    = NOVA_ICH_LR_VINTID_MASK;
 
 [[nodiscard]] constexpr auto make_lr(std::uint32_t vintid, std::uint8_t priority, bool maintenance_eoi = false) noexcept
     -> std::uint64_t {
