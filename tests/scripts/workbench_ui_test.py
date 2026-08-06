@@ -67,8 +67,10 @@ class UiStructureTest(unittest.TestCase):
 VIEW_HEADER = re.compile(r'<div class="view-h">(.*?)</div>\s*<div class="board"', re.S)
 # Any literal that looks like a hardware address or an interrupt number.
 HARD_ADDRESS = re.compile(r"0x[0-9a-fA-F]{6,}")
-# `"topic": { hz: N, paints: ["a", "b"] }`
-PAINTS = re.compile(r'"([\w.]+)":\s*\{[^}]*paints:\s*\[([^\]]*)\]')
+# `"topic": ["section", ...]`
+PAINTS = re.compile(r'"([\w.]+)":\s*\[([^\]]*)\]')
+# A sample rate written into the UI instead of read from the manifest.
+RATE_LITERAL = re.compile(r"\d+\s*Hz")
 
 
 class BoardViewTest(unittest.TestCase):
@@ -105,6 +107,14 @@ class BoardViewTest(unittest.TestCase):
         self.assertTrue(wanted)
         published = {obs.topic for obs in OBSERVATIONS}
         self.assertLessEqual(wanted, published, f"unpublished: {wanted - published}")
+
+    def test_the_board_states_no_sample_rate_of_its_own(self):
+        # A badge reading "S 20Hz" is a claim about the manifest. Written
+        # here it becomes a lie the moment a rate is tuned, and the
+        # screen goes on asserting it. The rate rides in topo.
+        source = (UI / "js" / "board.mjs").read_text()
+        stated = [hit for hit in RATE_LITERAL.findall(source) if not hit.startswith("$")]
+        self.assertFalse(stated, f"board.mjs states a rate: {stated}")
 
     def test_a_topic_repaints_named_sections_and_nothing_more(self):
         # Twenty scheduler samples a second must not redraw the address

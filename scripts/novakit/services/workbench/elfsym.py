@@ -128,6 +128,7 @@ class ElfIndex:
             if symbol.name:
                 self._symbols[symbol.name] = (symbol["st_value"], symbol["st_size"])
         self._variable_dies: dict[int, object] | None = None
+        self._enum_dies: dict[str, tuple[tuple[int, str], ...]] | None = None
         self._types: dict[int, TypeInfo] = {}
 
     def close(self) -> None:
@@ -144,7 +145,47 @@ class ElfIndex:
         info = self._type_of(die)
         return ResolvedSymbol(qualified, address, size or info.size, info)
 
+    def enum_labels(self, qualified: str) -> dict[int, str]:
+        """The enumerators of a firmware enum, by its qualified name.
+
+        The firmware's own enum is the vocabulary. A table of the same
+        names kept anywhere else drifts the first time a class is added,
+        and nothing notices — whereas a type that stops existing fails
+        here.
+        """
+        labels = self._enums().get(qualified)
+        if labels is None:
+            raise KeyError(f"enumeration not in DWARF: {qualified}")
+        return dict(labels)
+
     # ---------------- DWARF walking ----------------
+
+    def _enums(self) -> dict[str, tuple[tuple[int, str], ...]]:
+        if self._enum_dies is not None:
+            return self._enum_dies
+        table: dict[str, tuple[tuple[int, str], ...]] = {}
+
+        def walk(die, scope: str) -> None:
+            for child in die.iter_children():
+                name = _name_of(child)
+                if child.tag == "DW_TAG_enumeration_type":
+                    if not name:
+                        continue  # an unnamed enum has no name to ask for
+                    table.setdefault(
+                        f"{scope}{name}",
+                        tuple(
+                            (member.attributes["DW_AT_const_value"].value, _name_of(member))
+                            for member in child.iter_children()
+                            if member.tag == "DW_TAG_enumerator"
+                        ),
+                    )
+                elif child.tag in ("DW_TAG_namespace", "DW_TAG_structure_type", "DW_TAG_class_type"):
+                    walk(child, f"{scope}{name}::" if name else scope)
+
+        for cu in self._elf.get_dwarf_info().iter_CUs():
+            walk(cu.get_top_DIE(), "")
+        self._enum_dies = table
+        return table
 
     def _variables(self) -> dict[int, object]:
         """Address -> variable DIE for every namespace-level definition.

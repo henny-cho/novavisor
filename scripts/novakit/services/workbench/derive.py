@@ -12,13 +12,19 @@ observation knows which it is.
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
+from pathlib import Path
 
 from ...core import config
 from ...image import abi
 from . import elfsym
 
 Shape = Callable[[object, elfsym.TypeInfo], object]
+
+# The firmware enum the syndrome's class field indexes. Named here, read
+# from the image, published in the topology — never retyped.
+EC_ENUM = "nova::esr::ExceptionClass"
 
 # ICH_LR<n>_EL2 field positions, from the GICv3 register header the
 # firmware's delivery logic compiles against. One definition, so there
@@ -35,6 +41,14 @@ _LR = abi.read_defines(
 )
 _STATE_SHIFT = (_LR["NOVA_ICH_LR_STATE_MASK"] & -_LR["NOVA_ICH_LR_STATE_MASK"]).bit_length() - 1
 _STATE = {0: None, 1: "pending", 2: "active", 3: "pending+active"}
+
+# ESR_EL2 field positions, from the header esr.hpp derives its own
+# constants from. The class *names* are not here: they come from that
+# header's enum through DWARF, which the bridge can already read.
+_ESR = abi.read_defines(
+    config.REPO / "src" / "nova" / "arch" / "esr_fields.h",
+    ["NOVA_ESR_EC_SHIFT", "NOVA_ESR_EC_MASK", "NOVA_ESR_IL_SHIFT", "NOVA_ESR_ISS_MASK"],
+)
 
 
 def none_if_unset(value: object, info: elfsym.TypeInfo) -> object:
@@ -88,3 +102,62 @@ def vgic_inflight(value: object, info: elfsym.TypeInfo) -> object:
             )
         per_vcpu.append(live)
     return per_vcpu
+
+
+def trap_syndrome(value: object, info: elfsym.TypeInfo) -> object:
+    """The last trap each vCPU took, as the three words that identify it.
+
+    The Context panel wants all forty registers twice a second; the board
+    wants the syndrome current. One topic cannot serve both, so this one
+    keeps the three words that identify a trap and drops the rest — which
+    makes the faster poll cost less bandwidth than the slower one it
+    split from, not more.
+
+    The class number travels, not a name: the names are the firmware's
+    own enum, published once in the topology.
+
+    Frequency is still not claimed. The firmware latches the last trap
+    per vCPU, so a sample says what happened, never how often.
+    """
+    del info
+    out = []
+    for slot in value:
+        context = slot.get("ctx") if isinstance(slot, dict) else None
+        raw = int(context.get("esr", 0)) if context else 0
+        if not raw:  # nothing has trapped on this slot yet
+            out.append(None)
+            continue
+        out.append(
+            {
+                "esr": f"{raw:#x}",
+                "ec": (raw >> _ESR["NOVA_ESR_EC_SHIFT"]) & _ESR["NOVA_ESR_EC_MASK"],
+                "il": (raw >> _ESR["NOVA_ESR_IL_SHIFT"]) & 1,
+                "iss": f"{raw & _ESR['NOVA_ESR_ISS_MASK']:#x}",
+                "far": f"{int(context.get('far', 0)):#x}",
+                "elr": f"{int(context.get('elr', 0)):#x}",
+            }
+        )
+    return out
+
+
+@functools.cache
+def syndrome_vocabulary(elf: Path) -> dict[str, dict[int, str]]:
+    """Names for the syndrome's class field, from the built image.
+
+    The firmware's own enum is the vocabulary. Reading it costs a DWARF
+    walk, so it is cached per image — the enum cannot change without a
+    rebuild, and a rebuild writes a new file.
+
+    An image that is not there yet yields nothing rather than failing:
+    the topology is published before the first build finishes, and a
+    class shown as its number is still the truth.
+    """
+    if not elf.is_file():
+        return {}
+    index = elfsym.ElfIndex(elf)
+    try:
+        return {"esr_ec": index.enum_labels(EC_ENUM)}
+    except KeyError:
+        return {}
+    finally:
+        index.close()

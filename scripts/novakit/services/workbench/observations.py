@@ -56,8 +56,13 @@ OBSERVATIONS: tuple[Obs, ...] = (
         shape=derive.none_if_unset),
     Obs("timer.cntvoff", "nova::vcpu::g_cntvoff", rate_hz=2),
     Obs("vm.generation", "nova::vcpu::g_vm_generation", rate_hz=2),
-    # Context panel
+    # Context panel — the whole file, twice a second.
     Obs("ctx.trap", "nova::vcpu::g_vcpus", fields=("ctx",), rate_hz=2, hex=True),
+    # The board — the syndrome only, current. Five times the rate at a
+    # fraction of the bytes, because it carries three words per slot
+    # instead of forty.
+    Obs("ctx.syndrome", "nova::vcpu::g_vcpus", fields=("ctx",), rate_hz=10,
+        shape=derive.trap_syndrome),
     Obs("ctx.el1", "nova::vcpu::g_vcpus", fields=("el1",), rate_hz=2, hex=True),
     # PSCI / SMP panel
     Obs("smp.lifecycle", "nova::smp::g_lifecycle", rate_hz=5),
@@ -84,6 +89,16 @@ OBSERVATIONS: tuple[Obs, ...] = (
     # IVC panel — the shared page is guest memory, not an EL2 global.
     Obs("ivc.page", "", pa=_BOARD["NOVA_BOARD_IVC_SHM_PA"], layout="ivc_ring_page", hex=True),
 )
+
+
+def observation_rates() -> dict[str, float]:
+    """How often each topic is sampled, for the UI to say so.
+
+    A screen showing a sampled value has to be able to state how coarse
+    the sample is, and the manifest is the only place that knows. Written
+    into the UI instead, the two drift and the badge lies.
+    """
+    return {obs.topic: obs.rate_hz for obs in OBSERVATIONS}
 
 
 def timer_slot_labels() -> list[str]:

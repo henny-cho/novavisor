@@ -29,38 +29,27 @@ const DRAG_FLOOR = 220;
 /* Below this the console has no room left worth sharing. */
 const SHORT_WINDOW = 800;
 
-/* S-layer topics the board reads. Each carries the rate the observation
-   manifest polls it at — a block showing a sampled value has to be able
-   to say how coarse the sample is — and the sections it can change.
+/* S-layer topics the board reads, each with the sections it can change.
 
    A snapshot repaints those sections and nothing else. Twenty scheduler
    samples a second must not rewrite the address strip, and a topic that
-   paints nothing has no business being subscribed at all. */
-const TOPICS = {
-  "sched.cpu": { hz: 20, paints: ["routes", "vcpus", "cores"] },
-  "sched.run": { hz: 20, paints: ["vcpus"] },
-  "sched.affinity": { hz: 2, paints: ["vcpus"] },
-  "sched.slice": { hz: 10, paints: ["sched"] },
-  "timer.queue": { hz: 10, paints: ["timer"] },
-  "timer.programmed": { hz: 10, paints: ["cores"] },
-  "vm.generation": { hz: 2, paints: ["guests"] },
-  "ctx.trap": { hz: 2, paints: ["trap"] },
-  "dev.uart": { hz: 5, paints: ["vuart"] },
-  "dev.dma": { hz: 5, paints: ["devices"] },
-  "ivc.page": { hz: 10, paints: ["ivc"] },
-  "smp.online": { hz: 2, paints: ["routes", "cores"] },
-};
+   paints nothing has no business being subscribed at all.
 
-/* Exception classes worth naming on sight; anything else shows its raw
-   EC, which is still the truth and still searchable. */
-const EC_NAMES = {
-  0x01: "WFx",
-  0x07: "SIMD trap",
-  0x16: "HVC64",
-  0x17: "SMC64",
-  0x18: "MSR/MRS",
-  0x20: "IABT",
-  0x24: "DABT",
+   The rates are not here. How often a topic is sampled is the
+   manifest's to state, and it arrives in `topo.observations`. */
+const TOPICS = {
+  "sched.cpu": ["routes", "vcpus", "cores"],
+  "sched.run": ["vcpus"],
+  "sched.affinity": ["vcpus"],
+  "sched.slice": ["sched"],
+  "timer.queue": ["timer"],
+  "timer.programmed": ["cores"],
+  "vm.generation": ["guests"],
+  "ctx.syndrome": ["trap"],
+  "dev.uart": ["vuart"],
+  "dev.dma": ["devices"],
+  "ivc.page": ["ivc"],
+  "smp.online": ["routes", "cores"],
 };
 
 /* Address-map segment captions, keyed by the kind the bridge assigns.
@@ -123,6 +112,16 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
 
   const value = (topic) => latest.get(topic);
   const folded = () => view.classList.contains("folded");
+  /* How coarse a sample is belongs to the manifest that takes it. */
+  const rate = (topic) => topology?.observations?.[topic];
+  const sampled = (topic) => {
+    const hz = rate(topic);
+    return evidence("s", hz ? `S ${hz}Hz` : "S");
+  };
+  /* Firmware identifiers with the k trimmed: kHvcAa64 reads as HvcAa64.
+     Trimming a prefix is a rule; a table of prettier names would be a
+     second vocabulary to keep in step with the first. */
+  const className = (ec) => (topology?.taxonomy?.esr_ec?.[ec] || "").replace(/^k/, "");
 
   /* ---------------- geometry: split, fold, fit ---------------- */
 
@@ -423,7 +422,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     for (const guest of list) {
       const node = el("div", `blk vmc ${span} v${guest.slot % VM_SLOTS}`);
       const name = String(guest.name || `vm${guest.slot}`);
-      const meta = blockHead(node, `VM${guest.slot} ${name}`, "", evidence("s", "S 2Hz"));
+      const meta = blockHead(node, `VM${guest.slot} ${name}`, "", sampled("vm.generation"));
       /* Where the guest was loaded is a property of the run, not of any
          sample: it is written once here and never touched by a tick. */
       const placement = el("div", "bv");
@@ -499,7 +498,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
     live.cores = [];
     for (let cpu = 0; cpu < cpuCount(); cpu += 1) {
       const node = el("div", `blk ${span}`);
-      blockHead(node, `pCPU${cpu}`, topology?.board?.cpu || "", evidence("s", "S 20Hz"));
+      blockHead(node, `pCPU${cpu}`, topology?.board?.cpu || "", sampled("sched.cpu"));
       const body = el("div", "bv");
       const home = el("em", "", "없음");
       const rest = document.createTextNode("");
@@ -716,7 +715,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
       link.title =
         cpu === undefined
           ? ""
-          : `s${link.slot} 거주 @ pCPU${cpu} — sched.cpu[${cpu}].current (S ${TOPICS["sched.cpu"].hz}Hz)`;
+          : `s${link.slot} 거주 @ pCPU${cpu} — sched.cpu[${cpu}].current (S ${rate("sched.cpu")}Hz)`;
     }
   }
 
@@ -782,20 +781,16 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
 
   /* One line per vCPU, at most two — see the chip's two prebuilt rows. */
   function trapText() {
-    const traps = value("ctx.trap") || [];
+    /* The bridge splits the class out of the syndrome, so no bit
+       position is written here and no name is invented. */
     const seen = [];
-    traps.forEach((entry, slot) => {
-      const esr = entry?.ctx?.esr;
-      if (!esr) return;
-      const raw = Number.parseInt(String(esr), 16);
-      if (!raw) return;
-      const ec = (raw >>> 26) & 0x3f;
-      seen.push({ slot, ec, far: entry.ctx.far });
+    (value("ctx.syndrome") || []).forEach((entry, slot) => {
+      if (entry) seen.push({ slot, ec: entry.ec, far: entry.far });
     });
     if (!seen.length) return { lines: ["트랩 관측 없음"], title: "" };
     const lines = seen
       .slice(0, 2)
-      .map((hit) => `s${hit.slot} EC 0x${hit.ec.toString(16)} ${EC_NAMES[hit.ec] || ""}`.trim());
+      .map((hit) => `s${hit.slot} EC 0x${hit.ec.toString(16)} ${className(hit.ec)}`.trim());
     if (seen.length > 2) lines[1] += ` +${seen.length - 2}`;
     return {
       lines,
@@ -956,7 +951,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton }) {
          Unfolding paints every section from `latest`, so nothing is
          lost by not tracking sections while hidden. */
       if (folded()) return;
-      for (const section of TOPICS[frame.topic]?.paints || []) dirty.add(section);
+      for (const section of TOPICS[frame.topic] || []) dirty.add(section);
     },
     settle() {
       if (!dirty.size) return;
