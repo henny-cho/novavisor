@@ -150,6 +150,244 @@ b{font-weight:700}
    cross it to pair a name with its vCPU count. */
 .gitem .gv{font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink3);flex:none}
 
+/* ---------------- board view ---------------- */
+/* Vertical position is privilege: EL1 on top, then EL2, the PE, the
+   interconnect, devices, memory. A path through the machine is then a
+   vertical traversal, and the direction of an edge carries meaning
+   without a caption. */
+.view{
+  flex:none;display:flex;flex-direction:column;min-height:0;
+  height:var(--wb-view,520px);
+  border-bottom:1px solid var(--line);background:var(--panel)
+}
+/* Fold the body, keep the header: the control that unfolds it lives up
+   there, so hiding the whole view would strand the reader. */
+.view.folded{height:auto}
+.view.folded>.board{display:none}
+.view-h{
+  display:flex;align-items:center;gap:12px;flex:none;min-height:36px;
+  padding:5px var(--wb-pad);border-bottom:1px solid var(--line);background:var(--panel)
+}
+.view-title{display:flex;flex-direction:column;gap:1px;min-width:80px}
+.view-title span{
+  font-size:var(--fs-label);letter-spacing:.12em;text-transform:uppercase;
+  color:var(--ink3);font-weight:700
+}
+.view-title strong{font-size:var(--fs-title);line-height:1.1}
+.vtabs{display:flex;gap:4px;padding:3px;border-radius:8px;background:var(--sunken)}
+.vtab{
+  padding:3px 10px;border:1px solid transparent;border-radius:6px;
+  font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink3)
+}
+.vtab[aria-selected="true"]{
+  color:var(--hyp);border-color:var(--line2);background:var(--panel);font-weight:700
+}
+.vtab:disabled{opacity:.34}
+.legend{display:flex;align-items:center;gap:5px;margin-left:auto}
+.legend-label{
+  margin-right:3px;font-size:var(--fs-label);letter-spacing:.1em;color:var(--ink3);font-weight:700
+}
+.lg{
+  display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border:1px solid var(--line);
+  border-radius:5px;font-size:var(--fs-label);color:var(--ink3);white-space:nowrap
+}
+.lg b{color:var(--ink2);font-family:var(--mono)}
+.lg i{width:12px;height:0;border-top:2px solid var(--ink2);display:inline-block}
+.lg i.poll{border-top-style:dashed;border-color:var(--hyp)}
+.lg i.none{border-top-style:dashed;opacity:.5}
+.lg i.lock{border:none;width:auto;height:auto;font-style:normal}
+
+.split{
+  flex:none;height:8px;cursor:row-resize;background:var(--panel);
+  border-bottom:1px solid var(--line);position:relative
+}
+.split::after{
+  content:"";position:absolute;left:50%;top:3px;width:44px;height:2px;
+  margin-left:-22px;border-radius:2px;background:var(--line2)
+}
+.split:hover::after{background:var(--hyp)}
+.split[hidden]{display:none}
+
+.board{
+  flex:1;min-height:0;overflow:auto;padding:10px var(--wb-pad) 12px;
+  background:
+    linear-gradient(color-mix(in srgb,var(--line) 22%,transparent) 1px,transparent 1px),
+    linear-gradient(90deg,color-mix(in srgb,var(--line) 18%,transparent) 1px,transparent 1px),
+    radial-gradient(900px 420px at 50% -70px,var(--glow),transparent 65%),var(--bg);
+  background-size:24px 24px,24px 24px,auto,auto
+}
+/* The gutter is wide enough for the longest layer caption: a clipped
+   "HYPERVISOR" is worse than the 28 px it costs the bands. */
+.bands{
+  display:grid;grid-template-columns:68px minmax(0,1fr);column-gap:8px;row-gap:5px;
+  /* The width the narrowest thing on the board needs — an eight-segment
+     address strip printing a full address. Below it the board scrolls
+     sideways rather than clipping hex digits. */
+  position:relative;min-width:790px
+}
+.layer-label{
+  display:flex;flex-direction:column;align-items:flex-end;justify-content:center;
+  padding-right:8px;border-right:1px solid var(--line);
+  font-family:var(--mono);font-size:var(--fs-label);font-weight:700;
+  letter-spacing:.05em;color:var(--ink2)
+}
+.layer-label small{
+  font-family:var(--sans);font-size:var(--fs-label);font-weight:700;
+  letter-spacing:.06em;color:var(--ink3);margin-top:2px
+}
+.layer-label.live{color:var(--good)}
+/* Every band on the same 12 columns. Sized blocks (2, 3, 4, 6) never
+   reflow, so the board's height barely moves with the window width —
+   and GICR·n lands under pCPUn without a placement rule. */
+.band{
+  display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:7px;
+  min-width:0;position:relative;z-index:1;
+  padding:5px;border:1px solid transparent;border-radius:11px
+}
+.c2{grid-column:span 2}.c3{grid-column:span 3}
+.c4{grid-column:span 4}.c6{grid-column:span 6}.c12{grid-column:span 12}
+.map-layer{padding:0;border:none}
+.guest-layer{
+  background:linear-gradient(90deg,color-mix(in srgb,var(--vm0) 5%,transparent),
+    color-mix(in srgb,var(--vm1) 5%,transparent));
+  border-color:color-mix(in srgb,var(--line) 72%,transparent)
+}
+.hyp-layer{
+  background:color-mix(in srgb,var(--hyp) 5%,transparent);
+  border-color:color-mix(in srgb,var(--hyp) 20%,var(--line))
+}
+.pe-layer{background:color-mix(in srgb,var(--raised) 64%,transparent);border-color:var(--line)}
+.mem-layer{padding-bottom:4px}
+.wires{position:absolute;inset:0;pointer-events:none;z-index:3}
+
+/* The residency summary: which vCPU is on which core, first, because it
+   is the one fact the rest of the board is read against. */
+.route{
+  display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;min-width:0;
+  padding:7px 10px;border:1px solid var(--line);border-radius:10px;
+  background:linear-gradient(100deg,color-mix(in srgb,var(--vmc) 10%,var(--raised)),var(--raised));
+  box-shadow:var(--blk-sh);border-left:3px solid var(--vmc)
+}
+.route-node{display:flex;flex-direction:column;gap:1px;min-width:0}
+.route-node b{font-family:var(--mono);font-size:var(--fs-body);font-weight:700;
+  color:var(--vmc);white-space:nowrap}
+.route-node.cpu{align-items:flex-end}
+.route-node.cpu b{color:var(--ink)}
+.route-node small{font-family:var(--mono);font-size:var(--fs-label);color:var(--ink3);
+  white-space:nowrap}
+.route-flow{display:flex;align-items:center;gap:6px;min-width:30px}
+.route-flow::before{content:"";height:1px;flex:1;background:linear-gradient(90deg,var(--vmc),var(--hyp))}
+.route-flow::after{content:"›";font-family:var(--mono);font-size:var(--fs-title);
+  font-weight:700;color:var(--hyp);line-height:1}
+.route-state{display:inline-flex;align-items:center;gap:5px;color:var(--good)}
+.route-state::before{
+  content:"";width:6px;height:6px;border-radius:50%;background:var(--good);
+  box-shadow:0 0 6px var(--good)
+}
+.route.idle{border-left-color:var(--line2)}
+.route.idle .route-state{color:var(--ink3)}
+.route.idle .route-state::before{background:var(--ink3);box-shadow:none}
+
+/* One block shape for every layer, so a reader learns it once. */
+.blk{
+  display:flex;flex-direction:column;gap:3px;min-width:0;padding:6px 9px 7px;
+  border:1px solid var(--line);border-radius:var(--wb-r);background:var(--raised);
+  box-shadow:var(--blk-sh);text-align:left;
+  transition:border-color .16s,background .16s
+}
+.blk:hover{border-color:var(--line2);background:color-mix(in srgb,var(--raised) 88%,var(--hyp))}
+.blk.unused{opacity:.36}
+.bh{display:flex;align-items:baseline;gap:7px;min-width:0}
+.bt{font-size:var(--fs-title);font-weight:700;white-space:nowrap}
+.bm{
+  font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis
+}
+.bv{font-family:var(--mono);font-size:var(--fs-body);line-height:1.5;color:var(--ink2)}
+.bv em{font-style:normal;color:var(--ink)}
+/* Where a block's value came from, and how precise it is. */
+.src{
+  margin-left:auto;flex:none;padding:1px 6px;border:1px solid var(--line2);border-radius:4px;
+  font-family:var(--mono);font-size:var(--fs-label);font-weight:700;color:var(--ink3)
+}
+.src.s{color:var(--hyp);border-color:color-mix(in srgb,var(--hyp) 50%,transparent)}
+.src.con{color:var(--good);border-color:color-mix(in srgb,var(--good) 50%,transparent)}
+.pending{
+  border:1px dashed var(--line2);border-radius:5px;padding:0 5px;color:var(--ink3);
+  font-family:var(--mono);font-size:var(--fs-label)
+}
+
+.blk.vmc{
+  border-left:2px solid var(--vmc);
+  background:linear-gradient(90deg,color-mix(in srgb,var(--vmc) 8%,transparent),transparent 48%),
+    var(--raised)
+}
+.blk.vmc .bt{color:var(--vmc)}
+.vcpu{
+  display:flex;align-items:center;gap:7px;margin-top:3px;padding:3px 8px;
+  border:1px solid var(--line);border-radius:6px;background:var(--sunken);
+  font-family:var(--mono);font-size:var(--fs-body)
+}
+.vcpu .vn{font-weight:700;color:var(--vmc);flex:none}
+.vcpu .dot{
+  width:7px;height:7px;border-radius:50%;background:var(--good);
+  box-shadow:0 0 6px var(--good);flex:none
+}
+.vcpu.off .dot{background:var(--ink3);box-shadow:none}
+.vcpu .vaf{font-size:var(--fs-meta);color:var(--ink3);flex:none}
+.lrs{margin-left:auto;display:flex;align-items:center;gap:3px;flex:none}
+.lrs .ll{font-size:var(--fs-label);color:var(--ink3)}
+.lr{width:10px;height:10px;border-radius:3px;border:1px dashed var(--line2)}
+
+.chip{
+  min-width:0;border:1px solid var(--line);border-radius:8px;background:var(--sunken);
+  padding:5px 8px 6px;transition:border-color .16s,background .16s
+}
+.chip:hover{
+  border-color:color-mix(in srgb,var(--hyp) 55%,var(--line));
+  background:color-mix(in srgb,var(--sunken) 88%,var(--hyp))
+}
+.bc{
+  font-size:var(--fs-label);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink3);font-weight:700
+}
+.chip .cv{
+  font-family:var(--mono);font-size:var(--fs-body);line-height:1.5;color:var(--ink2);margin-top:2px
+}
+.chip .cv em{font-style:normal;color:var(--ink)}
+.perow{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:var(--fs-meta);
+  color:var(--ink3)}
+
+/* The address strips are not to scale: a 4 KiB page beside a 128 MiB
+   window would be invisible. Equal segments, sizes written out. */
+.memcol{display:flex;flex-direction:column;gap:5px}
+.striprow{display:flex;align-items:stretch;gap:7px}
+.striprow>.sl{
+  flex:none;width:26px;display:flex;align-items:center;justify-content:flex-end;
+  font-family:var(--mono);font-size:var(--fs-label);font-weight:700;color:var(--ink3)
+}
+.strip{display:flex;flex:1;min-width:0;gap:3px}
+.seg{
+  flex:1 1 0;min-width:0;border:1px solid var(--line);border-radius:5px;
+  background:var(--sunken);padding:3px 6px 4px;overflow:hidden
+}
+.seg.hole{background:transparent;border-style:dashed;opacity:.5}
+.seg.vm{
+  border-left:2px solid var(--vmc);
+  background:linear-gradient(90deg,color-mix(in srgb,var(--vmc) 11%,transparent),var(--sunken))
+}
+.seg .sa{font-family:var(--mono);font-size:var(--fs-label);color:var(--ink3);display:block}
+.seg .sn{
+  font-size:var(--fs-meta);font-weight:650;display:block;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis
+}
+.seg .ss{font-family:var(--mono);font-size:var(--fs-label);color:var(--ink2);display:block}
+.striph{
+  display:flex;align-items:baseline;gap:8px;font-size:var(--fs-label);letter-spacing:.05em;
+  text-transform:uppercase;color:var(--ink3);font-weight:700
+}
+.striph .note{text-transform:none;letter-spacing:0;font-weight:400}
+
 /* ---------------- console ---------------- */
 .center{
   grid-area:console;display:flex;flex-direction:column;min-height:0;

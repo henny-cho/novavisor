@@ -4,6 +4,7 @@
 
 import { MAX_VM_SLOT, clockLabel } from "./format.mjs";
 import { connect, send } from "./net.mjs";
+import { createBoard } from "./board.mjs";
 import { createCards } from "./cards.mjs";
 import { createConsole } from "./console.mjs";
 import { createEvents } from "./events.mjs";
@@ -56,6 +57,15 @@ const events = createEvents({
 const notify = (message) => events.addNotice(latestTs, message, { dim: true });
 
 const cards = createCards(ref("cards"));
+
+const boardView = createBoard({
+  view: ref("view"),
+  board: ref("board"),
+  bands: ref("bands"),
+  wires: ref("wires"),
+  split: ref("split"),
+  foldButton: ref("fold"),
+});
 
 const panels = createPanels({ tabs: ref("panel-tabs"), host: ref("panels") });
 
@@ -143,6 +153,7 @@ function onTopo(data) {
   const taxonomy = topo.taxonomy && typeof topo.taxonomy === "object" ? topo.taxonomy : {};
   events.setBadges(taxonomy.badges);
   panels.setTopology(topo);
+  boardView.setTopology(topo);
   /* Connect-time session state: the life events that built this picture
      may already be evicted from the backlog, so the fresh topo is the
      only reliable carrier for a late joiner. */
@@ -162,6 +173,7 @@ function onTopo(data) {
        counters describe the previous machine. */
     if (currentRun !== null && topo.run_id !== currentRun) {
       panels.clearAll();
+      boardView.clearAll();
       cards.reset();
     }
     currentRun = topo.run_id;
@@ -192,6 +204,7 @@ function onLife(ts, data) {
       /* Run boundary: measurements and counters from the previous
          machine must not read as this one's. */
       panels.clearAll();
+      boardView.clearAll();
       cards.reset();
       consoleView.mark(`── ${data.demo || "?"} ──`);
       events.addNotice(ts, `실행 중${demo}`);
@@ -305,6 +318,7 @@ function onFrame(frame) {
       /* S-layer snapshot topics come from the observation manifest as
          plain strings; the panels declare which ones they consume. */
       if (panels.accepts(frame.topic)) panels.apply(frame);
+      if (boardView.accepts(frame.topic)) boardView.apply(frame);
       break;
   }
 }
@@ -321,6 +335,7 @@ function onReset() {
   cards.clearAll();
   events.clearAll();
   panels.clearAll();
+  boardView.clearAll();
   lostFrames = 0;
   lossBadge.hidden = true;
   bootMark.hidden = true;
@@ -346,6 +361,7 @@ function onBatch() {
   consoleView.settle();
   events.settle();
   panels.settle();
+  boardView.settle();
 }
 
 /* ---------------- theme ---------------- */
