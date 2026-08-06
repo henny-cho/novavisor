@@ -51,6 +51,44 @@
     </aside>
 
     <section class="center">
+
+      <!-- The board shares the centre column with the console rather than
+           replacing it: the console is the evidence source behind several
+           of the things the board draws, so they have to be readable at
+           the same time. -->
+      <div class="view" id="view">
+        <div class="view-h">
+          <div class="view-title"><span>System map</span><strong>실행 보드</strong></div>
+          <div class="vtabs" role="tablist" aria-label="뷰 전환">
+            <button class="vtab" role="tab" aria-selected="true" type="button">보드</button>
+            <button class="vtab" role="tab" aria-selected="false" type="button" disabled
+                    title="인터럽트 경로 뷰는 아직 없습니다">인터럽트</button>
+            <button class="vtab" role="tab" aria-selected="false" type="button" disabled
+                    title="메모리 맵 뷰는 아직 없습니다">메모리</button>
+          </div>
+          <!-- Always visible: the board is sparser than a simulator on
+               purpose, and this says why. -->
+          <div class="legend" aria-label="증거 등급">
+            <span class="legend-label">EVIDENCE</span>
+            <span class="lg" title="콘솔 이벤트 — 시각 정확"><i></i><b>C</b><span class="lg-copy">콘솔</span></span>
+            <span class="lg" title="스냅샷 폴링 — 틱에 양자화된 관측"><i class="poll"></i><b>S</b><span class="lg-copy">폴링</span></span>
+            <span class="lg" title="일시정지 시점의 확정값"><i class="lock">◆</i><b>H</b><span class="lg-copy">정지</span></span>
+            <span class="lg" title="증거원 없음 — 구조만 표시"><i class="none"></i><b>—</b><span class="lg-copy">미관측</span></span>
+          </div>
+          <!-- Lives in the header, not the body: folding the whole view
+               would hide the control that unfolds it. -->
+          <button class="mini" id="fold" type="button" aria-expanded="true"
+                  title="보드 접기 / 펼치기">접기</button>
+        </div>
+        <div class="board" id="board">
+          <div class="bands" id="bands"><svg class="wires" id="wires" aria-hidden="true"></svg></div>
+        </div>
+      </div>
+
+      <div class="split" id="split" role="separator" aria-orientation="horizontal"
+           aria-label="보드와 콘솔 크기 조절" tabindex="0"
+           title="드래그 또는 화살표 키로 조절"></div>
+
       <div class="pane-h">콘솔<div class="tabs" id="tabs" role="tablist" aria-label="콘솔 탭"></div></div>
       <div class="banner" id="banner" hidden></div>
       <div class="logs" id="logs"></div>

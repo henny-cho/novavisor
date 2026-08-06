@@ -20,7 +20,7 @@ from pathlib import Path
 
 from ...core import board
 from .. import artifacts, expect, manifest, spawn
-from . import anchors
+from . import anchors, hardware
 from .observations import timer_slot_labels
 from .protocol import Kind, Src, Topic
 from .store import StateStore
@@ -58,10 +58,15 @@ def _catalog() -> list[dict]:
 
 
 def initial_topology() -> dict:
-    """What a client sees before any target runs: the pickable world."""
+    """What a client sees before any target runs: the pickable world.
+
+    The board map rides along, so the hardware picture is drawable
+    before anything boots — it describes the machine, not the run.
+    """
     return {
         "demo": None,
         "guests": [],
+        "board": hardware.board_map(),
         "catalog": _catalog(),
         "taxonomy": vocabulary(),
         "timer_slots": timer_slot_labels(),
@@ -95,10 +100,20 @@ def prepare(target: Target) -> Prepared:
         "demo": name,
         "variant": target.variant,
         "description": demo_manifest.get("description", ""),
+        # The placement the board map cannot state: where this run's
+        # guests landed inside the window it describes.
         "guests": [
-            {"name": guest.get("name"), "vcpus": guest.get("vcpus")}
+            {
+                "name": guest.get("name"),
+                "vcpus": guest.get("vcpus"),
+                "pa": guest.get("load_addr"),
+                "ipa": guest.get("ipa_base"),
+                "size": guest.get("memory_size"),
+                "uart": guest.get("uart", "none"),
+            }
             for guest in demo_manifest.get("guests", [])
         ],
+        "board": hardware.board_map(),
         "catalog": _catalog(),
         "taxonomy": vocabulary(),
         "timer_slots": timer_slot_labels(),

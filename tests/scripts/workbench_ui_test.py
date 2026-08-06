@@ -53,6 +53,88 @@ class UiStructureTest(unittest.TestCase):
                     self.assertNotIn(f"'{badge.value}'", text)
 
 
+VIEW_HEADER = re.compile(r'<div class="view-h">(.*?)</div>\s*<div class="board"', re.S)
+# Any literal that looks like a hardware address or an interrupt number.
+HARD_ADDRESS = re.compile(r"0x[0-9a-fA-F]{6,}")
+
+
+class BoardViewTest(unittest.TestCase):
+    """The board draws structure it is given, and stays reachable."""
+
+    def test_the_fold_control_survives_folding(self):
+        # Hiding the whole view hides the button that unfolds it, which
+        # strands the reader with no way back. The control lives in the
+        # header and the rule collapses only the body.
+        markup = (UI / "index.html").read_text()
+        header = VIEW_HEADER.search(markup)
+        self.assertIsNotNone(header, "board view header not found")
+        self.assertIn('id="fold"', header.group(1))
+        css = (UI / "css" / "workbench.css").read_text()
+        self.assertRegex(css, r"\.view\.folded\s*>\s*\.board\s*\{[^}]*display:\s*none")
+        self.assertNotRegex(css, r"\.view\[hidden\]")
+
+    def test_the_board_states_no_hardware_value_of_its_own(self):
+        # Addresses reach the UI in topo.board, generated from the same
+        # headers the linker script reads. One typed into the module
+        # would drift with no way for the browser to notice.
+        source = (UI / "js" / "board.mjs").read_text()
+        self.assertFalse(HARD_ADDRESS.findall(source), "board.mjs hardcodes an address")
+
+    def test_the_board_reads_only_published_topics(self):
+        # Its topic table is the contract with the observation manifest;
+        # a topic the bridge never publishes would silently draw nothing.
+        from novakit.services.workbench.observations import OBSERVATIONS
+
+        source = (UI / "js" / "board.mjs").read_text()
+        table = re.search(r"const TOPICS = \{(.*?)\n\};", source, re.S)
+        self.assertIsNotNone(table, "board topic table not found")
+        wanted = set(re.findall(r'"([\w.]+)":', table.group(1)))
+        self.assertTrue(wanted)
+        published = {obs.topic for obs in OBSERVATIONS}
+        self.assertLessEqual(wanted, published, f"unpublished: {wanted - published}")
+
+
+TYPE_SCALE = ("--fs-title", "--fs-body", "--fs-meta", "--fs-label")
+# `font-size: X` and the size slot of the `font:` shorthand.
+FONT_SIZE = re.compile(r"font-size:\s*([^;}]+)|font:\s*(?:[\w\s]*?\s)?((?:var\(--fs-[\w-]+\)|[\d.]+px))")
+# A wordmark is not text on the page; it is allowed its own size.
+SCALE_EXEMPT = (".brand .nv",)
+
+
+class TypeScaleTest(unittest.TestCase):
+    """Four sizes, no fifth.
+
+    A dense screen reads as noise long before any single value is too
+    small, and the drift is invisible in review — the numbers differ by
+    half a pixel. Naming the four roles makes a fifth size fail here.
+    """
+
+    def test_the_scale_is_declared_once(self):
+        css = (UI / "css" / "workbench.css").read_text()
+        declared = dict(CUSTOM_PROPERTY.findall(css))
+        for name in TYPE_SCALE:
+            with self.subTest(token=name):
+                self.assertIn(name, declared)
+        values = [declared[name].strip() for name in TYPE_SCALE]
+        self.assertEqual(len(set(values)), len(values), f"duplicate steps: {values}")
+
+    def test_every_rule_picks_a_step(self):
+        css = (UI / "css" / "workbench.css").read_text()
+        for rule in css.split("}"):
+            selector = rule.rsplit("{", 1)[0].strip().splitlines()[-1:] or [""]
+            if selector[0].strip() in SCALE_EXEMPT:
+                continue
+            for explicit, shorthand in FONT_SIZE.findall(rule):
+                size = (explicit or shorthand).strip()
+                if not size or size == "inherit":
+                    continue
+                with self.subTest(selector=selector[0].strip(), size=size):
+                    self.assertTrue(
+                        any(f"var({name})" in size for name in TYPE_SCALE),
+                        f"{size} is not a step of the scale",
+                    )
+
+
 SIDE_COLUMN = re.compile(r'<aside class="side">(.*?)</aside>', re.S)
 SIDE_RULE = re.compile(r"\.side\s*\{([^}]*)\}")
 GRID_ROWS = re.compile(r"grid-template-rows:([^;}]*)")
