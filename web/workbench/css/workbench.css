@@ -337,7 +337,22 @@ b{font-weight:700}
 .vcpu .vaf{font-size:var(--fs-meta);color:var(--ink3);flex:none}
 .lrs{margin-left:auto;display:flex;align-items:center;gap:3px;flex:none}
 .lrs .ll{font-size:var(--fs-label);color:var(--ink3)}
-.lr{width:10px;height:10px;border-radius:3px;border:1px dashed var(--line2)}
+/* A carried entry is marked by its glyph as well as its colour, so the
+   row still reads printed, projected, or to a reader who cannot tell
+   the two borders apart. */
+.lr{
+  min-width:11px;height:12px;border-radius:3px;border:1px dashed var(--line2);
+  font-size:var(--fs-label);line-height:10px;text-align:center;color:var(--line2)
+}
+.lr.held{border-style:solid;border-color:var(--hyp);color:var(--hyp);background:var(--hyp-dim)}
+/* The shadow of a resident vCPU is whatever EL2 last wrote: the
+   hardware is read back on the next entry, not now. */
+.lrs.stale .ll{color:var(--warn)}
+.lrs.stale .ll::after{content:"~"}
+.disagree{
+  margin-left:6px;flex:none;border:1px solid var(--crit);border-radius:5px;padding:0 5px;
+  color:var(--crit);font-size:var(--fs-label)
+}
 
 .chip{
   min-width:0;border:1px solid var(--line);border-radius:8px;background:var(--sunken);
@@ -351,8 +366,14 @@ b{font-weight:700}
   font-size:var(--fs-label);letter-spacing:.06em;text-transform:uppercase;
   color:var(--ink3);font-weight:700
 }
+/* A chip is a twelfth of the band, so its value has to be allowed to
+   wrap — but only once. A third line makes the whole EL2 row taller
+   than its neighbours, which is why the trap chip caps its own lines
+   too; past that the text is clipped and the title carries the rest. */
 .chip .cv{
-  font-family:var(--mono);font-size:var(--fs-body);line-height:1.5;color:var(--ink2);margin-top:2px
+  font-family:var(--mono);font-size:var(--fs-body);line-height:1.5;color:var(--ink2);margin-top:2px;
+  overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
+  overflow:hidden
 }
 .chip .cv em{font-style:normal;color:var(--ink)}
 .perow{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:var(--fs-meta);

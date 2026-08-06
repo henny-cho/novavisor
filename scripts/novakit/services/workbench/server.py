@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 
 from ...core import config
-from . import halt, snapshot, static
+from . import halt, hardware, snapshot, static
 from .protocol import (
     SUPPORTED_UPLINK,
     Clock,
@@ -288,7 +288,11 @@ class Bridge:
                         if not shm_path.exists() or shm_path.stat().st_size == 0:
                             continue
                         built = await asyncio.get_running_loop().run_in_executor(
-                            None, snapshot.ElfRamProvider, session.elf_path, shm_path
+                            None,
+                            snapshot.ElfRamProvider,
+                            session.elf_path,
+                            shm_path,
+                            hardware.platform()["NOVA_BOARD_PHYS_RAM_BASE"],
                         )
                         if session.run_id != current:
                             # A restart landed mid-build: this provider

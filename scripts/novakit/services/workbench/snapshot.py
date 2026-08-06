@@ -14,37 +14,50 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Protocol
 
+from ...image import abi
 from . import elfsym
 from .observations import OBSERVATIONS, Obs
 
-# The board's RAM base: the identity-mapped image loads here, so a
-# physical address maps to (pa - RAM_BASE) inside the backend file.
-RAM_BASE = 0x4000_0000
-
 _U32 = elfsym.TypeInfo("uint", 4)
 _U64 = elfsym.TypeInfo("uint", 8)
-_SLOTS = elfsym.TypeInfo("array", 128, element=_U64, count=16)
-# Mirrors nova/abi/ivc_ring.h: two SPSC rings, cache-line separated
-# indices, 16 slots of u64 each. Guest memory has no DWARF, so the
-# layout is declared here and held to the ABI by its own constants.
+
+# Guest memory carries no DWARF, so the IVC page is the one layout the
+# decoder is told rather than shown. It is told by the ABI header the
+# hypervisor's ring and the guest helper both compile against, so the
+# three cannot disagree.
+_IVC = abi.read_defines(
+    abi.IVC_RING,
+    [
+        "NOVA_IVC_RING0_OFF",
+        "NOVA_IVC_RING1_OFF",
+        "NOVA_IVC_RING_WIDX_OFF",
+        "NOVA_IVC_RING_RIDX_OFF",
+        "NOVA_IVC_RING_SLOTS_OFF",
+        "NOVA_IVC_RING_SLOTS",
+    ],
+)
+_SLOT_COUNT = _IVC["NOVA_IVC_RING_SLOTS"]
+# The rings are laid end to end, so their spacing is the ring's stride.
+_RING_STRIDE = _IVC["NOVA_IVC_RING1_OFF"] - _IVC["NOVA_IVC_RING0_OFF"]
+_SLOTS = elfsym.TypeInfo("array", _SLOT_COUNT * _U64.size, element=_U64, count=_SLOT_COUNT)
 _IVC_RING = elfsym.TypeInfo(
     "struct",
-    0x800,
+    _RING_STRIDE,
     name="ivc_ring",
     fields=(
-        elfsym.Field("widx", 0x00, _U32),
-        elfsym.Field("ridx", 0x40, _U32),
-        elfsym.Field("slots", 0x80, _SLOTS),
+        elfsym.Field("widx", _IVC["NOVA_IVC_RING_WIDX_OFF"], _U32),
+        elfsym.Field("ridx", _IVC["NOVA_IVC_RING_RIDX_OFF"], _U32),
+        elfsym.Field("slots", _IVC["NOVA_IVC_RING_SLOTS_OFF"], _SLOTS),
     ),
 )
 PAGE_LAYOUTS: dict[str, elfsym.TypeInfo] = {
     "ivc_ring_page": elfsym.TypeInfo(
         "struct",
-        0x1000,
+        abi.read_define(abi.GUEST_LAYOUT, "NOVA_IVC_SHM_SIZE"),
         name="ivc_page",
         fields=(
-            elfsym.Field("ring0", 0x000, _IVC_RING),
-            elfsym.Field("ring1", 0x800, _IVC_RING),
+            elfsym.Field("ring0", _IVC["NOVA_IVC_RING0_OFF"], _IVC_RING),
+            elfsym.Field("ring1", _IVC["NOVA_IVC_RING1_OFF"], _IVC_RING),
         ),
     ),
 }
@@ -67,9 +80,15 @@ class SnapshotProvider(Protocol):
 
 
 class ElfRamProvider:
-    """Decode firmware globals straight out of the shared RAM file."""
+    """Decode firmware globals straight out of the shared RAM file.
 
-    def __init__(self, elf_path: Path, ram_path: Path):
+    `ram_base` is where the machine's RAM aperture starts: QEMU backs
+    exactly that span with this file, so a physical address is read at
+    `pa - ram_base`. It is a board fact, and the caller supplies it.
+    """
+
+    def __init__(self, elf_path: Path, ram_path: Path, ram_base: int):
+        self._base = ram_base
         self._index = elfsym.ElfIndex(elf_path)
         try:
             self._resolved = {
@@ -88,23 +107,26 @@ class ElfRamProvider:
         for obs in OBSERVATIONS:
             if obs.pa is not None:
                 highest = max(highest, obs.pa + PAGE_LAYOUTS[obs.layout].size)
-        if len(self._ram) < highest - RAM_BASE:
+        if len(self._ram) < highest - self._base:
             self.close()
             raise ValueError("RAM backend is smaller than the observed image")
 
     def read(self, obs: Obs) -> object:
         if obs.pa is not None:
             info = PAGE_LAYOUTS[obs.layout]
-            offset = obs.pa - RAM_BASE
+            offset = obs.pa - self._base
             value = elfsym.decode(info, self._ram[offset : offset + info.size])
         else:
             resolved = self._resolved[obs.topic]
-            offset = resolved.address - RAM_BASE
+            info = resolved.type
+            offset = resolved.address - self._base
             value = elfsym.decode(
-                resolved.type,
-                self._ram[offset : offset + resolved.size],
-                fields=obs.fields,
+                info, self._ram[offset : offset + resolved.size], fields=obs.fields
             )
+        # Encodings become meanings before the wire, so no reader has to
+        # know the width of a "none" or the layout of a packed word.
+        if obs.shape is not None:
+            value = obs.shape(value, info)
         return _hexify(value) if obs.hex else value
 
     def close(self) -> None:

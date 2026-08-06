@@ -23,6 +23,8 @@ SIM = REPO / "web_sim" / "novavisor-sim.html"
 HTML_REFERENCE = re.compile(r'(?:src|href)="([^"]+)"')
 MODULE_IMPORT = re.compile(r'(?:import|from)\s+"(\./[^"]+)"')
 CUSTOM_PROPERTY = re.compile(r"(--[\w-]+)\s*:\s*([^;]+);")
+# A number no observed value legitimately reaches: a sentinel compare.
+BIG_LITERAL = re.compile(r"\b(?:\d{16,}|\d(?:\.\d+)?e(?:1[5-9]|[2-9]\d))\b")
 
 
 class UiStructureTest(unittest.TestCase):
@@ -43,6 +45,15 @@ class UiStructureTest(unittest.TestCase):
                 with self.subTest(module=module.name, target=target):
                     self.assertTrue((module.parent / target).is_file(), target)
 
+    def test_no_module_tests_for_a_firmware_sentinel(self):
+        # The bridge decodes the firmware's all-bits-set "none" to null.
+        # A UI comparing against 9e15 instead is relying on JSON losing
+        # precision past 2^53 — right by accident, and only until a
+        # sentinel narrower than 53 bits appears.
+        for module in sorted((UI / "js").glob("*.mjs")):
+            with self.subTest(module=module.name):
+                self.assertFalse(BIG_LITERAL.findall(module.read_text()))
+
     def test_no_module_hardcodes_a_taxonomy_badge(self):
         # The thin-client rule: vocabulary arrives in the topo snapshot.
         for module in sorted((UI / "js").glob("*.mjs")):
@@ -53,11 +64,30 @@ class UiStructureTest(unittest.TestCase):
                     self.assertNotIn(f"'{badge.value}'", text)
 
 
+class PanelReachTest(unittest.TestCase):
+    """Every published observation is on screen without being drawn."""
+
+    def test_unclaimed_topics_fall_to_a_panel_fed_by_the_manifest(self):
+        # Otherwise the default is that an observation is invisible until
+        # somebody writes a table for it, and a value can be polled for
+        # months with nobody able to see it. The fallback's topic list
+        # has to come from the manifest, not from a second list here.
+        source = (UI / "js" / "panels.mjs").read_text()
+        self.assertRegex(
+            source,
+            r"FALLBACK\.topics\s*=\s*Object\.keys\(topo\.observations",
+            "the fallback panel does not follow the observation manifest",
+        )
+        self.assertRegex(source, r"filter\(\(topic\)\s*=>\s*!claimed\.has\(topic\)\)")
+
+
 VIEW_HEADER = re.compile(r'<div class="view-h">(.*?)</div>\s*<div class="board"', re.S)
 # Any literal that looks like a hardware address or an interrupt number.
 HARD_ADDRESS = re.compile(r"0x[0-9a-fA-F]{6,}")
-# `"topic": { hz: N, paints: ["a", "b"] }`
-PAINTS = re.compile(r'"([\w.]+)":\s*\{[^}]*paints:\s*\[([^\]]*)\]')
+# `"topic": ["section", ...]`
+PAINTS = re.compile(r'"([\w.]+)":\s*\[([^\]]*)\]')
+# A sample rate written into the UI instead of read from the manifest.
+RATE_LITERAL = re.compile(r"\d+\s*Hz")
 
 
 class BoardViewTest(unittest.TestCase):
@@ -94,6 +124,14 @@ class BoardViewTest(unittest.TestCase):
         self.assertTrue(wanted)
         published = {obs.topic for obs in OBSERVATIONS}
         self.assertLessEqual(wanted, published, f"unpublished: {wanted - published}")
+
+    def test_the_board_states_no_sample_rate_of_its_own(self):
+        # A badge reading "S 20Hz" is a claim about the manifest. Written
+        # here it becomes a lie the moment a rate is tuned, and the
+        # screen goes on asserting it. The rate rides in topo.
+        source = (UI / "js" / "board.mjs").read_text()
+        stated = [hit for hit in RATE_LITERAL.findall(source) if not hit.startswith("$")]
+        self.assertFalse(stated, f"board.mjs states a rate: {stated}")
 
     def test_a_topic_repaints_named_sections_and_nothing_more(self):
         # Twenty scheduler samples a second must not redraw the address

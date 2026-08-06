@@ -15,6 +15,8 @@
 // This header has no dependencies beyond <cstdint> and is safe to include
 // in host-side GTest builds.
 
+#include "nova/arch/esr_fields.h"
+
 #include <cstdint>
 
 namespace nova::esr {
@@ -64,11 +66,15 @@ enum class ExceptionClass : std::uint8_t {
   }
 }
 
-// Field positions and masks (see the layout table above).
-inline constexpr std::uint64_t kEcShift    = 26U;
-inline constexpr std::uint64_t kEcMask     = 0x3FU;
-inline constexpr std::uint64_t kIlShift    = 25U;
-inline constexpr std::uint64_t kIssMask    = 0x01FF'FFFFU;
+// Field positions and masks (see the layout table above). The three
+// that describe where EC, IL and ISS sit come from the plain header
+// alongside this one, so the workbench bridge — which decodes a
+// syndrome out of guest RAM and cannot read C++ — shares the definition
+// rather than repeating it.
+inline constexpr std::uint64_t kEcShift    = NOVA_ESR_EC_SHIFT;
+inline constexpr std::uint64_t kEcMask     = NOVA_ESR_EC_MASK;
+inline constexpr std::uint64_t kIlShift    = NOVA_ESR_IL_SHIFT;
+inline constexpr std::uint64_t kIssMask    = NOVA_ESR_ISS_MASK;
 inline constexpr std::uint64_t kHvcImmMask = 0xFFFFU;
 inline constexpr std::uint64_t kWfxTiWfe   = 1ULL << 0U; // WFx ISS.TI bit 0: 0 = WFI, 1 = WFE
 

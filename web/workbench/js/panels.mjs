@@ -12,13 +12,8 @@
 
 import { clear, el, stamp } from "./format.mjs";
 
-/* JSON numbers past 2^53 lost precision anyway; every such value in the
-   observed structs is a "none" sentinel (kNoVcpu, kNoOwner, kNoDeadline). */
-const SENTINEL = 9e15;
-
 function fmt(value) {
   if (typeof value === "boolean") return value ? "●" : "·";
-  if (typeof value === "number") return value >= SENTINEL ? "—" : String(value);
   return String(value ?? "—");
 }
 
@@ -37,6 +32,33 @@ function table(headers, rows) {
 
 function section(title) {
   return el("div", "psec-h", title);
+}
+
+/* Any decoded value, without knowing what it is. The field names come
+   from the firmware's own debug info, so a table of them is already
+   readable — what a hand-written panel adds is ordering, units and
+   which columns matter, not the ability to show the value at all. */
+function generic(held) {
+  if (Array.isArray(held)) {
+    const rows = held.map((item, index) => [index, item]);
+    const shaped = held.find((item) => item && typeof item === "object" && !Array.isArray(item));
+    if (!shaped) return table(["#", "value"], rows.map(([at, item]) => [at, format(item)]));
+    const columns = [...new Set(held.flatMap((item) => Object.keys(item || {})))];
+    return table(
+      ["#", ...columns],
+      held.map((item, index) => [index, ...columns.map((key) => format(item?.[key]))]),
+    );
+  }
+  if (held && typeof held === "object") {
+    return table(["key", "value"], Object.entries(held).map(([key, item]) => [key, format(item)]));
+  }
+  return el("div", "pnote", fmt(held));
+}
+
+/* A nested value has no column of its own; its shape is still the
+   truth, so it travels as JSON rather than as "[object Object]". */
+function format(item) {
+  return item !== null && typeof item === "object" ? JSON.stringify(item) : item;
 }
 
 /* Which panels were open, so a reload does not undo the choice. */
@@ -109,16 +131,13 @@ export function createPanels({ tabs, host }) {
         const programmed = value("timer.programmed") || [];
         queues.forEach((slots, cpu) => {
           body.append(section(`cpu${cpu} — programmed ${fmt(programmed[cpu])}`));
-          const armed = slots
-            .map((slot, index) => ({ ...slot, index }))
-            .filter((slot) => slot.armed);
           body.append(
             table(
               ["slot", "owner", "deadline"],
-              armed.map((slot) => [slot.index, timerSlots[slot.index] ?? "?", slot.deadline]),
+              slots.map((slot) => [slot.slot, timerSlots[slot.slot] ?? "?", slot.deadline]),
             ),
           );
-          if (!armed.length) body.append(el("div", "pnote", "armed 슬롯 없음"));
+          if (!slots.length) body.append(el("div", "pnote", "armed 슬롯 없음"));
         });
         const cntvoff = value("timer.cntvoff") || [];
         const generation = value("vm.generation") || [];
@@ -288,13 +307,40 @@ export function createPanels({ tabs, host }) {
     },
   ];
 
+  /* Whatever no panel above claims. A new row in the observation
+     manifest is then already on screen, and the default is that an
+     observation is visible rather than that it needs a panel written
+     for it — which is the same choice inverted, and the other way round
+     a value can be polled for months with nobody able to see it.
+
+     Anything worth a shape of its own graduates to a panel above and
+     leaves here on its own. */
+  const FALLBACK = {
+    id: "other",
+    title: "기타",
+    topics: [],
+    render(body) {
+      for (const topic of FALLBACK.topics) {
+        const held = value(topic);
+        if (held === undefined) continue;
+        body.append(section(topic));
+        body.append(generic(held));
+      }
+    },
+  };
+  PANELS.push(FALLBACK);
+
   const interest = new Map(); // topic -> Set(panel ids); sched.valid feeds two panels
-  for (const panel of PANELS) {
-    for (const topic of panel.topics) {
-      if (!interest.has(topic)) interest.set(topic, new Set());
-      interest.get(topic).add(panel.id);
+  function index() {
+    interest.clear();
+    for (const panel of PANELS) {
+      for (const topic of panel.topics) {
+        if (!interest.has(topic)) interest.set(topic, new Set());
+        interest.get(topic).add(panel.id);
+      }
     }
   }
+  index();
 
   const bodies = new Map();
   for (const panel of PANELS) {
@@ -306,6 +352,8 @@ export function createPanels({ tabs, host }) {
     chip.title = `${panel.title} 표시 전환`;
     chip.append(el("span", "tt", panel.title));
     chip.addEventListener("click", () => toggle(panel.id));
+    /* Nothing is unclaimed until a topology says what is published. */
+    chip.hidden = panel === FALLBACK;
     tabs.append(chip);
 
     const body = el("div", "panel-body");
@@ -404,6 +452,16 @@ export function createPanels({ tabs, host }) {
     },
     setTopology(topo) {
       timerSlots = Array.isArray(topo.timer_slots) ? topo.timer_slots : [];
+      /* The manifest states what is published; everything a panel above
+         does not claim falls to the fallback. */
+      const claimed = new Set(
+        PANELS.filter((panel) => panel !== FALLBACK).flatMap((panel) => panel.topics),
+      );
+      FALLBACK.topics = Object.keys(topo.observations || {})
+        .filter((topic) => !claimed.has(topic))
+        .sort();
+      index();
+      bodies.get(FALLBACK.id).tab.hidden = FALLBACK.topics.length === 0;
       renderAll(); /* owner labels may resolve without a new frame */
     },
     clearAll() {

@@ -19,9 +19,9 @@ from enum import StrEnum
 from pathlib import Path
 
 from ...core import board
-from .. import artifacts, expect, manifest, spawn
-from . import anchors, hardware
-from .observations import timer_slot_labels
+from .. import artifacts, cmake, expect, manifest, spawn
+from . import anchors, derive, hardware
+from .observations import observation_rates, timer_slot_labels
 from .protocol import Kind, Src, Topic
 from .store import StateStore
 from .taxonomy import vocabulary
@@ -57,6 +57,12 @@ def _catalog() -> list[dict]:
     ]
 
 
+def _debug_image() -> Path:
+    """The image the S layer reads. It carries the firmware's own enums,
+    which is where the UI's names for a syndrome class come from."""
+    return cmake.preset_dir(cmake.selected_preset()) / "novavisor.elf"
+
+
 def initial_topology() -> dict:
     """What a client sees before any target runs: the pickable world.
 
@@ -68,8 +74,9 @@ def initial_topology() -> dict:
         "guests": [],
         "board": hardware.board_map(),
         "catalog": _catalog(),
-        "taxonomy": vocabulary(),
+        "taxonomy": vocabulary() | derive.syndrome_vocabulary(_debug_image()),
         "timer_slots": timer_slot_labels(),
+        "observations": observation_rates(),
     }
 
 
@@ -115,8 +122,9 @@ def prepare(target: Target) -> Prepared:
         ],
         "board": hardware.board_map(),
         "catalog": _catalog(),
-        "taxonomy": vocabulary(),
+        "taxonomy": vocabulary() | derive.syndrome_vocabulary(_debug_image()),
         "timer_slots": timer_slot_labels(),
+        "observations": observation_rates(),
     }
     return Prepared(scenario, topology)
 

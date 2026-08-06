@@ -110,7 +110,8 @@ RULES: tuple[Rule, ...] = (
     Rule("core_gic", re.compile(r"^unclaimed physical IRQ INTID=(?P<intid>\d+)"), badge=Badge.IRQ),
     Rule("dma", re.compile(r"^VM (?P<vm>\d+)")),
     Rule("mux", re.compile(r"^focus vm(?P<vm>\d+)$")),
-    Rule("nova", re.compile(r"^boot pe mpidr=0x(?P<mpidr>[0-9a-f]+) cores=(?P<cores>\d+)")),
+    # console::Hex prints sixteen digits with no 0x prefix.
+    Rule("nova", re.compile(r"^boot pe mpidr=(?P<mpidr>[0-9a-f]+) cores=(?P<cores>\d+)")),
     Rule("psci", re.compile(r"^VM (?P<vm>\d+)")),
     Rule(
         "smmu",
