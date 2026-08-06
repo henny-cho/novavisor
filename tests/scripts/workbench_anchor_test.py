@@ -47,7 +47,13 @@ CLASSIFY_TABLE = (
         {"type": "10", "sid": "5"},
     ),
     ("[smmu] stage-2 isolation active", Badge.SMMU, Severity.INFO, {}),
-    ("[nova] boot pe mpidr=0x0 cores=2", Badge.BOOT, Severity.INFO, {"mpidr": "0", "cores": "2"}),
+    # As the firmware prints it: console::Hex is sixteen digits, no 0x.
+    (
+        "[nova] boot pe mpidr=0000000000000000 cores=2 cntfrq=62500000",
+        Badge.BOOT,
+        Severity.INFO,
+        {"mpidr": "0000000000000000", "cores": "2"},
+    ),
     ("[boot] halt: EL2 stage-1 map build failed", Badge.BOOT, Severity.CRIT, {}),
     ("[core_vcpu] all VCPUs off — halting", Badge.SCHED, Severity.INFO, {}),
     ("[core_vcpu] VM 1 restored", Badge.SCHED, Severity.INFO, {}),
