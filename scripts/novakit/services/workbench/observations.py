@@ -9,8 +9,10 @@ silently blanking a panel.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
+from ...core import config
 from ...image import abi
 from . import derive, hardware
 
@@ -101,13 +103,70 @@ def observation_rates() -> dict[str, float]:
     return {obs.topic: obs.rate_hz for obs in OBSERVATIONS}
 
 
+SLOT_HEADER = (
+    config.REPO
+    / "src"
+    / "components"
+    / "service"
+    / "soft_timer"
+    / "include"
+    / "soft_timer"
+    / "soft_timer.hpp"
+)
+SLOT_BASE = re.compile(r"^inline constexpr std::size_t\s+(kSlot\w+)\s*=\s*([^;]+);", re.M)
+# What each group's entries are called. Only the words are here: where a
+# group starts and how wide it is both come from the header.
+SLOT_NAMES = {
+    "kSlotSlice": "slice",
+    "kSlotLegacyTimer": "legacy",
+    "kSlotCntvWake": "cntv_wake v{}",
+    "kSlotWatchdog": "watchdog vm{}",
+    "kSlotLifecycle": "lifecycle vm{}",
+    "kSlotDmaDrain": "dma_drain vm{}",
+    "kSlotCount": "",  # the end marker, not a group
+}
+
+
+def _slot_bases() -> dict[str, int]:
+    """Where each soft_timer slot group starts, read from the header.
+
+    The bases are written there as sums over the ABI's own extents
+    (`kSlotWatchdog = kSlotCntvWake + kMaxVcpus`). Evaluating those sums
+    here reads the one definition; restating them would be a second one,
+    and a group inserted between two others would silently shift every
+    label after it by a slot.
+    """
+    known = {"kMaxVcpus": MAX_VCPUS, "kMaxGuests": MAX_GUESTS}
+    for name, expression in SLOT_BASE.findall(SLOT_HEADER.read_text()):
+        total = 0
+        for term in expression.split("+"):
+            term = term.strip()
+            if term.isdigit():
+                total += int(term)
+            elif term in known:
+                total += known[term]
+            else:
+                raise SystemExit(f"nova workbench: {name} = {expression!r} is not a plain sum")
+        known[name] = total
+    missing = set(SLOT_NAMES) - set(known)
+    if missing:
+        raise SystemExit(f"nova workbench: no slot base for {sorted(missing)}")
+    return {name: known[name] for name in SLOT_NAMES}
+
+
 def timer_slot_labels() -> list[str]:
-    """Owner of each soft_timer slot, by the index convention the
-    firmware allocates (soft_timer.hpp): slice, legacy, then per-vCPU
-    wake and per-VM watchdog/lifecycle/dma-drain ranges."""
-    labels = ["slice", "legacy"]
-    labels += [f"cntv_wake v{slot}" for slot in range(MAX_VCPUS)]
-    labels += [f"watchdog vm{vm}" for vm in range(MAX_GUESTS)]
-    labels += [f"lifecycle vm{vm}" for vm in range(MAX_GUESTS)]
-    labels += [f"dma_drain vm{vm}" for vm in range(MAX_GUESTS)]
+    """Owner of each soft_timer slot.
+
+    A group is as wide as the gap to the next one, so nothing here
+    repeats the firmware's arithmetic — reorder the groups and the
+    labels follow.
+    """
+    ordered = sorted(_slot_bases().items(), key=lambda entry: entry[1])
+    labels: list[str] = []
+    for (name, base), (_, end) in zip(ordered, ordered[1:], strict=False):
+        if base != len(labels):
+            raise SystemExit(f"nova workbench: soft_timer slot groups overlap at {name}")
+        template = SLOT_NAMES[name]
+        width = end - base
+        labels += [template.format(index) for index in range(width)] if width > 1 else [template]
     return labels

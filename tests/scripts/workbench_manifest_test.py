@@ -11,6 +11,7 @@ import io
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
@@ -24,6 +25,34 @@ from novakit.services.workbench import (  # noqa: E402
 )
 
 ELF = REPO / "build" / "aarch64-debug" / "novavisor.elf"
+
+
+class TimerSlotTest(unittest.TestCase):
+    """Slot labels follow the header that allocates the slots."""
+
+    def test_each_group_starts_where_the_header_says(self):
+        # The existing extent check only compares totals, so a group
+        # inserted or reordered leaves the count right and every label
+        # after it wrong by a slot. Nothing else would notice.
+        bases = observations._slot_bases()
+        labels = observations.timer_slot_labels()
+        self.assertEqual(len(labels), bases["kSlotCount"])
+        for name, base in bases.items():
+            if name == "kSlotCount":
+                continue
+            with self.subTest(group=name):
+                word = observations.SLOT_NAMES[name].split(" ")[0]
+                self.assertTrue(labels[base].startswith(word), f"{labels[base]} at {base}")
+
+    def test_a_base_the_reader_cannot_evaluate_is_refused(self):
+        # Silence here would mean labels quietly shifted, so an
+        # expression outside the plain-sum form has to stop the bridge.
+        with mock.patch.object(observations, "SLOT_HEADER") as header:
+            header.read_text.return_value = (
+                "inline constexpr std::size_t kSlotSlice = kUnknownThing * 2;\n"
+            )
+            with self.assertRaises(SystemExit):
+                observations._slot_bases()
 
 
 class PageLayoutTest(unittest.TestCase):
