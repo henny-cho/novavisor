@@ -41,6 +41,14 @@ GRADE_CONSOLE = "console"  # a classified log line — exact in time
 GRADE_POLL = "poll"  # a snapshot delta — quantised to the sample
 GRADE_NONE = "none"  # structure, with nothing watching it
 
+# Edge names other modules refer to. The event catalogue says which path
+# a stop is evidence for, and a literal there would let a rename here
+# leave it pointing at nothing.
+EDGE_TRAP = "trap"
+EDGE_POST = "post"
+EDGE_INJECT = "inject"
+EDGE_MMIO = "mmio"
+
 # Expansion groups. A path between two instances of the same thing names
 # the group, because how many there are is the machine's answer.
 PAIR_CORES = "cores"
@@ -58,13 +66,13 @@ class Edge:
 
 
 EDGES: tuple[Edge, ...] = (
-    Edge("trap", BAND_EL1, "trap", GRADE_POLL, "ctx.syndrome", (Badge.TRAP,)),
+    Edge(EDGE_TRAP, BAND_EL1, "trap", GRADE_POLL, "ctx.syndrome", (Badge.TRAP,)),
     Edge("phys", "gicd", BAND_PE, GRADE_CONSOLE, badges=(Badge.IRQ, Badge.GIC)),
     # The hop between a device posting and the list register taking it,
     # read from the token store the post writes and the refill empties.
-    Edge("post", "gicd", "vgic", GRADE_POLL, "vgic.token"),
-    Edge("inject", "vgic", BAND_EL1, GRADE_POLL, "vgic.lr"),
-    Edge("mmio", BAND_EL1, "vgic", GRADE_CONSOLE, badges=(Badge.VGIC,)),
+    Edge(EDGE_POST, "gicd", "vgic", GRADE_POLL, "vgic.token"),
+    Edge(EDGE_INJECT, "vgic", BAND_EL1, GRADE_POLL, "vgic.lr"),
+    Edge(EDGE_MMIO, BAND_EL1, "vgic", GRADE_CONSOLE, badges=(Badge.VGIC,)),
     Edge("dma", BAND_DEV, "smmu", GRADE_POLL, "dev.dma", (Badge.DMA,)),
     Edge("walk", "smmu", "mem", GRADE_CONSOLE, badges=(Badge.SMMU,)),
     Edge("cross", "", "", GRADE_POLL, "smp.mail", (Badge.SMP,), pair=PAIR_CORES),

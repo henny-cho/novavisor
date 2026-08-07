@@ -7,7 +7,9 @@ from pathlib import Path
 
 from ...core import config
 from . import elfsym, snapshot
+from .events import EVENTS
 from .observations import MAX_CPUS, OBSERVATIONS, timer_slot_labels
+from .paths import EDGES
 
 
 def _fields_of(info: elfsym.TypeInfo) -> set[str]:
@@ -103,8 +105,28 @@ def verify_manifest(elf: Path | None = None) -> int:
                 "[workbench] timer queue extents diverge from the manifest constants",
                 file=sys.stderr,
             )
+
+        # Every stop point must still be a function in this image. An
+        # inlined or renamed one would otherwise leave the UI offering a
+        # breakpoint that can never be hit.
+        edge_ids = {edge.id for edge in EDGES}
+        for event in EVENTS:
+            try:
+                index.resolve_function(event.symbol)
+            except KeyError as error:
+                failures += 1
+                print(f"[workbench] stale event {event.id}: {error}", file=sys.stderr)
+            if event.edge and event.edge not in edge_ids:
+                failures += 1
+                print(
+                    f"[workbench] event {event.id} lights unknown path {event.edge!r}",
+                    file=sys.stderr,
+                )
     finally:
         index.close()
     if failures == 0:
-        print(f"[workbench] manifest check: {len(OBSERVATIONS)} observations resolve")
+        print(
+            f"[workbench] manifest check: {len(OBSERVATIONS)} observations "
+            f"and {len(EVENTS)} stop points resolve"
+        )
     return 1 if failures else 0

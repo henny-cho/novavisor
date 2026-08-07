@@ -244,7 +244,9 @@ class Bridge:
             self._release()
         if self._inspector is None:
             surfaces = self.session.surfaces
-            self._inspector = halt.HaltInspector(surfaces.qmp_path, surfaces.gdb_path)
+            self._inspector = halt.HaltInspector(
+                surfaces.qmp_path, surfaces.gdb_path, self.session.elf_path
+            )
             self._inspector_run = self.session.run_id
         return self._inspector
 

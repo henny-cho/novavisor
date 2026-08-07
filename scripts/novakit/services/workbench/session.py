@@ -20,7 +20,7 @@ from pathlib import Path
 
 from ...core import board
 from .. import artifacts, cmake, expect, manifest, spawn
-from . import anchors, derive, hardware
+from . import anchors, derive, events, hardware
 from .observations import observation_rates, timer_slot_labels
 from .protocol import Kind, Src, Topic
 from .store import StateStore
@@ -74,6 +74,7 @@ def initial_topology() -> dict:
         "guests": [],
         "board": hardware.board_map(),
         "catalog": _catalog(),
+        "stops": events.catalogue(),
         "taxonomy": vocabulary() | derive.syndrome_vocabulary(_debug_image()),
         "timer_slots": timer_slot_labels(),
         "observations": observation_rates(),
@@ -122,6 +123,7 @@ def prepare(target: Target) -> Prepared:
         ],
         "board": hardware.board_map(),
         "catalog": _catalog(),
+        "stops": events.catalogue(),
         "taxonomy": vocabulary() | derive.syndrome_vocabulary(_debug_image()),
         "timer_slots": timer_slot_labels(),
         "observations": observation_rates(),

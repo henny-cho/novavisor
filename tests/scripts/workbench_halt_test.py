@@ -341,5 +341,58 @@ class StopOwnershipTest(unittest.TestCase):
             inspector._require()
 
 
+class ArmTest(unittest.TestCase):
+    """Arming is declarative: the caller states the set it wants and the
+    difference is applied. A UI that forgets to clear one cannot leave
+    the machine stopping somewhere nobody asked about."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(dir="/dev/shm")
+        gdb_path = Path(self.directory.name) / "gdb.sock"
+        self.listener = unix_listener(gdb_path)
+        self.log: list[str] = []
+        threading.Thread(
+            target=serve_gdb, args=(self.listener, self.log), daemon=True
+        ).start()
+        self.inspector = halt.HaltInspector(
+            Path(self.directory.name) / "qmp.sock", gdb_path
+        )
+        # Stand in for the per-run symbol resolution; the addresses
+        # themselves are covered against the real image elsewhere.
+        self.inspector._addresses = {"vgic.bind": 0x4000BB24, "trap": 0x400044D8}
+        self.inspector.pause()
+        self.addCleanup(self.directory.cleanup)
+        self.addCleanup(self.listener.close)
+        self.addCleanup(self.inspector.resume)
+
+    def test_arming_sets_only_what_was_asked_for(self):
+        self.assertEqual(self.inspector.arm(["vgic.bind"]), ["vgic.bind"])
+        self.assertIn("Z0,4000bb24,4", self.log)
+        self.assertNotIn("Z0,400044d8,4", self.log)
+
+    def test_rearming_clears_what_is_no_longer_wanted(self):
+        self.inspector.arm(["vgic.bind", "trap"])
+        self.assertEqual(self.inspector.armed, ["trap", "vgic.bind"])
+        self.inspector.arm(["trap"])
+        self.assertEqual(self.inspector.armed, ["trap"])
+        self.assertIn("z0,4000bb24,4", self.log)
+
+    def test_rearming_the_same_set_does_not_resend(self):
+        self.inspector.arm(["trap"])
+        self.inspector.arm(["trap"])
+        self.assertEqual(self.log.count("Z0,400044d8,4"), 1)
+
+    def test_unknown_names_are_ignored_not_guessed(self):
+        self.assertEqual(self.inspector.arm(["nope", "trap"]), ["trap"])
+
+    def test_resume_forgets_the_breakpoints_the_stub_dropped(self):
+        """Letting go of the connection drops the stub's breakpoints, so
+        keeping the names would make the next pause believe they are
+        still set and skip re-arming them."""
+        self.inspector.arm(["trap"])
+        self.inspector.resume()
+        self.assertEqual(self.inspector.armed, [])
+
+
 if __name__ == "__main__":
     unittest.main()

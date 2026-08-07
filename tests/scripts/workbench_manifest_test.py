@@ -19,8 +19,10 @@ sys.path.insert(0, str(REPO / "scripts"))
 from novakit.services.workbench import (  # noqa: E402
     checks,
     elfsym,
+    events,
     hardware,
     observations,
+    paths,
     snapshot,
 )
 
@@ -155,6 +157,82 @@ class ManifestResolutionTest(unittest.TestCase):
         capacity = index.resolve("nova::vgic::(anonymous)::g_lr_count")
         self.assertEqual(capacity.type.kind, "uint")
         self.assertGreaterEqual(lr.type.count, 1)
+
+
+@unittest.skipUnless(ELF.is_file(), "debug ELF not built")
+class StopPointTest(unittest.TestCase):
+    """Every catalogued stop point must be a real function in the image.
+
+    An inlined or renamed one leaves the UI offering a breakpoint that
+    can never be hit — the halt-layer equivalent of a blank panel.
+    """
+
+    def setUp(self):
+        self.index = elfsym.ElfIndex(ELF)
+        self.addCleanup(self.index.close)
+
+    def test_every_event_resolves_to_an_entry_address(self):
+        for event in events.EVENTS:
+            with self.subTest(event=event.id):
+                address = self.index.resolve_function(event.symbol)
+                self.assertGreater(address, 0)
+
+    def test_addresses_are_distinct(self):
+        """Two events at one address would be one stop wearing two
+        names: arming either would fire both."""
+        seen = {event.id: self.index.resolve_function(event.symbol) for event in events.EVENTS}
+        self.assertEqual(len(set(seen.values())), len(seen), seen)
+
+    def test_the_bind_carries_the_binding_in_its_arguments(self):
+        """The whole point of the catalogue's first entry: the physical
+        and virtual numbers are AAPCS64 arguments, so a stop there reads
+        them off x0..x3 without decoding any memory."""
+        bind = events.BY_ID["vgic.bind"]
+        self.assertEqual(bind.args, ("vm", "vintid", "pintid", "generation"))
+
+    def test_resolution_needs_no_debug_info(self):
+        """`.symtab` alone. A function's parameters live in its mangled
+        name, and the prefix match sidesteps having to spell them."""
+        prefix = elfsym.mangle("nova::vgic::post_spi_tracked")
+        self.assertEqual(prefix, "_ZN4nova4vgic16post_spi_trackedE")
+        self.assertEqual(
+            self.index.resolve_function("nova::vgic::post_spi_tracked"),
+            self.index.resolve_function("nova::vgic::post_spi_tracked"),
+        )
+
+    def test_a_shorter_name_is_not_a_prefix_of_a_longer_one(self):
+        """Itanium length prefixes are what make the match safe:
+        post_spi and post_spi_tracked encode as 8post_spi and
+        16post_spi_tracked, so neither can match the other."""
+        self.assertNotEqual(
+            self.index.resolve_function("nova::vgic::post_spi"),
+            self.index.resolve_function("nova::vgic::post_spi_tracked"),
+        )
+
+    def test_an_absent_function_is_refused(self):
+        with self.assertRaises(KeyError):
+            self.index.resolve_function("nova::vgic::no_such_entry_point")
+
+
+class StopCatalogueTest(unittest.TestCase):
+    """Shape checks that hold without an image."""
+
+    def test_ids_are_unique(self):
+        ids = [event.id for event in events.EVENTS]
+        self.assertEqual(len(set(ids)), len(ids))
+
+    def test_every_edge_named_is_a_published_path(self):
+        known = {edge.id for edge in paths.EDGES}
+        for event in events.EVENTS:
+            if event.edge:
+                with self.subTest(event=event.id):
+                    self.assertIn(event.edge, known)
+
+    def test_the_catalogue_ships_no_addresses(self):
+        """Addresses change every build and the UI has no use for one;
+        shipping them would invite a client to cache a stale map."""
+        for entry in events.catalogue():
+            self.assertEqual(set(entry), {"id", "edge", "args", "label"})
 
 
 if __name__ == "__main__":

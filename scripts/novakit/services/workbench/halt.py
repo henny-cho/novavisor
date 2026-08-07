@@ -25,7 +25,10 @@ from __future__ import annotations
 import json
 import re
 import socket
+from collections.abc import Iterable
 from pathlib import Path
+
+from . import elfsym, events
 
 _XML_REFERENCE = re.compile(r'href="([^"]+)"')
 _XML_REGISTER = re.compile(r"<reg\b[^>]*/>")
@@ -233,6 +236,20 @@ class GdbClient:
         self._sock.sendall(b"\x03")
         return self._receive(timeout)
 
+    def set_breakpoint(self, address: int) -> bool:
+        """Break at an address.
+
+        Z0 rather than Z1: QEMU keeps both kinds out of band — a read
+        back from a breakpointed address returns the original
+        instruction, so EL2's read-only text is no obstacle — but the
+        hardware kind is limited to the debug registers the CPU models,
+        which is fewer than this catalogue has entries.
+        """
+        return self._exchange(f"Z0,{address:x},4") == "OK"
+
+    def clear_breakpoint(self, address: int) -> bool:
+        return self._exchange(f"z0,{address:x},4") == "OK"
+
     def detach(self) -> None:
         """Release the machine. The stub resumes it as we let go."""
         try:
@@ -254,14 +271,58 @@ class HaltInspector:
     only read.
     """
 
-    def __init__(self, qmp_path: Path, gdb_path: Path):
+    def __init__(self, qmp_path: Path, gdb_path: Path, elf_path: Path | None = None):
         self._qmp_path = qmp_path
         self._gdb_path = gdb_path
+        self._elf_path = elf_path
         self._gdb: GdbClient | None = None
+        self._addresses: dict[str, int] | None = None
+        self._armed: dict[str, int] = {}
 
     @property
     def paused(self) -> bool:
         return self._gdb is not None
+
+    @property
+    def armed(self) -> list[str]:
+        return sorted(self._armed)
+
+    def addresses(self) -> dict[str, int]:
+        """Where each catalogued event sits in *this* build.
+
+        Resolved once per run and from `.symtab` alone — a breakpoint
+        needs an entry address, not a layout, so this works on an image
+        with no debug info at all.
+        """
+        if self._addresses is None:
+            if self._elf_path is None:
+                raise RuntimeError("no image to resolve breakpoints against")
+            index = elfsym.ElfIndex(self._elf_path)
+            try:
+                self._addresses = {
+                    event.id: index.resolve_function(event.symbol)
+                    for event in events.EVENTS
+                }
+            finally:
+                index.close()
+        return self._addresses
+
+    def arm(self, wanted: Iterable[str]) -> list[str]:
+        """Break at exactly these events, and nowhere else.
+
+        Declarative on purpose: the caller says which stops it wants and
+        the difference is applied, so a UI that forgets to clear one
+        cannot leave the machine stopping somewhere nobody asked about.
+        """
+        gdb = self._require()
+        where = self.addresses()
+        target = {name for name in wanted if name in where}
+        for name in sorted(set(self._armed) - target):
+            gdb.clear_breakpoint(self._armed.pop(name))
+        for name in sorted(target - set(self._armed)):
+            if gdb.set_breakpoint(where[name]):
+                self._armed[name] = where[name]
+        return self.armed
 
     def status(self) -> str:
         qmp = QmpClient(self._qmp_path)
@@ -308,6 +369,9 @@ class HaltInspector:
 
     def resume(self) -> None:
         gdb, self._gdb = self._gdb, None
+        # Breakpoints live in the stub, so letting go drops them; keeping
+        # the names would make the next pause think they were still set.
+        self._armed.clear()
         if gdb is None:
             return
         try:
