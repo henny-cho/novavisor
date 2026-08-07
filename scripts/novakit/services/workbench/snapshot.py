@@ -129,9 +129,28 @@ class ElfRamProvider:
             value = obs.shape(value, info)
         return _hexify(value) if obs.hex else value
 
+    @property
+    def symbols(self) -> elfsym.SymbolTable:
+        """What this image carries, for questions about capability.
+
+        The symtab is already parsed behind this provider, so asking it
+        costs a dictionary lookup — where opening the ELF again to ask
+        the same thing costs a third of a second.
+        """
+        return self._index.symbols
+
     def close(self) -> None:
         self._ram.close()
         self._index.close()
+
+
+def image_symbols(provider) -> elfsym.SymbolTable | None:
+    """The symbol table behind a provider, if it has one.
+
+    A scripted provider has no image, and a capability question it
+    cannot answer is unknown rather than no.
+    """
+    return getattr(provider, "symbols", None)
 
 
 class SnapshotPoller:

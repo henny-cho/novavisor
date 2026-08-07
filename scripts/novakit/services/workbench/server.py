@@ -56,10 +56,14 @@ HALT_COMMANDS = ("stop", "cont", "step", "run", "abort")
 # covers a cold build ahead of the machine it is waiting for.
 LAUNCH_POLL_SECONDS = 0.005
 LAUNCH_ARM_TIMEOUT_SECONDS = 600.0
-# Ticks to keep looking for a formatted region before concluding the
-# image has no trace layer. EL2 formats it in its first init action,
-# which is still later than QEMU creating the backing file.
-TRACE_ATTEMPTS = 200
+# The trace loop's period. The rings are a latency budget rather than
+# memory, so this is the number that has to fit inside them — and it is
+# set by the peak, not the average. Measured on demo 17: the run
+# averages ~1500 events/s, but guest boot bursts to ~89k/s, which laps
+# a 4096-record ring in 46 ms. Ten times under that, and an idle look
+# costs two eight-byte reads because the drain is skipped outright when
+# nothing is waiting.
+TRACE_DRAIN_SECONDS = 0.005
 
 
 def _require_websockets():
@@ -108,8 +112,10 @@ class Bridge:
         # must not take the event stream with it.
         self._tracer: trace.TraceReader | None = None
         self._tracer_run: int | None = None
-        self._trace_attempts = 0
-        self._trace_absent = False
+        # What has been said about the T layer this run, so a state is
+        # published on the transition rather than on every tick.
+        self._trace_state = ""
+        self._board: dict[str, int] | None = None
         # Stamped into every connect topo: a changed token is the one
         # reliable restart signal, whatever the seq counter says.
         self._token = uuid.uuid4().hex[:8]
@@ -133,6 +139,7 @@ class Bridge:
         self._flusher = asyncio.create_task(self._flush_loop())
         if self.session.surfaces is not None:
             self.spawn(self._poll_loop())
+            self.spawn(self._trace_loop())
 
     @property
     def port(self) -> int:
@@ -465,10 +472,83 @@ class Bridge:
     def _drop_tracer(self) -> None:
         tracer, self._tracer = self._tracer, None
         self._tracer_run = None
-        self._trace_attempts = 0
-        self._trace_absent = False
+        self._trace_state = ""
         if tracer is not None:
             tracer.close()
+
+    def _board_numbers(self) -> dict[str, int]:
+        """Board constants, read once. The headers do not change while
+        the bridge runs, and the attach probe asks at 200 Hz."""
+        if self._board is None:
+            self._board = hardware.platform()
+        return self._board
+
+    def _set_trace_state(self, state: str, **detail) -> None:
+        """Say where the T layer stands, once per transition."""
+        if self._trace_state == state:
+            return
+        self._trace_state = state
+        self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "trace", "state": state, **detail})
+
+    def _image_has_tracing(self) -> bool:
+        """Does this build carry the ring writer?
+
+        Asked of the image, which knows, rather than inferred from how
+        many times the region has come back empty — that inference told
+        a slow machine its image had no tracing, and the tick after it
+        called drain() on the None it had just decided on.
+
+        Asked of the S layer's index, which is already parsed, rather
+        than by opening the ELF here: the answer costs a third of a
+        second to obtain and only ever changes the wording of a notice,
+        so paying for it on the attach path would delay the drain to
+        improve a log line. Until that index exists the answer is
+        unknown — which is not the same as no, so the probing carries
+        on either way.
+        """
+        symbols = snapshot.image_symbols(self._provider)
+        return symbols is None or symbols.has(trace.WRITER_SYMBOL)
+
+    def _attach_tracer(self) -> bool:
+        """Bind the T reader to this run's region, if it is there yet.
+
+        Two questions, kept apart. Whether the image has a trace layer
+        is settled by the image; whether the region has been formatted
+        yet is settled by the region, at the cost of a stat and a header
+        read. Neither is answered by a retry budget, so nothing here
+        latches: the probe is cheap enough to run for the life of a run,
+        and an appearing region corrects whatever was said before it.
+        """
+        session = self.session
+        if session.surfaces is None:
+            return False
+        if self._tracer_run != session.run_id:
+            self._drop_tracer()
+            self._tracer_run = session.run_id
+        if self._tracer is not None:
+            return True
+        shm_path = session.surfaces.shm_path
+        if not shm_path.exists() or shm_path.stat().st_size == 0:
+            return False
+        board = self._board_numbers()
+        try:
+            self._tracer = trace.TraceReader(
+                shm_path, board["NOVA_BOARD_PHYS_RAM_BASE"], board["NOVA_BOARD_TRACE_PA"]
+            )
+        except trace.NotYetFormatted as error:
+            self._set_trace_state(
+                "waiting" if self._image_has_tracing() else "none", reason=str(error)
+            )
+            return False
+        except trace.NotFormatted as error:
+            # A region that is there and disagrees about its layout. No
+            # amount of asking again resolves a version skew.
+            self._set_trace_state("mismatch", reason=str(error))
+            return False
+        # Constant for the run, so it rides the transition rather than
+        # every summary frame.
+        self._set_trace_state("active", early=self._tracer.geometry.early)
+        return True
 
     def _pump_trace(self) -> None:
         """Drain the firmware's rings and publish what fired.
@@ -478,34 +558,8 @@ class Bridge:
         with a silent drop would make "everything that happened" a lie.
         The records stay here for `nova workbench trace` to ask for.
         """
-        session = self.session
-        if session.surfaces is None:
+        if not self._attach_tracer():
             return
-        if self._tracer_run != session.run_id:
-            self._drop_tracer()
-            self._tracer_run = session.run_id
-        if self._tracer is None:
-            if self._trace_absent:
-                return
-            shm_path = session.surfaces.shm_path
-            if not shm_path.exists() or shm_path.stat().st_size == 0:
-                return
-            self._trace_attempts += 1
-            board = hardware.platform()
-            try:
-                self._tracer = trace.TraceReader(
-                    shm_path, board["NOVA_BOARD_PHYS_RAM_BASE"], board["NOVA_BOARD_TRACE_PA"]
-                )
-            except trace.NotFormatted:
-                # EL2 formats the region in its first init action, but
-                # that is still later than QEMU creating the backing
-                # file — so an empty region right after launch is a
-                # transient, not an image without a trace layer. Retry
-                # for a bounded while before believing it.
-                if self._trace_attempts < TRACE_ATTEMPTS:
-                    return
-                self._trace_absent = True
-                raise
         records, lost = self._tracer.drain()
         if not records and not lost:
             return
@@ -574,19 +628,6 @@ class Bridge:
         try:
             while True:
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
-                if self.session.phase is Phase.RUNNING:
-                    try:
-                        await asyncio.get_running_loop().run_in_executor(None, self._pump_trace)
-                    except trace.NotFormatted as error:
-                        # Only after the retries: an image built without
-                        # the trace component, or one older than this
-                        # reader. Said once, and the S layer carries on.
-                        self.store.publish(
-                            Topic.LIFE, Kind.EVENT,
-                            {"phase": "trace-unavailable", "error": str(error)},
-                        )
-                    except (FileNotFoundError, ValueError):
-                        self._drop_tracer()
                 try:
                     poller = await self._ensure_poller()
                     if poller is None:
@@ -615,6 +656,38 @@ class Bridge:
                     self._drop_provider()
         finally:
             self._drop_provider()
+
+    async def _trace_loop(self) -> None:
+        """Drain the firmware's rings, on the T layer's own clock.
+
+        Separate from the S loop on purpose. The two have very different
+        costs — one DWARF walk is three seconds — and a shared loop puts
+        the T layer behind whatever the S layer is doing. They were
+        already independent in what they read; this makes them
+        independent in when they read it, at their own rates.
+
+        The drain runs on a worker so a burst cannot stall the socket,
+        but the *question* is asked here: two eight-byte reads say
+        whether there is anything to hand off at all, and at this period
+        the answer is usually no. Paying the thread round trip for that
+        would cost thirty times what the reads do.
+        """
+        try:
+            while True:
+                # Nothing to hurry for once the image itself says there
+                # is no ring to attach to, or that its layout disagrees.
+                hurry = self._tracer is not None or self._trace_state in ("", "waiting")
+                await asyncio.sleep(TRACE_DRAIN_SECONDS if hurry else POLL_INTERVAL_SECONDS)
+                if self.session.phase is not Phase.RUNNING:
+                    continue
+                try:
+                    if self._tracer is not None and self._tracer.pending() == 0:
+                        continue
+                    await asyncio.get_running_loop().run_in_executor(None, self._pump_trace)
+                except (FileNotFoundError, ValueError):
+                    # The backing file went out from under the run.
+                    self._drop_tracer()
+        finally:
             self._drop_tracer()
 
     async def _flush_loop(self) -> None:

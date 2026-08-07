@@ -55,10 +55,29 @@ _RECORD = struct.Struct("<QHBBIQQ")
 class NotFormatted(RuntimeError):
     """The region carries no ring this reader understands.
 
-    Raised rather than papered over: a wrong magic or version means the
-    firmware and this file disagree about the layout, and decoding
+    Raised rather than papered over: a wrong version or geometry means
+    the firmware and this file disagree about the layout, and decoding
     anyway would turn that into plausible-looking events.
     """
+
+
+class NotYetFormatted(NotFormatted):
+    """Nothing has been placed here — so far.
+
+    EL2 formats the region in its first init action, which is later
+    than QEMU creating and sizing the backing file, so an empty region
+    right after launch is a moment in a launch rather than a fact about
+    an image. Distinct from its parent because the two call for
+    opposite responses: this one is answered by asking again, and a
+    version disagreement never will be.
+    """
+
+
+# The image symbol that settles whether a build carries the ring
+# writer. One-sided: present means certainly yes, absent only means
+# this reader cannot tell, since an optimised image inlines every use
+# and keeps no name.
+WRITER_SYMBOL = "nova::trace::g_ring"
 
 
 @dataclass(frozen=True)
@@ -108,7 +127,9 @@ class TraceReader:
             self._ram = mmap.mmap(backing.fileno(), 0, prot=mmap.PROT_READ)
         try:
             if len(self._ram) < self._offset + REGION_SIZE:
-                raise NotFormatted("RAM backend is smaller than the trace region")
+                # QEMU sizes the backend as it comes up, so a short file
+                # is a launch in progress, not a machine without room.
+                raise NotYetFormatted("RAM backend is smaller than the trace region")
             self.geometry = self._read_geometry()
         except BaseException:
             self._ram.close()
@@ -120,7 +141,11 @@ class TraceReader:
             self._ram, self._offset
         )
         if magic != MAGIC:
-            raise NotFormatted(f"no trace region at {self._offset:#x} (magic {magic:#x})")
+            # The magic is written last, so its absence says nothing
+            # about the layout — only that nobody has finished placing
+            # one here. Stale bytes from a previous boot read the same
+            # way, and mean the same thing for this run.
+            raise NotYetFormatted(f"no trace region at {self._offset:#x} (magic {magic:#x})")
         if version != VERSION:
             raise NotFormatted(f"trace region version {version}, expected {VERSION}")
         if record_size != _REC_SIZE:
@@ -139,6 +164,18 @@ class TraceReader:
     def _head(self, ring: int) -> int:
         base = self._offset + _HEADER_SIZE + ring * self.geometry.stride
         return int.from_bytes(self._ram[base + _HEAD_OFF : base + _HEAD_OFF + 8], "little")
+
+    def pending(self) -> int:
+        """Records waiting across every ring.
+
+        Two eight-byte reads and no decode, so a caller can ask far more
+        often than it can afford to drain — which is what lets an idle
+        tick skip the work rather than budget for it.
+        """
+        return sum(
+            max(0, self._head(ring) - self._cursor[ring])
+            for ring in range(self.geometry.rings)
+        )
 
     def drain(self) -> tuple[list[Record], int]:
         """Everything written since the last call, oldest first.

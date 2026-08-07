@@ -262,6 +262,25 @@ function onTopo(data) {
   }
 }
 
+/* The `early` count is a different fact from a drain loss: those events
+   predate the rings, so no drainer however prompt could have had them. */
+function traceStateText(data) {
+  switch (String(data.state || "")) {
+    case "active":
+      return data.early
+        ? `트레이스 연결 — 배치 전 유실 ${data.early}건`
+        : "트레이스 연결";
+    case "waiting":
+      return "트레이스 영역 대기 중";
+    case "none":
+      return "트레이스 계층 없음 (이미지에 링 기록자 심볼이 없음)";
+    case "mismatch":
+      return `트레이스 레이아웃 불일치: ${data.reason || "?"}`;
+    default:
+      return `트레이스 상태: ${data.state || "?"}`;
+  }
+}
+
 function onLife(ts, data) {
   const phase = String(data.phase || "");
   const demo = data.demo ? ` — ${data.demo}` : "";
@@ -388,6 +407,14 @@ function onLife(ts, data) {
         `검증 실패 (${data.failure || "?"}${data.pattern ? ` — ${data.pattern}` : ""})`,
         { severity: "CRIT" },
       );
+      break;
+    /* Where the T layer stands, said once per transition rather than
+       inferred from the absence of trace frames. */
+    case "trace":
+      events.addNotice(ts, traceStateText(data), {
+        dim: data.state !== "mismatch",
+        severity: data.state === "mismatch" ? "WARN" : undefined,
+      });
       break;
     case "unsupported":
       events.addNotice(ts, `미지원 업링크 토픽: ${data.topic || "?"}`, { dim: true });

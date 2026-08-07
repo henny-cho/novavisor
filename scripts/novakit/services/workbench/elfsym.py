@@ -57,6 +57,64 @@ class TornRead(ValueError):
     """An enum field held a value outside its enumeration."""
 
 
+def _symtab_of(elffile, path: Path) -> dict[str, tuple[int, int]]:
+    section = elffile.get_section_by_name(".symtab")
+    if section is None:
+        raise SystemExit(f"{path}: no .symtab")
+    return {
+        symbol.name: (symbol["st_value"], symbol["st_size"])
+        for symbol in section.iter_symbols()
+        if symbol.name
+    }
+
+
+class SymbolTable:
+    """An image's .symtab, and what can be answered from it alone.
+
+    Kept apart from the DWARF view because the questions are different
+    sizes. "Does this image carry X?" is a name lookup, and building
+    type layouts to answer it would make a capability query depend on
+    the very debug information it exists to report the absence of.
+    """
+
+    def __init__(self, entries: dict[str, tuple[int, int]]):
+        self.entries = entries
+
+    @classmethod
+    def of(cls, path: Path) -> SymbolTable:
+        elffile_type = _require_elftools()
+        with Path(path).open("rb") as stream:
+            return cls(_symtab_of(elffile_type(stream), Path(path)))
+
+    def has(self, qualified: str) -> bool:
+        """Is this variable in the image?"""
+        return mangle(qualified) in self.entries
+
+    def has_function(self, qualified: str) -> bool:
+        """Is this function in the image? Same prefix rule as address_of."""
+        prefix = mangle(qualified)
+        return any(name.startswith(prefix) for name in self.entries)
+
+    def address_of(self, qualified: str) -> int:
+        """A function's entry address, by qualified name.
+
+        A function's mangled name carries its parameter types, which
+        only the compiler can spell. The *variable* mangling of the same
+        name is exactly the prefix those types follow, and Itanium's
+        length-prefixed components mean no shorter name can be a prefix
+        of a longer one — so matching on it resolves the entry without
+        this reader having to encode C++ types.
+        """
+        prefix = mangle(qualified)
+        matches = sorted(name for name in self.entries if name.startswith(prefix))
+        if not matches:
+            raise KeyError(f"function not in .symtab: {qualified} ({prefix}...)")
+        addresses = {self.entries[name][0] for name in matches}
+        if len(addresses) > 1:
+            raise KeyError(f"{qualified} is overloaded; cannot pick one: {matches}")
+        return addresses.pop()
+
+
 @dataclass(frozen=True)
 class TypeInfo:
     kind: str  # uint | int | bool | enum | pointer | array | struct
@@ -120,13 +178,8 @@ class ElfIndex:
         elffile_type = _require_elftools()
         self._stream = self.path.open("rb")
         self._elf = elffile_type(self._stream)
-        symtab = self._elf.get_section_by_name(".symtab")
-        if symtab is None:
-            raise SystemExit(f"{self.path}: no .symtab")
-        self._symbols: dict[str, tuple[int, int]] = {}
-        for symbol in symtab.iter_symbols():
-            if symbol.name:
-                self._symbols[symbol.name] = (symbol["st_value"], symbol["st_size"])
+        self.symbols = SymbolTable(_symtab_of(self._elf, self.path))
+        self._symbols = self.symbols.entries
         self._variable_dies: dict[int, object] | None = None
         self._enum_dies: dict[str, tuple[tuple[int, str], ...]] | None = None
         self._types: dict[int, TypeInfo] = {}
@@ -146,23 +199,7 @@ class ElfIndex:
         return ResolvedSymbol(qualified, address, size or info.size, info)
 
     def resolve_function(self, qualified: str) -> int:
-        """A function's entry address, by qualified name.
-
-        A function's mangled name carries its parameter types, which
-        only the compiler can spell. The *variable* mangling of the same
-        name is exactly the prefix those types follow, and Itanium's
-        length-prefixed components mean no shorter name can be a prefix
-        of a longer one — so matching on it resolves the entry without
-        this reader having to encode C++ types.
-        """
-        prefix = mangle(qualified)
-        matches = sorted(name for name in self._symbols if name.startswith(prefix))
-        if not matches:
-            raise KeyError(f"function not in .symtab: {qualified} ({prefix}...)")
-        addresses = {self._symbols[name][0] for name in matches}
-        if len(addresses) > 1:
-            raise KeyError(f"{qualified} is overloaded; cannot pick one: {matches}")
-        return addresses.pop()
+        return self.symbols.address_of(qualified)
 
     def enum_labels(self, qualified: str) -> dict[int, str]:
         """The enumerators of a firmware enum, by its qualified name.
