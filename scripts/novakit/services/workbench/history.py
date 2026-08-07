@@ -74,7 +74,6 @@ class History:
         # them, so "how much was forgotten" is arithmetic and not a
         # counter that could drift from the buffer it describes.
         self._head = 0
-        self._stamps: list[int] = []  # ts per slot, in ring order
 
     def __len__(self) -> int:
         return min(self._head, self.capacity)
@@ -85,12 +84,7 @@ class History:
 
     def append(self, records: list[trace.Record]) -> None:
         for record in records:
-            slot = self._head % self.capacity
-            trace.pack_into(self._bytes, slot * trace.REC_SIZE, record)
-            if slot < len(self._stamps):
-                self._stamps[slot] = record.ts
-            else:
-                self._stamps.append(record.ts)
+            trace.pack_into(self._bytes, (self._head % self.capacity) * trace.REC_SIZE, record)
             self._head += 1
 
     def span(self) -> Span:
@@ -99,13 +93,23 @@ class History:
             return Span(0, 0, 0, False)
         return Span(self._at(0), self._at(held - 1), held, self.full)
 
+    def _slot(self, index: int) -> int:
+        """Where the index'th oldest retained record sits in the ring."""
+        return (self._head - len(self) + index) % self.capacity
+
     def _at(self, index: int) -> int:
-        """Timestamp of the index'th oldest retained record."""
-        return self._stamps[(self._head - len(self) + index) % self.capacity]
+        """Timestamp of the index'th oldest retained record.
+
+        Read back out of the buffer rather than mirrored into an array
+        beside it. A mirror is one more thing append() has to keep true,
+        and the first edit that forgets gives a bisection searching the
+        wrong order over records that are all still there — silently.
+        Eight bytes at a known offset is what the layout is for.
+        """
+        return trace.timestamp_at(self._bytes, self._slot(index) * trace.REC_SIZE)
 
     def _record(self, index: int) -> trace.Record:
-        slot = (self._head - len(self) + index) % self.capacity
-        return trace.unpack_from(self._bytes, slot * trace.REC_SIZE)
+        return trace.unpack_from(self._bytes, self._slot(index) * trace.REC_SIZE)
 
     def _bisect(self, ts: int) -> int:
         """First retained index whose timestamp is >= ts.

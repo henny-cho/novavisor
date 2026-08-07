@@ -511,10 +511,10 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
         bridge.session.phase = Phase.RUNNING
         bridge.session.elf_path = directory / "novavisor.elf"
         bridge.session.run_id = 1
-        # Resolve in-process: a scripted image cannot cross a process
-        # boundary, and this is the same fallback a host without a
-        # usable pool takes.
-        bridge._images_unavailable = True
+        # Resolve in-process. Where the work runs is environmental, and
+        # a scripted image cannot cross a process boundary; this is the
+        # same path a host that cannot start a pool takes.
+        bridge._image_pool = lambda: None
         return bridge
 
     async def drain_until(self, bridge, predicate, timeout: float = 2.0) -> list[dict]:

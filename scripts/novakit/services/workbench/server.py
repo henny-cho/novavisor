@@ -134,7 +134,6 @@ class Bridge:
         # Where images are parsed. Built on first use and kept, so a
         # restart's re-parse does not pay for a process as well.
         self._images: ProcessPoolExecutor | None = None
-        self._images_unavailable = False
         # Stamped into every connect topo: a changed token is the one
         # reliable restart signal, whatever the seq counter says.
         self._token = uuid.uuid4().hex[:8]
@@ -525,18 +524,24 @@ class Bridge:
         measurement that pointed here was blunt: with the S layer off
         entirely, demo 13's loss fell from 24890 records to 250.
 
-        One worker, because there is one image at a time, and it is
-        kept: a restart re-parses, and paying to respawn for that would
-        put the cost back where it was taken from. If a pool cannot be
-        started, the work still happens — on a thread, as before.
+        One worker, because there is one image at a time, and it is kept
+        once made: a restart re-parses, and paying to respawn for that
+        would put the cost back where it was taken from.
+
+        A failure to start one is not remembered. It costs a constructor
+        call to try — the workers spawn lazily — and this is asked once
+        per run, so a latched "no pool" would trade nothing for turning
+        one bad moment (an exhausted fd table, a transient) into the
+        rest of the session on a thread. Falling back per attempt is the
+        same behaviour without the memory.
         """
-        if self._images is None and not self._images_unavailable:
+        if self._images is None:
             try:
                 self._images = ProcessPoolExecutor(
                     max_workers=1, mp_context=multiprocessing.get_context("forkserver")
                 )
             except (OSError, ValueError, ImportError):
-                self._images_unavailable = True
+                return None  # this attempt runs on a thread; the next may not
         return self._images
 
     def _set_trace_state(self, state: str, **detail) -> None:

@@ -40,6 +40,8 @@ const LANE_MIN = 9;
 const LANE_MAX = 20;
 const GUTTER = 96; /* lane captions */
 const MARK_W = 2;
+/* How far off a mark a click may land and still mean it. */
+const SLACK_PX = 6;
 
 const CPU_COLOURS = ["--vm0", "--vm1", "--vm2", "--vm3"];
 
@@ -248,16 +250,40 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     return { from: Math.max(first, last - width), to: Math.max(last, first + 1) };
   }
 
+  /* Where everything is, in one place and one unit.
+     The paint works in device pixels and a pointer arrives in CSS
+     pixels, so the same three numbers — gutter, plot width, lane height
+     — were being derived twice with a factor between them. Two
+     derivations of one geometry drift the moment either is edited, and
+     the symptom is a click that selects something other than what the
+     reader aimed at. `scale` is the only place the two unit systems
+     meet: `1` answers in CSS pixels, the device ratio in device ones. */
+  function geometry(scale) {
+    const box = canvas.getBoundingClientRect();
+    const width = Math.max(1, box.width * scale);
+    const height = Math.max(1, box.height * scale);
+    const gutter = GUTTER * scale;
+    const rows = Math.max(1, lanes.length);
+    return {
+      width,
+      height,
+      gutter,
+      plot: Math.max(1, width - gutter),
+      lane: Math.min(LANE_MAX * scale, Math.max(LANE_MIN * scale, height / rows)),
+      scale,
+    };
+  }
+
   function measure() {
     const ratio = window.devicePixelRatio || 1;
-    const box = canvas.getBoundingClientRect();
-    const width = Math.max(1, Math.round(box.width * ratio));
-    const height = Math.max(1, Math.round(box.height * ratio));
+    const view_ = geometry(ratio);
+    const width = Math.round(view_.width);
+    const height = Math.round(view_.height);
     if (canvas.width !== width || canvas.height !== height) {
       canvas.width = width;
       canvas.height = height;
     }
-    return { width, height, ratio };
+    return view_;
   }
 
   function palette() {
@@ -331,24 +357,19 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
   }
 
   function paint() {
-    const { width, height, ratio } = measure();
+    const at = measure();
+    const { gutter, plot, lane: laneHeight, scale: ratio } = at;
     const colours = palette();
-    context.clearRect(0, 0, width, height);
+    context.clearRect(0, 0, at.width, at.height);
     const window_ = bounds();
     if (!window_ || !lanes.length) return;
-
-    const plot = width - GUTTER * ratio;
-    const laneHeight = Math.min(
-      LANE_MAX * ratio,
-      Math.max(LANE_MIN * ratio, height / lanes.length),
-    );
 
     context.font = `${9.5 * ratio}px ${colours.font}`;
     context.textBaseline = "middle";
     for (let lane = 0; lane < lanes.length; lane += 1) {
       const middle = lane * laneHeight + laneHeight / 2;
       context.fillStyle = colours.line;
-      context.fillRect(GUTTER * ratio, Math.round(middle), plot, 1);
+      context.fillRect(gutter, Math.round(middle), plot, 1);
       context.fillStyle = colours.ink;
       context.fillText(lanes[lane], 4 * ratio, middle);
     }
@@ -374,7 +395,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
         context.globalAlpha = peak > 1 ? 0.45 + 0.55 * (value / peak) : 1;
         context.fillStyle = colours.cpu[owner[lane][index] % colours.cpu.length];
         context.fillRect(
-          GUTTER * ratio + index * bar,
+          gutter + index * bar,
           lane * laneHeight + laneHeight - 2 * ratio - tall,
           Math.max(1, bar - ratio),
           tall,
@@ -393,20 +414,15 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     const window_ = bounds();
     if (!window_) return null;
     const box = canvas.getBoundingClientRect();
-    const gutter = GUTTER; /* the paint scales it by the ratio; this box is CSS px */
-    const plot = box.width - gutter;
-    const offset = event.clientX - box.left - gutter;
-    if (plot <= 0) return null;
-    const share = Math.min(1, Math.max(0, offset / plot));
+    const at = geometry(1);
+    const share = Math.min(1, Math.max(0, (event.clientX - box.left - at.gutter) / at.plot));
     return window_.from + share * (window_.to - window_.from);
   }
 
   function laneAt(event) {
     if (!lanes.length) return null;
     const box = canvas.getBoundingClientRect();
-    const laneHeight = Math.min(LANE_MAX, Math.max(LANE_MIN, box.height / lanes.length));
-    const index = Math.floor((event.clientY - box.top) / laneHeight);
-    return lanes[index] ?? null;
+    return lanes[Math.floor((event.clientY - box.top) / geometry(1).lane)] ?? null;
   }
 
   /* Every record in the window, from whichever buffer is answering for
@@ -483,7 +499,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     }
     /* Six pixels' worth of time: close enough to forgive a mouse,
        narrow enough that a click on empty space selects nothing. */
-    const slack = ((window_.to - window_.from) / Math.max(1, canvas.getBoundingClientRect().width - GUTTER)) * 6;
+    const slack = ((window_.to - window_.from) / geometry(1).plot) * SLACK_PX;
     const hit = nearest(to, laneAt(event), window_, slack);
     if (!hit) return;
     if (event.shiftKey && marked) {

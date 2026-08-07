@@ -35,6 +35,7 @@ _LAYOUT = abi.read_defines(
         "NOVA_TRACE_HEAD_OFF",
         "NOVA_TRACE_RECORDS_OFF",
         "NOVA_TRACE_REC_SIZE",
+        "NOVA_TRACE_TS_OFF",
         "NOVA_TRACE_SIZE",
     ],
 )
@@ -47,12 +48,13 @@ REC_SIZE = _LAYOUT["NOVA_TRACE_REC_SIZE"]
 _HEADER_SIZE = _LAYOUT["NOVA_TRACE_HEADER_SIZE"]
 _HEAD_OFF = _LAYOUT["NOVA_TRACE_HEAD_OFF"]
 _RECORDS_OFF = _LAYOUT["NOVA_TRACE_RECORDS_OFF"]
-_REC_SIZE = REC_SIZE
 
 # Region header, then one record. Both are fixed by the ABI header the
 # firmware compiles against; the struct strings only spell its fields.
 _HEADER = struct.Struct("<QIIIIIII")
 _RECORD = struct.Struct("<QHBBIQQ")
+_TS = struct.Struct("<Q")
+_TS_OFF = _LAYOUT["NOVA_TRACE_TS_OFF"]
 
 
 class NotFormatted(RuntimeError):
@@ -116,6 +118,19 @@ def pack_into(buffer, offset: int, record: Record) -> None:
     )
 
 
+def timestamp_at(buffer, offset: int) -> int:
+    """A stored record's timestamp, without decoding the rest of it.
+
+    Eight bytes at the offset the layout already fixes — read from the
+    ABI header like every other offset here, so nothing has to remember
+    that ts happens to come first. A holder that mirrored the timestamps
+    into an array of its own would have a second thing to keep true on
+    every write, and the first edit that forgot would search the wrong
+    order over records that are all still there.
+    """
+    return _TS.unpack_from(buffer, offset + _TS_OFF)[0]
+
+
 def unpack_from(buffer, offset: int) -> Record:
     ts, code, cpu, _flags, a, b, c = _RECORD.unpack_from(buffer, offset)
     return Record(ts, code, cpu, a, b, c)
@@ -169,8 +184,8 @@ class TraceReader:
             raise NotYetFormatted(f"no trace region at {self._offset:#x} (magic {magic:#x})")
         if version != VERSION:
             raise NotFormatted(f"trace region version {version}, expected {VERSION}")
-        if record_size != _REC_SIZE:
-            raise NotFormatted(f"trace record is {record_size} bytes, expected {_REC_SIZE}")
+        if record_size != REC_SIZE:
+            raise NotFormatted(f"trace record is {record_size} bytes, expected {REC_SIZE}")
         if rings < 1 or capacity < 1 or capacity & (capacity - 1):
             raise NotFormatted(f"trace geometry is not usable: {rings} rings, capacity {capacity}")
         return Geometry(rings, capacity, stride, freq, early)
@@ -225,7 +240,7 @@ class TraceReader:
             cursor = 0
         oldest = max(0, head - capacity)
         records = [
-            self._record(base + (index % capacity) * _REC_SIZE)
+            self._record(base + (index % capacity) * REC_SIZE)
             for index in range(max(cursor, oldest), head)
         ]
         # Re-read: anything the writer lapped while we were copying has
