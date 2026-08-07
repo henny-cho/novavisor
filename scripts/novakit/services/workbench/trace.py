@@ -40,13 +40,11 @@ _LAYOUT = abi.read_defines(
         "NOVA_TRACE_RECORDS_OFF",
         "NOVA_TRACE_REC_SIZE",
         "NOVA_TRACE_TS_OFF",
-        "NOVA_TRACE_SIZE",
         "NOVA_TRACE_MAX_RINGS",
     ],
 )
 MAGIC = _LAYOUT["NOVA_TRACE_MAGIC"]
 VERSION = _LAYOUT["NOVA_TRACE_VERSION"]
-REGION_SIZE = _LAYOUT["NOVA_TRACE_SIZE"]
 MAX_RINGS = _LAYOUT["NOVA_TRACE_MAX_RINGS"]
 # Public: anything keeping records keeps them at the firmware's width,
 # so the layout stays one number rather than one per holder.
@@ -161,14 +159,20 @@ class TraceReader:
     `ram_base` is where the machine's RAM aperture starts, so a physical
     address is read at `pa - ram_base` — the same one constant the S
     layer's provider uses, and the only address arithmetic here.
+
+    `region_size` comes from the board too. It is how much a board chose
+    to spend on the T layer, and the depth of every ring follows from
+    it, so a copy kept here would be this reader's opinion of another
+    machine's memory map.
     """
 
-    def __init__(self, ram_path: Path, ram_base: int, trace_pa: int):
+    def __init__(self, ram_path: Path, ram_base: int, trace_pa: int, region_size: int):
         self._offset = trace_pa - ram_base
+        self._region_size = region_size
         with Path(ram_path).open("rb") as backing:
             self._ram = mmap.mmap(backing.fileno(), 0, prot=mmap.PROT_READ)
         try:
-            if len(self._ram) < self._offset + REGION_SIZE:
+            if len(self._ram) < self._offset + region_size:
                 # QEMU sizes the backend as it comes up, so a short file
                 # is a launch in progress, not a machine without room.
                 raise NotYetFormatted("RAM backend is smaller than the trace region")
@@ -202,8 +206,8 @@ class TraceReader:
             raise NotFormatted(f"trace ring capacity {capacity} is not a power of two")
         if stride != _RECORDS_OFF + capacity * REC_SIZE:
             raise NotFormatted(f"trace stride {stride} disagrees with capacity {capacity}")
-        if _HEADER_SIZE + rings * stride > REGION_SIZE:
-            raise NotFormatted(f"{rings} rings of {capacity} do not fit {REGION_SIZE} bytes")
+        if _HEADER_SIZE + rings * stride > self._region_size:
+            raise NotFormatted(f"{rings} rings of {capacity} do not fit {self._region_size} bytes")
         return Geometry(rings, capacity, stride, freq, early)
 
     def _record(self, at: int) -> Record:
@@ -408,7 +412,7 @@ def decode(record: Record) -> dict:
     return out
 
 
-def report(shm_path: Path, ram_base: int, trace_pa: int, limit: int = 40) -> int:
+def report(shm_path: Path, ram_base: int, trace_pa: int, region_size: int, limit: int = 40) -> int:
     """The terminal twin of the T layer, read off the rings themselves.
 
     The fallback path: no bridge, so no history, and what arrives here
@@ -417,7 +421,7 @@ def report(shm_path: Path, ram_base: int, trace_pa: int, limit: int = 40) -> int
     makes it the answer when there is nothing else running.
     """
     try:
-        reader = TraceReader(shm_path, ram_base, trace_pa)
+        reader = TraceReader(shm_path, ram_base, trace_pa, region_size)
     except (NotFormatted, OSError) as error:
         print(f"[workbench] trace: {error}", file=sys.stderr)
         return 1

@@ -34,13 +34,22 @@ static_assert(cpu::kMaxCpus <= NOVA_TRACE_MAX_RINGS, "this board has more cores 
 // so a board can no longer declare a capacity that does not fit — it
 // can only reserve too little. A floor rather than a ceiling, and the
 // only sizing decision left for a port to get wrong.
-static_assert(trace::records_per_ring(NOVA_TRACE_SIZE, cpu::kMaxCpus) >= NOVA_TRACE_MIN_CAPACITY,
+static_assert(trace::records_per_ring(board::active::kTraceSize, cpu::kMaxCpus) >= NOVA_TRACE_MIN_CAPACITY,
               "this board reserves less trace region than the T layer is worth");
+
+// And the reservation has to be a reservation. The DTB generator checks
+// the same thing over a config's placements, but that runs when an
+// image is built for a guest set; this runs for every build, and the
+// thing on the other side is the pristine images the recovery path
+// re-loads from. A region that grew into them would be discovered as a
+// guest that restarts into rubble.
+static_assert(board::active::kTracePa + board::active::kTraceSize <= board::active::kGuestPristinePa,
+              "the trace region overruns the pristine guest images");
 
 namespace trace_detail {
 
 inline void place() noexcept {
-  trace::place(reinterpret_cast<void*>(static_cast<std::uintptr_t>(board::active::kTracePa)), NOVA_TRACE_SIZE,
+  trace::place(reinterpret_cast<void*>(static_cast<std::uintptr_t>(board::active::kTracePa)), board::active::kTraceSize,
                cpu::kMaxCpus, static_cast<std::uint32_t>(hyp_timer::freq()));
 }
 

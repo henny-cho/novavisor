@@ -115,11 +115,6 @@
  * implausible `rings` is checked against. */
 #define NOVA_TRACE_MAX_RINGS 4
 
-/* The whole reserved region. Everything else about the geometry follows
- * from this and the ring count. Bounded by the 1020 KiB gap every board
- * leaves between the IVC page and the pristine images. */
-#define NOVA_TRACE_SIZE 0x000A0000 /* 640 KiB */
-
 /* Event kinds. The bridge's event catalogue names the same moments for
  * its breakpoints; a stop point and a trace hook are one fact about the
  * firmware, so the numbering here and the names there stay together. */

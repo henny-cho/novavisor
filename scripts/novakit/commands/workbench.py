@@ -130,7 +130,11 @@ def show_trace(limit: Limit = 40, follow: Follow = False, since: Since = 5.0) ->
         _no_session("--follow needs a running bridge; showing the rings once")
     board = hardware.platform()
     code = trace.report(
-        surfaces[-1], board["NOVA_BOARD_PHYS_RAM_BASE"], board["NOVA_BOARD_TRACE_PA"], limit
+        surfaces[-1],
+        board["NOVA_BOARD_PHYS_RAM_BASE"],
+        board["NOVA_BOARD_TRACE_PA"],
+        board["NOVA_BOARD_TRACE_SIZE"],
+        limit,
     )
     if code:
         raise typer.Exit(code)

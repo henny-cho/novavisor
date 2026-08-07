@@ -17,9 +17,13 @@
 #define NOVA_BOARD_IVC_SHM_PA    0xA0000000
 /* Trace rings: the gap between the IVC page and the pristine
  * images. EL2-mapped already, never in a guest's Stage 2. */
+/* Trace rings. Sized by the host stall the T layer must survive: 89k
+ * records/s/core at peak, times a declared 1 s horizon. Four cores
+ * divide it, so each gets 2^17 records — about 1.5 s of that peak. */
 #define NOVA_BOARD_TRACE_PA      0xA0001000
-#define NOVA_BOARD_PRISTINE_PA   0xA0100000
-#define NOVA_BOARD_PRISTINE_SIZE 0x3FF00000 /* below the EL2 image at RAM_BASE */
+#define NOVA_BOARD_TRACE_SIZE    0x01010000 /* 16 MiB + 64 KiB */
+#define NOVA_BOARD_PRISTINE_PA   0xA1100000
+#define NOVA_BOARD_PRISTINE_SIZE 0x3EF00000 /* below the EL2 image at RAM_BASE */
 
 #define NOVA_BOARD_GUEST_CPU_COMPATIBLE "arm,neoverse-n1"
 

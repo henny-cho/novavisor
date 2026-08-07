@@ -28,11 +28,21 @@
 #define NOVA_BOARD_GUEST_PA_BASE 0x50000000
 #define NOVA_BOARD_GUEST_PA_SIZE 0x10000000 /* windows end at the IVC page */
 #define NOVA_BOARD_IVC_SHM_PA    0x60000000
-/* Trace rings: the gap between the IVC page and the pristine
- * images. EL2-mapped already, never in a guest's Stage 2. */
+/* Trace rings. Sized by the host stall the T layer must survive, not by
+ * what happened to be spare: 89k records/s/core at peak, times a
+ * declared 1 s horizon (1.5x the worst drain gap measured). This board
+ * divides it two ways, so each core gets 2^18 records — about 2.9 s of
+ * that peak. The 64 KiB above 16 MiB is what keeps the power-of-two
+ * floor from halving the result.
+ *
+ * EL2-mapped already (the Stage-1 map covers all of physical RAM),
+ * never in a guest's Stage 2, and never cleared at boot — a reader's
+ * window starts at head - capacity, so a previous boot's tail is
+ * outside it. */
 #define NOVA_BOARD_TRACE_PA      0x60001000
-#define NOVA_BOARD_PRISTINE_PA   0x60100000
-#define NOVA_BOARD_PRISTINE_SIZE 0x0FF00000 /* up to the end of physical RAM */
+#define NOVA_BOARD_TRACE_SIZE    0x01010000 /* 16 MiB + 64 KiB */
+#define NOVA_BOARD_PRISTINE_PA   0x61100000
+#define NOVA_BOARD_PRISTINE_SIZE 0x0EF00000 /* up to the end of physical RAM */
 
 /* Guest CPU node exposed by the generated DT. */
 #define NOVA_BOARD_GUEST_CPU_COMPATIBLE "arm,cortex-a57"

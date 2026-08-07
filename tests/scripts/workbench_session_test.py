@@ -626,6 +626,11 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(instances[1].closed)
 
 
+# The region a board reserves is a board number, so a fixture states
+# its own. Big enough for the one small ring below and nothing more.
+REGION_SIZE = 0x10000
+
+
 class TraceAttachTest(unittest.TestCase):
     """Binding the T reader to a run.
 
@@ -642,7 +647,6 @@ class TraceAttachTest(unittest.TestCase):
             [
                 "NOVA_TRACE_MAGIC",
                 "NOVA_TRACE_VERSION",
-                "NOVA_TRACE_SIZE",
                 "NOVA_TRACE_HEADER_SIZE",
                 "NOVA_TRACE_RECORDS_OFF",
                 "NOVA_TRACE_REC_SIZE",
@@ -650,7 +654,7 @@ class TraceAttachTest(unittest.TestCase):
         )
 
     def region_bytes(self, *, formatted: bool, version: int | None = None, early: int = 0) -> bytes:
-        buffer = bytearray(self.layout["NOVA_TRACE_SIZE"])
+        buffer = bytearray(REGION_SIZE)
         if formatted:
             stride = self.layout["NOVA_TRACE_RECORDS_OFF"] + 16 * self.layout["NOVA_TRACE_REC_SIZE"]
             struct.pack_into(
@@ -671,7 +675,11 @@ class TraceAttachTest(unittest.TestCase):
         bridge.session.run_id = 1
         # The region sits at the very start of the RAM aperture here, so
         # the fixture is the region and not half a gigabyte of run-up.
-        bridge._board = {"NOVA_BOARD_PHYS_RAM_BASE": 0, "NOVA_BOARD_TRACE_PA": 0}
+        bridge._board = {
+            "NOVA_BOARD_PHYS_RAM_BASE": 0,
+            "NOVA_BOARD_TRACE_PA": 0,
+            "NOVA_BOARD_TRACE_SIZE": REGION_SIZE,
+        }
         return bridge
 
     def states(self, bridge) -> list[str]:

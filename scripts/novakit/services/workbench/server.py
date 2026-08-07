@@ -622,7 +622,10 @@ class Bridge:
         board = self._board_numbers()
         try:
             self._tracer = trace.TraceReader(
-                shm_path, board["NOVA_BOARD_PHYS_RAM_BASE"], board["NOVA_BOARD_TRACE_PA"]
+                shm_path,
+                board["NOVA_BOARD_PHYS_RAM_BASE"],
+                board["NOVA_BOARD_TRACE_PA"],
+                board["NOVA_BOARD_TRACE_SIZE"],
             )
         except trace.NotYetFormatted as error:
             self._set_trace_state(

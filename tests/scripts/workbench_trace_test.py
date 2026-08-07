@@ -29,10 +29,15 @@ L = abi.read_defines(
         "NOVA_TRACE_HEADER_SIZE",
         "NOVA_TRACE_RECORDS_OFF",
         "NOVA_TRACE_REC_SIZE",
-        "NOVA_TRACE_SIZE",
         "NOVA_TRACE_MAX_RINGS",
     ],
 )
+# How much a board spends on the T layer is that board's decision, so a
+# fixture states its own rather than borrowing one. Room for a few rings
+# of CAPACITY and nothing more — the arithmetic under test is
+# `pa - ram_base`, and a real board's 16 MiB would make every case a
+# 16-megabyte file.
+REGION_SIZE = 0x10000
 RAM_BASE = 0x4000_0000
 # Close to the base on purpose: what matters is the `pa - ram_base`
 # arithmetic, and the real board offset would make every fixture a
@@ -62,8 +67,7 @@ class Region:
         self.capacity = capacity
         self.stride = stride_for(capacity)
         self.path = Path(tempfile.mkstemp(dir="/dev/shm", suffix="-ram")[1])
-        size = (TRACE_PA - RAM_BASE) + L["NOVA_TRACE_SIZE"]
-        self.buffer = bytearray(size)
+        self.buffer = bytearray((TRACE_PA - RAM_BASE) + REGION_SIZE)
         self.offset = TRACE_PA - RAM_BASE
         struct.pack_into(
             "<QIIIIIII", self.buffer, self.offset,
@@ -98,7 +102,7 @@ class Region:
 
     def reader(self) -> trace.TraceReader:
         self.flush()
-        return trace.TraceReader(self.path, RAM_BASE, TRACE_PA)
+        return trace.TraceReader(self.path, RAM_BASE, TRACE_PA, REGION_SIZE)
 
     def cleanup(self) -> None:
         self.path.unlink(missing_ok=True)
@@ -167,7 +171,7 @@ class GeometryTest(unittest.TestCase):
         self.addCleanup(region.cleanup)
         region.path.write_bytes(bytes(64))
         with self.assertRaises(trace.NotFormatted):
-            trace.TraceReader(region.path, RAM_BASE, TRACE_PA)
+            trace.TraceReader(region.path, RAM_BASE, TRACE_PA, REGION_SIZE)
 
     def test_reading_needs_no_image(self):
         """The whole point of the region header: the T layer works on a
