@@ -52,6 +52,10 @@ WAIT_NOTICE_SECONDS = 2.0
 # of seconds. Stepping is for looking inside an event, not reaching one.
 MAX_STEPS = 2000
 HALT_COMMANDS = ("stop", "cont", "step", "run", "abort")
+# Arming at launch races the guest, so the watch is tight; the budget
+# covers a cold build ahead of the machine it is waiting for.
+LAUNCH_POLL_SECONDS = 0.005
+LAUNCH_ARM_TIMEOUT_SECONDS = 600.0
 
 
 def _require_websockets():
@@ -93,6 +97,8 @@ class Bridge:
         # The poll loop owns it; the halt path borrows it to read the
         # whole machine at a stop, where every value is of one instant.
         self._poller: snapshot.SnapshotPoller | None = None
+        self._provider: snapshot.SnapshotProvider | None = None
+        self._provider_run: int | None = None
         # Stamped into every connect topo: a changed token is the one
         # reliable restart signal, whatever the seq counter says.
         self._token = uuid.uuid4().hex[:8]
@@ -225,6 +231,9 @@ class Bridge:
         # Hand the outgoing machine back before it is torn down; a run
         # that ends while we hold its stop leaves QEMU frozen mid-exit.
         self._release()
+        stops = [str(name) for name in uplink.data.get("stops", [])]
+        if stops:
+            self.spawn(self._arm_at_launch(self.session.run_id, stops))
         self.spawn(
             self.session.select(
                 Target(
@@ -292,10 +301,14 @@ class Bridge:
         # Same data shape as the S-layer topics: the UI panels read every
         # snapshot's payload from "values".
         self.store.publish(Topic.SYSREG, Kind.SNAPSHOT, {"values": data}, src=Src.HALT)
-        poller = self._poller
-        if poller is None:
-            return
         try:
+            # Built here if the poll loop has not got to it: arming at
+            # launch stops the machine during EL2 boot, long before the
+            # first successful poll, and a stop that silently skipped
+            # the manifest would be the emptiest one of the run.
+            poller = await self._ensure_poller()
+            if poller is None:
+                return
             values = await loop.run_in_executor(None, poller.sweep)
         except Exception as error:
             self.store.publish(
@@ -351,6 +364,47 @@ class Bridge:
             )
             await self._sweep_to_panels(inspector)
 
+    async def _arm_at_launch(self, previous_run: int, stops: list[str]) -> None:
+        """Take the stop before the guest can reach the event.
+
+        Short demos are over in well under a second — the DMA demo has
+        finished its transfers before a browser could send a command — so
+        "stop at the first X" is unreachable if arming has to wait for a
+        reader to click. Attaching to the stub stops the machine by
+        itself and the socket exists from QEMU's first moments, so taking
+        it during EL2 boot arrives long before any guest code runs.
+        """
+        deadline = asyncio.get_running_loop().time() + LAUNCH_ARM_TIMEOUT_SECONDS
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(LAUNCH_POLL_SECONDS)
+            if self.session.phase in (Phase.FAILED, Phase.IDLE, Phase.EXITED):
+                return  # the launch did not happen; nothing to arm
+            if self.session.run_id == previous_run:
+                continue
+            surfaces = self.session.surfaces
+            if surfaces is None or not surfaces.gdb_path.exists():
+                continue
+            break
+        else:
+            self._reject("halt: the machine never came up to be armed")
+            return
+        if self._halting:
+            return  # a reader got there first; theirs wins
+        self._halting = True
+        self._abort = False
+        try:
+            inspector = self._hold()
+            await self._sweep_to_panels(inspector)
+            self.store.publish(
+                Topic.LIFE, Kind.EVENT, {"phase": "armed", "stops": sorted(stops)}
+            )
+            await self._advance(inspector, {"stops": stops})
+        except Exception as error:
+            self._reject(f"halt: {error}")
+        finally:
+            self._halting = False
+            self._abort = False
+
     async def _halt_command(self, command: str, data: dict) -> None:
         """Pause is a held gdb connection; the machine stays stopped
         (virtual clock frozen) until it is advanced or resumed."""
@@ -397,54 +451,66 @@ class Bridge:
             self._halting = False
             self._abort = False
 
+    def _drop_provider(self) -> None:
+        provider, self._provider = self._provider, None
+        self._poller = None
+        self._provider_run = None
+        if provider is not None:
+            provider.close()
+
+    async def _ensure_poller(self) -> snapshot.SnapshotPoller | None:
+        """The S reader for this run, built once and shared.
+
+        Both the poll loop and the halt path need it, and a stop can
+        arrive before the loop's first successful build — arming at
+        launch stops the machine during EL2 boot, well ahead of the
+        first poll — so whoever needs it first builds it. Returns None
+        while the backend is not ready yet; the caller retries.
+        """
+        session = self.session
+        if session.phase is not Phase.RUNNING or session.elf_path is None:
+            return None
+        if session.surfaces is None:
+            return None
+        current = session.run_id
+        if self._provider_run == current:
+            return self._poller
+        # A rebuild moves symbols, so a new run needs a new reader.
+        self._drop_provider()
+        shm_path = session.surfaces.shm_path
+        # Cheap gate: no per-retry DWARF walk while QEMU is still
+        # creating and sizing the backend.
+        if not shm_path.exists() or shm_path.stat().st_size == 0:
+            return None
+        built = await asyncio.get_running_loop().run_in_executor(
+            None,
+            snapshot.ElfRamProvider,
+            session.elf_path,
+            shm_path,
+            hardware.platform()["NOVA_BOARD_PHYS_RAM_BASE"],
+        )
+        if session.run_id != current:
+            # A restart landed mid-build: this provider maps the
+            # previous run's RAM file.
+            built.close()
+            return None
+        self._provider = built
+        self._poller = snapshot.SnapshotPoller(built)
+        self._provider_run = current
+        return self._poller
+
     async def _poll_loop(self) -> None:
         """Publish S-layer snapshots while a run is live.
 
-        The provider is rebuilt per run (a rebuild moves symbols) and its
-        construction — one full DWARF walk — happens off the loop. RAM
+        Construction — one full DWARF walk — happens off the loop. RAM
         backend races at startup retry silently; any other fault ends
         this run's S layer, is reported once, and never kills the loop.
         """
-        provider = None
-        poller = None
-        run_id = None
         try:
             while True:
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
-                session = self.session
-                if (
-                    session.phase is not Phase.RUNNING
-                    or session.elf_path is None
-                    or session.surfaces is None
-                ):
-                    continue
-                current = session.run_id
                 try:
-                    if current != run_id:
-                        if provider is not None:
-                            provider.close()
-                            provider = poller = self._poller = None
-                        shm_path = session.surfaces.shm_path
-                        # Cheap gate: no per-retry DWARF walk while QEMU
-                        # is still creating and sizing the backend.
-                        if not shm_path.exists() or shm_path.stat().st_size == 0:
-                            continue
-                        built = await asyncio.get_running_loop().run_in_executor(
-                            None,
-                            snapshot.ElfRamProvider,
-                            session.elf_path,
-                            shm_path,
-                            hardware.platform()["NOVA_BOARD_PHYS_RAM_BASE"],
-                        )
-                        if session.run_id != current:
-                            # A restart landed mid-build: this provider
-                            # maps the previous run's RAM file.
-                            built.close()
-                            continue
-                        provider = built
-                        poller = snapshot.SnapshotPoller(provider)
-                        self._poller = poller
-                        run_id = current
+                    poller = await self._ensure_poller()
                     if poller is None:
                         continue
                     if self.session.paused:
@@ -468,14 +534,9 @@ class Bridge:
                         Kind.EVENT,
                         {"phase": "snapshot-unavailable", "error": str(error)},
                     )
-                    if provider is not None:
-                        provider.close()
-                    provider = poller = self._poller = None
-                    run_id = current
+                    self._drop_provider()
         finally:
-            self._poller = None
-            if provider is not None:
-                provider.close()
+            self._drop_provider()
 
     async def _flush_loop(self) -> None:
         while True:
