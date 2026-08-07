@@ -232,13 +232,23 @@ class StopCatalogueTest(unittest.TestCase):
         """Addresses change every build and the UI has no use for one;
         shipping them would invite a client to cache a stale map.
 
-        A record code is the opposite kind of number: fixed by the ABI
-        header both the ring writer and this reader compile against, and
-        needed because a column-encoded record carries nothing else to
-        look itself up by.
+        A record's code and field names are the opposite kind of fact:
+        fixed by the ABI header both the ring writer and this reader
+        compile against, and needed because a column-encoded record
+        carries nothing else to look itself up by or name its words
+        with.
         """
         for entry in events.catalogue():
-            self.assertEqual(set(entry), {"id", "edge", "args", "label", "code"})
+            self.assertEqual(set(entry), {"id", "edge", "args", "label", "code", "fields"})
+
+    def test_every_record_word_the_bridge_decodes_is_also_named(self):
+        """decode() knows the packing; the catalogue names the words.
+        An event whose words go unnamed reaches a reader who clicked a
+        mark as three bare numbers."""
+        for event in events.EVENTS:
+            with self.subTest(event=event.id):
+                self.assertEqual(len(event.fields), 3)
+                self.assertTrue(event.fields[0], f"{event.id} names none of its words")
 
 
 if __name__ == "__main__":

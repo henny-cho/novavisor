@@ -65,6 +65,12 @@ class Event:
     # and a trace hook are one fact, so they share an entry rather than
     # two tables free to disagree.
     code: int = 0
+    # What the record's three argument words hold, in order. A separate
+    # list from `args`, which names the AAPCS64 registers a breakpoint
+    # reads: a stop sees the call, a record sees what was written down.
+    # A packed word is named as the pair it is — splitting it belongs in
+    # decode(), the one place that knows the packing.
+    fields: tuple[str, str, str] = ("", "", "")
 
 
 # Ordered by the injection path they sit on: a physical interrupt is
@@ -78,40 +84,54 @@ EVENTS: tuple[Event, ...] = (
         ("vm", "vintid", "pintid", "generation"),
         "물리 SPI를 가상 INTID에 결속",
         _CODES["NOVA_TRACE_EV_VGIC_BIND"],
+        ("vm", "intids", "generation"),
     ),
     Event("vgic.spi", "nova::vgic::post_spi", paths.EDGE_POST, ("vm", "vintid"),
-          "하이퍼바이저가 SPI 생성", _CODES["NOVA_TRACE_EV_VGIC_POST"]),
+          "하이퍼바이저가 SPI 생성", _CODES["NOVA_TRACE_EV_VGIC_POST"],
+          ("vm", "vintid", "")),
     Event("vgic.private", "nova::vgic::post_private", paths.EDGE_POST, ("slot", "vintid"),
-          "하이퍼바이저가 PPI/SGI 생성", _CODES["NOVA_TRACE_EV_VGIC_PRIVATE"]),
+          "하이퍼바이저가 PPI/SGI 생성", _CODES["NOVA_TRACE_EV_VGIC_PRIVATE"],
+          ("slot", "vintid", "")),
     Event("vgic.inject", "nova::vgic::refill", paths.EDGE_INJECT, (),
-          "대기 인터럽트를 리스트 레지스터로", _CODES["NOVA_TRACE_EV_VGIC_INJECT"]),
+          "대기 인터럽트를 리스트 레지스터로", _CODES["NOVA_TRACE_EV_VGIC_INJECT"],
+          ("slot", "vintid|lr", "generation")),
     Event("vgic.eoi", "nova::vgic::(anonymous)::drain_eois", paths.EDGE_INJECT, ("slot",),
-          "게스트가 인터럽트 완료", _CODES["NOVA_TRACE_EV_VGIC_EOI"]),
+          "게스트가 인터럽트 완료", _CODES["NOVA_TRACE_EV_VGIC_EOI"],
+          ("slot", "intids", "generation")),
     Event("trap", "nova::trap_handler_component::handle_lower_sync", paths.EDGE_TRAP, (),
-          "EL1에서 EL2로 동기 예외", _CODES["NOVA_TRACE_EV_TRAP"]),
+          "EL1에서 EL2로 동기 예외", _CODES["NOVA_TRACE_EV_TRAP"],
+          ("ec", "esr", "far")),
     Event("mmio", "nova::trap::dispatch_data_abort", paths.EDGE_MMIO, (),
-          "게스트 MMIO 접근 트랩", _CODES["NOVA_TRACE_EV_MMIO"]),
+          "게스트 MMIO 접근 트랩", _CODES["NOVA_TRACE_EV_MMIO"],
+          ("access", "ipa", "value")),
     Event("sched.switch", "nova::vcpu::(anonymous)::switch_to", "", ("", "next"),
-          "vCPU 전환", _CODES["NOVA_TRACE_EV_SCHED_SWITCH"]),
+          "vCPU 전환", _CODES["NOVA_TRACE_EV_SCHED_SWITCH"],
+          ("next", "prev", "")),
     # The moments that used to be read off console text or inferred from
     # a snapshot delta. Each sits on the normal path, not on an error
     # branch: an edge whose evidence only appears when something breaks
     # would claim certainty for the ordinary case it never watched.
     Event("gic.ack", "nova::core_gic::drain", "phys", ("intid",),
-          "물리 IRQ를 EL2가 수신", _CODES["NOVA_TRACE_EV_GIC_ACK"]),
+          "물리 IRQ를 EL2가 수신", _CODES["NOVA_TRACE_EV_GIC_ACK"],
+          ("intid", "", "")),
     Event("smp.cross", "nova::smp::invoke_vm_owner", "cross", ("vm", "owner"),
-          "다른 코어에 소유권 호출 전달", _CODES["NOVA_TRACE_EV_CROSS_CALL"]),
+          "다른 코어에 소유권 호출 전달", _CODES["NOVA_TRACE_EV_CROSS_CALL"],
+          ("vm", "owner", "")),
     Event("ivc.doorbell", "nova::ivc_component::handle_hvc", "ivc", ("vm", "vintid"),
-          "게스트가 IVC 초인종을 울림", _CODES["NOVA_TRACE_EV_IVC_DOORBELL"]),
+          "게스트가 IVC 초인종을 울림", _CODES["NOVA_TRACE_EV_IVC_DOORBELL"],
+          ("vm", "vintid", "")),
     Event("psci.call", "nova::psci_component::handle_hvc", "psci", ("func", "arg"),
-          "게스트 전원 제어 호출", _CODES["NOVA_TRACE_EV_PSCI"]),
+          "게스트 전원 제어 호출", _CODES["NOVA_TRACE_EV_PSCI"],
+          ("func", "arg", "action")),
     Event("uart.line", "nova::console_mux::(anonymous)::emit", "uart", ("slot", "bytes"),
-          "게스트 콘솔 한 줄 방출", _CODES["NOVA_TRACE_EV_UART_LINE"]),
+          "게스트 콘솔 한 줄 방출", _CODES["NOVA_TRACE_EV_UART_LINE"],
+          ("slot", "bytes", "")),
     # No edge on purpose. A DMA fault is worth a lane of its own, and it
     # is not evidence about the path a working translation takes — see
     # the grade rule at the top of paths.py.
     Event("smmu.fault", "nova::smmu::(anonymous)::dispatch_faults", "", ("stream", "vm"),
-          "SMMU 변환 폴트", _CODES["NOVA_TRACE_EV_SMMU_FAULT"]),
+          "SMMU 변환 폴트", _CODES["NOVA_TRACE_EV_SMMU_FAULT"],
+          ("stream", "vm", "generation")),
 )
 
 BY_ID = {event.id: event for event in EVENTS}
@@ -158,6 +178,10 @@ def catalogue() -> list[dict]:
             # Column-encoded records carry the firmware's number, so the
             # UI needs the same mapping the ring writer used.
             "code": event.code,
+            # What the record's three words hold, for a reader who
+            # clicks a mark. Named here so the UI never learns a layout
+            # the bridge already knows.
+            "fields": list(event.fields),
         }
         for event in EVENTS
     ]

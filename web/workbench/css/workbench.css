@@ -221,8 +221,10 @@ b{font-weight:700}
   color:var(--ink3);font-weight:700
 }
 .tl-note{font-family:var(--mono);font-size:var(--fs-label);color:var(--ink3)}
-.tl-h .mini{margin-left:auto}
-.tl-h .mini + .mini{margin-left:0}
+.tl-sel{
+  flex:1;min-width:0;margin-left:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--mono);font-size:var(--fs-label);color:var(--ink2);text-align:right
+}
 .tl[data-follow="off"] #tl-follow{opacity:.45}
 /* Sized by its box and painted at device resolution: the element is the
    output, and the records it is drawn from live in the module. */

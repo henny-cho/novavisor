@@ -81,20 +81,48 @@ const boardView = createBoard({
 
 const panels = createPanels({ tabs: ref("panel-tabs"), host: ref("panels") });
 
-const timelineNote = ref("tl-note");
+const timelineNote = ref("tl-note"); /* what the run holds */
+const timelineSel = ref("tl-sel"); /* what the reader picked */
 const timeline = createTimeline({
   strip: ref("tl"),
   canvas: ref("tl-canvas"),
   foldButton: ref("tl-fold"),
+  followButton: ref("tl-follow"),
   /* The window request goes out on the same topic the summaries come
      back on: the kind already distinguishes an answer from something
      sent unasked. */
   request: (data) => send("trace", data),
+  /* A mark is a moment on a path, so selecting one says both: the
+     fields the firmware recorded, and the path lit on the board. The
+     board already knows how to focus, and pointing it at the edge the
+     catalogue names keeps one focus vocabulary rather than two. */
+  onSelect: (choice) => {
+    if (choice.kind === "delta") {
+      const gap = choice.micros === null ? "—" : `${choice.micros}us`;
+      timelineSel.textContent = `${choice.from.id} → ${choice.to.id} · Δt ${gap}`;
+      events.addNotice(latestTs, `Δt ${choice.from.id} → ${choice.to.id} = ${gap}`);
+      return;
+    }
+    const record = choice.record;
+    timelineSel.textContent = `${record.id} · cpu${record.cpu} · ${traceFields(record)}`;
+    if (record.edge) boardView.focusPath(record.edge);
+  },
 });
+
+/* The catalogue names the record's three words; an unnamed position
+   holds nothing for that event. Naming happens there and not here, so
+   the UI never learns a layout the bridge already knows. */
+function traceFields(record) {
+  const values = [record.a, record.b, record.c];
+  return (record.fields || [])
+    .map((name, index) => (name ? `${name}=${values[index] ?? 0}` : ""))
+    .filter(Boolean)
+    .join(" ");
+}
+/* The strip owns the state — a drag turns following off from inside —
+   so the button asks for a change and the strip decides what it says. */
 ref("tl-follow").addEventListener("click", (event) => {
-  const on = event.currentTarget.getAttribute("aria-pressed") !== "true";
-  event.currentTarget.setAttribute("aria-pressed", String(on));
-  timeline.setFollow(on);
+  timeline.setFollow(event.currentTarget.getAttribute("aria-pressed") !== "true");
 });
 
 const consoleView = createConsole({
@@ -329,6 +357,7 @@ function onLife(ts, data) {
       panels.clearAll();
       timeline.reset();
       timelineNote.textContent = "트레이스 대기";
+      timelineSel.textContent = "";
       boardView.clearAll();
       cards.reset();
       consoleView.mark(`── ${data.demo || "?"} ──`);

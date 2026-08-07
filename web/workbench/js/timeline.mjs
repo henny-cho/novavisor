@@ -29,6 +29,11 @@ const FOLLOW_MS = 250;
    carries records *or* density, never both, so a generous number costs
    nothing and simply means "enumerate these if you can". */
 const TAIL_BUCKETS = 8192;
+/* How much of the recent past a following strip shows. Following means
+   following the end, so the window is a duration rather than "whatever
+   has accumulated" — which would start at nothing and grow without
+   bound. */
+const LIVE_SECONDS = 5;
 /* Lane geometry. A lane thinner than this is a smudge; thicker than
    that and four lanes fill the strip. */
 const LANE_MIN = 9;
@@ -38,7 +43,7 @@ const MARK_W = 2;
 
 const CPU_COLOURS = ["--vm0", "--vm1", "--vm2", "--vm3"];
 
-export function createTimeline({ strip, canvas, foldButton, request }) {
+export function createTimeline({ strip, canvas, foldButton, followButton, request, onSelect }) {
   const context = canvas.getContext("2d");
   /* Parallel columns rather than objects: one array of 65536 records
      as objects is several megabytes of headers, and every field here
@@ -58,7 +63,13 @@ export function createTimeline({ strip, canvas, foldButton, request }) {
   const lanes = []; /* event ids seen this run, in catalogue order */
   let freq = 0; /* CNTFRQ, for the microsecond axis */
   let span = null; /* what the bridge still holds */
-  let dense = null; /* a window too busy to enumerate: {from,to,hist} */
+  /* A chosen window is kept apart from the follow tail. The tail is
+     append-only in arrival order, which is time order because the drain
+     merges the rings by CNTPCT; dropping an older window into it would
+     make the newest record an old one and send following back to
+     re-fetch everything since. */
+  let chosen = null; /* {from,to,cols} for an explicit window */
+  let dense = null; /* that window too busy to enumerate: {from,to,hist} */
   let follow = true;
   let view = null; /* {from,to} being drawn; null means "the tail" */
   let painting = false;
@@ -86,6 +97,7 @@ export function createTimeline({ strip, canvas, foldButton, request }) {
     seen.clear();
     lanes.length = 0;
     span = null;
+    chosen = null;
     dense = null;
     view = null;
     pending = 0;
@@ -144,20 +156,38 @@ export function createTimeline({ strip, canvas, foldButton, request }) {
     if (data.span) span = data.span;
     if (data.window.freq_hz) freq = data.window.freq_hz;
     pending = 0;
+    const { from, to } = data.window;
+    const forView = view && view.from === from && view.to === to;
+    if (!forView && view) return; /* a tail answer that a drag overtook */
     if (data.cols) {
-      dense = null;
-      append(data.cols, data.window.from);
+      if (forView) {
+        chosen = { from, to, cols: data.cols };
+        dense = null;
+      } else {
+        append(data.cols, from);
+      }
+      noteLanes(data.cols.code);
     } else if (data.hist) {
       /* Too many records in the window to enumerate at the resolution
-         asked for. Drawn as density and said so, rather than shown as a
-         handful of marks that would read as a quiet stretch. */
-      dense = { from: data.window.from, to: data.window.to, hist: data.hist };
+         asked for. Drawn as density, rather than as a sample of its
+         marks that would read as a quiet stretch. */
+      dense = { from, to, hist: data.hist };
+      chosen = null;
       for (const id of Object.keys(data.hist)) {
         seen.add(id);
         noteLane(id);
       }
     }
     draw();
+  }
+
+  function noteLanes(codes) {
+    for (const code of codes) {
+      const entry = byCode.get(code);
+      if (!entry) continue;
+      seen.add(entry.id);
+      noteLane(entry.id);
+    }
   }
 
   /* ---------------- following ---------------- */
@@ -172,7 +202,12 @@ export function createTimeline({ strip, canvas, foldButton, request }) {
 
   function tick() {
     if (!follow || !span || !span.n) return;
-    const from = held_count() ? newest() + 1 : span.from;
+    /* From the present when there is nothing held yet. Asking from the
+       start of the history instead would ask for the whole run, come
+       back as density every time because a run does not fit in a
+       screenful of columns, and never leave the client holding a single
+       record to draw a mark from. */
+    const from = held_count() ? newest() + 1 : span.to;
     if (span.to < from || pending === span.to) {
       schedule();
       return;
@@ -189,22 +224,28 @@ export function createTimeline({ strip, canvas, foldButton, request }) {
     follow = on;
     if (follow) {
       view = null;
+      chosen = null;
+      dense = null;
       schedule();
     }
     strip.dataset.follow = follow ? "on" : "off";
+    if (followButton) followButton.setAttribute("aria-pressed", String(follow));
     draw();
   }
 
   /* ---------------- drawing ---------------- */
 
+  /* Following shows the last few seconds; a chosen window shows itself.
+     Density stands in only while there are no records for the window —
+     the first thing a fresh strip has, and what a zoomed-out one keeps. */
   function bounds() {
     if (view) return view;
     const count = held_count();
-    if (dense) return { from: dense.from, to: dense.to };
-    if (!count) return null;
+    if (!count) return dense ? { from: dense.from, to: dense.to } : null;
     const last = newest();
     const first = held.ts[slot(0)];
-    return { from: first, to: Math.max(last, first + 1) };
+    const width = freq ? LIVE_SECONDS * freq : last - first;
+    return { from: Math.max(first, last - width), to: Math.max(last, first + 1) };
   }
 
   function measure() {
@@ -251,7 +292,22 @@ export function createTimeline({ strip, canvas, foldButton, request }) {
     const width = Math.max(1, window_.to - window_.from);
     const counts = lanes.map(() => new Uint32Array(columns));
     const owner = lanes.map(() => new Uint8Array(columns));
-    if (dense && !heldCovers(window_)) {
+    const place = (id, ts, cpu) => {
+      const lane = lanes.indexOf(id);
+      if (lane < 0 || ts < window_.from || ts > window_.to) return;
+      const column = Math.min(columns - 1, Math.floor(((ts - window_.from) / width) * columns));
+      counts[lane][column] += 1;
+      owner[lane][column] = cpu;
+    };
+    if (chosen) {
+      const cols = chosen.cols;
+      for (let index = 0; index < cols.ts.length; index += 1) {
+        const entry = byCode.get(cols.code[index]);
+        if (entry) place(entry.id, chosen.from + cols.ts[index], cols.cpu[index]);
+      }
+      return { counts, owner };
+    }
+    if (dense) {
       for (const [id, column] of Object.entries(dense.hist)) {
         const lane = lanes.indexOf(id);
         if (lane < 0) continue;
@@ -268,21 +324,11 @@ export function createTimeline({ strip, canvas, foldButton, request }) {
     const total = held_count();
     for (let index = 0; index < total; index += 1) {
       const at = slot(index);
-      const ts = held.ts[at];
-      if (ts < window_.from || ts > window_.to) continue;
       const entry = byCode.get(held.code[at]);
-      if (!entry) continue;
-      const lane = lanes.indexOf(entry.id);
-      if (lane < 0) continue;
-      const column = Math.min(columns - 1, Math.floor(((ts - window_.from) / width) * columns));
-      counts[lane][column] += 1;
-      owner[lane][column] = held.cpu[at];
+      if (entry) place(entry.id, held.ts[at], held.cpu[at]);
     }
     return { counts, owner };
   }
-
-  const heldCovers = (window_) =>
-    held_count() > 0 && held.ts[slot(0)] <= window_.from && newest() >= window_.to;
 
   function paint() {
     const { width, height, ratio } = measure();
@@ -337,6 +383,131 @@ export function createTimeline({ strip, canvas, foldButton, request }) {
     }
     context.globalAlpha = 1;
   }
+
+  /* ---------------- interaction ---------------- */
+
+  /* Timestamp under a pointer, and the record nearest it. Both work off
+     the same geometry the paint uses, so what a reader clicks is what
+     they saw rather than a second guess at where it was drawn. */
+  function timeAt(event) {
+    const window_ = bounds();
+    if (!window_) return null;
+    const box = canvas.getBoundingClientRect();
+    const gutter = GUTTER; /* the paint scales it by the ratio; this box is CSS px */
+    const plot = box.width - gutter;
+    const offset = event.clientX - box.left - gutter;
+    if (plot <= 0) return null;
+    const share = Math.min(1, Math.max(0, offset / plot));
+    return window_.from + share * (window_.to - window_.from);
+  }
+
+  function laneAt(event) {
+    if (!lanes.length) return null;
+    const box = canvas.getBoundingClientRect();
+    const laneHeight = Math.min(LANE_MAX, Math.max(LANE_MIN, box.height / lanes.length));
+    const index = Math.floor((event.clientY - box.top) / laneHeight);
+    return lanes[index] ?? null;
+  }
+
+  /* Every record in the window, from whichever buffer is answering for
+     it. One reader for both so a click and the paint can never disagree
+     about what is on screen. */
+  function* visible(window_) {
+    if (chosen) {
+      const cols = chosen.cols;
+      for (let index = 0; index < cols.ts.length; index += 1) {
+        const ts = chosen.from + cols.ts[index];
+        if (ts < window_.from || ts > window_.to) continue;
+        yield { ts, code: cols.code[index], cpu: cols.cpu[index],
+                a: cols.a[index], b: cols.b[index], c: cols.c[index] };
+      }
+      return;
+    }
+    const count = held_count();
+    for (let index = 0; index < count; index += 1) {
+      const at = slot(index);
+      if (held.ts[at] < window_.from || held.ts[at] > window_.to) continue;
+      yield { ts: held.ts[at], code: held.code[at], cpu: held.cpu[at],
+              a: held.a[at], b: held.b[at], c: held.c[at] };
+    }
+  }
+
+  /* Nearest in time, within the lane the pointer is on and within a few
+     pixels of it. Marks are two pixels wide, so demanding an exact hit
+     would put the fields out of reach of a mouse — but an unbounded
+     nearest answers a click on empty space with a record from the far
+     side of the strip, and in a window shown as density it would answer
+     every click with the same one. */
+  function nearest(ts, lane, window_, slack) {
+    let best = null;
+    let distance = slack;
+    for (const record of visible(window_)) {
+      const entry = byCode.get(record.code);
+      if (!entry) continue;
+      if (lane && entry.id !== lane) continue;
+      const gap = Math.abs(record.ts - ts);
+      if (gap <= distance) {
+        distance = gap;
+        best = { entry, record };
+      }
+    }
+    if (!best) return null;
+    return { id: best.entry.id, edge: best.entry.edge, fields: best.entry.fields || [],
+             ...best.record };
+  }
+
+  let dragFrom = null;
+  let marked = null; /* the record last clicked, for a second one to measure against */
+
+  canvas.addEventListener("pointerdown", (event) => {
+    dragFrom = timeAt(event);
+    if (dragFrom !== null) canvas.setPointerCapture(event.pointerId);
+  });
+
+  canvas.addEventListener("pointerup", (event) => {
+    const to = timeAt(event);
+    const from = dragFrom;
+    dragFrom = null;
+    if (from === null || to === null) return;
+    const window_ = bounds();
+    const dragged = window_ && Math.abs(to - from) > (window_.to - window_.from) / 200;
+    if (dragged) {
+      /* Narrowing is a request for records the client may not hold: the
+         window it leaves may reach back past the tail that following
+         has been collecting. */
+      view = { from: Math.round(Math.min(from, to)), to: Math.round(Math.max(from, to)) };
+      setFollow(false);
+      request({ op: "window", from: view.from, to: view.to, buckets: TAIL_BUCKETS });
+      draw();
+      return;
+    }
+    /* Six pixels' worth of time: close enough to forgive a mouse,
+       narrow enough that a click on empty space selects nothing. */
+    const slack = ((window_.to - window_.from) / Math.max(1, canvas.getBoundingClientRect().width - GUTTER)) * 6;
+    const hit = nearest(to, laneAt(event), window_, slack);
+    if (!hit) return;
+    if (event.shiftKey && marked) {
+      onSelect({ kind: "delta", from: marked, to: hit, micros: micros(hit.ts - marked.ts) });
+      return;
+    }
+    marked = hit;
+    onSelect({ kind: "mark", record: hit, micros: micros(hit.ts - (bounds()?.from ?? hit.ts)) });
+  });
+
+  /* Everything the bridge still holds — the widest honest view, and not
+     "the whole run", which stopped existing at the horizon. Following
+     ends here by definition: this window has a fixed left edge. The
+     follow button is how a reader comes back to the present. */
+  canvas.addEventListener("dblclick", () => {
+    if (!span || !span.n) return;
+    marked = null;
+    view = { from: span.from, to: span.to };
+    setFollow(false);
+    request({ op: "window", from: view.from, to: view.to, buckets: TAIL_BUCKETS });
+    draw();
+  });
+
+  const micros = (ticks) => (freq ? Math.round((ticks * 1e6) / freq) : null);
 
   /* ---------------- chrome ---------------- */
 

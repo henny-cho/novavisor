@@ -1486,6 +1486,15 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
        path was used, and some for both. `smp.mail` paints nothing and
        still has to arrive, or the crosscall never lights. */
     accepts: (topic) => topic in TOPICS || byTopic.has(topic),
+    /* A path named from somewhere else — a timeline mark, say. The
+       board focuses by anchor, so pointing at the path's source is what
+       leaves it lit with everything not touching it dimmed; the focus
+       vocabulary stays one thing rather than two. */
+    focusPath(id) {
+      const edge = byId.get(id);
+      setFocus(edge ? edge.from : null);
+      return Boolean(edge);
+    },
     note,
     stopped,
     traced,
