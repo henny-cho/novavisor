@@ -711,18 +711,23 @@ class Bridge:
         is nothing to the bridge and a great deal to a browser, and a cap
         with a silent drop would make "everything that happened" a lie.
         The records stay here for `nova workbench trace` to ask for.
+
+        What the drain could not recover arrives as records too, so the
+        history holds the holes in the same order and the same shape as
+        everything else, and the summary's loss count is read back off
+        them rather than tallied beside them.
         """
         if not self._attach_tracer():
             return
-        records, lost = self._tracer.drain()
-        if not records and not lost:
+        records = self._tracer.drain()
+        if not records:
             return
         self._history.append(records)
         self.store.publish(
             Topic.TRACE,
             Kind.EVENT,
             trace.summarise(records)
-            | {"dropped": lost, "count": len(records), "span": self._history.span().as_dict()},
+            | {"count": len(records), "span": self._history.span().as_dict()},
             src=Src.TRACE,
         )
 

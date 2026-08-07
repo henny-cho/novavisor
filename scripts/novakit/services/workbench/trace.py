@@ -53,6 +53,14 @@ _HEADER_SIZE = _LAYOUT["NOVA_TRACE_HEADER_SIZE"]
 _HEAD_OFF = _LAYOUT["NOVA_TRACE_HEAD_OFF"]
 _RECORDS_OFF = _LAYOUT["NOVA_TRACE_RECORDS_OFF"]
 
+# The code this reader writes where records should have been. Taken
+# from the catalogue rather than read out of the header a second time:
+# one entry names the moment, its number, and what its words mean.
+GAP_CODE = events.BY_ID["trace.gap"].code
+# `a` is a u32 on the wire. A loss past four billion events is a
+# saturated count rather than a wrapped one.
+_MAX_COUNT = 0xFFFF_FFFF
+
 # Region header, then one record. Both are fixed by the ABI header the
 # firmware compiles against; the struct strings only spell its fields.
 _HEADER = struct.Struct("<QIIIIIII")
@@ -181,6 +189,13 @@ class TraceReader:
             self._ram.close()
             raise
         self._cursor = [0] * self.geometry.rings
+        # The last timestamp handed out per ring, which is where the
+        # next hole opens, and what a drain that recovered nothing has
+        # to carry until a record gives it somewhere to end.
+        self._last_ts = [0] * self.geometry.rings
+        self._pending = [0] * self.geometry.rings
+        # The pre-placement drops, waiting for a timestamp to sit at.
+        self._early_pending = self.geometry.early
 
     def _read_geometry(self) -> Geometry:
         magic, version, record_size, stride, rings, capacity, freq, early = _HEADER.unpack_from(
@@ -232,21 +247,44 @@ class TraceReader:
             for ring in range(self.geometry.rings)
         )
 
-    def drain(self) -> tuple[list[Record], int]:
-        """Everything written since the last call, oldest first.
+    def drain(self) -> list[Record]:
+        """Everything written since the last call, oldest first, and a
+        record for everything that was not.
 
         Ordered across rings by timestamp. CNTPCT is common to every PE,
         so that ordering is the machine's real one — which is the thing
         a sampled layer can never supply, whatever its rate.
+
+        A hole comes back as a record rather than as a count beside the
+        list. The count was the honest number and the wrong shape: this
+        function knows both ends of every hole, and a caller handed an
+        integer can only say that something was lost, never that it was
+        lost *there*. Two marks with eight thousand records missing
+        between them are drawn as neighbours, and the causal chain a
+        reader takes from that is fiction.
         """
         found: list[Record] = []
-        lost = 0
         for ring in range(self.geometry.rings):
-            records, missed = self._drain_one(ring)
-            found += records
-            lost += missed
+            found += self._drain_one(ring)
         found.sort(key=lambda record: record.ts)
-        return found, lost
+        return self._with_early(found)
+
+    def _with_early(self, records: list[Record]) -> list[Record]:
+        """Fold the pre-placement drops in, once, at the front.
+
+        A different loss from a lapped ring — these predate the region,
+        so no drain however prompt could have caught them — but the same
+        hole in the run, and the boot they fall in is where a reader is
+        most likely to be looking for something. `b` is zero: nothing
+        precedes them, so the hole has no near end.
+        """
+        if not self._early_pending or not records:
+            return records
+        early, self._early_pending = self._early_pending, 0
+        records.insert(
+            0, Record(ts=records[0].ts, code=GAP_CODE, cpu=0, a=min(early, _MAX_COUNT), b=0, c=0)
+        )
+        return records
 
     def _oldest_intact(self, head: int) -> int:
         """The oldest index still whole when the writer's head reads
@@ -264,7 +302,7 @@ class TraceReader:
         capacity = self.geometry.capacity
         return head - capacity + 1 if head >= capacity else 0
 
-    def _drain_one(self, ring: int) -> tuple[list[Record], int]:
+    def _drain_one(self, ring: int) -> list[Record]:
         capacity = self.geometry.capacity
         base = self._offset + _HEADER_SIZE + ring * self.geometry.stride + _RECORDS_OFF
         cursor = self._cursor[ring]
@@ -287,10 +325,42 @@ class TraceReader:
         if safe > keep:
             del records[: min(safe - keep, len(records))]
         self._cursor[ring] = head
-        return records, (head - cursor) - len(records)
+
+        missed = (head - cursor) - len(records) + self._pending[ring]
+        if not records:
+            # Nothing survived, so there is no timestamp to close a hole
+            # on. Carried rather than placed at a moment nothing
+            # happened: the count is never dropped, only deferred to the
+            # drain that can say where it ends.
+            self._pending[ring] = missed
+            return records
+        self._pending[ring] = 0
+        # Both ends, read before the cursor moves past them: the hole
+        # opened at the last record this ring handed out and closes at
+        # the first that survived it.
+        opened, closed = self._last_ts[ring], records[0].ts
+        self._last_ts[ring] = records[-1].ts
+        if missed:
+            records.insert(
+                0,
+                Record(ts=closed, code=GAP_CODE, cpu=ring, a=min(missed, _MAX_COUNT),
+                       b=opened, c=0),
+            )
+        return records
 
     def close(self) -> None:
         self._ram.close()
+
+
+def dropped_in(records: list[Record]) -> int:
+    """Events the gap records in this batch account for.
+
+    The one place the number is computed. A badge showing a count and a
+    window drawing the holes have to be two views of one drain, not two
+    accounts of it — so the summary derives its total from the same
+    records the window will hand out.
+    """
+    return sum(record.a for record in records if record.code == GAP_CODE)
 
 
 def summarise(records: list[Record]) -> dict:
@@ -310,7 +380,7 @@ def summarise(records: list[Record]) -> dict:
             continue
         edges[entry.edge] = edges.get(entry.edge, 0) + 1
         last[entry.edge] = decode(record)
-    return {"edges": edges, "last": last}
+    return {"edges": edges, "last": last, "dropped": dropped_in(records)}
 
 
 def histogram(records: list[Record], first: int, last: int, buckets: int) -> dict[str, list[int]]:
@@ -409,6 +479,11 @@ def decode(record: Record) -> dict:
         out |= {"slot": record.a, "bytes": record.b}
     elif entry.id == "smmu.fault":
         out |= {"stream": record.a, "vm": record.b, "generation": record.c}
+    elif entry.id == "trace.gap":
+        # The width, not the far end: `b` is a raw counter value, which
+        # is the one thing no reader can use. Zero when the hole opened
+        # before anything was recorded, so it has no measurable start.
+        out |= {"count": record.a, "ticks": record.ts - record.b if record.b else 0}
     return out
 
 
@@ -426,28 +501,17 @@ def report(shm_path: Path, ram_base: int, trace_pa: int, region_size: int, limit
         print(f"[workbench] trace: {error}", file=sys.stderr)
         return 1
     try:
-        records, lost = reader.drain()
+        records = reader.drain()
         geometry = reader.geometry
     finally:
         reader.close()
 
+    lost = dropped_in(records)
     print(
         f"rings {geometry.rings}  capacity {geometry.capacity}  "
         f"cntfrq {geometry.freq_hz}  records {len(records)}  dropped {lost}  "
         f"early {geometry.early}"
     )
-    if lost:
-        # Never silently: a ring that lapped is a fact about the run,
-        # and a report that hid it would read as a complete history.
-        print(f"[workbench] {lost} record(s) overwritten before this drain", file=sys.stderr)
-    if geometry.early:
-        # A different fact from `dropped`, and not actionable the same
-        # way: these predate the region, so no drain could have caught
-        # them however prompt it was.
-        print(
-            f"[workbench] {geometry.early} event(s) emitted before the rings were placed",
-            file=sys.stderr,
-        )
     print_records(records, geometry.freq_hz, limit)
     return 0
 
@@ -468,10 +532,21 @@ def print_records(records: list[Record], freq_hz: int, limit: int) -> None:
     base = shown[0].ts if shown else 0
     for record in shown:
         fields = decode(record)
+        # A field named `ticks` is a duration in the same clock as the
+        # stamp, and printed raw it is a counter value nobody can read.
+        # One rule rather than one case per event that has one.
+        if "ticks" in fields:
+            fields["ticks"] = f"{_micros(fields['ticks'], freq_hz)}us"
         detail = " ".join(
             f"{key}={value}" for key, value in fields.items() if key not in ("event", "cpu", "ts")
         )
         # Relative to the first record shown: absolute counter values
         # say nothing a reader can use, and the frequency is right here.
-        micros = (record.ts - base) * 1_000_000 // max(1, freq_hz)
-        print(f"  {micros:>10}us cpu{record.cpu} {fields['event']:<13} {detail}")
+        print(
+            f"  {_micros(record.ts - base, freq_hz):>10}us "
+            f"cpu{record.cpu} {fields['event']:<13} {detail}"
+        )
+
+
+def _micros(ticks: int, freq_hz: int) -> int:
+    return ticks * 1_000_000 // max(1, freq_hz)

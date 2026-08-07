@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ...core import config
 from . import elfsym, snapshot
-from .events import EVENTS
+from .events import EVENTS, STOPS
 from .observations import MAX_CPUS, OBSERVATIONS, timer_slot_labels
 from .paths import EDGES
 
@@ -111,11 +111,12 @@ def verify_manifest(elf: Path | None = None) -> int:
         # breakpoint that can never be hit.
         edge_ids = {edge.id for edge in EDGES}
         for event in EVENTS:
-            try:
-                index.resolve_function(event.symbol)
-            except KeyError as error:
-                failures += 1
-                print(f"[workbench] stale event {event.id}: {error}", file=sys.stderr)
+            if event.stop:
+                try:
+                    index.resolve_function(event.symbol)
+                except KeyError as error:
+                    failures += 1
+                    print(f"[workbench] stale event {event.id}: {error}", file=sys.stderr)
             if event.edge and event.edge not in edge_ids:
                 failures += 1
                 print(
@@ -127,6 +128,6 @@ def verify_manifest(elf: Path | None = None) -> int:
     if failures == 0:
         print(
             f"[workbench] manifest check: {len(OBSERVATIONS)} observations "
-            f"and {len(EVENTS)} stop points resolve"
+            f"and {len(STOPS)} stop points resolve"
         )
     return 1 if failures else 0

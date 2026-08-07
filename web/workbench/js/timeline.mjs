@@ -62,7 +62,8 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
   };
   let head = 0; /* total ever appended; the live window is the last HOLD */
 
-  let byCode = new Map(); /* firmware code -> catalogue entry */
+  let byCode = new Map(); /* record code -> catalogue entry */
+  let byId = new Map(); /* event id -> catalogue entry */
   let order = []; /* catalogue order, for stable lane placement */
   const lanes = []; /* event ids seen this run, in catalogue order */
   let freq = 0; /* CNTFRQ, for the microsecond axis */
@@ -93,10 +94,12 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
 
   function setCatalogue(stops) {
     byCode = new Map();
+    byId = new Map();
     order = [];
     for (const stop of stops || []) {
       if (!stop.code) continue;
       byCode.set(stop.code, stop);
+      byId.set(stop.id, stop);
       order.push(stop.id);
     }
   }
@@ -301,9 +304,33 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     return {
       ink: style.getPropertyValue("--ink3").trim() || "#888",
       line: style.getPropertyValue("--line").trim() || "#333",
+      warn: style.getPropertyValue("--warn").trim() || "#a8770a",
       cpu: CPU_COLOURS.map((name) => style.getPropertyValue(name).trim() || "#888"),
       font: style.getPropertyValue("--mono").trim() || "monospace",
     };
+  }
+
+  /* Diagonal hatching, built once per colour. A gap is the one thing on
+     this strip that is not an observation, and a solid band would read
+     as one — the stripes say "nothing was here to draw". */
+  let hatchFor = null;
+  function hatch(colour, ratio) {
+    if (hatchFor && hatchFor.colour === colour && hatchFor.ratio === ratio) return hatchFor.pattern;
+    const step = Math.max(4, Math.round(5 * ratio));
+    const tile = document.createElement("canvas");
+    tile.width = tile.height = step;
+    const pen = tile.getContext("2d");
+    pen.strokeStyle = colour;
+    pen.globalAlpha = 0.55;
+    pen.lineWidth = Math.max(1, ratio);
+    pen.beginPath();
+    pen.moveTo(-step, step);
+    pen.lineTo(step, -step);
+    pen.moveTo(0, step * 2);
+    pen.lineTo(step * 2, 0);
+    pen.stroke();
+    hatchFor = { colour, ratio, pattern: context.createPattern(tile, "repeat") };
+    return hatchFor.pattern;
   }
 
   /* Always from the held records, never from what is already painted:
@@ -384,6 +411,8 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
       context.fillText(lanes[lane], 4 * ratio, middle);
     }
 
+    bands(window_, at, colours);
+
     const bar = MARK_W * ratio;
     const columns = Math.max(1, Math.floor(plot / bar));
     const { counts, owner } = bin(window_, columns);
@@ -413,6 +442,36 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
       }
     }
     context.globalAlpha = 1;
+  }
+
+  /* Records that cover a stretch rather than an instant, drawn as the
+     stretch. A gap's whole content is how much of the axis nothing was
+     watching, and a two-pixel tick at its far end says the opposite —
+     that the strip either side of it is continuous.
+
+     Painted before the marks, so a mark that survived inside a busy
+     window still sits on top. A `from` of zero means the hole opened
+     before anything was recorded, so the band runs off the left edge
+     rather than claiming a start it does not have. */
+  function bands(window_, at, colours) {
+    if (!lanes.some((id) => byId.get(id)?.span)) return;
+    const width = Math.max(1, window_.to - window_.from);
+    const x = (ts) => at.gutter + ((ts - window_.from) / width) * at.plot;
+    context.fillStyle = hatch(colours.warn, at.scale);
+    for (const record of visible(window_)) {
+      const entry = byCode.get(record.code);
+      if (!entry || !entry.span) continue;
+      const lane = lanes.indexOf(entry.id);
+      if (lane < 0) continue;
+      const from = Math.max(at.gutter, record.b ? x(record.b) : at.gutter);
+      const to = Math.min(at.gutter + at.plot, x(record.ts));
+      context.fillRect(
+        from,
+        lane * at.lane + 2 * at.scale,
+        Math.max(1, to - from),
+        at.lane - 4 * at.scale,
+      );
+    }
   }
 
   /* ---------------- interaction ---------------- */

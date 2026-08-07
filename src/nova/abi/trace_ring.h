@@ -133,6 +133,26 @@
 #define NOVA_TRACE_EV_UART_LINE    13
 #define NOVA_TRACE_EV_SMMU_FAULT   14
 
+/* Codes the host writes into the same stream, far above the firmware's
+ * numbering and read as a separate family — so one can never arrive as
+ * a hook nobody implemented.
+ *
+ * The ring protocol above can say how much a reader missed but not
+ * where, and a count is the wrong shape for that knowledge: a drain
+ * holds both ends of the hole and throws them away on the way out.
+ * Written as a record instead, a hole sorts by timestamp, decodes,
+ * lands in a lane and answers a window like anything else, so nothing
+ * downstream needs a second path for the part of the run that is
+ * missing. */
+#define NOVA_TRACE_HOST_CODE_BASE 0x8000
+
+/* A stretch nothing was watching: a ring lapped before a drain reached
+ * it, or the events predate the region entirely. `ts` closes the hole
+ * at the first record that survived it, `cpu` names the ring, `a`
+ * counts what was lost, and `b` opens it at the last record handed out
+ * before — zero when even that is unknown. */
+#define NOVA_TRACE_HOST_EV_GAP 0x8000
+
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
 #endif /* NOVA_TRACE_RING_H */

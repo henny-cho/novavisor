@@ -217,6 +217,11 @@ function setStops(stops) {
   const previous = stopPick.value;
   clear(stopPick);
   for (const stop of stops || []) {
+    /* One catalogue, two uses. Everything in it names a lane; only the
+       entries backed by a firmware function name a place to halt, and
+       the bridge says which those are rather than the client guessing
+       from an id. */
+    if (stop.stop === false) continue;
     const option = el("option", "", stop.label ? `${stop.id} — ${stop.label}` : stop.id);
     option.value = stop.id;
     stopPick.append(option);

@@ -358,7 +358,7 @@ class HaltInspector:
             try:
                 self._addresses = {
                     event.id: index.resolve_function(event.symbol)
-                    for event in events.EVENTS
+                    for event in events.STOPS
                 }
             finally:
                 index.close()
