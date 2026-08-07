@@ -82,6 +82,8 @@ const boardView = createBoard({
 const panels = createPanels({ tabs: ref("panel-tabs"), host: ref("panels") });
 
 const timelineNote = ref("tl-note"); /* what the run holds */
+const stopHereButton = ref("tl-stop");
+let markedEvent = null; /* the event a picked mark names, for "stop here" */
 const timelineSel = ref("tl-sel"); /* what the reader picked */
 const timeline = createTimeline({
   strip: ref("tl"),
@@ -106,6 +108,13 @@ const timeline = createTimeline({
     const record = choice.record;
     timelineSel.textContent = `${record.id} · cpu${record.cpu} · ${traceFields(record)}`;
     if (record.edge) boardView.focusPath(record.edge);
+    /* One catalogue, two consumers, and this is where that is repaid:
+       the moment a reader picked out of the trace is already a stop
+       point, so wanting to see the next one is a lookup and not a
+       second table. */
+    markedEvent = record.id;
+    stopHereButton.hidden = false;
+    stopHereButton.title = `다음 ${record.id}에서 정지`;
   },
 });
 
@@ -119,6 +128,18 @@ function traceFields(record) {
     .filter(Boolean)
     .join(" ");
 }
+/* The stop is taken through the same path the picker uses, because a
+   mark and a stop point are one fact: the catalogue that named the
+   record is the catalogue the halt layer breaks on. */
+stopHereButton.addEventListener("click", () => {
+  if (!markedEvent) return;
+  stopPick.value = markedEvent;
+  if (halt({ cmd: "run", stops: [markedEvent] })) {
+    say(`대기 · ${markedEvent}`);
+    events.addNotice(latestTs, `타임라인 마크에서 정지 요청 — ${markedEvent}`);
+  }
+});
+
 /* The strip owns the state — a drag turns following off from inside —
    so the button asks for a change and the strip decides what it says. */
 ref("tl-follow").addEventListener("click", (event) => {
@@ -358,6 +379,7 @@ function onLife(ts, data) {
       timeline.reset();
       timelineNote.textContent = "트레이스 대기";
       timelineSel.textContent = "";
+      stopHereButton.hidden = true;
       boardView.clearAll();
       cards.reset();
       consoleView.mark(`── ${data.demo || "?"} ──`);
@@ -373,6 +395,9 @@ function onLife(ts, data) {
       setPaused(false);
       setAuto(false);
       setPhase("running");
+      /* A delta is only true of the pair of stops it was measured
+         across; a running machine has moved past both. */
+      panels.clearMoved();
       events.addNotice(ts, "머신 재개");
       break;
     /* Stopped *at* something, rather than wherever the reader clicked.

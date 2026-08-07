@@ -342,6 +342,9 @@ export function createPanels({ tabs, host }) {
   }
   index();
 
+  /* Per topic, what moved between the last two stops. Cleared when the
+     machine resumes: a delta is only true of the pair it came from. */
+  const moved = new Map();
   const bodies = new Map();
   for (const panel of PANELS) {
     /* A toggle, not a tab: several panels may be open at once, so the
@@ -351,6 +354,11 @@ export function createPanels({ tabs, host }) {
     chip.setAttribute("aria-pressed", "false");
     chip.title = `${panel.title} 표시 전환`;
     chip.append(el("span", "tt", panel.title));
+    /* How many of this panel's fields moved since the previous stop.
+       A stop publishes the whole machine; between two consecutive binds
+       three or four values actually changed, and this is what says
+       which drawer to open for them. */
+    chip.append(el("b", "tmoved", ""));
     chip.addEventListener("click", () => toggle(panel.id));
     /* Nothing is unclaimed until a topology says what is published. */
     chip.hidden = panel === FALLBACK;
@@ -383,6 +391,16 @@ export function createPanels({ tabs, host }) {
     remember();
     sync();
     if (visible.has(id)) render(id);
+  }
+
+  function markMoved() {
+    for (const entry of bodies.values()) {
+      let count = 0;
+      for (const topic of entry.panel.topics) count += (moved.get(topic) || []).length;
+      const badge = entry.tab.querySelector(".tmoved");
+      if (badge) badge.textContent = count ? String(count) : "";
+      entry.tab.classList.toggle("moved", count > 0);
+    }
   }
 
   function render(id) {
@@ -436,6 +454,7 @@ export function createPanels({ tabs, host }) {
       const data = frame.data && typeof frame.data === "object" ? frame.data : null;
       if (!data || data.values === undefined) return;
       latest.set(frame.topic, { value: data.values, ts: frame.ts, src: frame.src });
+      if (Array.isArray(data.changed)) moved.set(frame.topic, data.changed);
       /* Coalesced to one render per flush window, and only for the
          panels this topic actually feeds: six topics at 20 Hz would
          otherwise rebuild the same table over a hundred times a second,
@@ -446,9 +465,16 @@ export function createPanels({ tabs, host }) {
       }
     },
     settle() {
+      markMoved();
       if (!dirty.size) return;
       for (const id of dirty) render(id);
       dirty.clear();
+    },
+    /* A delta belongs to the pair of stops it was measured across, so
+       resuming retires it rather than leaving a stale count on a tab. */
+    clearMoved() {
+      moved.clear();
+      markMoved();
     },
     setTopology(topo) {
       timerSlots = Array.isArray(topo.timer_slots) ? topo.timer_slots : [];
@@ -466,6 +492,7 @@ export function createPanels({ tabs, host }) {
     },
     clearAll() {
       latest.clear();
+      moved.clear();
       ctxSlot = 0; /* the new run may not have the old slot */
       renderAll();
     },

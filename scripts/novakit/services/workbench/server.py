@@ -127,6 +127,9 @@ class Bridge:
         # published on the transition rather than on every tick.
         self._trace_state = ""
         self._board: dict[str, int] | None = None
+        # The previous stop's reading, per topic. A stop publishes the
+        # whole machine; this is what lets it also say what moved.
+        self._stopped_at: dict[str, object] = {}
         # The bridge's memory of the run. The firmware's rings are a
         # handover buffer sized in milliseconds; this is where a reader
         # who noticed something late can still find its cause.
@@ -345,7 +348,11 @@ class Bridge:
         self.session.paused = True
         # Same data shape as the S-layer topics: the UI panels read every
         # snapshot's payload from "values".
-        self.store.publish(Topic.SYSREG, Kind.SNAPSHOT, {"values": data}, src=Src.HALT)
+        was, self._stopped_at = self._stopped_at, {Topic.SYSREG.value: data}
+        self.store.publish(
+            Topic.SYSREG, Kind.SNAPSHOT, self._with_delta(data, was, Topic.SYSREG.value),
+            src=Src.HALT,
+        )
         try:
             # Built here if the poll loop has not got to it: arming at
             # launch stops the machine during EL2 boot, long before the
@@ -361,7 +368,24 @@ class Bridge:
             )
             return
         for obs, value in values:
-            self.store.publish(obs.topic, Kind.SNAPSHOT, {"values": value}, src=Src.HALT)
+            self._stopped_at[obs.topic] = value
+            self.store.publish(
+                obs.topic, Kind.SNAPSHOT, self._with_delta(value, was, obs.topic), src=Src.HALT
+            )
+
+    @staticmethod
+    def _with_delta(value, previous: dict, topic: str) -> dict:
+        """A stopped reading, and what moved since the last stop.
+
+        Absent on the first stop of a run rather than reported as
+        "everything changed": there was nothing to change from, and a UI
+        that highlighted every field would be pointing at the reading
+        itself.
+        """
+        payload = {"values": value}
+        if topic in previous:
+            payload["changed"] = snapshot.changed_paths(previous[topic], value)
+        return payload
 
     async def _advance(self, inspector: halt.HaltInspector, data: dict) -> None:
         """Run until a catalogued event, as many times as asked.
@@ -501,8 +525,10 @@ class Bridge:
         self._tracer_run = None
         self._trace_state = ""
         # A new machine's timestamps are a new epoch, and merging them
-        # with the last run's would put the two in one order.
+        # with the last run's would put the two in one order. The same
+        # goes for a stop-to-stop delta across a restart.
         self._history = history.History(self._history.capacity)
+        self._stopped_at = {}
         if tracer is not None:
             tracer.close()
 

@@ -173,6 +173,35 @@ class ElfRamProvider:
         self._ram.close()
 
 
+def changed_paths(before, after, prefix: str = "") -> list[str]:
+    """Leaf paths that differ between two readings of one topic.
+
+    What a stop is *for* is seeing what moved, and a stop publishes the
+    whole machine — twenty-eight topics of it. Between two consecutive
+    binds three or four values actually changed, and finding them by eye
+    across every panel is the work this removes.
+
+    Leaves, not containers: "the scheduler changed" is true of almost
+    every stop and says nothing, where `sched.cpu[1].current` is the
+    answer. A path that appears on one side only is a change too — a
+    reading that grew or lost a field is exactly the kind of thing worth
+    being told about.
+    """
+    if isinstance(before, dict) and isinstance(after, dict):
+        out = []
+        for key in dict.fromkeys([*before, *after]):
+            out += changed_paths(before.get(key), after.get(key), f"{prefix}.{key}" if prefix else key)
+        return out
+    if isinstance(before, list) and isinstance(after, list):
+        out = []
+        for index in range(max(len(before), len(after))):
+            here = before[index] if index < len(before) else None
+            there = after[index] if index < len(after) else None
+            out += changed_paths(here, there, f"{prefix}[{index}]")
+        return out
+    return [] if before == after else [prefix or "value"]
+
+
 def image_symbols(provider) -> elfsym.SymbolTable | None:
     """The symbol table behind a provider, if it has one.
 
