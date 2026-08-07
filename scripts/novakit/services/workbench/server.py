@@ -90,6 +90,9 @@ class Bridge:
         self._inspector: halt.HaltInspector | None = None
         self._inspector_run = 0
         self._abort = False
+        # The poll loop owns it; the halt path borrows it to read the
+        # whole machine at a stop, where every value is of one instant.
+        self._poller: snapshot.SnapshotPoller | None = None
         # Stamped into every connect topo: a changed token is the one
         # reliable restart signal, whatever the seq counter says.
         self._token = uuid.uuid4().hex[:8]
@@ -273,12 +276,34 @@ class Bridge:
             inspector.resume()
 
     async def _sweep_to_panels(self, inspector: halt.HaltInspector) -> None:
-        """Publish the register truth of whatever stop we are sitting on."""
-        data = await asyncio.get_running_loop().run_in_executor(None, inspector.pause)
+        """Everything the machine knows about the instant it stopped.
+
+        Registers come from the stub; the rest is the whole observation
+        manifest read from a machine that is not moving. Polling has to
+        sample and can only report what changed since last time; a
+        stopped machine can be read exhaustively, with no torn value and
+        no writer racing the reader, so this is the one place the S layer
+        is exact. It goes out as H for that reason — same reading, a
+        different claim about how much it can be trusted.
+        """
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(None, inspector.pause)
         self.session.paused = True
         # Same data shape as the S-layer topics: the UI panels read every
         # snapshot's payload from "values".
         self.store.publish(Topic.SYSREG, Kind.SNAPSHOT, {"values": data}, src=Src.HALT)
+        poller = self._poller
+        if poller is None:
+            return
+        try:
+            values = await loop.run_in_executor(None, poller.sweep)
+        except Exception as error:
+            self.store.publish(
+                Topic.LIFE, Kind.EVENT, {"phase": "snapshot-unavailable", "error": str(error)}
+            )
+            return
+        for obs, value in values:
+            self.store.publish(obs.topic, Kind.SNAPSHOT, {"values": value}, src=Src.HALT)
 
     async def _advance(self, inspector: halt.HaltInspector, data: dict) -> None:
         """Run until a catalogued event, as many times as asked.
@@ -398,7 +423,7 @@ class Bridge:
                     if current != run_id:
                         if provider is not None:
                             provider.close()
-                            provider = poller = None
+                            provider = poller = self._poller = None
                         shm_path = session.surfaces.shm_path
                         # Cheap gate: no per-retry DWARF walk while QEMU
                         # is still creating and sizing the backend.
@@ -418,8 +443,15 @@ class Bridge:
                             continue
                         provider = built
                         poller = snapshot.SnapshotPoller(provider)
+                        self._poller = poller
                         run_id = current
                     if poller is None:
+                        continue
+                    if self.session.paused:
+                        # Nothing can change while the machine is
+                        # stopped, and the stop already published a full
+                        # sweep. Polling static RAM would only spend
+                        # reads to confirm it.
                         continue
                     for obs, value in poller.tick():
                         self.store.publish(
@@ -438,9 +470,10 @@ class Bridge:
                     )
                     if provider is not None:
                         provider.close()
-                    provider = poller = None
+                    provider = poller = self._poller = None
                     run_id = current
         finally:
+            self._poller = None
             if provider is not None:
                 provider.close()
 
