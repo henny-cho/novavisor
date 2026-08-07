@@ -27,7 +27,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ...image import abi
 from . import paths
+
+# The firmware's numbering for the same moments. Read from the ABI
+# header both sides compile against, so a renumbered event cannot mean
+# one thing to the ring writer and another to this reader.
+_CODES = abi.read_defines(
+    abi.TRACE_RING,
+    [
+        "NOVA_TRACE_EV_TRAP",
+        "NOVA_TRACE_EV_VGIC_BIND",
+        "NOVA_TRACE_EV_VGIC_POST",
+        "NOVA_TRACE_EV_VGIC_PRIVATE",
+        "NOVA_TRACE_EV_VGIC_INJECT",
+        "NOVA_TRACE_EV_VGIC_EOI",
+        "NOVA_TRACE_EV_SCHED_SWITCH",
+        "NOVA_TRACE_EV_MMIO",
+    ],
+)
 
 
 @dataclass(frozen=True)
@@ -37,6 +55,10 @@ class Event:
     edge: str = ""
     args: tuple[str, ...] = field(default_factory=tuple)
     label: str = ""
+    # The record type the firmware writes for this moment. A stop point
+    # and a trace hook are one fact, so they share an entry rather than
+    # two tables free to disagree.
+    code: int = 0
 
 
 # Ordered by the injection path they sit on: a physical interrupt is
@@ -49,24 +71,26 @@ EVENTS: tuple[Event, ...] = (
         paths.EDGE_POST,
         ("vm", "vintid", "pintid", "generation"),
         "물리 SPI를 가상 INTID에 결속",
+        _CODES["NOVA_TRACE_EV_VGIC_BIND"],
     ),
     Event("vgic.spi", "nova::vgic::post_spi", paths.EDGE_POST, ("vm", "vintid"),
-          "하이퍼바이저가 SPI 생성"),
+          "하이퍼바이저가 SPI 생성", _CODES["NOVA_TRACE_EV_VGIC_POST"]),
     Event("vgic.private", "nova::vgic::post_private", paths.EDGE_POST, ("slot", "vintid"),
-          "하이퍼바이저가 PPI/SGI 생성"),
+          "하이퍼바이저가 PPI/SGI 생성", _CODES["NOVA_TRACE_EV_VGIC_PRIVATE"]),
     Event("vgic.inject", "nova::vgic::refill", paths.EDGE_INJECT, (),
-          "대기 인터럽트를 리스트 레지스터로"),
+          "대기 인터럽트를 리스트 레지스터로", _CODES["NOVA_TRACE_EV_VGIC_INJECT"]),
     Event("vgic.eoi", "nova::vgic::(anonymous)::drain_eois", paths.EDGE_INJECT, ("slot",),
-          "게스트가 인터럽트 완료"),
+          "게스트가 인터럽트 완료", _CODES["NOVA_TRACE_EV_VGIC_EOI"]),
     Event("trap", "nova::trap_handler_component::handle_lower_sync", paths.EDGE_TRAP, (),
-          "EL1에서 EL2로 동기 예외"),
+          "EL1에서 EL2로 동기 예외", _CODES["NOVA_TRACE_EV_TRAP"]),
     Event("mmio", "nova::trap::dispatch_data_abort", paths.EDGE_MMIO, (),
-          "게스트 MMIO 접근 트랩"),
+          "게스트 MMIO 접근 트랩", _CODES["NOVA_TRACE_EV_MMIO"]),
     Event("sched.switch", "nova::vcpu::(anonymous)::switch_to", "", ("", "next"),
-          "vCPU 전환"),
+          "vCPU 전환", _CODES["NOVA_TRACE_EV_SCHED_SWITCH"]),
 )
 
 BY_ID = {event.id: event for event in EVENTS}
+BY_CODE = {event.code: event for event in EVENTS if event.code}
 
 
 def catalogue() -> list[dict]:

@@ -26,6 +26,7 @@ class Topic(StrEnum):
     LIFE = "life"
     VERIFY = "verify"
     SYSREG = "sysreg"
+    TRACE = "trace"
     # uplink
     UART = "uart"
     TARGET = "target"
@@ -37,7 +38,7 @@ class Topic(StrEnum):
 
 
 DOWNLINK = frozenset(
-    {Topic.TOPO, Topic.CONSOLE, Topic.EV, Topic.LIFE, Topic.VERIFY, Topic.SYSREG}
+    {Topic.TOPO, Topic.CONSOLE, Topic.EV, Topic.LIFE, Topic.VERIFY, Topic.SYSREG, Topic.TRACE}
 )
 UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.HALT, Topic.CMD, Topic.PROBE})
 # Recognised-but-deferred uplink topics are answered explicitly instead
