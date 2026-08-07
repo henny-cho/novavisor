@@ -85,9 +85,16 @@
  * is ~82k events per second per core before anything is lost. */
 #define NOVA_TRACE_CAPACITY 4096
 
-/* The whole reserved region. Bounded by the gap every board leaves
- * between the IVC page and the pristine images. */
-#define NOVA_TRACE_SIZE 0x00080000 /* 512 KiB */
+/* Rings the region is sized for. The board decides how many it fills;
+ * this is the ceiling every board's reservation must cover, so porting
+ * to a wider machine does not silently overrun into the pristine
+ * images. */
+#define NOVA_TRACE_MAX_RINGS 4
+
+/* The whole reserved region: header + MAX_RINGS * (header + records),
+ * rounded up. Bounded by the 1020 KiB gap every board leaves between
+ * the IVC page and the pristine images. */
+#define NOVA_TRACE_SIZE 0x000A0000 /* 640 KiB */
 
 /* Event kinds. The bridge's event catalogue names the same moments for
  * its breakpoints; a stop point and a trace hook are one fact about the

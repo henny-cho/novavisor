@@ -21,6 +21,7 @@
 
 #include "nova/abi/trace_ring.h"
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -78,6 +79,9 @@ inline constexpr std::size_t kRingStride = NOVA_TRACE_RECORDS_OFF + NOVA_TRACE_C
   return NOVA_TRACE_HEADER_SIZE + rings * kRingStride;
 }
 
+static_assert(region_size(NOVA_TRACE_MAX_RINGS) <= NOVA_TRACE_SIZE,
+              "the reserved region cannot hold the rings it is declared to allow");
+
 // One core's ring. Default-constructed it is inert, which is what a
 // core runs with before the region is placed and what a host test gets
 // for free — an unplaced ring drops events rather than faulting.
@@ -124,6 +128,13 @@ private:
   Record*        records_ = nullptr;
 };
 
+// The rings themselves, one per core, filled in by whoever places the
+// region. An inline variable rather than a component global: the hot
+// paths that emit must not acquire a link dependency on the component
+// that happens to do the placing, and a profile without it simply
+// leaves these unplaced, where emit() drops.
+inline std::array<Ring, NOVA_TRACE_MAX_RINGS> g_ring{};
+
 // Where ring `index` begins inside a region at `base`.
 [[nodiscard]] inline auto ring_at(void* base, std::size_t index) noexcept -> void* {
   return static_cast<char*>(base) + NOVA_TRACE_HEADER_SIZE + index * kRingStride;
@@ -147,6 +158,19 @@ inline void format(void* base, std::uint32_t rings, std::uint32_t freq_hz) noexc
     std::atomic_ref{*head}.store(0, std::memory_order_relaxed);
   }
   std::atomic_ref{header->magic}.store(NOVA_TRACE_MAGIC, std::memory_order_release);
+}
+
+// Format the region and bind every core's ring to it.
+//
+// Runs once, on the primary, before any secondary exists — the same
+// ordering premise the boot CTR_EL0 snapshot relies on, so a secondary
+// that starts later reads rings that are already placed.
+inline void place(void* base, std::size_t rings, std::uint32_t freq_hz) noexcept {
+  const std::size_t count = rings < NOVA_TRACE_MAX_RINGS ? rings : NOVA_TRACE_MAX_RINGS;
+  format(base, static_cast<std::uint32_t>(count), freq_hz);
+  for (std::size_t index = 0; index < count; ++index) {
+    g_ring[index] = Ring{ring_at(base, index)};
+  }
 }
 
 } // namespace nova::trace

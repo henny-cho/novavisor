@@ -55,6 +55,18 @@ inline void write_cntvoff(std::uint64_t offset) noexcept {
   return cnt;
 }
 
+// The same counter without the barrier, for stamping an event that has
+// already happened. Nothing is being compared against a register just
+// written, so the ordering `now()` buys is not needed — and this sits
+// on trap and injection paths, where an ISB is the expensive part of
+// the read. A few cycles of skew cannot reorder two events on one core,
+// because the stores that record them are ordered anyway.
+[[nodiscard]] inline auto now_relaxed() noexcept -> std::uint64_t {
+  std::uint64_t cnt = 0;
+  __asm__ volatile("mrs %0, cntpct_el0" : "=r"(cnt));
+  return cnt;
+}
+
 namespace detail {
 // The adopted counter frequency. Written once by the boot contract gate
 // before any RuntimeStart action runs, so every later reader sees a

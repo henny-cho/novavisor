@@ -7,6 +7,7 @@ set(NOVA_PROJECT_REQUIRE_EMBEDDED_PAYLOAD TRUE)
 
 set(NOVA_COMPONENTS
     nova_panic
+    trace
     trap_handler
     boot_msg
     dtb_parser

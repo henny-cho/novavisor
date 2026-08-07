@@ -11,6 +11,7 @@ set(NOVA_PROJECT_CAPABILITIES
 # its absence means "no DMA to isolate", not "no VM power".
 set(NOVA_COMPONENTS
     nova_panic
+    trace
     trap_handler
     boot_msg
     dtb_parser
