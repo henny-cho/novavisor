@@ -75,6 +75,10 @@ class Bridge:
         self._server = None
         self._flusher: asyncio.Task | None = None
         self._halting = False
+        # The gdb connection *is* the stop, so the inspector outlives the
+        # command that took it: held while paused, dropped on resume.
+        self._inspector: halt.HaltInspector | None = None
+        self._inspector_run = 0
         # Stamped into every connect topo: a changed token is the one
         # reliable restart signal, whatever the seq counter says.
         self._token = uuid.uuid4().hex[:8]
@@ -129,6 +133,7 @@ class Bridge:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
+        self._release()
         await self.session.stop()
 
     def _live_state(self) -> dict:
@@ -203,6 +208,9 @@ class Bridge:
             self._reject(f"target: session is {self.session.phase.value}")
             return
         variant = uplink.data.get("variant")
+        # Hand the outgoing machine back before it is torn down; a run
+        # that ends while we hold its stop leaves QEMU frozen mid-exit.
+        self._release()
         self.spawn(
             self.session.select(
                 Target(
@@ -223,19 +231,45 @@ class Bridge:
             replay=False,
         )
 
+    def _hold(self) -> halt.HaltInspector:
+        """The inspector for this run, made once and kept.
+
+        Attaching stops the machine, so a fresh inspector per command
+        would take a new stop on every click and leak the previous one.
+        Keyed on the run: a restart replaces the sockets underneath, and
+        an inspector still holding the old ones answers for a machine
+        that no longer exists.
+        """
+        if self._inspector_run != self.session.run_id:
+            self._release()
+        if self._inspector is None:
+            surfaces = self.session.surfaces
+            self._inspector = halt.HaltInspector(surfaces.qmp_path, surfaces.gdb_path)
+            self._inspector_run = self.session.run_id
+        return self._inspector
+
+    def _release(self) -> None:
+        """Give the machine back and forget the inspector.
+
+        Called on resume and at every run boundary: the next run has new
+        sockets, and an inspector still holding the old ones would answer
+        for a machine that no longer exists.
+        """
+        inspector, self._inspector = self._inspector, None
+        if inspector is not None:
+            inspector.resume()
+
     async def _halt_command(self, command: str) -> None:
-        """Pause = QMP stop + a per-CPU register sweep; the machine stays
-        stopped (virtual clock frozen) until the resume command."""
+        """Pause is a held gdb connection plus a per-CPU register sweep;
+        the machine stays stopped (virtual clock frozen) until resume."""
         if self._halting:
             self._reject("qmp: inspection in progress")
             return
         self._halting = True
         try:
-            surfaces = self.session.surfaces
-            inspector = halt.HaltInspector(surfaces.qmp_path, surfaces.gdb_path)
             loop = asyncio.get_running_loop()
             if command == "stop":
-                data = await loop.run_in_executor(None, inspector.pause)
+                data = await loop.run_in_executor(None, self._hold().pause)
                 self.session.paused = True
                 # Same data shape as the S-layer topics: the UI panels
                 # read every snapshot's payload from "values".
@@ -244,7 +278,7 @@ class Bridge:
                 )
                 self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "paused"})
             else:
-                await loop.run_in_executor(None, inspector.resume)
+                await loop.run_in_executor(None, self._release)
                 self.session.paused = False
                 self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "resumed"})
         except Exception as error:
