@@ -13,6 +13,7 @@
 #include "hal/gic.hpp"
 #include "nova/arch/trap_context.hpp"
 #include "nova/panic.hpp"
+#include "trace/trace.hpp"
 
 #include <array>
 #include <cib/top.hpp>
@@ -62,6 +63,10 @@ void drain(TrapContext* ctx) noexcept {
     if (intid == kPanicStopSgi) {
       halt(); // another core owns a first-failure report — park silently
     }
+    // Every physical interrupt passes here, and this is also where EL2
+    // wakes from idle — so it is the definitional gate for the wire
+    // between the distributor and a PE, rather than a log line about it.
+    trace_emit(NOVA_TRACE_EV_GIC_ACK, intid);
 
     IrqCall call{.ctx = ctx, .intid = intid, .handled = false};
     cib::service<IrqService>(&call);

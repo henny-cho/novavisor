@@ -257,6 +257,23 @@ class CatalogueTest(unittest.TestCase):
         codes = [event.code for event in events.EVENTS]
         self.assertEqual(len(set(codes)), len(codes))
 
+    def test_every_event_with_arguments_decodes_them(self):
+        """An event whose record falls through decode() reaches the UI
+        as a bare code and a timestamp — catalogued, and still unread."""
+        for event in events.EVENTS:
+            if not event.args:
+                continue
+            with self.subTest(event=event.id):
+                decoded = trace.decode(trace.Record(ts=1, code=event.code, cpu=0, a=1, b=2, c=3))
+                named = set(decoded) - {"event", "cpu", "ts"}
+                self.assertTrue(named, f"{event.id} names arguments but decodes none")
+
+    def test_a_fault_only_moment_lights_no_path(self):
+        """The grade rule in paths.py: an edge may not look more certain
+        than what watches it, and a hook that fires only on a fault has
+        watched nothing about the working path."""
+        self.assertEqual(events.BY_ID["smmu.fault"].edge, "")
+
 
 if __name__ == "__main__":
     unittest.main()

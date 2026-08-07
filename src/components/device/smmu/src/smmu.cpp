@@ -18,6 +18,7 @@
 #include "smmu/hw_driver.hpp"
 #include "smmu/runtime_model.hpp"
 #include "smmu/ste_model.hpp"
+#include "trace/trace.hpp"
 
 #include <array>
 #include <cstddef>
@@ -327,7 +328,9 @@ void dispatch_faults(const FaultBatch& batch) noexcept {
   const auto notices = collect_fault_notices<kEventCount>(
       std::span<const std::uint32_t>{batch.stream_ids.data(), batch.count}, quarantine_fault_stream);
   for (std::size_t i = 0; i < notices.count; ++i) {
-    DmaFaultCall call{.notice = notices.notices[i]};
+    const FaultNotice& notice = notices.notices[i];
+    trace_emit(NOVA_TRACE_EV_SMMU_FAULT, notice.stream_id, notice.owner_vm, notice.generation);
+    DmaFaultCall call{.notice = notice};
     cib::service<DmaFaultService>(&call);
     if (!call.handled) {
       console::write("[smmu] DMA fault recovery unavailable\n");

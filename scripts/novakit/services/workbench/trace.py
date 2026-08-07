@@ -281,6 +281,18 @@ def decode(record: Record) -> dict:
                 "ipa": f"{record.b:#x}", "value": f"{record.c:#x}"}
     elif entry.id == "sched.switch":
         out |= {"next": record.a, "prev": record.b}
+    elif entry.id == "gic.ack":
+        out |= {"intid": record.a}
+    elif entry.id == "smp.cross":
+        out |= {"vm": record.a, "owner": record.b}
+    elif entry.id == "ivc.doorbell":
+        out |= {"vm": record.a, "vintid": record.b}
+    elif entry.id == "psci.call":
+        out |= {"func": f"{record.a:#x}", "arg": f"{record.b:#x}", "action": record.c}
+    elif entry.id == "uart.line":
+        out |= {"slot": record.a, "bytes": record.b}
+    elif entry.id == "smmu.fault":
+        out |= {"stream": record.a, "vm": record.b, "generation": record.c}
     return out
 
 

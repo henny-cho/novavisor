@@ -115,6 +115,12 @@
 #define NOVA_TRACE_EV_VGIC_EOI     6
 #define NOVA_TRACE_EV_SCHED_SWITCH 7
 #define NOVA_TRACE_EV_MMIO         8
+#define NOVA_TRACE_EV_GIC_ACK      9
+#define NOVA_TRACE_EV_CROSS_CALL   10
+#define NOVA_TRACE_EV_IVC_DOORBELL 11
+#define NOVA_TRACE_EV_PSCI         12
+#define NOVA_TRACE_EV_UART_LINE    13
+#define NOVA_TRACE_EV_SMMU_FAULT   14
 
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
