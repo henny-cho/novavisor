@@ -74,6 +74,12 @@ class StateStore:
             self._backlog.append(frame)
         return frame
 
+    @property
+    def topology(self) -> dict:
+        """The world as last published. Read-only to callers; a late
+        joiner is replayed from exactly this."""
+        return self._topology
+
     def set_topology(self, data: dict) -> dict:
         self._topology = data
         return self.publish(Topic.TOPO, Kind.SNAPSHOT, data)

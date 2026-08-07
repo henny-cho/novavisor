@@ -9,6 +9,7 @@ default executor so the event loop keeps serving connections.
 from __future__ import annotations
 
 import asyncio
+import functools
 import shutil
 import socket
 import tempfile
@@ -20,7 +21,7 @@ from pathlib import Path
 
 from ...core import board
 from .. import artifacts, cmake, expect, manifest, spawn
-from . import anchors, derive, events, hardware
+from . import anchors, derive, elfsym, events, hardware, paths
 from .observations import observation_rates, timer_slot_labels
 from .protocol import Kind, Src, Topic
 from .store import StateStore
@@ -63,6 +64,36 @@ def _debug_image() -> Path:
     return cmake.preset_dir(cmake.selected_preset()) / "novavisor.elf"
 
 
+@functools.cache
+def _image_symbols(elf: Path, _stamp: float) -> elfsym.SymbolTable | None:
+    """The built image's symbol table, or None if there is not one yet.
+
+    Cached on the file's mtime: the answer cannot change without a
+    rebuild, and reading it is a third of a second the topology path
+    would otherwise pay on every publish.
+    """
+    if not elf.is_file():
+        return None
+    try:
+        return elfsym.SymbolTable.of(elf)
+    except (OSError, SystemExit):
+        return None
+
+
+def image_capability(tracing: bool = False) -> set[str]:
+    """Which paths this run can show direct evidence for.
+
+    `tracing` is false before a machine exists, which is honest rather
+    than pessimistic: the rings are placed by EL2 well after the
+    topology first goes out, and grading now for a layer that has not
+    arrived is the overstatement the grades exist to prevent. The bridge
+    republishes when it does arrive.
+    """
+    elf = _debug_image()
+    stamp = elf.stat().st_mtime if elf.is_file() else 0.0
+    return events.observable(_image_symbols(elf, stamp), tracing)
+
+
 def initial_topology() -> dict:
     """What a client sees before any target runs: the pickable world.
 
@@ -72,7 +103,7 @@ def initial_topology() -> dict:
     return {
         "demo": None,
         "guests": [],
-        "board": hardware.board_map(),
+        "board": hardware.board_map(direct=image_capability()),
         "catalog": _catalog(),
         "stops": events.catalogue(),
         "taxonomy": vocabulary() | derive.syndrome_vocabulary(_debug_image()),
@@ -121,7 +152,7 @@ def prepare(target: Target) -> Prepared:
             }
             for guest in demo_manifest.get("guests", [])
         ],
-        "board": hardware.board_map(),
+        "board": hardware.board_map(direct=image_capability()),
         "catalog": _catalog(),
         "stops": events.catalogue(),
         "taxonomy": vocabulary() | derive.syndrome_vocabulary(_debug_image()),
@@ -267,6 +298,28 @@ class Session:
         # Bumped on every RUNNING transition: snapshot readers key their
         # resolved state on it, since a rebuild moves symbols.
         self.run_id = 0
+
+    def regrade_paths(self, tracing: bool) -> None:
+        """Republish the board with the paths this run can now witness.
+
+        Capability is not settled when the topology first goes out: EL2
+        places the trace rings well after it, and an edge that was grey
+        because nothing could watch it becomes direct the moment
+        something can. Publishing the upgrade is the alternative to
+        promising it in advance.
+        """
+        topology = self._store.topology
+        board = topology.get("board")
+        if not board:
+            return
+        regraded = paths.edges(
+            board["cpus"],
+            [block["id"] for block in board["blocks"]],
+            image_capability(tracing),
+        )
+        if regraded == board["edges"]:
+            return
+        self._store.set_topology(topology | {"board": board | {"edges": regraded}})
 
     def _set_phase(self, phase: Phase, **data) -> None:
         self.phase = phase

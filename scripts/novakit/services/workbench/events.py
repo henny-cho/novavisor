@@ -118,6 +118,31 @@ BY_ID = {event.id: event for event in EVENTS}
 BY_CODE = {event.code: event for event in EVENTS if event.code}
 
 
+def observable(symbols, tracing: bool) -> set[str]:
+    """Paths this run can produce direct evidence for.
+
+    A different question from "which paths does the catalogue name".
+    The catalogue is a source constant: it says the same thing about a
+    stripped image, a build without the trace component, and a machine
+    with no debug stub — which is exactly the overstatement grades exist
+    to prevent, and it was the grade calculation itself making it.
+
+    Two ways to witness a moment, so two tests. The rings record it
+    wherever they are placed, symbols or not; a breakpoint needs the
+    symbol but nothing else. `symbols` is None when the image has not
+    been read yet, which rules nothing in.
+    """
+    out = set()
+    for event in EVENTS:
+        if not event.edge:
+            continue
+        if tracing and event.code:
+            out.add(event.edge)
+        elif symbols is not None and symbols.has_function(event.symbol):
+            out.add(event.edge)
+    return out
+
+
 def catalogue() -> list[dict]:
     """What the UI needs to offer the reader a choice of stop points.
 

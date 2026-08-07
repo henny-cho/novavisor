@@ -16,11 +16,12 @@ joined by the UI.
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 from ...core import config
 from ...image import abi, dtb
-from . import events, paths
+from . import paths
 
 BOARD_DIR = config.REPO / "src" / "hal" / "board"
 DEFAULT_BOARD = "qemu_virt"
@@ -211,12 +212,16 @@ def _blocks(values: dict, inventory: dict) -> list[dict]:
     return blocks
 
 
-def board_map(board: str = DEFAULT_BOARD) -> dict:
+def board_map(board: str = DEFAULT_BOARD, direct: Iterable[str] = ()) -> dict:
     """The drawable machine description for one board.
 
     Every value is looked up in a header or the device inventory; a
     renamed define fails here (and in CI) instead of quietly blanking a
     block in the browser.
+
+    `direct` names the paths the caller can actually witness this run —
+    see events.observable(). Empty means nothing is watching, which is a
+    picture the board is still entitled to be drawn in.
     """
     layout_header = board_layout_header(board)
     values = dict(dtb.read_layout(abi.GUEST_LAYOUT, layout_header))
@@ -242,12 +247,11 @@ def board_map(board: str = DEFAULT_BOARD) -> dict:
         "vcpu_stride": abi.MAX_VCPUS_PER_VM,
         "dtb_reserve": values["NOVA_GUEST_DTB_SIZE"],
         "blocks": blocks,
-        # A path the machine can be stopped on is graded up: a
-        # breakpoint is not another sample, it is the event itself.
+        # `direct` comes from the caller because it is not a fact about
+        # the board: it is what *this run* can witness, and the board
+        # map is the same on a stripped image as on a debug one.
         "edges": paths.edges(
-            values["NOVA_BOARD_SMP_CPUS"],
-            [block["id"] for block in blocks],
-            {event.edge for event in events.EVENTS if event.edge},
+            values["NOVA_BOARD_SMP_CPUS"], [block["id"] for block in blocks], direct
         ),
         "regions": {
             "pa": _physical_regions(values),

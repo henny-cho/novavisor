@@ -585,6 +585,8 @@ class Bridge:
         # Constant for the run, so it rides the transition rather than
         # every summary frame.
         self._set_trace_state("active", early=self._tracer.geometry.early)
+        # A layer arriving is a change in what the board may claim.
+        self.session.regrade_paths(tracing=True)
         return True
 
     def _pump_trace(self) -> None:

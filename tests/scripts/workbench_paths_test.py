@@ -15,7 +15,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit.services.workbench import hardware, paths  # noqa: E402
+from novakit.services.workbench import events, hardware, paths  # noqa: E402
 from novakit.services.workbench.observations import OBSERVATIONS  # noqa: E402
 from novakit.services.workbench.taxonomy import Badge  # noqa: E402
 
@@ -100,6 +100,44 @@ class PublishedEdgeTest(unittest.TestCase):
     def test_ids_stay_unique_after_expansion(self):
         ids = [edge["id"] for edge in self.edges]
         self.assertEqual(len(ids), len(set(ids)))
+
+
+class CapabilityGradeTest(unittest.TestCase):
+    """A grade describes what is watching, so it has to come from the
+    run and not from a table in the source.
+
+    The catalogue names the same moments whatever was built. Grading
+    from it painted a stripped image exactly as certain as a debug one —
+    the overstatement the whole grade scheme exists to prevent, made by
+    the grade calculation itself.
+    """
+
+    def test_an_image_with_nothing_to_watch_with_claims_nothing(self):
+        self.assertEqual(events.observable(None, tracing=False), set())
+
+    def test_the_rings_alone_are_enough(self):
+        """The firmware emits whether or not its names survived, so a
+        stripped image with tracing is still direct evidence."""
+        witnessed = events.observable(None, tracing=True)
+        self.assertIn(paths.EDGE_POST, witnessed)
+        self.assertIn("phys", witnessed)
+
+    def test_a_fault_only_moment_upgrades_nothing(self):
+        """smmu.fault is catalogued and has no edge, so no amount of
+        capability may promote the path a working translation takes."""
+        witnessed = events.observable(None, tracing=True)
+        self.assertNotIn("walk", witnessed)
+        self.assertNotIn("dma", witnessed)
+
+    def test_losing_the_capability_demotes_the_path(self):
+        watched = hardware.board_map(direct=events.observable(None, tracing=True))
+        blind = hardware.board_map(direct=())
+        graded = {edge["id"]: edge["grade"] for edge in watched["edges"]}
+        ungraded = {edge["id"]: edge["grade"] for edge in blind["edges"]}
+        self.assertEqual(graded["phys"], paths.GRADE_DIRECT)
+        self.assertEqual(ungraded["phys"], paths.GRADE_CONSOLE)
+        # The two maps describe one board: only the certainty differs.
+        self.assertEqual(set(graded), set(ungraded))
 
 
 if __name__ == "__main__":
