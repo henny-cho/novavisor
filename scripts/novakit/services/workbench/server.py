@@ -356,6 +356,9 @@ class Bridge:
         if uplink.topic is Topic.TRACE:
             self._answer_window(uplink.data)
             return
+        if uplink.topic is Topic.CURSOR:
+            self._answer_cursor(uplink.data)
+            return
         if uplink.topic is Topic.HALT:
             command = str(uplink.data.get("cmd", ""))
             if command not in HALT_COMMANDS:
@@ -770,6 +773,58 @@ class Bridge:
         # A layer arriving is a change in what the board may claim.
         self.session.regrade_paths(tracing=True)
         return True
+
+    def _answer_cursor(self, data: dict) -> None:
+        """Put the whole view at one point in the run.
+
+        The strip, the panels and the console were three views of one
+        run that could only ever agree about the present. This is what
+        makes them agree about a past: one timestamp moves all three,
+        because the reader's question — "what did the machine look like
+        *then*" — is one question.
+
+        Only a replay can answer it. A live machine's now is the only
+        point it has, and a panel returned to an earlier reading would
+        be showing a value nothing can be checked against.
+        """
+        if self._replay is None:
+            self._reject("cursor: only a replay can be moved in time")
+            return
+        try:
+            ts = int(data.get("ts"))
+        except (TypeError, ValueError):
+            self._reject("cursor: ts must be an integer")
+            return
+        wire = self._replay.wire_ts(ts)
+        state = self._replay.at(wire)
+        # As ordinary snapshot frames, in the shape the panels already
+        # apply: a seek that sent a special payload would teach the
+        # client a second way to take a value, and the two would come
+        # to disagree about which is a reading.
+        for frame in state.values():
+            self.store.publish(
+                frame["topic"],
+                Kind.SNAPSHOT,
+                frame.get("data") or {},
+                src=frame.get("src", Src.BRIDGE.value),
+                replay=False,
+                ts=frame.get("ts"),
+            )
+        # Both clocks, because the client cuts its console by the wire's
+        # and draws its strip by the machine's. And the topics with no
+        # reading yet at this moment — said out loud, because silence
+        # about them leaves their later value on screen, which is a
+        # value the machine had not produced when the reader is looking.
+        self.store.publish(
+            Topic.CURSOR,
+            Kind.SNAPSHOT,
+            {
+                "ts": ts,
+                "wire": wire,
+                "unread": [topic for topic in self._replay.topics if topic not in state],
+            },
+            replay=False,
+        )
 
     def _answer_window(self, data: dict) -> None:
         """Answer a request for part of the history, at its resolution.

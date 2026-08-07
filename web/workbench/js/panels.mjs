@@ -140,6 +140,9 @@ export function createPanels({ tabs, host }) {
      it came from. Beside `latest` because the two are read together and
      never apart — that pairing is the whole design here. */
   const moved = new Map();
+  /* Topics the run had not read yet at the point the reader is looking
+     at. Empty live, where the only point is now. */
+  let unread = new Set();
   const visible = new Set(); // panels switched on; screen order is PANELS order
   const dirty = new Set(); // panels whose topics changed since the last settle
   let timerSlots = [];
@@ -166,7 +169,8 @@ export function createPanels({ tabs, host }) {
   /* The only way into a reading. There is deliberately no accessor
      that hands back a bare value: one existed, every renderer used it,
      and the mask arrived at the panel with nowhere to be applied. */
-  const at = (topic) => new Cursor(latest.get(topic)?.value, moved.get(topic));
+  const at = (topic) =>
+    unread.has(topic) ? new Cursor(undefined, undefined) : new Cursor(latest.get(topic)?.value, moved.get(topic));
 
   const PANELS = [
     {
@@ -628,6 +632,15 @@ export function createPanels({ tabs, host }) {
       if (!dirty.size) return;
       for (const id of dirty) render(id);
       dirty.clear();
+    },
+    /* Topics with no reading at the cursor's moment. Held rather than
+       cleared, so moving the cursor back and forth costs nothing — and
+       drawn as "not yet read", because the alternative is leaving a
+       later value on screen at a moment the machine had not produced
+       it, which is the one thing a cursor exists to prevent. */
+    setUnread(topics) {
+      unread = new Set(Array.isArray(topics) ? topics : []);
+      for (const id of visible) dirty.add(id);
     },
     /* A delta belongs to the pair of stops it was measured across, so
        resuming retires it rather than leaving a stale count on a tab. */

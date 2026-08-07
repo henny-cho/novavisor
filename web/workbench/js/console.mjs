@@ -93,12 +93,30 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, on
     activate(active);
   }
 
-  function push(view, vm, text) {
+  function push(view, vm, text, ts) {
     const row = el("div", vm === null ? "cline hyp" : `cline guest ${slot(vm)}`);
+    /* When the line was printed, so a reader who moved the cursor back
+       is not shown output the machine had not produced yet. Live it is
+       never read; the cost is one attribute per line. */
+    if (ts !== undefined) row.dataset.ts = String(ts);
     row.append(el("span", "cg", vm === null ? "EL2" : `vm${vm}`));
     row.append(el("span", "ct", text === undefined || text === null ? "" : text));
     view.pane.append(row);
     trim(view.pane, LINE_CAP);
+    dirty = true;
+  }
+
+  /* Hide everything printed after `ts`, or show it all again with null.
+     Hidden rather than removed: a cursor moves both ways, and a console
+     that discarded the future would make the second move a re-fetch of
+     what is already on the page. */
+  function cutAt(ts) {
+    for (const view of views.values()) {
+      for (const row of view.pane.children) {
+        const at = row.dataset.ts;
+        row.hidden = ts !== null && at !== undefined && Number(at) > ts;
+      }
+    }
     dirty = true;
   }
 
@@ -113,12 +131,12 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, on
     }
   }
 
-  function append(line) {
+  function append(line, ts) {
     const vm = Number.isInteger(line.vm) ? line.vm : null;
-    push(merged(), vm, line.text);
+    push(merged(), vm, line.text, ts);
     /* A tab is a slot the board can host; guest text that merely looks
        like a tag stays in the merged log and mints nothing. */
-    if (vm !== null && vm >= 0 && vm < MAX_VM_SLOT) push(guestView(vm), vm, line.text);
+    if (vm !== null && vm >= 0 && vm < MAX_VM_SLOT) push(guestView(vm), vm, line.text, ts);
   }
 
   /* Session divider in the merged log, so two runs never read as one. */
@@ -181,5 +199,5 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, on
 
   merged();
   activate(MERGED);
-  return { setGuests, append, mark, setBanner, settle, clearAll };
+  return { setGuests, append, mark, setBanner, settle, clearAll, cutAt };
 }

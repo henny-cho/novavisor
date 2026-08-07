@@ -135,6 +135,22 @@ class Recorder:
         }
 
 
+# Frames between folded checkpoints. Small enough that a seek applies a
+# few hundred frames from the nearest one, large enough that a
+# twenty-minute run holds a few hundred checkpoints rather than tens of
+# thousands of dictionaries.
+CHECKPOINT_EVERY = 256
+
+
+@dataclass(frozen=True)
+class Checkpoint:
+    """The world as of one point in the stream."""
+
+    at: int  # index into frames; the state is *before* applying this one
+    ts: int
+    topics: dict[str, dict]  # topic -> the frame's data, as last seen
+
+
 @dataclass(frozen=True)
 class Recording:
     """A run, read back."""
@@ -143,6 +159,87 @@ class Recording:
     meta: dict
     frames: list[dict] = field(default_factory=list)
     records: list[trace.Record] = field(default_factory=list)
+    marks: list[Checkpoint] = field(default_factory=list)
+
+    @property
+    def topics(self) -> list[str]:
+        """Every topic this run ever published a reading for.
+
+        Needed to answer a seek honestly. A topic first read halfway
+        through has no value before that, and saying nothing about it
+        would leave its later reading on screen — a value the machine
+        had not produced yet, at a moment the reader asked to be
+        returned to.
+        """
+        seen = dict.fromkeys(
+            frame["topic"]
+            for frame in self.frames
+            if frame.get("kind") == "snapshot" and frame.get("topic") != "topo"
+        )
+        return list(seen)
+
+    def wire_ts(self, cntpct: int) -> int:
+        """When the bridge learned of a record stamped `cntpct`.
+
+        Two clocks meet here. Records carry CNTPCT, which is the
+        machine's; frames carry the bridge's monotonic clock. Nothing
+        converts between them — but every drain summary carries both,
+        its own frame timestamp and the newest CNTPCT it just took in,
+        so the pairs are already in the stream.
+
+        A record stamped T was handed over by the first drain whose span
+        reached T. Everything published before that frame is before T in
+        the order the browser saw, which is what a cursor has to cut on.
+        No interpolation: the answer is a frame that exists.
+        """
+        for frame in self.frames:
+            if frame.get("topic") != "trace" or frame.get("kind") != "event":
+                continue
+            span = (frame.get("data") or {}).get("span") or {}
+            if span.get("to", 0) >= cntpct:
+                return frame.get("ts", 0)
+        return self.frames[-1].get("ts", 0) if self.frames else 0
+
+    def at(self, ts: int) -> dict[str, dict]:
+        """Every topic's latest snapshot as of `ts`.
+
+        From the nearest checkpoint forward, so the cost is the
+        checkpoint interval and not the run. The checkpoints are folded
+        out of this same list at load, which is why there is no
+        keyframe record in the file: a written one is a summary that can
+        disagree with what it summarises, and this one cannot — it was
+        computed from it a moment ago.
+        """
+        state: dict[str, dict] = {}
+        start = 0
+        for mark in self.marks:
+            if mark.ts > ts:
+                break
+            state, start = dict(mark.topics), mark.at
+        for frame in self.frames[start:]:
+            if frame.get("ts", 0) > ts:
+                break
+            if frame.get("kind") == "snapshot" and frame.get("topic") != "topo":
+                state[frame["topic"]] = frame
+        return state
+
+
+def fold(frames: list[dict], every: int = CHECKPOINT_EVERY) -> list[Checkpoint]:
+    """Checkpoints, derived from the stream rather than written into it.
+
+    An index in the file would be a cache: two things describing one
+    run, free to disagree the first time either is edited, and the
+    disagreement invisible because the summary is what gets read. Folded
+    at load there is one description and the other is a function of it.
+    """
+    marks: list[Checkpoint] = []
+    state: dict[str, dict] = {}
+    for index, frame in enumerate(frames):
+        if index % every == 0:
+            marks.append(Checkpoint(at=index, ts=frame.get("ts", 0), topics=dict(state)))
+        if frame.get("kind") == "snapshot" and frame.get("topic") != "topo":
+            state[frame["topic"]] = frame
+    return marks
 
 
 def load(directory: Path) -> Recording:
@@ -184,4 +281,6 @@ def load(directory: Path) -> Recording:
         trace.unpack_from(blob, at)
         for at in range(0, len(blob) - len(blob) % trace.REC_SIZE, trace.REC_SIZE)
     ]
-    return Recording(directory=directory, meta=meta, frames=frames, records=records)
+    return Recording(
+        directory=directory, meta=meta, frames=frames, records=records, marks=fold(frames)
+    )

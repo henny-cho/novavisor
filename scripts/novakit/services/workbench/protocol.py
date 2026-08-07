@@ -40,6 +40,9 @@ class Topic(StrEnum):
     # The machine's stop and its advance. Named for what it owns rather
     # than the socket it once used: QMP no longer holds the stop.
     HALT = "halt"
+    # Where in the run the reader is looking. Only a replay can answer
+    # it: a live machine's "now" is the only point it has.
+    CURSOR = "cursor"
     CMD = "cmd"
     PROBE = "probe"
 
@@ -51,10 +54,14 @@ DOWNLINK = frozenset(
 # would double SUPPORTED_UPLINK, the validation and the documentation to
 # say the same word twice; the Kind already distinguishes a request from
 # what the bridge sends unasked.
-UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.HALT, Topic.CMD, Topic.PROBE, Topic.TRACE})
+UPLINK = frozenset(
+    {Topic.UART, Topic.TARGET, Topic.HALT, Topic.CMD, Topic.PROBE, Topic.TRACE, Topic.CURSOR}
+)
 # Recognised-but-deferred uplink topics are answered explicitly instead
 # of being dropped, so the UI degrades visibly.
-SUPPORTED_UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.HALT, Topic.TRACE})
+SUPPORTED_UPLINK = frozenset(
+    {Topic.UART, Topic.TARGET, Topic.HALT, Topic.TRACE, Topic.CURSOR}
+)
 
 
 class Kind(StrEnum):

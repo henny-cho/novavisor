@@ -132,6 +132,11 @@ const timeline = createTimeline({
     markedEvent = record.id;
     stopHereButton.hidden = false;
     stopHereButton.title = `다음 ${record.id}에서 정지`;
+    /* In a replay the selection is the whole view's cursor: the moment
+       a reader picks on the strip is the moment the panels and the
+       console are returned to. Live there is only now, and asking
+       would be asking a machine to have been something it is not. */
+    if (replaying) send("cursor", { ts: record.ts });
   },
 });
 
@@ -640,7 +645,7 @@ function onFrame(frame) {
       }
       break;
     case "console":
-      consoleView.append(data);
+      consoleView.append(data, frame.ts);
       if (Number.isInteger(data.vm) && data.vm >= 0 && data.vm < MAX_VM_SLOT) {
         cards.touch(data.vm, data.text);
       }
@@ -674,6 +679,16 @@ function onFrame(frame) {
       break;
     case "life":
       onLife(frame.ts, data);
+      break;
+    /* Where in the run the reader is looking. The strip, the panels and
+       the console were three views that could only agree about the
+       present; this is the one number that makes them agree about a
+       past. The panels arrive as ordinary snapshots just before it, so
+       nothing here has to put them anywhere. */
+    case "cursor":
+      consoleView.cutAt(data.wire ?? null);
+      events.cutAt(data.wire ?? null);
+      panels.setUnread(data.unread);
       break;
     /* One matched expectation of a --verify run; index is 1-based. */
     case "verify":

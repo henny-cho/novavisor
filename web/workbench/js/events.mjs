@@ -34,19 +34,37 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
     list.append(el("div", "empty", "이벤트 없음 — 타깃을 실행하면 채워집니다."));
   }
 
-  function apply(name) {
-    const off = hidden(name);
-    for (const row of list.querySelectorAll(`[data-badge="${CSS.escape(name)}"]`)) row.hidden = off;
+  /* Whether a row is on screen. One rule, because two — a badge filter
+     and a time cursor — would each decide half of it and the second to
+     run would undo the first. */
+  let cut = null;
+  /* A row with no run time is this session talking about itself —
+     "connected", "tour started" — and has no place on the run's
+     timeline, so a cursor does not cut it. */
+  const shows = (row) =>
+    !hidden(row.dataset.badge) &&
+    (cut === null || row.dataset.ts === undefined || Number(row.dataset.ts) <= cut);
+
+  function refresh() {
+    for (const row of list.children) {
+      if (row.dataset.badge) row.hidden = !shows(row);
+    }
+    dirty = true;
   }
 
   /* Show only these badges, or pass null to stop narrowing. What the
      user muted stays muted either way. */
   function narrow(names) {
     narrowed = names === null ? null : new Set(names);
-    for (const row of list.children) {
-      if (row.dataset.badge) row.hidden = hidden(row.dataset.badge);
-    }
+    refresh();
     filters.classList.toggle("narrowed", narrowed !== null);
+  }
+
+  /* Everything after `ts` is the future of wherever the reader is
+     looking. Hidden, not dropped: the cursor moves both ways. */
+  function cutAt(ts) {
+    cut = ts;
+    refresh();
   }
 
   function makeChip(name) {
@@ -59,7 +77,7 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
       if (muted.has(name)) muted.delete(name);
       else muted.add(name);
       chip.setAttribute("aria-pressed", String(!muted.has(name)));
-      apply(name);
+      refresh();
     });
     chips.set(name, chip);
     return chip;
@@ -69,23 +87,26 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
   function setBadges(badges) {
     const names = (Array.isArray(badges) ? badges : []).map(String);
     for (const name of [...muted]) {
-      if (name !== LIFE && !names.includes(name)) {
-        muted.delete(name);
-        apply(name); /* its chip is gone; its rows must not stay hidden */
-      }
+      /* Its chip is gone; its rows must not stay hidden. */
+      if (name !== LIFE && !names.includes(name)) muted.delete(name);
     }
     clear(filters);
     chips.clear();
     for (const name of names) filters.append(makeChip(name));
     filters.append(makeChip(LIFE));
     if (!names.length) filters.append(el("span", "empty", "배지 정보 대기 중"));
+    refresh(); /* a chip that vanished must not leave its rows hidden */
   }
 
-  function addRow({ ts, badge, severity, message, fields, dim }) {
+  function addRow({ ts, badge, severity, message, fields, dim, local }) {
     const name = badge ? String(badge) : "?";
     if (list.firstElementChild && list.firstElementChild.classList.contains("empty")) clear(list);
     const row = el("div", dim ? "erow dim" : "erow");
     row.dataset.badge = name;
+    /* When it happened, so a cursor moved into the past does not leave
+       the log showing what the machine had not done yet. Left unset for
+       this session's own remarks: they are not moments in the run. */
+    if (!local) row.dataset.ts = String(ts ?? 0);
     if (severity) row.dataset.sev = String(severity);
     row.style.setProperty("--chipc", accent(name));
     row.append(el("span", "et", stamp(ts)));
@@ -96,7 +117,7 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
         row.append(el("span", "ef", `${key}=${value}`));
       }
     }
-    row.hidden = hidden(name);
+    row.hidden = !shows(row);
     list.append(row);
     trim(list, ROW_CAP);
     dirty = true;
@@ -129,6 +150,7 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
       message,
       fields: options.fields,
       dim: Boolean(options.dim),
+      local: true,
     });
   }
 
@@ -141,11 +163,11 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
     muted.clear();
     for (const [name, chip] of chips) {
       chip.setAttribute("aria-pressed", "true");
-      apply(name);
     }
+    refresh();
   });
   clearButton.addEventListener("click", clearAll);
 
   placeholder();
-  return { setBadges, addEvent, addNotice, settle, clearAll, narrow };
+  return { setBadges, addEvent, addNotice, settle, clearAll, narrow, cutAt };
 }
