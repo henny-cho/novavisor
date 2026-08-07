@@ -221,6 +221,9 @@ b{font-weight:700}
   color:var(--ink3);font-weight:700
 }
 .tl-note{font-family:var(--mono);font-size:var(--fs-label);color:var(--ink3)}
+/* The run has already gone longer without draining than the rings can
+   cover. Not a warning about the future — a thing that happened. */
+.tl-note.over{color:var(--warn)}
 .tab .tmoved{
   font-family:var(--mono);font-size:var(--fs-label);color:var(--warn)
 }

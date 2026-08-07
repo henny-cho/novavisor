@@ -29,9 +29,10 @@
 #define NOVA_BOARD_GUEST_PA_SIZE 0x10000000 /* windows end at the IVC page */
 #define NOVA_BOARD_IVC_SHM_PA    0x60000000
 /* Trace rings. Sized by the host stall the T layer must survive, not by
- * what happened to be spare: 89k records/s/core at peak, times a
- * declared 1 s horizon (1.5x the worst drain gap measured). This board
- * divides it two ways, so each core gets 2^18 records — about 2.9 s of
+ * what happened to be spare: 133k records/s/core at peak (measured on a
+ * Linux guest boot, and published every run so the next machine does
+ * not have to be measured by hand), times a declared 1 s horizon. This
+ * board divides it two ways, so each core gets 2^18 records — 1.97 s of
  * that peak. The 64 KiB above 16 MiB is what keeps the power-of-two
  * floor from halving the result.
  *

@@ -389,6 +389,70 @@ class GapTest(unittest.TestCase):
         self.assertEqual(decoded["ticks"], 500)
 
 
+class BudgetTest(unittest.TestCase):
+    """The ring depth is a latency budget, and a budget nobody measures
+    is a number from one afternoon on one laptop."""
+
+    def records(self, count: int, cpu: int = 0):
+        return [trace.Record(ts=index, code=TRAP, cpu=cpu, a=0, b=0, c=0)
+                for index in range(count)]
+
+    def test_the_horizon_falls_out_of_the_fastest_fill_seen(self):
+        budget = trace.Budget(capacity=1000)
+        budget.looked([], 0.0)
+        budget.looked(self.records(100), 0.5)  # 200/s
+        self.assertEqual(budget.as_dict()["peak_rate"], 200)
+        self.assertAlmostEqual(budget.horizon_seconds, 5.0)
+
+    def test_the_rate_is_per_ring_not_across_them(self):
+        """The depth is per ring, so a total across four of them would
+        claim a horizon four times shorter than the real one."""
+        budget = trace.Budget(capacity=1000)
+        budget.looked([], 0.0)
+        budget.looked(self.records(100, cpu=0) + self.records(100, cpu=1), 1.0)
+        self.assertEqual(budget.as_dict()["peak_rate"], 100)
+
+    def test_a_gap_record_is_not_a_fill(self):
+        """It stands for records that never reached the reader; counting
+        it as arrival would inflate the rate exactly when the ring was
+        already losing."""
+        budget = trace.Budget(capacity=1000)
+        budget.looked([], 0.0)
+        budget.looked(
+            [trace.Record(ts=1, code=trace.GAP_CODE, cpu=0, a=99999, b=0, c=0)], 1.0
+        )
+        self.assertEqual(budget.as_dict()["peak_rate"], 0)
+
+    def test_the_stall_is_measured_between_looks_not_between_finds(self):
+        """A ring that was empty was never at risk. Counting an idle
+        stretch as a stall makes the worst case a measure of how quiet
+        the run was."""
+        budget = trace.Budget(capacity=1000)
+        budget.looked(self.records(1), 0.0)
+        budget.looked([], 2.0)  # a long look that found nothing
+        budget.looked(self.records(1), 2.1)
+        self.assertAlmostEqual(budget.as_dict()["worst_gap_ms"], 2000.0)
+
+    def test_the_crossing_is_reported_rather_than_left_to_be_noticed(self):
+        budget = trace.Budget(capacity=100)
+        budget.looked([], 0.0)
+        budget.looked(self.records(100), 0.1)  # 1000/s -> horizon 100 ms
+        self.assertAlmostEqual(budget.as_dict()["horizon_ms"], 100.0)
+        self.assertFalse(budget.overrun)
+
+        budget.looked(self.records(1), 0.5)  # 400 ms without a look
+        self.assertTrue(budget.overrun)
+        self.assertTrue(budget.as_dict()["overrun"])
+
+    def test_an_unmeasured_budget_is_zero_and_not_unlimited(self):
+        budget = trace.Budget(capacity=1000)
+        budget.looked([], 0.0)
+        budget.looked([], 1.0)
+        self.assertEqual(budget.horizon_seconds, 0.0)
+        # Nothing has been seen, so nothing has been broken either.
+        self.assertFalse(budget.overrun)
+
+
 class SummaryTest(unittest.TestCase):
     def test_the_wire_carries_counts_and_the_last_of_each(self):
         """Bounded by the number of paths, not by the event rate: a few

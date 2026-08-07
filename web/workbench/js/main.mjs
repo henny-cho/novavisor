@@ -335,14 +335,32 @@ function onTopo(data) {
   }
 }
 
+/* What the ring depth buys on this host, in the two numbers that set
+   it: how fast the busiest core filled a ring, and how long this
+   process actually went between looks. Both measured, because a
+   horizon quoted from a design note is not a fact about the machine
+   the reader is looking at. */
+function budgetText(budget) {
+  if (!budget.peak_rate) return `링 ${budget.capacity}건`;
+  const rate =
+    budget.peak_rate >= 1000
+      ? `${Math.round(budget.peak_rate / 1000)}k/s`
+      : `${budget.peak_rate}/s`;
+  return `링 ${(budget.horizon_ms / 1000).toFixed(1)}초 @ ${rate} · 최악 정체 ${Math.round(
+    budget.worst_gap_ms,
+  )}ms`;
+}
+
 /* The `early` count is a different fact from a drain loss: those events
    predate the rings, so no drainer however prompt could have had them. */
 function traceStateText(data) {
   switch (String(data.state || "")) {
-    case "active":
+    case "active": {
+      const shape = data.capacity ? ` — 링 ${data.rings}×${data.capacity}` : "";
       return data.early
-        ? `트레이스 연결 — 배치 전 유실 ${data.early}건`
-        : "트레이스 연결";
+        ? `트레이스 연결${shape} · 배치 전 유실 ${data.early}건`
+        : `트레이스 연결${shape}`;
+    }
     case "waiting":
       return "트레이스 영역 대기 중";
     case "none":
@@ -547,9 +565,14 @@ function onFrame(frame) {
       boardView.traced(frame.ts, data);
       timeline.note(data);
       if (data.span) {
-        timelineNote.textContent = data.span.full
+        const held = data.span.full
           ? `${data.span.n} 레코드 · 지평선 도달`
           : `${data.span.n} 레코드`;
+        timelineNote.textContent = data.budget ? `${held} · ${budgetText(data.budget)}` : held;
+        /* The promise and the reality side by side, and the crossing
+           marked. A budget that only ever appeared in a design note is
+           one nobody checks against the machine in front of them. */
+        timelineNote.classList.toggle("over", Boolean(data.budget?.overrun));
       }
       if (data.dropped) noteLoss(data.dropped);
       break;

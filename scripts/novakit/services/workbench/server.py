@@ -12,6 +12,7 @@ import asyncio
 import multiprocessing
 import signal
 import sys
+import time
 import uuid
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -121,6 +122,10 @@ class Bridge:
         # must not take the event stream with it.
         self._tracer: trace.TraceReader | None = None
         self._tracer_run: int | None = None
+        # What the ring depth is worth on this host, measured rather
+        # than assumed. Built with the geometry, so it dies with the run
+        # whose rings it describes.
+        self._budget: trace.Budget | None = None
         # What has been said about the T layer this run, so a state is
         # published on the transition rather than on every tick.
         self._trace_state = ""
@@ -526,6 +531,9 @@ class Bridge:
         tracer, self._tracer = self._tracer, None
         self._tracer_run = None
         self._trace_state = ""
+        # Measured against a geometry that is about to go away, and
+        # about a machine that no longer exists.
+        self._budget = None
         # A new machine's timestamps are a new epoch, and merging them
         # with the last run's would put the two in one order. The same
         # goes for a stop-to-stop delta across a restart.
@@ -641,9 +649,19 @@ class Bridge:
         # region has been read, and needed by everything that turns a
         # range of them back into a duration.
         self._history.freq_hz = self._tracer.geometry.freq_hz
+        self._budget = trace.Budget(self._tracer.geometry.capacity)
         # Constant for the run, so it rides the transition rather than
-        # every summary frame.
-        self._set_trace_state("active", early=self._tracer.geometry.early)
+        # every summary frame. The geometry travels with it: the depth
+        # is what the budget below is measured against, and a reader
+        # told a stall without it cannot tell a close call from a
+        # comfortable one.
+        self._set_trace_state(
+            "active",
+            early=self._tracer.geometry.early,
+            rings=self._tracer.geometry.rings,
+            capacity=self._tracer.geometry.capacity,
+            region_bytes=board["NOVA_BOARD_TRACE_SIZE"],
+        )
         # A layer arriving is a change in what the board may claim.
         self.session.regrade_paths(tracing=True)
         return True
@@ -719,7 +737,12 @@ class Bridge:
         """
         if not self._attach_tracer():
             return
-        records = self._tracer.drain()
+        # The cheap gate sits here rather than in the loop, so every
+        # tick with a reader attached is a look the budget can measure:
+        # the exposure a ring runs is the time between opportunities to
+        # empty it, and a tick that found it empty is still one.
+        records = self._tracer.drain() if self._tracer.pending() else []
+        self._budget.looked(records, time.monotonic())
         if not records:
             return
         self._history.append(records)
@@ -727,7 +750,11 @@ class Bridge:
             Topic.TRACE,
             Kind.EVENT,
             trace.summarise(records)
-            | {"count": len(records), "span": self._history.span().as_dict()},
+            | {
+                "count": len(records),
+                "span": self._history.span().as_dict(),
+                "budget": self._budget.as_dict(),
+            },
             src=Src.TRACE,
         )
 
@@ -846,8 +873,6 @@ class Bridge:
                 if self.session.phase is not Phase.RUNNING:
                     continue
                 try:
-                    if self._tracer is not None and self._tracer.pending() == 0:
-                        continue
                     self._pump_trace()
                 except (FileNotFoundError, ValueError):
                     # The backing file went out from under the run.

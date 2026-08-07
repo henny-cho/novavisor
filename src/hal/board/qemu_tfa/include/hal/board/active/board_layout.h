@@ -31,9 +31,9 @@
 #define NOVA_BOARD_GUEST_PA_BASE 0x50000000
 #define NOVA_BOARD_GUEST_PA_SIZE 0x10000000 /* windows end at the EL2 image */
 #define NOVA_BOARD_IVC_SHM_PA    0x48000000 /* above the firmware DTB region */
-/* Trace rings. Sized by the host stall the T layer must survive: 89k
+/* Trace rings. Sized by the host stall the T layer must survive: 133k
  * records/s/core at peak, times a declared 1 s horizon. Two cores
- * divide it, so each gets 2^18 records — about 2.9 s of that peak.
+ * divide it, so each gets 2^18 records — 1.97 s of that peak.
  * EL2-mapped already, never in a guest's Stage 2. */
 #define NOVA_BOARD_TRACE_PA      0x48001000
 #define NOVA_BOARD_TRACE_SIZE    0x01010000 /* 16 MiB + 64 KiB */

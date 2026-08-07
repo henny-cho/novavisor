@@ -161,6 +161,79 @@ class Geometry:
     early: int = 0
 
 
+class Budget:
+    """What the ring's depth is worth, in the terms that decide it.
+
+    Capacity is a latency budget: how long the host may go without
+    emptying a ring before the firmware laps it. Both sides of that are
+    runtime facts — how fast the busiest ring fills, and how long this
+    host actually goes between looks — and neither was ever measured.
+    The depth was picked from one afternoon's numbers on one laptop,
+    which is a number that stops being true on the next machine and
+    says nothing when it does.
+
+    So the instrument states its own terms, and the moment the observed
+    stall passes the horizon those terms promise, that crossing is
+    itself something to observe rather than something to rediscover by
+    hand next time the marks look wrong.
+    """
+
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+        self._at: float | None = None
+        self._peak = 0.0  # records per second into one ring
+        self._worst = 0.0  # seconds between looks
+
+    def looked(self, records: list[Record], at: float) -> None:
+        """One opportunity to drain, and what it found.
+
+        The interval is between *looks*, not between drains that found
+        something. A ring that was empty was never at risk, so counting
+        an idle stretch as a stall would turn the worst case into a
+        measure of how quiet the run was.
+
+        The rate is per ring, because the depth is per ring: `cpu` is
+        which ring wrote the record, and a total across four of them
+        would claim a horizon four times shorter than the real one.
+        """
+        if self._at is not None:
+            interval = at - self._at
+            self._worst = max(self._worst, interval)
+            if interval > 0 and records:
+                per_ring: dict[int, int] = {}
+                for record in records:
+                    if record.code != GAP_CODE:
+                        per_ring[record.cpu] = per_ring.get(record.cpu, 0) + 1
+                if per_ring:
+                    self._peak = max(self._peak, max(per_ring.values()) / interval)
+        self._at = at
+
+    @property
+    def horizon_seconds(self) -> float:
+        """How long the ring covers at the fastest fill yet seen.
+
+        Zero until something has been seen. An unmeasured budget is not
+        an unlimited one, and reporting it as zero rather than as
+        infinity is the difference between the two.
+        """
+        return self.capacity / self._peak if self._peak else 0.0
+
+    @property
+    def overrun(self) -> bool:
+        """Whether this run has already gone longer without looking than
+        the ring can cover. Not a prediction — a thing that happened."""
+        return bool(self._peak) and self._worst > self.horizon_seconds
+
+    def as_dict(self) -> dict:
+        return {
+            "capacity": self.capacity,
+            "peak_rate": round(self._peak),
+            "worst_gap_ms": round(self._worst * 1000, 1),
+            "horizon_ms": round(self.horizon_seconds * 1000, 1),
+            "overrun": self.overrun,
+        }
+
+
 class TraceReader:
     """One run's rings, read from the shared RAM file.
 
