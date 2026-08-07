@@ -19,6 +19,7 @@ from pathlib import Path
 from ...core import config
 from . import halt, hardware, history, snapshot, static, trace
 from .protocol import (
+    MAX_BUCKETS,
     SUPPORTED_UPLINK,
     Clock,
     Envelopes,
@@ -71,9 +72,6 @@ TRACE_DRAIN_SECONDS = 0.005
 # window and only the individual marks are gated on it, because more
 # points than pixels is a density by definition.
 DEFAULT_BUCKETS = 1200
-# The response arrays are this long, so a caller asking for more than a
-# screen's worth of columns is refused rather than quietly given less.
-MAX_BUCKETS = 8192
 
 
 def _require_websockets():

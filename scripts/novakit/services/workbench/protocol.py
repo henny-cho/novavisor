@@ -17,6 +17,13 @@ from enum import StrEnum
 
 PROTOCOL_VERSION = 1
 
+# Columns a window request may ask to be answered in. A limit on a
+# request field is part of the contract, not an implementation detail of
+# whoever enforces it: it lives here and rides the topology, so the two
+# clients ask within it instead of each carrying a copy of the number to
+# drift from.
+MAX_BUCKETS = 8192
+
 
 class Topic(StrEnum):
     # downlink

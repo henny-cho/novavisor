@@ -19,6 +19,12 @@ import sys
 import time
 
 from . import trace
+from .protocol import MAX_BUCKETS
+
+# Rounds of narrowing before giving up. The ratio below converges in one
+# or two; the rest is headroom for a stretch whose density is wildly
+# uneven, and running out is reported rather than answered with a guess.
+_NARROW_TRIES = 6
 
 
 def tail(port: int, seconds: float, limit: int, forever: bool) -> int:
@@ -45,7 +51,7 @@ def tail(port: int, seconds: float, limit: int, forever: bool) -> int:
     try:
         with connect(f"ws://127.0.0.1:{port}/ws", max_size=None) as socket:
             while True:
-                span, freq = _await_span(socket)
+                span, freq, ceiling = _ask(socket)
                 if span is None:
                     print("[workbench] trace: nothing recorded yet", file=sys.stderr)
                     return 1
@@ -53,7 +59,7 @@ def tail(port: int, seconds: float, limit: int, forever: bool) -> int:
                 back = int(seconds * freq) if freq else span["to"] - span["from"]
                 first = newest + 1 if newest else max(span["from"], span["to"] - back)
                 if first <= span["to"]:
-                    records = _narrow(socket, first, span["to"], limit)
+                    records = _narrow(socket, first, span["to"], limit, ceiling)
                     if records:
                         newest = records[-1].ts
                         trace.print_records(records, freq, limit)
@@ -81,50 +87,52 @@ def _frames(socket, seconds: float = 15.0):
         yield from json.loads(payload)
 
 
-def _await_span(socket, seconds: float = 2.0):
-    """The bridge's own account of what it still holds, as it stands now.
+def _ask(socket, seconds: float = 3.0):
+    """What the bridge holds, in what clock, answerable at what width.
 
-    Asked rather than assumed: the horizon belongs to the bridge, and a
-    client that guessed a range would be inventing the one number the
-    history publishes precisely so nobody has to.
+    All three are the bridge's to state. A client that guessed the range
+    would be inventing the one number the history publishes precisely so
+    nobody has to, and one that guessed the width would carry a copy of
+    a limit it does not own.
 
-    The newest such account, not the first to arrive. A connection is
-    replayed the backlog, so the first summary a client sees describes
+    The *newest* account of the span, not the first to arrive: a
+    connection is replayed the backlog, so the first summary describes
     the history as it was at its first record — a window of one, which
-    is why asking for everything printed a single line.
+    is why asking for everything once printed a single line.
     """
-    latest, freq = None, 0
+    latest, freq, ceiling = None, 0, MAX_BUCKETS
     for frame in _frames(socket, seconds):
+        if frame.get("topic") == "topo":
+            ceiling = (frame["data"].get("limits") or {}).get("buckets", ceiling)
+            continue
         if frame.get("topic") != "trace" or frame.get("kind") != "event":
             continue
         span = frame["data"].get("span")
         if span and span.get("n") and (latest is None or span["to"] > latest["to"]):
             latest = span
             freq = span.get("freq_hz", freq)
-    return latest, freq
+    return latest, freq, ceiling
 
 
-def _narrow(socket, first: int, last: int, limit: int) -> list[trace.Record]:
+def _narrow(socket, first: int, last: int, limit: int, ceiling: int) -> list[trace.Record]:
     """The newest records in a stretch, narrowing until they can be sent.
 
     A window holding more records than the resolution asked for comes
     back as density — right for a strip of pixels, useless to a
     terminal. So the terminal does what a reader dragging the strip
-    does: it asks again for less of the same stretch. Density gives the
-    count, and the count says by how much to narrow, so this converges
-    in a round trip or two rather than guessing.
+    does: it asks again for less of the same stretch.
+
+    The density is the count, and `ceiling` is what will be enumerated,
+    so the factor to narrow by is their ratio rather than a guess. One
+    resolution throughout: asking at one width and aiming at another is
+    how a loop like this ends up not converging on either.
     """
-    room = max(limit, 64)
-    for _ in range(6):
-        records, dense = _window(socket, first, last, room)
+    for _ in range(_NARROW_TRIES):
+        records, dense = _window(socket, first, last, ceiling)
         if not dense:
-            return records
-        # Aim a few times wider than the number of lines asked for, from
-        # the newest end: density is uneven, so a window sized to exactly
-        # `limit` lands short of it as often as not, and the printer
-        # takes the newest `limit` from whatever arrives.
-        width = max(1, int((last - first) * min(room, limit * 4) / dense))
-        first = max(first, last - width)
+            return records[-limit:] if limit else records
+        # From the newest end: a terminal reads the end of a run.
+        first = max(first, last - max(1, (last - first) * ceiling // dense))
     print(
         "[workbench] that stretch stays too dense to list; narrow it with --since",
         file=sys.stderr,
@@ -132,7 +140,7 @@ def _narrow(socket, first: int, last: int, limit: int) -> list[trace.Record]:
     return []
 
 
-def _window(socket, first: int, last: int, limit: int) -> tuple[list[trace.Record], int]:
+def _window(socket, first: int, last: int, buckets: int) -> tuple[list[trace.Record], int]:
     """One window: its records, or how many were too many to list.
 
     A response carries records or the density standing in for them. A
@@ -143,7 +151,7 @@ def _window(socket, first: int, last: int, limit: int) -> tuple[list[trace.Recor
     """
     socket.send(json.dumps({
         "topic": "trace",
-        "data": {"op": "window", "from": first, "to": last, "buckets": max(limit, 4096)},
+        "data": {"op": "window", "from": first, "to": last, "buckets": buckets},
     }))
     for frame in _frames(socket):
         if frame.get("topic") != "trace" or frame.get("kind") != "snapshot":

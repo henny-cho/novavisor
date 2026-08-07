@@ -25,10 +25,12 @@
 const HOLD = 1 << 16;
 /* How often following asks for what has arrived since last time. */
 const FOLLOW_MS = 250;
-/* Resolution asked for on a tail request. Large on purpose: a response
-   carries records *or* density, never both, so a generous number costs
-   nothing and simply means "enumerate these if you can". */
-const TAIL_BUCKETS = 8192;
+/* Resolution asked for when the point is to get the records rather than
+   a picture of them: a response carries records *or* density, never
+   both, so asking high costs nothing and just means "enumerate these if
+   you can". The ceiling is the bridge's and travels with the topology —
+   a copy of the number here is a copy to drift from. */
+const FALLBACK_BUCKETS = 4096;
 /* How much of the recent past a following strip shows. Following means
    following the end, so the window is a duration rather than "whatever
    has accumulated" — which would start at nothing and grow without
@@ -64,6 +66,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
   let order = []; /* catalogue order, for stable lane placement */
   const lanes = []; /* event ids seen this run, in catalogue order */
   let freq = 0; /* CNTFRQ, for the microsecond axis */
+  let ceiling = FALLBACK_BUCKETS; /* what the bridge will answer in */
   let span = null; /* what the bridge still holds */
   /* A chosen window is kept apart from the follow tail. The tail is
      append-only in arrival order, which is time order because the drain
@@ -83,6 +86,10 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
   const newest = () => (held_count() ? held.ts[slot(held_count() - 1)] : 0);
 
   /* ---------------- data in ---------------- */
+
+  function setLimits(limits) {
+    if (limits && limits.buckets) ceiling = limits.buckets;
+  }
 
   function setCatalogue(stops) {
     byCode = new Map();
@@ -221,7 +228,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
        visible window at this rate would move more bytes than streaming
        every record, which is the thing the summary exists to avoid. */
     pending = span.to;
-    request({ op: "window", from, to: span.to, buckets: TAIL_BUCKETS });
+    request({ op: "window", from, to: span.to, buckets: ceiling });
     schedule();
   }
 
@@ -496,7 +503,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
          has been collecting. */
       view = { from: Math.round(Math.min(from, to)), to: Math.round(Math.max(from, to)) };
       setFollow(false);
-      request({ op: "window", from: view.from, to: view.to, buckets: TAIL_BUCKETS });
+      request({ op: "window", from: view.from, to: view.to, buckets: ceiling });
       draw();
       return;
     }
@@ -522,7 +529,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     marked = null;
     view = { from: span.from, to: span.to };
     setFollow(false);
-    request({ op: "window", from: view.from, to: view.to, buckets: TAIL_BUCKETS });
+    request({ op: "window", from: view.from, to: view.to, buckets: ceiling });
     draw();
   });
 
@@ -544,5 +551,5 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
   new ResizeObserver(() => draw()).observe(canvas);
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => draw());
 
-  return { setCatalogue, note, apply, reset, setFollow, draw, freqHz: () => freq };
+  return { setCatalogue, setLimits, note, apply, reset, setFollow, draw, freqHz: () => freq };
 }

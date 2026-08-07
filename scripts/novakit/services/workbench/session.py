@@ -23,7 +23,7 @@ from ...core import board
 from .. import artifacts, cmake, expect, manifest, spawn
 from . import anchors, derive, elfsym, events, hardware, paths
 from .observations import observation_rates, timer_slot_labels
-from .protocol import Kind, Src, Topic
+from .protocol import MAX_BUCKETS, Kind, Src, Topic
 from .store import StateStore
 from .taxonomy import vocabulary
 
@@ -109,6 +109,7 @@ def initial_topology() -> dict:
         "taxonomy": vocabulary() | derive.syndrome_vocabulary(_debug_image()),
         "timer_slots": timer_slot_labels(),
         "observations": observation_rates(),
+        "limits": {"buckets": MAX_BUCKETS},
     }
 
 
@@ -158,6 +159,7 @@ def prepare(target: Target) -> Prepared:
         "taxonomy": vocabulary() | derive.syndrome_vocabulary(_debug_image()),
         "timer_slots": timer_slot_labels(),
         "observations": observation_rates(),
+        "limits": {"buckets": MAX_BUCKETS},
     }
     return Prepared(scenario, topology)
 
