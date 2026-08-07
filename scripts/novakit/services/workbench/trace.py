@@ -263,6 +263,52 @@ def summarise(records: list[Record]) -> dict:
     return {"edges": edges, "last": last}
 
 
+def histogram(records: list[Record], first: int, last: int, buckets: int) -> dict[str, list[int]]:
+    """How many of each event fell in each column of a window.
+
+    Always the whole window. A wide request answered with the first N
+    records and a count of the rest is honest arithmetic about a
+    question nobody asked: a reader who dragged the window out wants to
+    know what happened and how much of it, and a 1200-pixel strip could
+    not draw fifty thousand separate marks anyway.
+
+    Keyed by event rather than by path. Three events share the `post`
+    edge, and a lane per path would sum them into one column that no
+    longer says which fired; the UI has the catalogue and can group.
+    """
+    span = max(1, last - first + 1)
+    out: dict[str, list[int]] = {}
+    for record in records:
+        entry = events.BY_CODE.get(record.code)
+        if entry is None:
+            continue
+        column = min(buckets - 1, (record.ts - first) * buckets // span)
+        lane = out.get(entry.id)
+        if lane is None:
+            lane = out[entry.id] = [0] * buckets
+        lane[max(0, column)] += 1
+    return out
+
+
+def columns(records: list[Record], first: int) -> dict[str, list[int]]:
+    """Records as parallel arrays, timestamps relative to the window.
+
+    Repeating six field names per record costs ~110 bytes against ~40
+    for the columns, and the browser's decode is an indexed loop either
+    way. Relative timestamps keep the numbers small and well inside the
+    range a JSON number carries exactly, which a raw 64-bit counter is
+    not guaranteed to be.
+    """
+    return {
+        "ts": [record.ts - first for record in records],
+        "code": [record.code for record in records],
+        "cpu": [record.cpu for record in records],
+        "a": [record.a for record in records],
+        "b": [record.b for record in records],
+        "c": [record.c for record in records],
+    }
+
+
 def decode(record: Record) -> dict:
     """A record as the event it is, with its arguments named.
 

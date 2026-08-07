@@ -150,6 +150,14 @@ def catalogue() -> list[dict]:
     the UI has no use for one. The bridge resolves them per run.
     """
     return [
-        {"id": event.id, "edge": event.edge, "args": list(event.args), "label": event.label}
+        {
+            "id": event.id,
+            "edge": event.edge,
+            "args": list(event.args),
+            "label": event.label,
+            # Column-encoded records carry the firmware's number, so the
+            # UI needs the same mapping the ring writer used.
+            "code": event.code,
+        }
         for event in EVENTS
     ]

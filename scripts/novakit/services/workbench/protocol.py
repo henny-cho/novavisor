@@ -40,10 +40,14 @@ class Topic(StrEnum):
 DOWNLINK = frozenset(
     {Topic.TOPO, Topic.CONSOLE, Topic.EV, Topic.LIFE, Topic.VERIFY, Topic.SYSREG, Topic.TRACE}
 )
-UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.HALT, Topic.CMD, Topic.PROBE})
+# `trace` travels both ways. A second topic for "asking about traces"
+# would double SUPPORTED_UPLINK, the validation and the documentation to
+# say the same word twice; the Kind already distinguishes a request from
+# what the bridge sends unasked.
+UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.HALT, Topic.CMD, Topic.PROBE, Topic.TRACE})
 # Recognised-but-deferred uplink topics are answered explicitly instead
 # of being dropped, so the UI degrades visibly.
-SUPPORTED_UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.HALT})
+SUPPORTED_UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.HALT, Topic.TRACE})
 
 
 class Kind(StrEnum):

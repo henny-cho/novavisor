@@ -66,6 +66,14 @@ LAUNCH_ARM_TIMEOUT_SECONDS = 600.0
 # costs two eight-byte reads because the drain is skipped outright when
 # nothing is waiting.
 TRACE_DRAIN_SECONDS = 0.005
+# Columns a window request is answered in, when it does not say. A
+# resolution, not a cap on data: the density always covers the whole
+# window and only the individual marks are gated on it, because more
+# points than pixels is a density by definition.
+DEFAULT_BUCKETS = 1200
+# The response arrays are this long, so a caller asking for more than a
+# screen's worth of columns is refused rather than quietly given less.
+MAX_BUCKETS = 8192
 
 
 def _require_websockets():
@@ -243,6 +251,9 @@ class Bridge:
             reason = self.session.send_bytes(decode_bytes(str(uplink.data.get("bytes", ""))))
             if reason is not None:
                 self._reject(f"uart: {reason}")
+            return
+        if uplink.topic is Topic.TRACE:
+            self._answer_window(uplink.data)
             return
         if uplink.topic is Topic.HALT:
             command = str(uplink.data.get("cmd", ""))
@@ -596,6 +607,62 @@ class Bridge:
         # A layer arriving is a change in what the board may claim.
         self.session.regrade_paths(tracing=True)
         return True
+
+    def _answer_window(self, data: dict) -> None:
+        """Answer a request for part of the history, at its resolution.
+
+        The request carries how many columns the caller can draw, and
+        that single number settles both halves of the answer: the
+        density always covers the whole window, and the individual
+        records come only when there are few enough to be drawn as
+        marks. There is no separate cap to pick and no cliff at which
+        marks vanish — more points than pixels is a density by
+        definition.
+        """
+        if str(data.get("op", "")) != "window":
+            self._reject(f"trace: unknown op {data.get('op')!r}")
+            return
+        span = self._history.span()
+        try:
+            first = int(data.get("from", span.first))
+            last = int(data.get("to", span.last))
+            buckets = int(data.get("buckets", DEFAULT_BUCKETS))
+        except (TypeError, ValueError):
+            self._reject("trace: window bounds must be integers")
+            return
+        if not 1 <= buckets <= MAX_BUCKETS:
+            # Refused rather than clamped: the response array is as long
+            # as this number, and a caller that asked for a million
+            # columns has misunderstood something worth telling it about.
+            self._reject(f"trace: buckets must be 1..{MAX_BUCKETS}")
+            return
+        if last < first:
+            self._reject("trace: window ends before it starts")
+            return
+        wanted = {str(name) for name in data.get("events", [])}
+        found = self._history.window(first, last)
+        if wanted:
+            found = [record for record in found if record.event in wanted]
+        payload = {
+            "window": {
+                "from": first,
+                "to": last,
+                "n": len(found),
+                "freq_hz": self._tracer.geometry.freq_hz if self._tracer else 0,
+            },
+            "span": span.as_dict(),
+        }
+        # The records, or the density that stands in for them — never
+        # both. A density is what a window says when its records will
+        # not fit on the screen; once they do fit, they are sent, and
+        # any histogram of them is a loop the client already has the
+        # data for. Sending both put 1200 mostly-zero buckets beside
+        # four marks, on the request shape live following uses most.
+        if len(found) <= buckets:
+            payload["cols"] = trace.columns(found, first)
+        else:
+            payload["hist"] = trace.histogram(found, first, last, buckets)
+        self.store.publish(Topic.TRACE, Kind.SNAPSHOT, payload, src=Src.TRACE, replay=False)
 
     def _pump_trace(self) -> None:
         """Drain the firmware's rings and publish what fired.
