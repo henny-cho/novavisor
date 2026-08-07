@@ -58,6 +58,7 @@ struct Header {
   std::uint32_t rings       = 0;
   std::uint32_t capacity    = 0;
   std::uint32_t freq_hz     = 0;
+  std::uint32_t early       = 0;
 };
 
 static_assert(offsetof(Header, magic) == NOVA_TRACE_MAGIC_OFF);
@@ -67,6 +68,7 @@ static_assert(offsetof(Header, stride) == NOVA_TRACE_STRIDE_OFF);
 static_assert(offsetof(Header, rings) == NOVA_TRACE_RINGS_OFF);
 static_assert(offsetof(Header, capacity) == NOVA_TRACE_CAP_OFF);
 static_assert(offsetof(Header, freq_hz) == NOVA_TRACE_FREQ_OFF);
+static_assert(offsetof(Header, early) == NOVA_TRACE_EARLY_OFF);
 static_assert(sizeof(Header) <= NOVA_TRACE_HEADER_SIZE);
 
 inline constexpr std::uint64_t kCapacityMask = NOVA_TRACE_CAPACITY - 1;
@@ -82,9 +84,16 @@ inline constexpr std::size_t kRingStride = NOVA_TRACE_RECORDS_OFF + NOVA_TRACE_C
 static_assert(region_size(NOVA_TRACE_MAX_RINGS) <= NOVA_TRACE_SIZE,
               "the reserved region cannot hold the rings it is declared to allow");
 
+// Events emitted before any ring was placed. There is nowhere to put
+// them, so they are lost by construction — but a loss nobody counts is
+// indistinguishable from nothing having happened, and this one falls
+// in early boot, where that difference matters most. place() folds the
+// total into the region header.
+inline std::atomic<std::uint32_t> g_early{};
+
 // One core's ring. Default-constructed it is inert, which is what a
 // core runs with before the region is placed and what a host test gets
-// for free — an unplaced ring drops events rather than faulting.
+// for free — an unplaced ring counts events rather than faulting.
 class Ring {
 public:
   Ring() = default;
@@ -109,6 +118,7 @@ public:
   void emit(std::uint64_t ts, std::uint16_t type, std::uint8_t cpu, std::uint32_t a, std::uint64_t b,
             std::uint64_t c) noexcept {
     if (!placed()) {
+      g_early.fetch_add(1, std::memory_order_relaxed);
       return;
     }
     const std::uint64_t index = std::atomic_ref{*head_}.load(std::memory_order_relaxed);
@@ -140,11 +150,13 @@ inline std::array<Ring, NOVA_TRACE_MAX_RINGS> g_ring{};
   return static_cast<char*>(base) + NOVA_TRACE_HEADER_SIZE + index * kRingStride;
 }
 
-// Publish the region's geometry and zero every head.
+// Lay out the region: geometry fields, and every head back to zero.
 //
-// The magic goes last. A reader that finds it can then trust everything
-// beside it, so a region caught mid-format reads as absent rather than
-// as a ring with a plausible but wrong stride.
+// Deliberately not the magic. That flag means "everything beside me is
+// now true", and one header field — the count of events that had no
+// ring to land in — cannot be final until the rings are bound. Writing
+// it after the magic would leave a reader free to sample it early and
+// cache a zero, so the magic is publish()'s to release.
 inline void format(void* base, std::uint32_t rings, std::uint32_t freq_hz) noexcept {
   auto* header        = reinterpret_cast<Header*>(base);
   header->version     = NOVA_TRACE_VERSION;
@@ -153,14 +165,32 @@ inline void format(void* base, std::uint32_t rings, std::uint32_t freq_hz) noexc
   header->rings       = rings;
   header->capacity    = NOVA_TRACE_CAPACITY;
   header->freq_hz     = freq_hz;
+  header->early       = 0;
   for (std::uint32_t index = 0; index < rings; ++index) {
     auto* head = reinterpret_cast<std::uint64_t*>(static_cast<char*>(ring_at(base, index)) + NOVA_TRACE_HEAD_OFF);
     std::atomic_ref{*head}.store(0, std::memory_order_relaxed);
   }
+}
+
+// Make a formatted region findable, and account for what preceded it.
+//
+// The magic goes last, so a region caught mid-format reads as absent
+// rather than as a ring with a plausible but wrong stride.
+inline void publish(void* base, std::uint32_t early) noexcept {
+  auto* header  = reinterpret_cast<Header*>(base);
+  header->early = early;
   std::atomic_ref{header->magic}.store(NOVA_TRACE_MAGIC, std::memory_order_release);
 }
 
-// Format the region and bind every core's ring to it.
+// Format the region, bind every core's ring to it, then make it
+// findable.
+//
+// The order is the point. Heads are zeroed before any ring is bound, so
+// no event lands at a stale index that the zeroing then discards; the
+// rings are bound before the magic, so an event in that window is
+// recorded rather than counted as early; and `early` is read once the
+// last ring is placed, after which no core can add to it — the board
+// seam in the trace component asserts that every core has a ring.
 //
 // Runs once, on the primary, before any secondary exists — the same
 // ordering premise the boot CTR_EL0 snapshot relies on, so a secondary
@@ -171,6 +201,7 @@ inline void place(void* base, std::size_t rings, std::uint32_t freq_hz) noexcept
   for (std::size_t index = 0; index < count; ++index) {
     g_ring[index] = Ring{ring_at(base, index)};
   }
+  publish(base, g_early.load(std::memory_order_relaxed));
 }
 
 } // namespace nova::trace

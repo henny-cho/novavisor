@@ -46,7 +46,7 @@ class Region:
     """A trace region on disk, written the way the firmware writes one."""
 
     def __init__(self, rings: int = 2, *, magic: int | None = None, version: int | None = None,
-                 capacity: int = CAPACITY):
+                 capacity: int = CAPACITY, early: int = 0):
         self.rings = rings
         self.capacity = capacity
         self.path = Path(tempfile.mkstemp(dir="/dev/shm", suffix="-ram")[1])
@@ -54,10 +54,10 @@ class Region:
         self.buffer = bytearray(size)
         self.offset = TRACE_PA - RAM_BASE
         struct.pack_into(
-            "<QIIIIII", self.buffer, self.offset,
+            "<QIIIIIII", self.buffer, self.offset,
             L["NOVA_TRACE_MAGIC"] if magic is None else magic,
             L["NOVA_TRACE_VERSION"] if version is None else version,
-            L["NOVA_TRACE_REC_SIZE"], STRIDE, rings, capacity, 62_500_000,
+            L["NOVA_TRACE_REC_SIZE"], STRIDE, rings, capacity, 62_500_000, early,
         )
         self.heads = [0] * rings
         self.flush()
@@ -103,6 +103,16 @@ class GeometryTest(unittest.TestCase):
         self.assertEqual(reader.geometry.capacity, CAPACITY)
         # ts -> seconds has one source and it travels with the geometry.
         self.assertEqual(reader.geometry.freq_hz, 62_500_000)
+
+    def test_the_pre_placement_drop_count_travels_with_the_geometry(self):
+        """Events emitted before the region existed have no ring and no
+        cursor arithmetic that could recover them. Unpublished, they are
+        indistinguishable from a quiet boot."""
+        region = Region(early=17)
+        self.addCleanup(region.cleanup)
+        reader = region.reader()
+        self.addCleanup(reader.close)
+        self.assertEqual(reader.geometry.early, 17)
 
     def test_a_wrong_magic_is_refused_not_decoded(self):
         """Decoding anyway would turn a version skew into events that

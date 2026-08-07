@@ -48,7 +48,7 @@ _REC_SIZE = _LAYOUT["NOVA_TRACE_REC_SIZE"]
 
 # Region header, then one record. Both are fixed by the ABI header the
 # firmware compiles against; the struct strings only spell its fields.
-_HEADER = struct.Struct("<QIIIIII")
+_HEADER = struct.Struct("<QIIIIIII")
 _RECORD = struct.Struct("<QHBBIQQ")
 
 
@@ -87,6 +87,11 @@ class Geometry:
     capacity: int
     stride: int
     freq_hz: int
+    # Events the firmware emitted before it had a ring to put them in.
+    # Not a drain loss — it happened before this reader could exist —
+    # but the one part of the run no cursor arithmetic can recover, so
+    # it travels with the geometry rather than going unmentioned.
+    early: int = 0
 
 
 class TraceReader:
@@ -111,7 +116,7 @@ class TraceReader:
         self._cursor = [0] * self.geometry.rings
 
     def _read_geometry(self) -> Geometry:
-        magic, version, record_size, stride, rings, capacity, freq = _HEADER.unpack_from(
+        magic, version, record_size, stride, rings, capacity, freq, early = _HEADER.unpack_from(
             self._ram, self._offset
         )
         if magic != MAGIC:
@@ -122,7 +127,7 @@ class TraceReader:
             raise NotFormatted(f"trace record is {record_size} bytes, expected {_REC_SIZE}")
         if rings < 1 or capacity < 1 or capacity & (capacity - 1):
             raise NotFormatted(f"trace geometry is not usable: {rings} rings, capacity {capacity}")
-        return Geometry(rings, capacity, stride, freq)
+        return Geometry(rings, capacity, stride, freq, early)
 
     def _record(self, at: int) -> Record:
         # The reserved byte is unpacked and dropped: it belongs to the
@@ -262,12 +267,21 @@ def report(shm_path: Path, ram_base: int, trace_pa: int, limit: int = 40) -> int
 
     print(
         f"rings {geometry.rings}  capacity {geometry.capacity}  "
-        f"cntfrq {geometry.freq_hz}  records {len(records)}  dropped {lost}"
+        f"cntfrq {geometry.freq_hz}  records {len(records)}  dropped {lost}  "
+        f"early {geometry.early}"
     )
     if lost:
         # Never silently: a ring that lapped is a fact about the run,
         # and a report that hid it would read as a complete history.
         print(f"[workbench] {lost} record(s) overwritten before this drain", file=sys.stderr)
+    if geometry.early:
+        # A different fact from `dropped`, and not actionable the same
+        # way: these predate the region, so no drain could have caught
+        # them however prompt it was.
+        print(
+            f"[workbench] {geometry.early} event(s) emitted before the rings were placed",
+            file=sys.stderr,
+        )
     counts: dict[str, int] = {}
     for record in records:
         counts[record.event or str(record.code)] = counts.get(record.event or str(record.code), 0) + 1

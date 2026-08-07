@@ -23,6 +23,13 @@
 #include <flow/flow.hpp>
 
 namespace nova {
+
+// The seam where the board's core count meets the region's ring count.
+// A core past the last ring would index g_ring out of bounds on every
+// emit, so this is not a loss to account for like the pre-placement
+// drops — it is a state the build must not be able to reach.
+static_assert(cpu::kMaxCpus <= NOVA_TRACE_MAX_RINGS, "this board has more cores than the trace region has rings");
+
 namespace trace_detail {
 
 inline void place() noexcept {
