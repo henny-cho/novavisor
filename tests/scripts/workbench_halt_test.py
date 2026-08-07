@@ -394,5 +394,146 @@ class ArmTest(unittest.TestCase):
         self.assertEqual(self.inspector.armed, [])
 
 
+class StopReplyTest(unittest.TestCase):
+    def test_fields_are_parsed(self):
+        self.assertEqual(halt.parse_stop("T05thread:01;"), {"thread": "01"})
+        self.assertEqual(
+            halt.parse_stop("T05swbreak:;thread:p1.2;"),
+            {"swbreak": "", "thread": "p1.2"},
+        )
+
+    def test_a_non_stop_reply_yields_nothing(self):
+        self.assertEqual(halt.parse_stop("OK"), {})
+        self.assertEqual(halt.parse_stop(""), {})
+
+    def test_payload_hexes_every_number(self):
+        """Arguments are bit patterns and counters alike; JSON numbers
+        lose exactness past 2^53, so they travel as strings."""
+        stop = halt.Stop(0x4000BB24, "01", "vgic.bind", "post", {"vintid": 37})
+        self.assertEqual(
+            stop.payload(),
+            {
+                "pc": "0x4000bb24",
+                "thread": "01",
+                "event": "vgic.bind",
+                "edge": "post",
+                "args": {"vintid": "0x25"},
+            },
+        )
+
+
+def serve_gdb_stalling(listener: socket.socket, log: list[str]) -> None:
+    """A stub whose steps never retire — the `wfi` case.
+
+    The hypervisor idles in `nova::halt()`, `wfi; b .`, and a step there
+    completes only when an interrupt arrives. Most of the time between
+    events is spent here, so this is the ordinary case, not an edge one.
+    """
+    connection, _ = listener.accept()
+    connection.settimeout(5)
+    documents = {"target.xml": TARGET_XML, "core.xml": CORE_XML}
+    buffer = b""
+    while True:
+        try:
+            data = connection.recv(65536)
+        except OSError:
+            break
+        if not data:
+            break
+        buffer += data
+        while True:
+            if buffer.startswith(b"\x03"):
+                buffer = buffer[1:]
+                log.append("\x03")
+                connection.sendall(b"+$T02thread:01;#00")
+                continue
+            start = buffer.find(b"$")
+            end = buffer.find(b"#", start)
+            if start == -1 or end == -1 or len(buffer) < end + 3:
+                break
+            payload = buffer[start + 1 : end].decode()
+            buffer = buffer[end + 3 :]
+            log.append(payload)
+            if payload.startswith("vCont;s"):
+                continue  # the instruction never retires
+            reply = handle_gdb(payload, documents)
+            if reply is None:
+                continue
+            checksum = sum(reply.encode()) % 256
+            connection.sendall(f"+${reply}#{checksum:02x}".encode())
+    connection.close()
+
+
+class AdvanceModeTest(unittest.TestCase):
+    """Stepping, running to an event, and taking the machine back."""
+
+    def start(self, server=serve_gdb):
+        directory = tempfile.TemporaryDirectory(dir="/dev/shm")
+        self.addCleanup(directory.cleanup)
+        gdb_path = Path(directory.name) / "gdb.sock"
+        listener = unix_listener(gdb_path)
+        self.addCleanup(listener.close)
+        log: list[str] = []
+        threading.Thread(target=server, args=(listener, log), daemon=True).start()
+        inspector = halt.HaltInspector(Path(directory.name) / "qmp.sock", gdb_path)
+        # The stub answers pc as the wire-order hex 1122...88, which decodes
+        # little-endian to this.
+        inspector._addresses = {"vgic.bind": 0x8877665544332211, "trap": 0x400044D8}
+        inspector.pause()
+        self.addCleanup(inspector.resume)
+        return inspector, log
+
+    def test_step_follows_the_thread_that_reported(self):
+        inspector, log = self.start()
+        result = inspector.step(3)
+        self.assertEqual(result["steps"], 3)
+        self.assertFalse(result["stalled"])
+        self.assertEqual(log.count("vCont;s:01"), 3)
+
+    def test_a_step_that_never_retires_is_reported_not_hung(self):
+        """`wfi` is where the hypervisor waits. A UI that hangs there
+        looks broken; one that says "still waiting" is telling the truth
+        about the machine."""
+        inspector, log = self.start(serve_gdb_stalling)
+        result = inspector.step(4, timeout=0.2)
+        self.assertEqual(result["steps"], 0)
+        self.assertTrue(result["stalled"])
+        # The machine is taken back rather than left mid-instruction.
+        self.assertIn("\x03", log)
+
+    def test_where_names_the_catalogued_event_and_reads_its_arguments(self):
+        """The fake stub's pc decodes to the address the map calls
+        vgic.bind — so the arguments come back named."""
+        inspector, _ = self.start()
+        stop = inspector.where()
+        self.assertEqual(stop.event, "vgic.bind")
+        self.assertEqual(stop.edge, "post")
+        self.assertEqual(set(stop.args), {"vm", "vintid", "pintid", "generation"})
+
+    def test_a_stop_somewhere_uncatalogued_says_so(self):
+        inspector, _ = self.start()
+        inspector._addresses = {"trap": 0x400044D8}
+        stop = inspector.where()
+        self.assertEqual(stop.event, "")
+        self.assertEqual(stop.args, {})
+
+    def test_waiting_is_sliced_so_an_abort_can_land(self):
+        """A machine that never reaches the chosen event must not pin
+        the caller: each slice returns None and the continue stands."""
+        inspector, log = self.start()
+        inspector.begin(["trap"])
+        self.assertIsNone(inspector.wait(0.15))
+        self.assertIsNone(inspector.wait(0.15))
+        self.assertEqual(log.count("vCont;c"), 1)
+
+    def test_interrupt_takes_a_running_machine_back(self):
+        inspector, log = self.start()
+        inspector.begin(["trap"])
+        self.assertIsNone(inspector.wait(0.15))
+        stop = inspector.interrupt()
+        self.assertEqual(stop.thread, "01")
+        self.assertIn("\x03", log)
+
+
 if __name__ == "__main__":
     unittest.main()

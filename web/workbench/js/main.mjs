@@ -127,7 +127,7 @@ function setPaused(next) {
 }
 
 pauseButton.addEventListener("click", () => {
-  if (!send("qmp", { cmd: paused ? "cont" : "stop" })) {
+  if (!send("halt", { cmd: paused ? "cont" : "stop" })) {
     notify("브리지에 연결되지 않아 요청을 보내지 못했습니다");
   }
 });

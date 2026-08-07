@@ -656,6 +656,36 @@ class ConnectionHandlerTest(unittest.IsolatedAsyncioTestCase):
         # Iteration continued: the second message was still delivered.
         self.assertTrue(any("session is idle" in reason for reason in phases), phases)
 
+    async def test_abort_is_not_refused_by_the_advance_it_cancels(self):
+        """An abort is only ever sent *while* an advance is running, so
+        putting it behind the busy guard rejects it exactly when it is
+        needed — and the advance then waits forever with no way out."""
+        bridge = self.bridge()
+        bridge._halting = True
+
+        await bridge._halt_command("abort", {})
+
+        self.assertTrue(bridge._abort)
+        rejections = [
+            frame["data"]
+            for frame in bridge.store.drain()
+            if frame["data"].get("phase") == "uplink-rejected"
+        ]
+        self.assertEqual(rejections, [])
+
+    async def test_every_other_command_still_waits_its_turn(self):
+        bridge = self.bridge()
+        bridge._halting = True
+
+        await bridge._halt_command("run", {})
+
+        reasons = [
+            frame["data"].get("reason")
+            for frame in bridge.store.drain()
+            if frame["data"].get("phase") == "uplink-rejected"
+        ]
+        self.assertEqual(reasons, ["halt: inspection in progress"])
+
 
 @unittest.skipUnless(importlib.util.find_spec("websockets"), "websockets is not installed")
 class ServerSmokeTest(unittest.IsolatedAsyncioTestCase):
@@ -704,10 +734,10 @@ class ServerSmokeTest(unittest.IsolatedAsyncioTestCase):
                         [frame["data"] for frame in frames],
                     )
 
-                    await connection.send('{"topic":"qmp","data":{"cmd":"stop"}}')
+                    await connection.send('{"topic":"halt","data":{"cmd":"stop"}}')
                     frames = json.loads(await asyncio.wait_for(connection.recv(), 2))
                     self.assertIn(
-                        {"phase": "uplink-rejected", "reason": "qmp: session is idle"},
+                        {"phase": "uplink-rejected", "reason": "halt: session is idle"},
                         [frame["data"] for frame in frames],
                     )
             finally:

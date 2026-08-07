@@ -42,6 +42,16 @@ from .store import StateStore
 FLUSH_INTERVAL_SECONDS = 0.05
 POLL_INTERVAL_SECONDS = 0.05
 WS_PATH = "/ws"
+# Waiting for a breakpoint is sliced so an abort is answered promptly;
+# the machine keeps running across slices, only the listening pauses.
+RUN_SLICE_SECONDS = 0.25
+# How long to run before saying so. A chosen event may be rare or may
+# never occur on this demo; silence reads as a hung bridge.
+WAIT_NOTICE_SECONDS = 2.0
+# ~700 us per instruction over RSP, so this caps one request at a couple
+# of seconds. Stepping is for looking inside an event, not reaching one.
+MAX_STEPS = 2000
+HALT_COMMANDS = ("stop", "cont", "step", "run", "abort")
 
 
 def _require_websockets():
@@ -79,6 +89,7 @@ class Bridge:
         # command that took it: held while paused, dropped on resume.
         self._inspector: halt.HaltInspector | None = None
         self._inspector_run = 0
+        self._abort = False
         # Stamped into every connect topo: a changed token is the one
         # reliable restart signal, whatever the seq counter says.
         self._token = uuid.uuid4().hex[:8]
@@ -189,14 +200,14 @@ class Bridge:
             if reason is not None:
                 self._reject(f"uart: {reason}")
             return
-        if uplink.topic is Topic.QMP:
+        if uplink.topic is Topic.HALT:
             command = str(uplink.data.get("cmd", ""))
-            if command not in ("stop", "cont"):
-                self._reject(f"qmp: unknown cmd {command!r}")
+            if command not in HALT_COMMANDS:
+                self._reject(f"halt: unknown cmd {command!r}")
             elif self.session.phase is not Phase.RUNNING or self.session.surfaces is None:
-                self._reject(f"qmp: session is {self.session.phase.value}")
+                self._reject(f"halt: session is {self.session.phase.value}")
             else:
-                self.spawn(self._halt_command(command))
+                self.spawn(self._halt_command(command, uplink.data))
             return
         demo = uplink.data.get("demo")
         if not demo:
@@ -261,35 +272,105 @@ class Bridge:
         if inspector is not None:
             inspector.resume()
 
-    async def _halt_command(self, command: str) -> None:
-        """Pause is a held gdb connection plus a per-CPU register sweep;
-        the machine stays stopped (virtual clock frozen) until resume."""
+    async def _sweep_to_panels(self, inspector: halt.HaltInspector) -> None:
+        """Publish the register truth of whatever stop we are sitting on."""
+        data = await asyncio.get_running_loop().run_in_executor(None, inspector.pause)
+        self.session.paused = True
+        # Same data shape as the S-layer topics: the UI panels read every
+        # snapshot's payload from "values".
+        self.store.publish(Topic.SYSREG, Kind.SNAPSHOT, {"values": data}, src=Src.HALT)
+
+    async def _advance(self, inspector: halt.HaltInspector, data: dict) -> None:
+        """Run until a catalogued event, as many times as asked.
+
+        The wait is sliced rather than blocking: a machine that never
+        reaches the chosen event would otherwise pin an executor thread
+        and ignore the abort button. `period` paces the repeats so the
+        reader can watch events at a human speed — the unit of a step is
+        an *event*, because a fixed slice of time holds anywhere from
+        zero of them to thousands.
+        """
+        stops = [str(name) for name in data.get("stops", [])]
+        period = max(0.0, min(float(data.get("period", 0.0)), 10.0))
+        repeat = max(1, min(int(data.get("repeat", 1)), 1000))
+        loop = asyncio.get_running_loop()
+        for index in range(repeat):
+            if self._abort:
+                break
+            if index and period:
+                await asyncio.sleep(period)
+                if self._abort:
+                    break
+            await loop.run_in_executor(None, inspector.begin, stops)
+            self.session.paused = False
+            stop = None
+            waited = 0.0
+            noticed = False
+            while stop is None and not self._abort:
+                stop = await loop.run_in_executor(None, inspector.wait, RUN_SLICE_SECONDS)
+                waited += RUN_SLICE_SECONDS
+                if stop is None and not noticed and waited >= WAIT_NOTICE_SECONDS:
+                    # The chosen event may be rare, or may not happen at
+                    # all on this demo. Silence would be indistinguishable
+                    # from a hung bridge, so say which stops are pending.
+                    noticed = True
+                    self.store.publish(
+                        Topic.LIFE, Kind.EVENT,
+                        {"phase": "waiting", "stops": sorted(inspector.armed)},
+                    )
+            if stop is None:
+                stop = await loop.run_in_executor(None, inspector.interrupt)
+            self.session.paused = True
+            self.store.publish(
+                Topic.LIFE, Kind.EVENT, {"phase": "stopped", **stop.payload()}
+            )
+            await self._sweep_to_panels(inspector)
+
+    async def _halt_command(self, command: str, data: dict) -> None:
+        """Pause is a held gdb connection; the machine stays stopped
+        (virtual clock frozen) until it is advanced or resumed."""
+        if command == "abort":
+            # Checked before the busy guard, not after: an abort is only
+            # ever sent *while* an advance is running, so guarding it the
+            # same way would reject it exactly when it is needed.
+            self._abort = True
+            return
         if self._halting:
-            self._reject("qmp: inspection in progress")
+            self._reject("halt: inspection in progress")
             return
         self._halting = True
+        self._abort = False
         try:
+            inspector = self._hold()
             loop = asyncio.get_running_loop()
             if command == "stop":
-                data = await loop.run_in_executor(None, self._hold().pause)
-                self.session.paused = True
-                # Same data shape as the S-layer topics: the UI panels
-                # read every snapshot's payload from "values".
-                self.store.publish(
-                    Topic.SYSREG, Kind.SNAPSHOT, {"values": data}, src=Src.HALT
-                )
+                await self._sweep_to_panels(inspector)
                 self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "paused"})
-            else:
+            elif command == "cont":
                 await loop.run_in_executor(None, self._release)
                 self.session.paused = False
                 self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "resumed"})
+            elif command == "step":
+                if not inspector.paused:
+                    await self._sweep_to_panels(inspector)
+                count = max(1, min(int(data.get("count", 1)), MAX_STEPS))
+                result = await loop.run_in_executor(None, inspector.step, count)
+                self.store.publish(
+                    Topic.LIFE, Kind.EVENT, {"phase": "stepped", **result}
+                )
+                await self._sweep_to_panels(inspector)
+            else:  # "run"
+                if not inspector.paused:
+                    await self._sweep_to_panels(inspector)
+                await self._advance(inspector, data)
         except Exception as error:
             # This coroutine is the request boundary: any protocol fault
             # (bad JSON, corrupt RSP hex, a missing XML attribute) must
             # become a reply, not an unretrieved task exception.
-            self._reject(f"qmp: {error}")
+            self._reject(f"halt: {error}")
         finally:
             self._halting = False
+            self._abort = False
 
     async def _poll_loop(self) -> None:
         """Publish S-layer snapshots while a run is live.

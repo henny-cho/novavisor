@@ -29,7 +29,9 @@ class Topic(StrEnum):
     # uplink
     UART = "uart"
     TARGET = "target"
-    QMP = "qmp"
+    # The machine's stop and its advance. Named for what it owns rather
+    # than the socket it once used: QMP no longer holds the stop.
+    HALT = "halt"
     CMD = "cmd"
     PROBE = "probe"
 
@@ -37,10 +39,10 @@ class Topic(StrEnum):
 DOWNLINK = frozenset(
     {Topic.TOPO, Topic.CONSOLE, Topic.EV, Topic.LIFE, Topic.VERIFY, Topic.SYSREG}
 )
-UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.QMP, Topic.CMD, Topic.PROBE})
+UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.HALT, Topic.CMD, Topic.PROBE})
 # Recognised-but-deferred uplink topics are answered explicitly instead
 # of being dropped, so the UI degrades visibly.
-SUPPORTED_UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.QMP})
+SUPPORTED_UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.HALT})
 
 
 class Kind(StrEnum):

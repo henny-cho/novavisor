@@ -160,7 +160,7 @@ the same reader the poller uses.
 |---|---|
 | Panels show `실측 대기 중` | No session is running yet, or the S provider could not attach. Watch the event log for `snapshot-unavailable` (symbol resolution failed — rebuild the image) |
 | `유실 N` badge | The frame window overflowed (oldest console frames are dropped first); click to reset the counter |
-| Pause rejected (`qmp: session is …`) | The pause path needs a RUNNING interactive session with observation surfaces; it is unavailable while building, verifying, or idle |
+| Pause rejected (`halt: session is …`) | The pause path needs a RUNNING interactive session with observation surfaces; it is unavailable while building, verifying, or idle |
 | Port already in use | Another bridge is running; pick `--port` or stop it |
 
 ---
@@ -239,7 +239,7 @@ flushed every 50 ms:
 - Every panel-consumed snapshot (S topics and `sysreg`) carries its payload
   under `data.values` — one contract for the whole panel drawer.
 - Uplink (client → bridge): `target` (launch a demo), `uart` (bytes to the
-  focused guest), `qmp` (`{"cmd": "stop"|"cont"}`). Recognised-but-deferred
+  focused guest), `halt` (see below). Recognised-but-deferred
   topics are answered with an explicit `unsupported` event so the UI degrades
   visibly.
 

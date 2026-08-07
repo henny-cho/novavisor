@@ -26,6 +26,7 @@ import json
 import re
 import socket
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import elfsym, events
@@ -250,6 +251,18 @@ class GdbClient:
     def clear_breakpoint(self, address: int) -> bool:
         return self._exchange(f"z0,{address:x},4") == "OK"
 
+    def drain(self) -> int:
+        """Discard stop replies already in flight.
+
+        A step that timed out is still owed an answer; when the machine
+        is taken back by force both arrive, and leaving the second one
+        queued would make the *next* command read a reply to the last.
+        """
+        dropped = 0
+        while self._receive(0.05) is not None:
+            dropped += 1
+        return dropped
+
     def detach(self) -> None:
         """Release the machine. The stub resumes it as we let go."""
         try:
@@ -260,6 +273,48 @@ class GdbClient:
 
     def close(self) -> None:
         self._sock.close()
+
+
+_STOP_FIELD = re.compile(r"(\w+):([^;]*);")
+
+
+@dataclass(frozen=True)
+class Stop:
+    """Where the machine came to rest, and what it means.
+
+    `event` is the catalogue name when the PC matches a known stop point
+    and empty otherwise — an interrupt or a step lands wherever it lands,
+    and calling that "unknown" is more honest than guessing.
+    """
+
+    pc: int
+    thread: str
+    event: str = ""
+    edge: str = ""
+    args: dict[str, int] = field(default_factory=dict)
+
+    def payload(self) -> dict:
+        return {
+            "pc": f"{self.pc:#x}",
+            "thread": self.thread,
+            "event": self.event,
+            "edge": self.edge,
+            # Bit patterns and counters alike travel as hex strings, the
+            # same rule the register sweep follows.
+            "args": {name: f"{value:#x}" for name, value in self.args.items()},
+        }
+
+
+def parse_stop(reply: str) -> dict[str, str]:
+    """The `key:value;` pairs of a `T05thread:01;` stop reply.
+
+    The two-digit signal follows the T with no separator, so it has to
+    be cut before matching — `\\w+` would otherwise read `T05thread` as
+    one key and the thread would never be found.
+    """
+    if not reply.startswith("T"):
+        return {}
+    return dict(_STOP_FIELD.findall(reply[3:]))
 
 
 class HaltInspector:
@@ -278,6 +333,8 @@ class HaltInspector:
         self._gdb: GdbClient | None = None
         self._addresses: dict[str, int] | None = None
         self._armed: dict[str, int] = {}
+        self._thread = ""
+        self._running = False
 
     @property
     def paused(self) -> bool:
@@ -367,11 +424,105 @@ class HaltInspector:
             raise RuntimeError("the machine is not paused")
         return self._gdb
 
+    # -------- advancing --------
+
+    def _note(self, reply: str | None) -> None:
+        """Remember which thread reported, so a step follows the stop."""
+        thread = parse_stop(reply or "").get("thread", "")
+        if thread:
+            self._thread = thread.split(".")[-1]
+
+    def _thread_id(self) -> str:
+        gdb = self._require()
+        return self._thread or (gdb.threads[0] if gdb.threads else "1")
+
+    def where(self) -> Stop:
+        """Decode the current stop: which catalogued event, if any.
+
+        Arguments are read at the entry breakpoint, where AAPCS64 still
+        has them in x0.. — a few instructions later they are gone, which
+        is why the catalogue breaks on entry rather than anywhere else
+        in the function.
+        """
+        gdb = self._require()
+        thread = self._thread_id()
+        gdb.select_thread(thread)
+        pc = gdb.read_register("pc") or 0
+        by_address = {address: name for name, address in (self._addresses or {}).items()}
+        name = by_address.get(pc, "")
+        event = events.BY_ID.get(name)
+        args = {}
+        if event is not None:
+            args = {
+                label: gdb.read_register(f"x{index}") or 0
+                for index, label in enumerate(event.args)
+                if label
+            }
+        return Stop(pc, thread, name, event.edge if event else "", args)
+
+    def step(self, count: int = 1, timeout: float = 3.0) -> dict:
+        """Advance one thread by instructions.
+
+        Measured at ~700 us per instruction over the RSP socket, so this
+        is for looking *inside* an event, never for reaching one: a few
+        hundred steps is a fraction of a second, a few million is a day.
+
+        A step that does not retire is the normal answer at `wfi`, where
+        the hypervisor idles between events — the instruction completes
+        only when an interrupt arrives. Saying so beats hanging.
+        """
+        gdb = self._require()
+        thread = self._thread_id()
+        done = 0
+        stalled = False
+        for _ in range(max(1, count)):
+            reply = gdb.step(thread, timeout)
+            if reply is None:
+                stalled = True
+                self._note(gdb.interrupt())
+                gdb.drain()
+                break
+            self._note(reply)
+            done += 1
+        return {"steps": done, "stalled": stalled, "stop": self.where().payload()}
+
+    def begin(self, wanted: Iterable[str]) -> None:
+        """Arm the wanted stops and let the machine go.
+
+        Split from the waiting so a caller can stay cancellable: the
+        continue is sent once, and the reply is collected in slices.
+        """
+        gdb = self._require()
+        self.arm(wanted)
+        self._running = True
+        gdb._send("vCont;c")
+
+    def wait(self, timeout: float) -> Stop | None:
+        """A slice of waiting. None means the machine is still going."""
+        gdb = self._require()
+        reply = gdb._receive(timeout)
+        if reply is None:
+            return None
+        self._running = False
+        self._note(reply)
+        return self.where()
+
+    def interrupt(self) -> Stop:
+        """Take a running machine back."""
+        gdb = self._require()
+        if self._running:
+            self._note(gdb.interrupt())
+            gdb.drain()
+            self._running = False
+        return self.where()
+
     def resume(self) -> None:
         gdb, self._gdb = self._gdb, None
         # Breakpoints live in the stub, so letting go drops them; keeping
         # the names would make the next pause think they were still set.
         self._armed.clear()
+        self._thread = ""
+        self._running = False
         if gdb is None:
             return
         try:
