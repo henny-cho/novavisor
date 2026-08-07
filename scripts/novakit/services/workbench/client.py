@@ -49,7 +49,15 @@ def tail(port: int, seconds: float, limit: int, forever: bool) -> int:
 
     newest = 0  # the last timestamp printed, so following never repeats one
     try:
-        with connect(f"ws://127.0.0.1:{port}/ws", max_size=None) as socket:
+        socket = connect(f"ws://127.0.0.1:{port}/ws", max_size=None)
+    except OSError as error:
+        # Never reaching the bridge is a failure; losing it partway
+        # through a follow is how a follow ends. One `except` around
+        # both would have called the first of those a success.
+        print(f"[workbench] trace: no bridge on port {port}: {error}", file=sys.stderr)
+        return 1
+    try:
+        with socket:
             while True:
                 span, freq, ceiling = _ask(socket)
                 if span is None:

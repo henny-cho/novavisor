@@ -33,25 +33,7 @@ from . import paths
 # The firmware's numbering for the same moments. Read from the ABI
 # header both sides compile against, so a renumbered event cannot mean
 # one thing to the ring writer and another to this reader.
-_CODES = abi.read_defines(
-    abi.TRACE_RING,
-    [
-        "NOVA_TRACE_EV_TRAP",
-        "NOVA_TRACE_EV_VGIC_BIND",
-        "NOVA_TRACE_EV_VGIC_POST",
-        "NOVA_TRACE_EV_VGIC_PRIVATE",
-        "NOVA_TRACE_EV_VGIC_INJECT",
-        "NOVA_TRACE_EV_VGIC_EOI",
-        "NOVA_TRACE_EV_SCHED_SWITCH",
-        "NOVA_TRACE_EV_MMIO",
-        "NOVA_TRACE_EV_GIC_ACK",
-        "NOVA_TRACE_EV_CROSS_CALL",
-        "NOVA_TRACE_EV_IVC_DOORBELL",
-        "NOVA_TRACE_EV_PSCI",
-        "NOVA_TRACE_EV_UART_LINE",
-        "NOVA_TRACE_EV_SMMU_FAULT",
-    ],
-)
+_CODES = abi.read_define_family(abi.TRACE_RING, "NOVA_TRACE_EV_")
 
 
 @dataclass(frozen=True)

@@ -257,6 +257,16 @@ class CatalogueTest(unittest.TestCase):
         codes = [event.code for event in events.EVENTS]
         self.assertEqual(len(set(codes)), len(codes))
 
+    def test_every_code_the_firmware_defines_is_catalogued(self):
+        """The other direction, and the one that fails quietly: a hook
+        added to the ABI header and not here writes records that arrive
+        as a number nothing can name, and summarise() skips them without
+        a word. The codes are read as a family, so the header is the
+        only list — this checks nobody added to it alone."""
+        for name, code in events._CODES.items():
+            with self.subTest(code=name):
+                self.assertIn(code, events.BY_CODE, f"{name} has no catalogue entry")
+
     def test_every_event_with_arguments_decodes_them(self):
         """An event whose record falls through decode() reaches the UI
         as a bare code and a timestamp — catalogued, and still unread."""
