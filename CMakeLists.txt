@@ -181,6 +181,7 @@ else()
     nova_add_host_test(gicv3_vtr_test)        # ICH_VTR-derived ICC_CTLR view + VMCR reset
     nova_add_host_test(timebase_test)         # CNTFRQ contract + overflow-safe ms conversion
     nova_add_host_test(cpu_features_test)     # speculation-barrier ID fields → SMCCC verdict
+    nova_add_host_test(trace_ring_test)       # overwriting trace ring: loss is counted, never torn
 
     # Component tests (src/components/<group>/<name>/test/).
     nova_add_component_test(core_mmu stage2_descriptor_test) # Stage 2 descriptor encoding
