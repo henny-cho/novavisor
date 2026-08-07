@@ -18,6 +18,7 @@ from ..core.config import REPO
 
 GUEST_LAYOUT = REPO / "src" / "nova" / "abi" / "guest_layout.h"
 IVC_RING = REPO / "src" / "nova" / "abi" / "ivc_ring.h"
+TRACE_RING = REPO / "src" / "nova" / "abi" / "trace_ring.h"
 
 
 def read_defines(path: Path, wanted: list[str]) -> dict[str, int]:
