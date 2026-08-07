@@ -391,7 +391,7 @@ class Bridge:
         """
         payload = {"values": value}
         if topic in previous:
-            payload["changed"] = snapshot.changed_paths(previous[topic], value)
+            payload["changed"] = snapshot.changed_mask(previous[topic], value)
         return payload
 
     async def _advance(self, inspector: halt.HaltInspector, data: dict) -> None:

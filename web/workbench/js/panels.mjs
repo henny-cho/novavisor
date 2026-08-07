@@ -393,10 +393,21 @@ export function createPanels({ tabs, host }) {
     if (visible.has(id)) render(id);
   }
 
+  /* Leaves in a mask: how many values actually moved. The mask is
+     shaped like the value it describes, so this is the same walk a
+     renderer does — and the only arithmetic the client needs over it. */
+  function movedCount(mask) {
+    if (mask === true) return 1;
+    if (!mask || typeof mask !== "object") return 0;
+    let total = 0;
+    for (const key of Object.keys(mask)) total += movedCount(mask[key]);
+    return total;
+  }
+
   function markMoved() {
     for (const entry of bodies.values()) {
       let count = 0;
-      for (const topic of entry.panel.topics) count += (moved.get(topic) || []).length;
+      for (const topic of entry.panel.topics) count += movedCount(moved.get(topic));
       const badge = entry.tab.querySelector(".tmoved");
       if (badge) badge.textContent = count ? String(count) : "";
       entry.tab.classList.toggle("moved", count > 0);
@@ -454,7 +465,9 @@ export function createPanels({ tabs, host }) {
       const data = frame.data && typeof frame.data === "object" ? frame.data : null;
       if (!data || data.values === undefined) return;
       latest.set(frame.topic, { value: data.values, ts: frame.ts, src: frame.src });
-      if (Array.isArray(data.changed)) moved.set(frame.topic, data.changed);
+      /* Absent on the first stop of a run; `false` or `{}` when a stop
+         genuinely moved nothing, which is a different answer. */
+      if (data.changed !== undefined) moved.set(frame.topic, data.changed);
       /* Coalesced to one render per flush window, and only for the
          panels this topic actually feeds: six topics at 20 Hz would
          otherwise rebuild the same table over a hundred times a second,
