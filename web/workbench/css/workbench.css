@@ -52,6 +52,11 @@ b{font-weight:700}
 }
 
 .launch{display:flex;align-items:center;gap:7px;min-width:0}
+/* Stepping controls. Grouped and separated from the launch row: one
+   picks what runs, the other decides where it stops. */
+.stepper{display:flex;align-items:center;gap:6px;min-width:0}
+.stepper .pick{max-width:15ch}
+.stepper .btn[aria-pressed="true"]{border-color:var(--hyp);color:var(--hyp)}
 .launch .lb{
   font-size:var(--fs-label);letter-spacing:.09em;text-transform:uppercase;color:var(--ink3);font-weight:650
 }
@@ -193,6 +198,7 @@ b{font-weight:700}
 }
 .lg b{color:var(--ink2);font-family:var(--mono)}
 .lg i{width:12px;height:0;border-top:2px solid var(--ink2);display:inline-block}
+.lg i.direct{border-top-width:3px;border-color:var(--hyp)}
 .lg i.poll{border-top-style:dashed;border-color:var(--hyp)}
 .lg i.none{border-top-style:dashed;opacity:.5}
 .lg i.lock{border:none;width:auto;height:auto;font-style:normal}
@@ -264,6 +270,11 @@ b{font-weight:700}
    can do, and the two must not read as the same kind of statement.
    The stroke states the grade — see the header legend. */
 .edge{stroke:var(--ec,var(--ink3));fill:none;stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}
+/* Solid and brightest: the machine can be stopped on this one, and a
+   breakpoint is not another sample — it is the event itself, with the
+   whole machine held still around it. Nothing else on the board can
+   claim that, so nothing else is drawn this plainly. */
+.edge.direct{opacity:.72;stroke-width:1.5}
 .edge.console{opacity:.5}
 .edge.poll{opacity:.42;stroke-dasharray:3 3}
 .edge.none{opacity:.22;stroke:var(--ink3);stroke-dasharray:1 4}

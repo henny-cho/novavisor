@@ -27,6 +27,23 @@
               title="머신 정지 + sysreg 정밀 검사 (가상 클록도 함께 멈춤)">일시정지</button>
     </div>
 
+    <!-- Stopping at an event, not wherever the reader happened to click.
+         The choices arrive in the topo snapshot; nothing here names a
+         firmware function. -->
+    <div class="stepper">
+      <label class="lb" for="stop-at">정지 지점</label>
+      <select id="stop-at" class="pick" aria-label="어느 사건에서 멈출지"></select>
+      <button id="advance" class="btn" type="button"
+              title="선택한 사건까지 실행하고 멈춘다">다음 사건</button>
+      <button id="step" class="btn" type="button"
+              title="명령 단위로 진행 — 사건 '안'을 보기 위한 것">40 명령</button>
+      <button id="auto" class="btn" type="button" aria-pressed="false"
+              title="사건에서 사건으로 자동 진행 (진행 단위는 시간이 아니라 사건)">자동</button>
+      <button id="abort" class="btn ghost" type="button" hidden
+              title="진행 중단">중지</button>
+      <span id="stop-note" class="badge sm" data-tone="idle" hidden></span>
+    </div>
+
     <div class="status">
       <span id="phase" class="badge" data-tone="idle" title="세션 상태" aria-live="polite">
         <i class="dot"></i><span id="phase-text">대기</span>
@@ -72,6 +89,7 @@
             <span class="legend-label">EVIDENCE</span>
             <span class="lg" title="콘솔 이벤트 — 시각 정확"><i></i><b>C</b><span class="lg-copy">콘솔</span></span>
             <span class="lg" title="스냅샷 폴링 — 틱에 양자화된 관측"><i class="poll"></i><b>S</b><span class="lg-copy">폴링</span></span>
+            <span class="lg" title="이 경로에서 머신을 세울 수 있다 — 표본이 아니라 사건 그 자체"><i class="direct"></i><b>M</b><span class="lg-copy">실측</span></span>
             <span class="lg" title="일시정지 시점의 확정값"><i class="lock">◆</i><b>H</b><span class="lg-copy">정지</span></span>
             <span class="lg" title="증거원 없음 — 구조만 표시"><i class="none"></i><b>—</b><span class="lg-copy">미관측</span></span>
           </div>

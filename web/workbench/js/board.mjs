@@ -155,6 +155,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
   let whereSig = null;
   let byTopic = new Map(); // topic -> paths it is evidence for
   let byBadge = new Map(); // console badge -> paths it is evidence for
+  let byId = new Map(); // path id -> the path, for measured stops
   const lit = new Set(); // topics that arrived this batch
   let focused = null; // anchor id the reader is looking at
   let topology = null;
@@ -472,6 +473,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     live.edges = [];
     byTopic = new Map();
     byBadge = new Map();
+    byId = new Map();
     const specs = topology?.board?.edges || [];
     /* Two paths may join the same pair of blocks in opposite directions
        — the guest's MMIO out and the vGIC's injection back. Drawn on one
@@ -506,6 +508,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
         fan: (rank - (crowd.get(group) - 1) / 2) * 11,
       };
       live.edges.push(edge);
+      byId.set(edge.id, edge);
       if (spec.topic) {
         if (!byTopic.has(spec.topic)) byTopic.set(spec.topic, []);
         byTopic.get(spec.topic).push(edge);
@@ -619,6 +622,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
   function edgeTitle(edge) {
     const name = EDGE_TEXT[edge.id] || edge.id;
     const seen = edge.last ? ` · 마지막 ${stamp(edge.last.ts)} ${edge.last.message || ""}` : "";
+    if (edge.grade === "direct") return `${name} — 정지 가능 · 실측${seen}`;
     if (edge.grade === "console") return `${name} — 콘솔 이벤트 · 시각 정확${seen}`;
     if (edge.grade === "poll") {
       const hz = rate(edge.topic);
@@ -642,6 +646,24 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
          console is the better evidence, and it should look like it. */
       if (!folded()) flash(edge, true);
     }
+  }
+
+  /* The machine stopped on this path, and here is what it was carrying.
+
+     Unlike every other route into this view, nothing here is inferred.
+     The values are the event's own arguments, read out of the argument
+     registers while the machine was held still — so the caption states
+     them rather than describing how closely they were watched. */
+  function stopped(ts, data) {
+    const edge = byId.get(String(data && data.edge));
+    if (!edge) return;
+    const args = (data && data.args) || {};
+    const named = Object.keys(args)
+      .map((key) => `${key}=${args[key]}`)
+      .join(" ");
+    edge.last = { ts, message: named || data.event || "" };
+    put(edge.tip, edgeTitle(edge));
+    if (!folded()) flash(edge, true);
   }
 
   /* ---------------- skeleton ---------------- */
@@ -1433,6 +1455,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
        still has to arrive, or the crosscall never lights. */
     accepts: (topic) => topic in TOPICS || byTopic.has(topic),
     note,
+    stopped,
     apply(frame) {
       if (frame.kind !== "snapshot") return;
       const data = frame.data && typeof frame.data === "object" ? frame.data : null;

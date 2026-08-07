@@ -37,6 +37,7 @@ CHIPS = ("trap", "sched", "timer", "vgic", "vuart", "ivc")
 # Anchors on the address strip.
 SEGMENTS = ("mem", "pa:shared")
 
+GRADE_DIRECT = "direct"  # the machine stopped on it — measured, exact
 GRADE_CONSOLE = "console"  # a classified log line — exact in time
 GRADE_POLL = "poll"  # a snapshot delta — quantised to the sample
 GRADE_NONE = "none"  # structure, with nothing watching it
@@ -88,15 +89,22 @@ def _expand(edge: Edge, cpus: int) -> list[tuple[str, str]]:
     return [(edge.source, edge.target)]
 
 
-def edges(cpus: int, blocks: Iterable[str]) -> list[dict]:
+def edges(cpus: int, blocks: Iterable[str], direct: Iterable[str] = ()) -> list[dict]:
     """Concrete paths for one board.
 
     Expanded and filtered here so the UI gets a flat list and resolves
     every endpoint by name. A board with no SMMU has fewer paths — a fact
     about the board, not a line drawn to nowhere.
+
+    `direct` names the paths the machine can be stopped on. Those are
+    upgraded, because a breakpoint is not another sample: it is the
+    event itself, with the whole machine held still around it. The
+    caller supplies the set rather than this module reading the event
+    catalogue, which names paths from here — one direction only.
     """
     known = set(blocks) | set(BANDS) | set(CHIPS) | set(SEGMENTS)
     known |= {f"core{cpu}" for cpu in range(cpus)}
+    observable = set(direct)
     out = []
     for edge in EDGES:
         for index, (source, target) in enumerate(_expand(edge, cpus)):
@@ -106,7 +114,7 @@ def edges(cpus: int, blocks: Iterable[str]) -> list[dict]:
                 "id": edge.id if index == 0 else f"{edge.id}{index}",
                 "from": source,
                 "to": target,
-                "grade": edge.grade,
+                "grade": GRADE_DIRECT if edge.id in observable else edge.grade,
                 "topic": edge.topic,
                 "badges": [badge.value for badge in edge.badges],
             })

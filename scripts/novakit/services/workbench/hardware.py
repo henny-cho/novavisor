@@ -20,7 +20,7 @@ from pathlib import Path
 
 from ...core import config
 from ...image import abi, dtb
-from . import paths
+from . import events, paths
 
 BOARD_DIR = config.REPO / "src" / "hal" / "board"
 DEFAULT_BOARD = "qemu_virt"
@@ -241,7 +241,13 @@ def board_map(board: str = DEFAULT_BOARD) -> dict:
         "vcpu_stride": abi.MAX_VCPUS_PER_VM,
         "dtb_reserve": values["NOVA_GUEST_DTB_SIZE"],
         "blocks": blocks,
-        "edges": paths.edges(values["NOVA_BOARD_SMP_CPUS"], [block["id"] for block in blocks]),
+        # A path the machine can be stopped on is graded up: a
+        # breakpoint is not another sample, it is the event itself.
+        "edges": paths.edges(
+            values["NOVA_BOARD_SMP_CPUS"],
+            [block["id"] for block in blocks],
+            {event.edge for event in events.EVENTS if event.edge},
+        ),
         "regions": {
             "pa": _physical_regions(values),
             "ipa": _intermediate_regions(values),

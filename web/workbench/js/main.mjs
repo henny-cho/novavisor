@@ -2,7 +2,7 @@
    the two pieces of UI state the wire does not carry — the theme and how
    much of the stream was lost. */
 
-import { MAX_VM_SLOT, clockLabel } from "./format.mjs";
+import { MAX_VM_SLOT, clear, clockLabel, el } from "./format.mjs";
 import { connect, send } from "./net.mjs";
 import { createBoard } from "./board.mjs";
 import { createCards } from "./cards.mjs";
@@ -26,6 +26,12 @@ const themeButton = ref("theme");
 const runButton = ref("run");
 const rerunButton = ref("rerun");
 const pauseButton = ref("pause");
+const stopPick = ref("stop-at");
+const advanceButton = ref("advance");
+const stepButton = ref("step");
+const autoButton = ref("auto");
+const abortButton = ref("abort");
+const stopNote = ref("stop-note");
 
 /* Session phases the bridge publishes, in this UI's words. Unknown phases
    fall through to a plain notice rather than a blank badge. */
@@ -43,6 +49,7 @@ let clockText = "";
 let lostFrames = 0;
 let currentRun = null;
 let paused = false;
+let autoRunning = false;
 /* Snapshots may arrive out of order during connect replay; the highest
    sequence is the current world. */
 let topoSeq = 0;
@@ -107,6 +114,11 @@ function setPhase(phase, override) {
   /* Only a running machine can be paused; every other phase offering
      the button would send stop to a machine that no longer exists. */
   pauseButton.hidden = phase !== "running";
+  /* Same reason as the pause button: advancing a machine that is not
+     there sends commands the bridge can only reject. */
+  for (const control of [advanceButton, stepButton, autoButton]) {
+    control.disabled = phase !== "running";
+  }
 }
 
 /* Connect replay hands the fresh snapshot over before the older backlog,
@@ -130,6 +142,71 @@ pauseButton.addEventListener("click", () => {
   if (!send("halt", { cmd: paused ? "cont" : "stop" })) {
     notify("브리지에 연결되지 않아 요청을 보내지 못했습니다");
   }
+});
+
+/* The choices come from the bridge with the rest of the topology, the
+   same way badges and board blocks do. Naming a firmware function here
+   would put a second copy of the catalogue in the client. */
+function setStops(stops) {
+  const previous = stopPick.value;
+  clear(stopPick);
+  for (const stop of stops || []) {
+    const option = el("option", "", stop.label ? `${stop.id} — ${stop.label}` : stop.id);
+    option.value = stop.id;
+    stopPick.append(option);
+  }
+  if (previous) stopPick.value = previous;
+}
+
+const chosen = () => (stopPick.value ? [stopPick.value] : []);
+
+function setAuto(next) {
+  autoRunning = next;
+  autoButton.setAttribute("aria-pressed", String(next));
+  abortButton.hidden = !next;
+}
+
+/* One line beside the controls saying what the machine is doing right
+   now. The event log keeps the history; this answers "is it stuck?",
+   which a scrolling log answers badly. */
+function say(text) {
+  stopNote.textContent = text || "";
+  stopNote.hidden = !text;
+}
+
+function halt(data) {
+  if (!send("halt", data)) {
+    notify("브리지에 연결되지 않아 요청을 보내지 못했습니다");
+    return false;
+  }
+  return true;
+}
+
+advanceButton.addEventListener("click", () => {
+  halt({ cmd: "run", stops: chosen() });
+});
+
+/* Instructions, not events: this is for looking *inside* one. At about
+   700us per instruction over the debug socket, forty is a fraction of a
+   second and forty thousand would be a minute. */
+stepButton.addEventListener("click", () => {
+  halt({ cmd: "step", count: 40 });
+});
+
+/* The period is in seconds but the unit of progress is an event — a
+   fixed slice of time holds anywhere from zero of them to thousands. */
+autoButton.addEventListener("click", () => {
+  if (autoRunning) {
+    halt({ cmd: "abort" });
+    setAuto(false);
+    return;
+  }
+  if (halt({ cmd: "run", stops: chosen(), repeat: 50, period: 1 })) setAuto(true);
+});
+
+abortButton.addEventListener("click", () => {
+  halt({ cmd: "abort" });
+  setAuto(false);
 });
 
 function noteLoss(count) {
@@ -158,6 +235,7 @@ function onTopo(data) {
   events.setBadges(taxonomy.badges);
   panels.setTopology(topo);
   boardView.setTopology(topo);
+  setStops(topo.stops);
   /* Connect-time session state: the life events that built this picture
      may already be evicted from the backlog, so the fresh topo is the
      only reliable carrier for a late joiner. */
@@ -204,6 +282,8 @@ function onLife(ts, data) {
       runButton.disabled = false;
       rerunButton.hidden = true;
       setPaused(false);
+      setAuto(false);
+      say("");
       consoleView.setBanner(null); /* a panic banner lives until the next run */
       /* Run boundary: measurements and counters from the previous
          machine must not read as this one's. */
@@ -221,8 +301,45 @@ function onLife(ts, data) {
       break;
     case "resumed":
       setPaused(false);
+      setAuto(false);
       setPhase("running");
       events.addNotice(ts, "머신 재개");
+      break;
+    /* Stopped *at* something, rather than wherever the reader clicked.
+       The board lights the path this is evidence for; the log keeps the
+       values, because a pulse fades and a reader may look away. */
+    case "stopped": {
+      setPaused(true);
+      setPhase("running", data.event ? `정지 · ${data.event}` : "정지");
+      boardView.stopped(ts, data);
+      const args = data.args && typeof data.args === "object" ? data.args : {};
+      const named = Object.keys(args).map((key) => `${key}=${args[key]}`).join(" ");
+      events.addNotice(ts, `정지 ${data.event || data.pc || ""}${named ? ` — ${named}` : ""}`);
+      say(data.event ? `정지 · ${data.event}` : "정지");
+      break;
+    }
+    case "armed":
+      say(`무장 · ${(data.stops || []).join(", ")}`);
+      events.addNotice(ts, `정지 지점 무장 — ${(data.stops || []).join(", ")}`);
+      break;
+    /* The chosen event may be rare, or may not happen on this demo at
+       all. Saying so is the difference between waiting and looking
+       broken. */
+    case "waiting":
+      say(`대기 · ${(data.stops || []).join(", ")}`);
+      break;
+    case "stepped":
+      setPaused(true);
+      /* A step at `wfi` does not retire until an interrupt arrives, and
+         the hypervisor idles there between events — so this is the
+         ordinary answer, not a fault. */
+      say(data.stalled ? "대기 중 — 명령이 끝나지 않음 (wfi)" : `${data.steps} 명령 진행`);
+      events.addNotice(
+        ts,
+        data.stalled
+          ? "스텝 정지 — wfi에서 대기 중 (인터럽트 전까지 명령이 끝나지 않음)"
+          : `${data.steps} 명령 진행 → ${(data.stop && data.stop.pc) || ""}`,
+      );
       break;
     case "verifying":
       setPhase(phase);
