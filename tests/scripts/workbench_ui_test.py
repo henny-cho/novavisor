@@ -379,6 +379,58 @@ class SelectionTest(unittest.TestCase):
         self.assertIn("dropSelection()", reset.group(1))
 
 
+class PathTourTest(unittest.TestCase):
+    """Walking a path is the recorded order, not a script.
+
+    The earlier design was a static chain of numbered hops per path. A
+    script can be wrong about the machine and stay wrong quietly; a
+    recording cannot be wrong about itself. This is the composition
+    that replaced it: a filtered window the bridge already answers, and
+    the selection cursor that already walks whatever came back.
+    """
+
+    def setUp(self):
+        self.board = (UI / "js" / "board.mjs").read_text()
+        self.timeline = (UI / "js" / "timeline.mjs").read_text()
+        self.main = (UI / "js" / "main.mjs").read_text()
+
+    def test_a_path_can_be_aimed_at_without_widening_it(self):
+        """The drawn width is what says how well a path is observed, so
+        the click target is a companion rather than a thicker line."""
+        self.assertIn('hit.dataset.edge = spec.id', self.board)
+        css = (UI / "css" / "workbench.css").read_text()
+        self.assertRegex(css, r"\.edge-hit\{[^}]*stroke:\s*transparent")
+        self.assertRegex(css, r"\.edge-hit\{[^}]*pointer-events:\s*stroke")
+        # Shown and hidden with the path, or it is a target for
+        # something that is not on screen.
+        show = re.search(r"function showEdge\(edge, on\) \{(.*?)\n  \}", self.board, re.S)
+        self.assertIn("edge.hit.style.display", show.group(1))
+
+    def test_the_board_says_which_path_and_nothing_about_the_trace(self):
+        click = re.search(
+            r'wires\.addEventListener\("click".*?\n  \}\);', self.board, re.S)
+        self.assertIsNotNone(click, "no path click handler")
+        self.assertIn("onTour(id)", click.group(0))
+        # The recorded order lives in the strip; a second reading of it
+        # here would be a second answer.
+        self.assertNotIn("window", click.group(0))
+
+    def test_the_moments_that_light_a_path_come_from_the_catalogue(self):
+        """A per-path list of event ids typed into the client would be a
+        second copy of what the bridge already publishes."""
+        self.assertRegex(
+            self.main, r"catalogue\.filter\(\(stop\) => stop\.edge === edge\)")
+
+    def test_the_tour_is_a_filtered_window_walked_by_the_one_cursor(self):
+        tour = re.search(r"function tour\(eventIds, label\) \{(.*?)\n  \}", self.timeline, re.S)
+        self.assertIsNotNone(tour, "tour not found")
+        self.assertIn("events: eventIds", tour.group(1))
+        # No records are drawn here and no selection is announced here;
+        # the window answer starts the same cursor everything else uses.
+        self.assertNotIn("onSelect(", tour.group(1))
+        self.assertRegex(self.timeline, r"if \(touring\) \{[\s\S]{0,200}select\(0\);")
+
+
 class StepperTest(unittest.TestCase):
     """The controls that stop the machine at an event."""
 

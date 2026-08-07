@@ -89,6 +89,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
   let pending = 0; /* ts already asked for, so a slow answer is not re-asked */
   let timer = null;
 
+  const cols_length = (cols) => (cols && cols.ts ? cols.ts.length : 0);
   const held_count = () => Math.min(head, HOLD);
   const slot = (index) => (head - held_count() + index) % HOLD;
   const newest = () => (held_count() ? held.ts[slot(held_count() - 1)] : 0);
@@ -192,11 +193,26 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
         dropSelection();
         chosen = { from, to, cols: data.cols };
         dense = null;
+        /* The tour's answer arrived: start at its first passage and
+           walk. Through the same cursor as everything else. */
+        if (touring) {
+          touring = null;
+          if (cols_length(data.cols)) {
+            requestAnimationFrame(() => {
+              select(0);
+              play();
+            });
+          }
+        }
       } else {
         append(data.cols, from);
       }
       noteLanes(data.cols.code);
     } else if (data.hist) {
+      /* Even filtered to one path the stretch can be too busy to
+         enumerate. Said rather than left as a tour that quietly never
+         starts. */
+      touring = null;
       /* Too many records in the window to enumerate at the resolution
          asked for. Drawn as density, rather than as a sample of its
          marks that would read as a quiet stretch. */
@@ -654,6 +670,35 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     return false;
   }
 
+  /* Everything a path actually carried this run, in the order it
+     carried it.
+     Not a new mechanism. The bridge already answers a window filtered
+     by event; the cursor already walks whatever the window returned.
+     A tour is those two composed, which is why the board gained a
+     click and this file gained no second way to draw a record.
+
+     It replaces a scripted chain of numbered hops. A script can be
+     wrong about the machine; a recording cannot be wrong about itself. */
+  let touring = null; /* the request in flight, so its answer can start it */
+  function tour(eventIds, label) {
+    if (!span || !span.n || !eventIds.length) return false;
+    dropSelection();
+    setFollow(false);
+    touring = { events: eventIds, label };
+    view = { from: span.from, to: span.to };
+    request({
+      op: "window",
+      from: view.from,
+      to: view.to,
+      buckets: ceiling,
+      events: eventIds,
+    });
+    draw();
+    return true;
+  }
+
+  const touringLabel = () => touring?.label ?? null;
+
   function dropSelection() {
     stop();
     chosenAt = -1;
@@ -770,5 +815,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     play,
     stop,
     isPlaying,
+    tour,
+    touringLabel,
   };
 }

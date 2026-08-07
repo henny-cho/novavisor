@@ -77,6 +77,11 @@ const boardView = createBoard({
      The board decides which those are, from the paths touching it; the
      log keeps that separate from what the reader muted by hand. */
   onFocus: (badges) => events.narrow(badges),
+  /* Click a path, walk what actually went down it. The board names the
+     path; the catalogue says which recorded moments light it; the strip
+     already knows how to ask for a filtered window and walk the answer.
+     Nothing here is new machinery — it is those three, composed. */
+  onTour: (edge) => startTour(edge),
 });
 
 const panels = createPanels({ tabs: ref("panel-tabs"), host: ref("panels") });
@@ -125,6 +130,27 @@ const timeline = createTimeline({
     stopHereButton.title = `다음 ${record.id}에서 정지`;
   },
 });
+
+/* The catalogue the bridge published this run, so a path can be turned
+   into the recorded moments that light it without a second table. */
+let catalogue = [];
+
+function startTour(edge) {
+  const ids = catalogue.filter((stop) => stop.edge === edge).map((stop) => stop.id);
+  if (!ids.length) {
+    /* A path with no recorded moment is drawn from structure alone.
+       Saying so beats a tour that starts and shows nothing. */
+    timelineSel.textContent = `${edge} — 이 경로를 기록하는 훅이 없습니다`;
+    return;
+  }
+  if (!timeline.tour(ids, edge)) {
+    timelineSel.textContent = `${edge} — 아직 기록된 통과가 없습니다`;
+    return;
+  }
+  setPlaying(true);
+  timelineSel.textContent = `투어 · ${edge} — 녹화된 순서 재생 중`;
+  events.addNotice(latestTs, `경로 투어 — ${edge}`);
+}
 
 /* The catalogue names the record's three words; an unnamed position
    holds nothing for that event. Naming happens there and not here, so
@@ -347,6 +373,7 @@ function onTopo(data) {
   events.setBadges(taxonomy.badges);
   panels.setTopology(topo);
   boardView.setTopology(topo);
+  catalogue = Array.isArray(topo.stops) ? topo.stops : [];
   setStops(topo.stops);
   timeline.setCatalogue(topo.stops);
   timeline.setLimits(topo.limits);

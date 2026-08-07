@@ -301,6 +301,12 @@ b{font-weight:700}
 .pe-layer{background:color-mix(in srgb,var(--raised) 64%,transparent);border-color:var(--line)}
 .mem-layer{padding-bottom:4px}
 .wires{position:absolute;inset:0;pointer-events:none;z-index:3}
+/* The overlay stays transparent to the pointer so block clicks reach
+   the board underneath. A path is the one thing on this view a reader
+   can ask to see the recorded order of, so it takes clicks — through an
+   invisible companion, because the visible width is what says how well
+   the path is observed and must not be widened to make a target. */
+.edge-hit{stroke:transparent;stroke-width:11;fill:none;pointer-events:stroke;cursor:pointer}
 /* Paths through the machine. Thin and quiet next to the residency wires:
    a wire says where a vCPU lives right now, a path says what the machine
    can do, and the two must not read as the same kind of statement.
