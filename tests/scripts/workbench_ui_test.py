@@ -80,6 +80,32 @@ class PanelReachTest(unittest.TestCase):
         )
         self.assertRegex(source, r"filter\(\(topic\)\s*=>\s*!claimed\.has\(topic\)\)")
 
+    def test_no_panel_reads_a_value_without_its_provenance(self):
+        """A stop's whole product is what moved, and a renderer handed a
+        bare number has already lost it.
+
+        Enforced by removal rather than by review: the accessor that
+        returned a value alone is gone, so the only ways into a reading
+        are `at()`, which carries the mask, and `plain()`, which states
+        out loud that a cell was computed here. Nine renderers were nine
+        chances to forget a highlight, and every new panel was another.
+        """
+        source = (UI / "js" / "panels.mjs").read_text()
+        self.assertNotIn("value(", source)
+        self.assertRegex(source, r"const at = \(topic\) =>")
+        self.assertRegex(source, r"const plain = \(shown\) =>")
+
+    def test_a_table_cell_that_lost_its_provenance_is_refused(self):
+        """Not merely unhighlighted — a bare value in a cell would draw
+        perfectly and silently never light up, which is the exact
+        failure this arrangement exists to make impossible."""
+        source = (UI / "js" / "panels.mjs").read_text()
+        self.assertRegex(source, r"if \(!\(cell instanceof Cell\)\)[\s\S]{0,200}throw new TypeError")
+
+    def test_the_moved_cell_has_a_style_to_be_seen_by(self):
+        css = (UI / "css" / "workbench.css").read_text()
+        self.assertRegex(css, r"\.ptable td\.moved")
+
 
 VIEW_HEADER = re.compile(r'<div class="view-h">(.*?)</div>\s*<div class="board"', re.S)
 # Any literal that looks like a hardware address or an interrupt number.

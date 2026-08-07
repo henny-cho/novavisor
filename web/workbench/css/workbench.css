@@ -677,6 +677,16 @@ b{font-weight:700}
 .ptable th { color: var(--ink3); font-weight: 600; text-align: left; padding: 1px 8px 1px 0; border-bottom: 1px solid var(--line); }
 .ptable td { color: var(--ink); padding: 1px 8px 1px 0; white-space: nowrap; }
 .ptable tr:nth-child(even) td { background: color-mix(in srgb, var(--panel) 60%, transparent); }
+/* Moved since the previous stop. The tab badge says how many values in
+   this panel's topics moved; these say which of them are on screen.
+   Colour on the value rather than a background, so a wide table stays
+   readable when half of it moved. A reading shown in a heading or a
+   note is marked the same way, so escaping the table does not mean
+   escaping the highlight. */
+.ptable td.moved, .pcell.moved, .psec-h.moved, .pnote.moved { color: var(--warn) }
+.ptable td.moved, .psec-h.moved { font-weight: 650 }
+.ptable td.moved { background: color-mix(in srgb, var(--warn) 9%, transparent); }
+.ptable tr:nth-child(even) td.moved { background: color-mix(in srgb, var(--warn) 9%, transparent); }
 .pslots { display: flex; gap: 4px; flex-wrap: wrap; }
 .pslot { font: var(--fs-body) var(--mono); color: var(--ink2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 7px; }
 .pslot.on { color: var(--hyp); border-color: var(--hyp); font-weight: 700; }
