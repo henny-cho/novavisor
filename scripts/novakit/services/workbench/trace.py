@@ -13,6 +13,10 @@ host's own memory, and works out what it missed:
 Derived rather than accumulated. Counting the pre-copy and post-copy
 skips separately double-counts wherever a lapping writer makes the two
 overlap — a mistake the firmware-side test made first.
+
+The recoverable depth is capacity - 1, not capacity: see
+`_oldest_intact`. The difference only ever shows when the reader is
+already behind.
 """
 
 from __future__ import annotations
@@ -37,11 +41,13 @@ _LAYOUT = abi.read_defines(
         "NOVA_TRACE_REC_SIZE",
         "NOVA_TRACE_TS_OFF",
         "NOVA_TRACE_SIZE",
+        "NOVA_TRACE_MAX_RINGS",
     ],
 )
 MAGIC = _LAYOUT["NOVA_TRACE_MAGIC"]
 VERSION = _LAYOUT["NOVA_TRACE_VERSION"]
 REGION_SIZE = _LAYOUT["NOVA_TRACE_SIZE"]
+MAX_RINGS = _LAYOUT["NOVA_TRACE_MAX_RINGS"]
 # Public: anything keeping records keeps them at the firmware's width,
 # so the layout stays one number rather than one per holder.
 REC_SIZE = _LAYOUT["NOVA_TRACE_REC_SIZE"]
@@ -186,8 +192,18 @@ class TraceReader:
             raise NotFormatted(f"trace region version {version}, expected {VERSION}")
         if record_size != REC_SIZE:
             raise NotFormatted(f"trace record is {record_size} bytes, expected {REC_SIZE}")
-        if rings < 1 or capacity < 1 or capacity & (capacity - 1):
-            raise NotFormatted(f"trace geometry is not usable: {rings} rings, capacity {capacity}")
+        # The depth is the region divided by the ring count, so it
+        # arrives here and nowhere else — there is no constant left to
+        # check it against. That makes vetting it this reader's job:
+        # every number below is one it is about to index with.
+        if not 1 <= rings <= MAX_RINGS:
+            raise NotFormatted(f"trace region declares {rings} rings, expected 1..{MAX_RINGS}")
+        if capacity < 1 or capacity & (capacity - 1):
+            raise NotFormatted(f"trace ring capacity {capacity} is not a power of two")
+        if stride != _RECORDS_OFF + capacity * REC_SIZE:
+            raise NotFormatted(f"trace stride {stride} disagrees with capacity {capacity}")
+        if _HEADER_SIZE + rings * stride > REGION_SIZE:
+            raise NotFormatted(f"{rings} rings of {capacity} do not fit {REGION_SIZE} bytes")
         return Geometry(rings, capacity, stride, freq, early)
 
     def _record(self, at: int) -> Record:
@@ -228,6 +244,22 @@ class TraceReader:
         found.sort(key=lambda record: record.ts)
         return found, lost
 
+    def _oldest_intact(self, head: int) -> int:
+        """The oldest index still whole when the writer's head reads
+        `head`.
+
+        One short of the capacity, and that is not caution. Head at H
+        means the writer has published H records and is *inside* the
+        slot for index H — which is the slot index H - capacity
+        occupies. That record is already being destroyed, so the
+        recoverable depth is capacity - 1, and a reader that kept the
+        last `capacity` would hand out one record built from two
+        events. It costs nothing while the reader keeps up: the cursor
+        is newer than this bound, so the bound never applies.
+        """
+        capacity = self.geometry.capacity
+        return head - capacity + 1 if head >= capacity else 0
+
     def _drain_one(self, ring: int) -> tuple[list[Record], int]:
         capacity = self.geometry.capacity
         base = self._offset + _HEADER_SIZE + ring * self.geometry.stride + _RECORDS_OFF
@@ -238,17 +270,16 @@ class TraceReader:
             # the same backing file). Start again rather than report a
             # loss of minus several thousand.
             cursor = 0
-        oldest = max(0, head - capacity)
+        keep = max(cursor, self._oldest_intact(head))
         records = [
             self._record(base + (index % capacity) * REC_SIZE)
-            for index in range(max(cursor, oldest), head)
+            for index in range(keep, head)
         ]
         # Re-read: anything the writer lapped while we were copying has
         # fallen out of the window, so it is discarded rather than
         # trusted. Reading a record that is being written is only
         # possible through exactly this race.
-        safe = max(0, self._head(ring) - capacity)
-        keep = max(cursor, oldest)
+        safe = self._oldest_intact(self._head(ring))
         if safe > keep:
             del records[: min(safe - keep, len(records))]
         self._cursor[ring] = head
@@ -381,9 +412,9 @@ def report(shm_path: Path, ram_base: int, trace_pa: int, limit: int = 40) -> int
     """The terminal twin of the T layer, read off the rings themselves.
 
     The fallback path: no bridge, so no history, and what arrives here
-    is only what the rings still hold — about 2.7 seconds. Needs no
-    browser and no image either, which is what makes it the answer when
-    there is nothing else running.
+    is only what the rings still hold — however deep the board's region
+    divided into. Needs no browser and no image either, which is what
+    makes it the answer when there is nothing else running.
     """
     try:
         reader = TraceReader(shm_path, ram_base, trace_pa)

@@ -90,9 +90,18 @@ class TraceRegionTest(unittest.TestCase):
                 self.assertGreaterEqual(start, after_ivc)
                 self.assertLessEqual(end, values["NOVA_BOARD_PRISTINE_PA"])
 
-    def test_the_region_holds_every_ring_the_writer_will_place(self):
-        """Sizing is the header's own arithmetic; if it stops adding up,
-        rings would silently overlap each other rather than fail."""
+    def test_the_region_reaches_the_floor_at_the_widest_ring_count(self):
+        """Capacity is not declared anywhere: it is the region divided
+        by the cores that write to it. So the reservation is the whole
+        sizing decision, and the way to get it wrong is to reserve too
+        little.
+
+        Stated at NOVA_TRACE_MAX_RINGS, which makes it hold for every
+        board at once — a board with fewer cores divides the same region
+        by less and lands deeper. The per-board form of this is the
+        static_assert in the trace component, and it only fires for the
+        board being built.
+        """
         from novakit.image import abi
 
         values = abi.read_defines(
@@ -102,26 +111,41 @@ class TraceRegionTest(unittest.TestCase):
                 "NOVA_TRACE_HEADER_SIZE",
                 "NOVA_TRACE_RECORDS_OFF",
                 "NOVA_TRACE_REC_SIZE",
-                "NOVA_TRACE_CAPACITY",
+                "NOVA_TRACE_MIN_CAPACITY",
+                "NOVA_TRACE_MAX_RINGS",
             ],
         )
-        cpus = abi.read_defines(
-            REPO / "src" / "hal" / "board" / "qemu_virt" / "include"
-            / "hal" / "board" / "active" / "board_layout.h",
-            ["NOVA_BOARD_SMP_CPUS"],
-        )["NOVA_BOARD_SMP_CPUS"]
-        stride = (
+        floor_stride = (
             values["NOVA_TRACE_RECORDS_OFF"]
-            + values["NOVA_TRACE_REC_SIZE"] * values["NOVA_TRACE_CAPACITY"]
+            + values["NOVA_TRACE_REC_SIZE"] * values["NOVA_TRACE_MIN_CAPACITY"]
         )
-        needed = values["NOVA_TRACE_HEADER_SIZE"] + stride * cpus
+        needed = (
+            values["NOVA_TRACE_HEADER_SIZE"] + floor_stride * values["NOVA_TRACE_MAX_RINGS"]
+        )
         self.assertLessEqual(needed, values["NOVA_TRACE_SIZE"])
 
-    def test_a_record_is_a_power_of_two(self):
-        """Indexing is a mask, and no record may straddle a cache line."""
+    def test_every_board_fills_no_more_rings_than_the_abi_allows(self):
+        """A core past the last ring would index the writer's inline
+        array out of bounds on every emit."""
         from novakit.image import abi
 
-        size = abi.read_define(abi.TRACE_RING, "NOVA_TRACE_REC_SIZE")
-        self.assertEqual(size & (size - 1), 0)
-        capacity = abi.read_define(abi.TRACE_RING, "NOVA_TRACE_CAPACITY")
-        self.assertEqual(capacity & (capacity - 1), 0)
+        rings = abi.read_define(abi.TRACE_RING, "NOVA_TRACE_MAX_RINGS")
+        for board in self.BOARDS:
+            with self.subTest(board=board):
+                header = (
+                    REPO / "src" / "hal" / "board" / board
+                    / "include" / "hal" / "board" / "active" / "board_layout.h"
+                )
+                cpus = abi.read_define(header, "NOVA_BOARD_SMP_CPUS")
+                self.assertLessEqual(cpus, rings)
+
+    def test_the_sizes_indexing_relies_on_are_powers_of_two(self):
+        """Indexing is a mask, and no record may straddle a cache line.
+        The floor is one too, so it names a depth a division can land
+        on exactly rather than one it can only overshoot."""
+        from novakit.image import abi
+
+        for name in ("NOVA_TRACE_REC_SIZE", "NOVA_TRACE_MIN_CAPACITY"):
+            with self.subTest(define=name):
+                value = abi.read_define(abi.TRACE_RING, name)
+                self.assertEqual(value & (value - 1), 0)

@@ -39,16 +39,28 @@ RAM_BASE = 0x4000_0000
 # half-gigabyte file.
 TRACE_PA = 0x4000_1000
 CAPACITY = 16  # small enough that lapping is easy to arrange
-STRIDE = L["NOVA_TRACE_RECORDS_OFF"] + CAPACITY * L["NOVA_TRACE_REC_SIZE"]
+
+
+def stride_for(capacity: int) -> int:
+    return L["NOVA_TRACE_RECORDS_OFF"] + capacity * L["NOVA_TRACE_REC_SIZE"]
 
 
 class Region:
-    """A trace region on disk, written the way the firmware writes one."""
+    """A trace region on disk, written the way the firmware writes one.
+
+    The geometry fields are separately overridable because that is the
+    only way to write a header the firmware could not have written —
+    which is what the reader's vetting is for. Left alone they stay
+    consistent with each other, so a test about draining never trips a
+    check about layout.
+    """
 
     def __init__(self, rings: int = 2, *, magic: int | None = None, version: int | None = None,
-                 capacity: int = CAPACITY, early: int = 0):
+                 capacity: int = CAPACITY, early: int = 0,
+                 header_rings: int | None = None, stride: int | None = None):
         self.rings = rings
         self.capacity = capacity
+        self.stride = stride_for(capacity)
         self.path = Path(tempfile.mkstemp(dir="/dev/shm", suffix="-ram")[1])
         size = (TRACE_PA - RAM_BASE) + L["NOVA_TRACE_SIZE"]
         self.buffer = bytearray(size)
@@ -57,13 +69,16 @@ class Region:
             "<QIIIIIII", self.buffer, self.offset,
             L["NOVA_TRACE_MAGIC"] if magic is None else magic,
             L["NOVA_TRACE_VERSION"] if version is None else version,
-            L["NOVA_TRACE_REC_SIZE"], STRIDE, rings, capacity, 62_500_000, early,
+            L["NOVA_TRACE_REC_SIZE"],
+            self.stride if stride is None else stride,
+            rings if header_rings is None else header_rings,
+            capacity, 62_500_000, early,
         )
         self.heads = [0] * rings
         self.flush()
 
     def ring_base(self, ring: int) -> int:
-        return self.offset + L["NOVA_TRACE_HEADER_SIZE"] + ring * STRIDE
+        return self.offset + L["NOVA_TRACE_HEADER_SIZE"] + ring * self.stride
 
     def emit(self, ring: int, ts: int, code: int, cpu: int = 0, a: int = 0, b: int = 0, c: int = 0) -> None:
         index = self.heads[ring]
@@ -124,6 +139,25 @@ class GeometryTest(unittest.TestCase):
 
     def test_a_future_version_is_refused(self):
         region = Region(version=L["NOVA_TRACE_VERSION"] + 1)
+        self.addCleanup(region.cleanup)
+        with self.assertRaises(trace.NotFormatted):
+            region.reader()
+
+    def test_a_ring_count_past_the_abi_ceiling_is_refused(self):
+        """The depth now arrives entirely from the header, so the header
+        is what a reader indexes with — and MAX_RINGS is the one bound
+        it can still hold that number to."""
+        region = Region(header_rings=L["NOVA_TRACE_MAX_RINGS"] + 1)
+        self.addCleanup(region.cleanup)
+        with self.assertRaises(trace.NotFormatted):
+            region.reader()
+
+    def test_a_stride_that_disagrees_with_the_capacity_is_refused(self):
+        """Two numbers describing one layout. Believing the stride and
+        indexing with the capacity would read every ring but the first
+        at an offset nothing was written to — records that are all
+        present, all decodable, and all wrong."""
+        region = Region(stride=stride_for(CAPACITY) + 32)
         self.addCleanup(region.cleanup)
         with self.assertRaises(trace.NotFormatted):
             region.reader()
@@ -201,11 +235,16 @@ class DrainTest(unittest.TestCase):
         self.addCleanup(reader.close)
 
         records, lost = reader.drain()
-        self.assertEqual(len(records), CAPACITY)
-        self.assertEqual(lost, CAPACITY * 2)
+        # One short of the capacity. The slot the writer would fill next
+        # is the one holding the oldest record, and nothing in the
+        # region distinguishes "head is resting here" from "the writer
+        # is halfway through this slot" — so that record is given up
+        # rather than handed out as two events spliced together.
+        self.assertEqual(len(records), CAPACITY - 1)
+        self.assertEqual(lost, CAPACITY * 2 + 1)
         # Every record between the cursor and the head is accounted for.
         self.assertEqual(len(records) + lost, CAPACITY * 3)
-        self.assertEqual(records[0].ts, CAPACITY * 2)
+        self.assertEqual(records[0].ts, CAPACITY * 2 + 1)
 
     def test_a_reformatted_region_restarts_rather_than_reporting_negative_loss(self):
         """A restart that reuses the backing file rewinds head to zero.

@@ -23,6 +23,7 @@
 
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 
@@ -71,18 +72,34 @@ static_assert(offsetof(Header, freq_hz) == NOVA_TRACE_FREQ_OFF);
 static_assert(offsetof(Header, early) == NOVA_TRACE_EARLY_OFF);
 static_assert(sizeof(Header) <= NOVA_TRACE_HEADER_SIZE);
 
-inline constexpr std::uint64_t kCapacityMask = NOVA_TRACE_CAPACITY - 1;
-static_assert((NOVA_TRACE_CAPACITY & kCapacityMask) == 0, "capacity must be a power of two");
-
 // Bytes one ring occupies, header included.
-inline constexpr std::size_t kRingStride = NOVA_TRACE_RECORDS_OFF + NOVA_TRACE_CAPACITY * NOVA_TRACE_REC_SIZE;
-
-[[nodiscard]] constexpr auto region_size(std::size_t rings) noexcept -> std::size_t {
-  return NOVA_TRACE_HEADER_SIZE + rings * kRingStride;
+[[nodiscard]] constexpr auto ring_stride(std::size_t capacity) noexcept -> std::size_t {
+  return NOVA_TRACE_RECORDS_OFF + capacity * NOVA_TRACE_REC_SIZE;
 }
 
-static_assert(region_size(NOVA_TRACE_MAX_RINGS) <= NOVA_TRACE_SIZE,
-              "the reserved region cannot hold the rings it is declared to allow");
+[[nodiscard]] constexpr auto region_size(std::size_t rings, std::size_t capacity) noexcept -> std::size_t {
+  return NOVA_TRACE_HEADER_SIZE + rings * ring_stride(capacity);
+}
+
+// How deep a ring gets, given the region it shares and how many share
+// it. This is the inverse of region_size(), and it is the direction the
+// real system runs in: a board reserves bytes, a build fixes the core
+// count, and the capacity is whatever those two divide into. Nobody
+// declares it, so nobody can declare it wrong.
+//
+// Floored to a power of two so indexing stays a mask. The floor is why
+// the region wants a little slack above the arithmetic minimum —
+// landing one record short of a boundary halves every ring.
+[[nodiscard]] constexpr auto records_per_ring(std::size_t size, std::size_t rings) noexcept -> std::size_t {
+  if (rings == 0 || size < NOVA_TRACE_HEADER_SIZE) {
+    return 0;
+  }
+  const std::size_t per_ring = (size - NOVA_TRACE_HEADER_SIZE) / rings;
+  if (per_ring <= NOVA_TRACE_RECORDS_OFF) {
+    return 0;
+  }
+  return std::bit_floor((per_ring - NOVA_TRACE_RECORDS_OFF) / NOVA_TRACE_REC_SIZE);
+}
 
 // Events emitted before any ring was placed. There is nowhere to put
 // them, so they are lost by construction — but a loss nobody counts is
@@ -98,9 +115,13 @@ class Ring {
 public:
   Ring() = default;
 
-  explicit Ring(void* base) noexcept
+  // The mask travels with the ring rather than sitting in a constant
+  // beside it: the depth is a property of the region this ring was cut
+  // from, and a writer that read it from anywhere else would be the
+  // second opinion the derivation exists to remove.
+  Ring(void* base, std::size_t capacity) noexcept
       : head_(reinterpret_cast<std::uint64_t*>(static_cast<char*>(base) + NOVA_TRACE_HEAD_OFF)),
-        records_(reinterpret_cast<Record*>(static_cast<char*>(base) + NOVA_TRACE_RECORDS_OFF)) {}
+        records_(reinterpret_cast<Record*>(static_cast<char*>(base) + NOVA_TRACE_RECORDS_OFF)), mask_(capacity - 1) {}
 
   [[nodiscard]] auto placed() const noexcept -> bool { return head_ != nullptr; }
 
@@ -122,7 +143,7 @@ public:
       return;
     }
     const std::uint64_t index = std::atomic_ref{*head_}.load(std::memory_order_relaxed);
-    Record&             slot  = records_[index & kCapacityMask];
+    Record&             slot  = records_[index & mask_];
     slot.ts                   = ts;
     slot.type                 = type;
     slot.cpu                  = cpu;
@@ -136,6 +157,7 @@ public:
 private:
   std::uint64_t* head_    = nullptr;
   Record*        records_ = nullptr;
+  std::uint64_t  mask_    = 0;
 };
 
 // The rings themselves, one per core, filled in by whoever places the
@@ -146,8 +168,8 @@ private:
 inline std::array<Ring, NOVA_TRACE_MAX_RINGS> g_ring{};
 
 // Where ring `index` begins inside a region at `base`.
-[[nodiscard]] inline auto ring_at(void* base, std::size_t index) noexcept -> void* {
-  return static_cast<char*>(base) + NOVA_TRACE_HEADER_SIZE + index * kRingStride;
+[[nodiscard]] inline auto ring_at(void* base, std::size_t index, std::size_t capacity) noexcept -> void* {
+  return static_cast<char*>(base) + NOVA_TRACE_HEADER_SIZE + index * ring_stride(capacity);
 }
 
 // Lay out the region: geometry fields, and every head back to zero.
@@ -157,17 +179,22 @@ inline std::array<Ring, NOVA_TRACE_MAX_RINGS> g_ring{};
 // ring to land in — cannot be final until the rings are bound. Writing
 // it after the magic would leave a reader free to sample it early and
 // cache a zero, so the magic is publish()'s to release.
-inline void format(void* base, std::uint32_t rings, std::uint32_t freq_hz) noexcept {
+inline void format(void* base, std::uint32_t rings, std::uint32_t capacity, std::uint32_t freq_hz) noexcept {
   auto* header        = reinterpret_cast<Header*>(base);
   header->version     = NOVA_TRACE_VERSION;
   header->record_size = NOVA_TRACE_REC_SIZE;
-  header->stride      = static_cast<std::uint32_t>(kRingStride);
+  header->stride      = static_cast<std::uint32_t>(ring_stride(capacity));
   header->rings       = rings;
-  header->capacity    = NOVA_TRACE_CAPACITY;
+  header->capacity    = capacity;
   header->freq_hz     = freq_hz;
   header->early       = 0;
+  // Heads only. Clearing the records would put a multi-megabyte memset
+  // on the boot path to hide bytes the reader's own window arithmetic
+  // already excludes — the window starts at head - capacity, so a
+  // previous boot's tail is never inside it.
   for (std::uint32_t index = 0; index < rings; ++index) {
-    auto* head = reinterpret_cast<std::uint64_t*>(static_cast<char*>(ring_at(base, index)) + NOVA_TRACE_HEAD_OFF);
+    auto* head =
+        reinterpret_cast<std::uint64_t*>(static_cast<char*>(ring_at(base, index, capacity)) + NOVA_TRACE_HEAD_OFF);
     std::atomic_ref{*head}.store(0, std::memory_order_relaxed);
   }
 }
@@ -182,8 +209,13 @@ inline void publish(void* base, std::uint32_t early) noexcept {
   std::atomic_ref{header->magic}.store(NOVA_TRACE_MAGIC, std::memory_order_release);
 }
 
-// Format the region, bind every core's ring to it, then make it
-// findable.
+// Divide `size` bytes at `base` into `rings` rings, bind every core's
+// ring to one, then make the region findable.
+//
+// The depth is computed here and nowhere else. The caller supplies the
+// two facts it actually owns — how much the board reserved and how many
+// cores will write — and everything else is arithmetic, so there is no
+// value for a board header and this file to disagree about.
 //
 // The order is the point. Heads are zeroed before any ring is bound, so
 // no event lands at a stale index that the zeroing then discards; the
@@ -195,11 +227,20 @@ inline void publish(void* base, std::uint32_t early) noexcept {
 // Runs once, on the primary, before any secondary exists — the same
 // ordering premise the boot CTR_EL0 snapshot relies on, so a secondary
 // that starts later reads rings that are already placed.
-inline void place(void* base, std::size_t rings, std::uint32_t freq_hz) noexcept {
-  const std::size_t count = rings < NOVA_TRACE_MAX_RINGS ? rings : NOVA_TRACE_MAX_RINGS;
-  format(base, static_cast<std::uint32_t>(count), freq_hz);
+inline void place(void* base, std::size_t size, std::size_t rings, std::uint32_t freq_hz) noexcept {
+  const std::size_t count    = rings < NOVA_TRACE_MAX_RINGS ? rings : NOVA_TRACE_MAX_RINGS;
+  const std::size_t capacity = records_per_ring(size, count);
+  if (capacity == 0) {
+    // Too little room for even one record. Left unformatted on purpose:
+    // an unplaced ring already counts what it drops, and publishing a
+    // magic over a geometry nothing can be read from would trade a
+    // truthful "nothing here" for a region a reader must reject. The
+    // board seam's floor is what keeps a real build off this path.
+    return;
+  }
+  format(base, static_cast<std::uint32_t>(count), static_cast<std::uint32_t>(capacity), freq_hz);
   for (std::size_t index = 0; index < count; ++index) {
-    g_ring[index] = Ring{ring_at(base, index)};
+    g_ring[index] = Ring{ring_at(base, index, capacity), capacity};
   }
   publish(base, g_early.load(std::memory_order_relaxed));
 }

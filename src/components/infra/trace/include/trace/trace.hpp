@@ -30,11 +30,18 @@ namespace nova {
 // drops — it is a state the build must not be able to reach.
 static_assert(cpu::kMaxCpus <= NOVA_TRACE_MAX_RINGS, "this board has more cores than the trace region has rings");
 
+// The other half of that seam: the region is divided by the core count,
+// so a board can no longer declare a capacity that does not fit — it
+// can only reserve too little. A floor rather than a ceiling, and the
+// only sizing decision left for a port to get wrong.
+static_assert(trace::records_per_ring(NOVA_TRACE_SIZE, cpu::kMaxCpus) >= NOVA_TRACE_MIN_CAPACITY,
+              "this board reserves less trace region than the T layer is worth");
+
 namespace trace_detail {
 
 inline void place() noexcept {
-  trace::place(reinterpret_cast<void*>(static_cast<std::uintptr_t>(board::active::kTracePa)), cpu::kMaxCpus,
-               static_cast<std::uint32_t>(hyp_timer::freq()));
+  trace::place(reinterpret_cast<void*>(static_cast<std::uintptr_t>(board::active::kTracePa)), NOVA_TRACE_SIZE,
+               cpu::kMaxCpus, static_cast<std::uint32_t>(hyp_timer::freq()));
 }
 
 } // namespace trace_detail
