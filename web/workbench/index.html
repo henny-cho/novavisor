@@ -101,6 +101,21 @@
         <div class="board" id="board">
           <div class="bands" id="bands"><svg class="wires" id="wires" aria-hidden="true"></svg></div>
         </div>
+        <!-- Inside the view, so its height comes out of the board's
+             share: the console already negotiates for the rest of the
+             column and a third claimant would leave nobody able to
+             state what the total is. -->
+        <div class="tl" id="tl">
+          <div class="tl-h">
+            <span class="tl-title">시간 축</span>
+            <span class="tl-note" id="tl-note">트레이스 대기</span>
+            <button class="mini" id="tl-follow" type="button" aria-pressed="true"
+                    title="최신 구간 추종">추종</button>
+            <button class="mini" id="tl-fold" type="button" aria-expanded="true"
+                    title="시간 축 접기 / 펼치기">접기</button>
+          </div>
+          <canvas class="tl-c" id="tl-canvas" aria-label="트레이스 시간 축"></canvas>
+        </div>
       </div>
 
       <div class="split" id="split" role="separator" aria-orientation="horizontal"

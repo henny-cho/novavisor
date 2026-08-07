@@ -9,6 +9,7 @@ import { createCards } from "./cards.mjs";
 import { createConsole } from "./console.mjs";
 import { createEvents } from "./events.mjs";
 import { createPanels } from "./panels.mjs";
+import { createTimeline } from "./timeline.mjs";
 import { createTopology } from "./topology.mjs";
 
 const THEME_KEY = "nv-wb-theme";
@@ -79,6 +80,22 @@ const boardView = createBoard({
 });
 
 const panels = createPanels({ tabs: ref("panel-tabs"), host: ref("panels") });
+
+const timelineNote = ref("tl-note");
+const timeline = createTimeline({
+  strip: ref("tl"),
+  canvas: ref("tl-canvas"),
+  foldButton: ref("tl-fold"),
+  /* The window request goes out on the same topic the summaries come
+     back on: the kind already distinguishes an answer from something
+     sent unasked. */
+  request: (data) => send("trace", data),
+});
+ref("tl-follow").addEventListener("click", (event) => {
+  const on = event.currentTarget.getAttribute("aria-pressed") !== "true";
+  event.currentTarget.setAttribute("aria-pressed", String(on));
+  timeline.setFollow(on);
+});
 
 const consoleView = createConsole({
   tabs: ref("tabs"),
@@ -236,6 +253,7 @@ function onTopo(data) {
   panels.setTopology(topo);
   boardView.setTopology(topo);
   setStops(topo.stops);
+  timeline.setCatalogue(topo.stops);
   /* Connect-time session state: the life events that built this picture
      may already be evicted from the backlog, so the fresh topo is the
      only reliable carrier for a late joiner. */
@@ -305,8 +323,12 @@ function onLife(ts, data) {
       say("");
       consoleView.setBanner(null); /* a panic banner lives until the next run */
       /* Run boundary: measurements and counters from the previous
-         machine must not read as this one's. */
+         machine must not read as this one's. The timeline goes too —
+         a new machine restarts CNTPCT, so merging the two would put
+         them in one order. */
       panels.clearAll();
+      timeline.reset();
+      timelineNote.textContent = "트레이스 대기";
       boardView.clearAll();
       cards.reset();
       consoleView.mark(`── ${data.demo || "?"} ──`);
@@ -455,9 +477,20 @@ function onFrame(frame) {
       events.addEvent(frame.ts, data);
       boardView.note(frame.ts, data);
       break;
-    /* T layer: what the firmware recorded, drained from its rings. */
+    /* T layer: what the firmware recorded, drained from its rings. The
+       summary lights the board; the window answers draw the order. */
     case "trace":
+      if (frame.kind === "snapshot") {
+        timeline.apply(data);
+        break;
+      }
       boardView.traced(frame.ts, data);
+      timeline.note(data);
+      if (data.span) {
+        timelineNote.textContent = data.span.full
+          ? `${data.span.n} 레코드 · 지평선 도달`
+          : `${data.span.n} 레코드`;
+      }
       if (data.dropped) noteLoss(data.dropped);
       break;
     case "life":

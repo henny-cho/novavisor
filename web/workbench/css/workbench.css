@@ -203,6 +203,31 @@ b{font-weight:700}
 .lg i.none{border-top-style:dashed;opacity:.5}
 .lg i.lock{border:none;width:auto;height:auto;font-style:normal}
 
+/* The time axis, under the board and inside the same view: its height
+   is taken from the board's share rather than from the column, so the
+   console's floor keeps meaning what it meant. */
+.tl{
+  flex:none;display:flex;flex-direction:column;height:112px;
+  border-top:1px solid var(--line);background:var(--panel)
+}
+.tl.folded{height:auto}
+.tl.folded>.tl-c{display:none}
+.tl-h{
+  display:flex;align-items:center;gap:8px;flex:none;min-height:22px;
+  padding:2px var(--wb-pad)
+}
+.tl-title{
+  font-size:var(--fs-label);letter-spacing:.12em;text-transform:uppercase;
+  color:var(--ink3);font-weight:700
+}
+.tl-note{font-family:var(--mono);font-size:var(--fs-label);color:var(--ink3)}
+.tl-h .mini{margin-left:auto}
+.tl-h .mini + .mini{margin-left:0}
+.tl[data-follow="off"] #tl-follow{opacity:.45}
+/* Sized by its box and painted at device resolution: the element is the
+   output, and the records it is drawn from live in the module. */
+.tl-c{flex:1;min-height:0;width:100%;display:block}
+
 .split{
   flex:none;height:8px;cursor:row-resize;background:var(--panel);
   border-bottom:1px solid var(--line);position:relative
