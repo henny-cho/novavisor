@@ -41,10 +41,13 @@ _LAYOUT = abi.read_defines(
 MAGIC = _LAYOUT["NOVA_TRACE_MAGIC"]
 VERSION = _LAYOUT["NOVA_TRACE_VERSION"]
 REGION_SIZE = _LAYOUT["NOVA_TRACE_SIZE"]
+# Public: anything keeping records keeps them at the firmware's width,
+# so the layout stays one number rather than one per holder.
+REC_SIZE = _LAYOUT["NOVA_TRACE_REC_SIZE"]
 _HEADER_SIZE = _LAYOUT["NOVA_TRACE_HEADER_SIZE"]
 _HEAD_OFF = _LAYOUT["NOVA_TRACE_HEAD_OFF"]
 _RECORDS_OFF = _LAYOUT["NOVA_TRACE_RECORDS_OFF"]
-_REC_SIZE = _LAYOUT["NOVA_TRACE_REC_SIZE"]
+_REC_SIZE = REC_SIZE
 
 # Region header, then one record. Both are fixed by the ABI header the
 # firmware compiles against; the struct strings only spell its fields.
@@ -98,6 +101,24 @@ class Record:
     def edge(self) -> str:
         entry = events.BY_CODE.get(self.code)
         return entry.edge if entry else ""
+
+
+def pack_into(buffer, offset: int, record: Record) -> None:
+    """Write a record back in the firmware's own layout.
+
+    Anything holding many records holds them like this. As Record
+    objects the same count costs several times the bytes, and a holder
+    that decoded on the way in would pay for every record to answer
+    about the few a reader asks for.
+    """
+    _RECORD.pack_into(
+        buffer, offset, record.ts, record.code, record.cpu, 0, record.a, record.b, record.c
+    )
+
+
+def unpack_from(buffer, offset: int) -> Record:
+    ts, code, cpu, _flags, a, b, c = _RECORD.unpack_from(buffer, offset)
+    return Record(ts, code, cpu, a, b, c)
 
 
 @dataclass(frozen=True)
@@ -158,8 +179,7 @@ class TraceReader:
         # The reserved byte is unpacked and dropped: it belongs to the
         # layout, not to the event, and carrying it would put a field
         # with no meaning on the wire.
-        ts, code, cpu, _flags, a, b, c = _RECORD.unpack_from(self._ram, at)
-        return Record(ts, code, cpu, a, b, c)
+        return unpack_from(self._ram, at)
 
     def _head(self, ring: int) -> int:
         base = self._offset + _HEADER_SIZE + ring * self.geometry.stride

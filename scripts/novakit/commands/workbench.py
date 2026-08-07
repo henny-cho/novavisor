@@ -9,7 +9,7 @@ from typing import Annotated
 import typer
 
 from ..services import manifest
-from ..services.workbench import hardware, server, session, trace
+from ..services.workbench import hardware, history, server, session, trace
 
 app = typer.Typer(
     help="Observe and drive the firmware under QEMU.",
@@ -46,6 +46,20 @@ Verify = Annotated[
     bool,
     typer.Option("--verify", help="Run the verification scenario, streaming its progress."),
 ]
+TraceHistory = Annotated[
+    int,
+    typer.Option(
+        "--trace-history",
+        metavar="RECORDS",
+        min=1024,
+        help=(
+            "Drained trace records the bridge keeps, at 32 bytes each. "
+            f"The default {history.DEFAULT_CAPACITY} is 16 MiB, which the measured "
+            "~1500 events/s fills in about six minutes; a busier run fills it sooner, "
+            "and the summary publishes the span actually held."
+        ),
+    ),
+]
 
 
 @app.command()
@@ -55,10 +69,11 @@ def serve(
     port: Port = 8787,
     variant: Variant = None,
     verify: Verify = False,
+    trace_history: TraceHistory = history.DEFAULT_CAPACITY,
 ) -> None:
     """Serve the workbench UI against a live QEMU session."""
     target = session.Target(demo=demo, variant=variant, verify=verify) if demo else None
-    code = server.serve(host=host, port=port, target=target)
+    code = server.serve(host=host, port=port, target=target, trace_history=trace_history)
     if code:
         raise typer.Exit(code)
 

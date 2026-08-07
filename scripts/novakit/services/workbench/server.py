@@ -17,7 +17,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from ...core import config
-from . import halt, hardware, snapshot, static, trace
+from . import halt, hardware, history, snapshot, static, trace
 from .protocol import (
     SUPPORTED_UPLINK,
     Clock,
@@ -90,6 +90,7 @@ class Bridge:
         ui_root: Path,
         deps: Deps | None = None,
         surfaces: Surfaces | None = None,
+        trace_history: int = history.DEFAULT_CAPACITY,
     ):
         self.store = StateStore(Envelopes(Clock()))
         self.session = Session(self.store, deps, surfaces)
@@ -118,6 +119,10 @@ class Bridge:
         # published on the transition rather than on every tick.
         self._trace_state = ""
         self._board: dict[str, int] | None = None
+        # The bridge's memory of the run. The firmware's rings are a
+        # handover buffer sized in milliseconds; this is where a reader
+        # who noticed something late can still find its cause.
+        self._history = history.History(trace_history)
         # Where images are parsed. Built on first use and kept, so a
         # restart's re-parse does not pay for a process as well.
         self._images: ProcessPoolExecutor | None = None
@@ -485,6 +490,9 @@ class Bridge:
         tracer, self._tracer = self._tracer, None
         self._tracer_run = None
         self._trace_state = ""
+        # A new machine's timestamps are a new epoch, and merging them
+        # with the last run's would put the two in one order.
+        self._history = history.History(self._history.capacity)
         if tracer is not None:
             tracer.close()
 
@@ -602,10 +610,12 @@ class Bridge:
         records, lost = self._tracer.drain()
         if not records and not lost:
             return
+        self._history.append(records)
         self.store.publish(
             Topic.TRACE,
             Kind.EVENT,
-            trace.summarise(records) | {"dropped": lost, "count": len(records)},
+            trace.summarise(records)
+            | {"dropped": lost, "count": len(records), "span": self._history.span().as_dict()},
             src=Src.TRACE,
         )
 
@@ -762,11 +772,13 @@ class Bridge:
                 pass  # the transport is already beyond a clean close
 
 
-async def _serve_forever(*, host: str, port: int, target: Target | None, ui_root: Path) -> None:
+async def _serve_forever(
+    *, host: str, port: int, target: Target | None, ui_root: Path, trace_history: int
+) -> None:
     if not ui_root.is_dir():
         raise SystemExit(f"[workbench] UI root missing: {ui_root}")
     surfaces = make_surfaces()
-    bridge = Bridge(ui_root=ui_root, surfaces=surfaces)
+    bridge = Bridge(ui_root=ui_root, surfaces=surfaces, trace_history=trace_history)
     # A supervisor's SIGTERM must walk the same teardown as Ctrl-C, or
     # QEMU (its own session, immune to the terminal) outlives the bridge
     # with a gigabyte of tmpfs pinned.
@@ -793,6 +805,7 @@ def serve(
     port: int = 8787,
     target: Target | None = None,
     ui_root: Path | None = None,
+    trace_history: int = history.DEFAULT_CAPACITY,
 ) -> int:
     try:
         asyncio.run(
@@ -801,6 +814,7 @@ def serve(
                 port=port,
                 target=target,
                 ui_root=ui_root or config.WORKBENCH_UI_DIR,
+                trace_history=trace_history,
             )
         )
     except (KeyboardInterrupt, asyncio.CancelledError):
