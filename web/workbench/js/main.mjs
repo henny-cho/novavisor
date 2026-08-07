@@ -428,6 +428,11 @@ function onFrame(frame) {
       events.addEvent(frame.ts, data);
       boardView.note(frame.ts, data);
       break;
+    /* T layer: what the firmware recorded, drained from its rings. */
+    case "trace":
+      boardView.traced(frame.ts, data);
+      if (data.dropped) noteLoss(data.dropped);
+      break;
     case "life":
       onLife(frame.ts, data);
       break;

@@ -11,7 +11,7 @@ Observation is layered by cost and fidelity:
 |---|---|---|---|
 | **Console** | pty text → anchor parser | events as the firmware narrates them | M1 |
 | **S** (snapshot) | guest RAM mmap + DWARF decode, polled | real state, may race a writer | M2 |
-| **T** (trace) | in-firmware trace ring | ordered causality | planned (M3) |
+| **T** (trace) | in-firmware trace ring, drained | ordered causality | M3 |
 | **H** (halt) | QMP stop + gdb register read | ground truth at a frozen instant | M2 |
 
 This document covers both how to *use* the workbench (Part I) and how to
@@ -174,6 +174,46 @@ dropped to resume. QMP is read-only here. Mixing a QMP stop in deadlocks the
 stub — a QMP-stopped machine answers no `vCont` and no breakpoint packet at
 all, with no error — which is why `QmpClient` no longer offers `stop`/`cont`.
 
+### The trace layer (T)
+
+EL2 writes every event it reaches into per-CPU rings in a reserved
+physical region, and the bridge drains them at the poll rate. That
+changes what the drain interval means: it is a bound on *latency*, not
+on coverage. A sampled layer misses anything shorter than its interval
+no matter how fast it runs — the interrupt bind was never once caught at
+10 Hz or at 500 Hz — and a ring simply has it.
+
+The wire carries counts per path and the last event of each, ~650 bytes
+per window. The records stay on the bridge; ask for them from a
+terminal, against a live session:
+
+```console
+$ ./scripts/nova workbench trace
+rings 2  capacity 4096  cntfrq 62500000  records 4096  dropped 5147
+  mmio=3  sched.switch=1  trap=4086  vgic.bind=2  vgic.eoi=2  vgic.inject=2
+    270296us cpu0 vgic.bind     vm=0 vintid=37 pintid=37 generation=3
+    270407us cpu0 vgic.inject   slot=0 vintid=37 lr=0 generation=3
+    270732us cpu0 vgic.eoi      slot=0 vintid=37 pintid=37 generation=3
+```
+
+An interrupt bound, injected 111 µs later, completed 325 µs after that.
+Neither sampling nor a halt can produce that: one misses it, the other
+shows a single instant rather than a sequence.
+
+Things worth knowing:
+
+- **The writer never waits for the reader.** Rings overwrite when full,
+  because a closed browser tab must not be able to stall EL2. Loss is
+  therefore possible, and it is always counted — `dropped` on the wire
+  and in the report. A demo that front-loads thousands of traps will lap
+  before the bridge attaches, and says so.
+- **Traps outnumber everything else by ~400:1.** An undrained region is
+  almost entirely traps within a few thousand events.
+- **No debug info is involved.** The region describes its own geometry,
+  so the T layer works on a stripped image and keeps working when
+  symbol resolution for the S layer fails.
+- Cost: +1.34% on the trap-heavy Linux demo, at ~1500 events/second.
+
 ### Verify runs
 
 `nova workbench serve <demo> --verify` streams the verification scenario:
@@ -241,6 +281,7 @@ Bridge modules (`scripts/novakit/services/workbench/`):
 | `observations.py` | **the observation manifest** (see below) |
 | `snapshot.py` | `SnapshotProvider` seam, `ElfRamProvider`, `SnapshotPoller`, hand-declared guest-page layouts |
 | `halt.py` | `QmpClient` (read-only), `GdbClient` (RSP), `HaltInspector` |
+| `trace.py` | `TraceReader` (T layer), the wire summary, and the `nova workbench trace` report |
 | `events.py` | **the event catalogue** — where the machine can be stopped, and which path each stop is evidence for |
 | `checks.py` | manifest-vs-image contract (CI step) and the `inspect symbols` report |
 

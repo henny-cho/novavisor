@@ -640,10 +640,42 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     const edges = byBadge.get(String(data && data.badge));
     if (!edges) return;
     for (const edge of edges) {
+      /* A path the firmware records for itself does not also get lit by
+         a line of its own log output. Two sources for one fact means
+         the pulse count is neither, and the console is the weaker of
+         the two — it says a message was printed, not that the event
+         happened. */
+      if (edge.grade === "direct") continue;
       edge.last = { ts, message: data.message };
       put(edge.tip, edgeTitle(edge));
       /* Exact motion even on a sampled path: for this one pulse the
          console is the better evidence, and it should look like it. */
+      if (!folded()) flash(edge, true);
+    }
+  }
+
+  /* What the firmware recorded for itself, drained from its rings.
+
+     The counts are per drain window rather than per event: the bridge
+     sees every record and sends the tally, because a browser cannot be
+     handed a few thousand frames a second and a cap with a silent drop
+     would make the number a lie. So the pulse says "this path was used
+     in the last window", and the caption says how many times. */
+  function traced(ts, data) {
+    const counts = (data && data.edges) || {};
+    const last = (data && data.last) || {};
+    for (const id of Object.keys(counts)) {
+      const edge = byId.get(id);
+      if (!edge) continue;
+      const values = last[id];
+      const named = values
+        ? Object.keys(values)
+            .filter((key) => key !== "event" && key !== "ts")
+            .map((key) => `${key}=${values[key]}`)
+            .join(" ")
+        : "";
+      edge.last = { ts, message: `${counts[id]}회${named ? ` · ${named}` : ""}` };
+      put(edge.tip, edgeTitle(edge));
       if (!folded()) flash(edge, true);
     }
   }
@@ -1456,6 +1488,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     accepts: (topic) => topic in TOPICS || byTopic.has(topic),
     note,
     stopped,
+    traced,
     apply(frame) {
       if (frame.kind !== "snapshot") return;
       const data = frame.data && typeof frame.data === "object" ? frame.data : null;
