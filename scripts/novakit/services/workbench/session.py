@@ -35,6 +35,11 @@ class Phase(StrEnum):
     VERIFYING = "verifying"
     EXITED = "exited"
     FAILED = "failed"
+    # A run being read back from disk. Distinct from every phase above
+    # because the machine is not merely stopped, it is absent: nothing
+    # can be selected, stepped or resumed, and a command that pretended
+    # otherwise would be a control that quietly does nothing.
+    REPLAY = "replay"
 
 
 @dataclass(frozen=True)

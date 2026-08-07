@@ -70,10 +70,14 @@ class StateStore:
         *,
         src: Src = Src.BRIDGE,
         replay: bool = True,
+        ts: int | None = None,
     ) -> dict:
         """`replay=False` keeps a frame out of the connect backlog — for
-        per-request noise (rejections) that must not evict history."""
-        frame = self._envelopes.make(topic, kind, data, src=src)
+        per-request noise (rejections) that must not evict history.
+
+        `ts` names the moment when it is not now — a recorded frame
+        happened when the recording says it did."""
+        frame = self._envelopes.make(topic, kind, data, src=src, ts=ts)
         # Before the window, which drops console frames on overrun: an
         # observer of everything must not be given a client's view.
         if self._on_frame is not None:
@@ -88,6 +92,18 @@ class StateStore:
         """The world as last published. Read-only to callers; a late
         joiner is replayed from exactly this."""
         return self._topology
+
+    def adopt_topology(self, data: dict) -> None:
+        """The world, without announcing it.
+
+        For startup, before the socket is open: there is nobody to
+        announce it to, and the frame would sit in the backlog to be
+        replayed *after* every future connect's fresh topo — an older
+        description of the world arriving second. Live that is merely
+        redundant. In a replay the stale copy carries no phase, so it
+        re-enables the controls the fresh one had just disabled.
+        """
+        self._topology = data
 
     def set_topology(self, data: dict) -> dict:
         self._topology = data

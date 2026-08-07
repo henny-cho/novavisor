@@ -96,6 +96,29 @@ def serve(
         raise typer.Exit(code)
 
 
+RecordingDir = Annotated[
+    Path,
+    typer.Argument(metavar="DIR", help="A directory written by `serve --record`."),
+]
+
+
+@app.command()
+def replay(
+    directory: RecordingDir,
+    host: Host = "127.0.0.1",
+    port: Port = 8787,
+) -> None:
+    """Serve a recorded session — no QEMU, no image, no toolchain.
+
+    The same UI answered by the same code: a replay served by a path of
+    its own would be a second bridge, free to answer differently about
+    one run, and then it would not be evidence.
+    """
+    code = server.replay(host=host, port=port, directory=directory)
+    if code:
+        raise typer.Exit(code)
+
+
 Limit = Annotated[int, typer.Option(min=1, max=4096, help="How many of the newest records to print.")]
 Follow = Annotated[
     bool,

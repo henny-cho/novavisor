@@ -153,5 +153,127 @@ class TeeTest(unittest.TestCase):
         self.assertEqual(len(store.drain()), 1)
 
 
+class IdentityTest(unittest.TestCase):
+    """A replay is answered by the live code, or it is not evidence.
+
+    This is the whole constraint of the replay design. A path of its own
+    would be a second bridge, and from the first divergence the two are
+    two accounts of one run with nothing to say which is right.
+    """
+
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp(prefix="nova-id-"))
+        self.ui = Path(tempfile.mkdtemp(prefix="nova-ui-"))
+
+    def tearDown(self):
+        for root in (self.directory, self.ui):
+            for child in root.iterdir():
+                child.unlink()
+            root.rmdir()
+
+    def answer(self, bridge, request):
+        bridge.store.drain()  # discard whatever setup published
+        bridge._answer_window(request)
+        for frame in bridge.store.drain():
+            if frame["topic"] == "trace" and frame["kind"] == "snapshot":
+                return frame["data"]
+        return None
+
+    def test_one_window_has_one_answer_live_or_replayed(self):
+        from novakit.services.workbench.server import Bridge
+
+        written = records(600, first=1_000)
+        recorder = recording.Recorder(self.directory, {"freq_hz": 62_500_000})
+        recorder.frame({"seq": 1, "topic": "life", "kind": "event", "ts": 5,
+                        "src": "bridge", "data": {"phase": "running"}})
+        recorder.drained(written)
+        recorder.close()
+
+        live = Bridge(ui_root=self.ui)
+        live._history.freq_hz = 62_500_000
+        live._history.append(written)
+
+        replayed = Bridge(ui_root=self.ui)
+        replayed.load_replay(recording.load(self.directory))
+
+        for buckets in (16, 8192):
+            with self.subTest(buckets=buckets):
+                request = {"op": "window", "from": 1_000, "to": 1_500, "buckets": buckets}
+                self.assertEqual(self.answer(live, request), self.answer(replayed, request))
+        # Including the filtered form a path tour uses.
+        request = {"op": "window", "from": 1_000, "to": 1_600, "buckets": 8192,
+                   "events": ["trap"]}
+        self.assertEqual(self.answer(live, request), self.answer(replayed, request))
+
+    def test_a_replay_says_it_is_one(self):
+        from novakit.services.workbench.server import Bridge
+        from novakit.services.workbench.session import Phase
+
+        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        recorder.close()
+        bridge = Bridge(ui_root=self.ui)
+        bridge.load_replay(recording.load(self.directory))
+        self.assertIs(bridge.session.phase, Phase.REPLAY)
+        self.assertEqual(bridge._live_state()["phase"], "replay")
+
+    def test_a_recording_cannot_be_driven(self):
+        """Refused with a reason, not accepted and ignored: a control
+        that silently does nothing is worse than one that says why."""
+        from novakit.services.workbench.server import Bridge
+
+        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        recorder.close()
+        bridge = Bridge(ui_root=self.ui)
+        bridge.load_replay(recording.load(self.directory))
+
+        bridge.store.drain()
+        bridge._handle_uplink(json.dumps({"topic": "target", "data": {"demo": "09_guest_smp"}}))
+        bridge._handle_uplink(json.dumps({"topic": "halt", "data": {"cmd": "stop"}}))
+        said = [
+            frame["data"].get("reason", "")
+            for frame in bridge.store.drain()
+            if frame["topic"] == "life"
+        ]
+        self.assertTrue(any("replay" in text for text in said), said)
+        self.assertTrue(any("halt: session is replay" in text for text in said), said)
+
+    def test_the_recorded_world_is_the_one_the_client_is_given(self):
+        """Its catalogue, its board map, its limits — not this process's
+        guesses about a machine that is not here. And exactly one
+        topology, or the recorded run's phase would overwrite the
+        replay's and the reader would be told it is live."""
+        from novakit.services.workbench.server import Bridge
+
+        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        recorder.frame({"seq": 900, "topic": "topo", "kind": "snapshot", "ts": 0,
+                        "src": "bridge", "data": {"stops": [{"id": "trap"}], "phase": "running"}})
+        recorder.frame({"seq": 901, "topic": "console", "kind": "event", "ts": 3,
+                        "src": "serial", "data": {"line": "hello"}})
+        recorder.frame({"seq": 902, "topic": "console", "kind": "event", "ts": 4,
+                        "src": "serial", "data": {"line": "world"}})
+        recorder.close()
+
+        bridge = Bridge(ui_root=self.ui)
+        bridge.load_replay(recording.load(self.directory))
+        payload = bridge._connect_payload()
+        topos = [frame for frame in payload if frame["topic"] == "topo"]
+        self.assertTrue(topos)
+        for frame in topos:
+            self.assertEqual(frame["data"]["stops"], [{"id": "trap"}])
+        # Exactly one carries a phase, and it is this connection's.
+        phased = [frame["data"]["phase"] for frame in topos if "phase" in frame["data"]]
+        self.assertEqual(phased, ["replay"])
+        # The recorded moment, not this process's clock: a replay
+        # wearing "now" puts yesterday on screen as if it were live.
+        console = [frame for frame in payload if frame["topic"] == "console"]
+        self.assertEqual([frame["ts"] for frame in console], [3, 4])
+        # The sequence, though, belongs to this socket. Carried over,
+        # the recorded numbers would read to the client as a rewind and
+        # every frame after the first would be dropped as a duplicate.
+        seqs = [frame["seq"] for frame in console]
+        self.assertEqual(seqs, sorted(seqs))
+        self.assertTrue(all(seq < 900 for seq in seqs), seqs)
+
+
 if __name__ == "__main__":
     unittest.main()

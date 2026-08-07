@@ -151,6 +151,49 @@ class Bridge:
         # Stamped into every connect topo: a changed token is the one
         # reliable restart signal, whatever the seq counter says.
         self._token = uuid.uuid4().hex[:8]
+        # A run read back from disk, if this bridge is showing one.
+        self._replay: recording.Recording | None = None
+        self._replay_frames: list[dict] = []
+
+    def load_replay(self, rec: recording.Recording) -> None:
+        """Show a recorded run instead of a live machine.
+
+        Everything below feeds the structures the live bridge already
+        answers from — the history the window protocol reads, the
+        topology the UI builds itself from — because a replay served by
+        its own code would be a second bridge, free to answer
+        differently about one run. The identity test is that contract.
+        """
+        self._replay = rec
+        self.session.phase = Phase.REPLAY
+        # A range of counter values is not a duration without this, and
+        # nothing in a replay will read a region header to learn it.
+        self._history.freq_hz = int(rec.meta.get("freq_hz", 0))
+        self._history.append(rec.records)
+        # The world the recording was made in — its catalogue, its board
+        # map, its request limits — rather than this process's guesses
+        # about a machine that is not here.
+        for frame in rec.frames:
+            if frame.get("topic") == Topic.TOPO.value:
+                # The world, without the session state the recorded run
+                # merged into it on the way out. Phase, pause and run
+                # identity are facts about a connection to a machine,
+                # and this connection is to a file — carried over, they
+                # would tell the reader the machine is still running.
+                session_keys = set(self._live_state())
+                world = {
+                    key: value
+                    for key, value in (frame.get("data") or {}).items()
+                    if key not in session_keys
+                }
+                self.store.adopt_topology(world)
+                break
+        # Everything but the topology, which is published once above.
+        # Two topologies would put the recorded run's phase over the
+        # replay's, and the reader would be told the machine is running.
+        self._replay_frames = [
+            frame for frame in rec.frames if frame.get("topic") != Topic.TOPO.value
+        ]
 
     async def open(self, host: str, port: int) -> None:
         websocket_server, headers_type, response_type = _require_websockets()
@@ -237,10 +280,41 @@ class Bridge:
             "run_id": self.session.run_id,
         }
 
+    def _connect_payload(self) -> list[dict]:
+        """What a joining client is given to build the world from.
+
+        Live, that is the topology and a bounded backlog. In a replay it
+        is the whole run: a window of the last few hundred frames would
+        hand back the tail of a recording made precisely so the earlier
+        ones survive.
+
+        Re-stamped with this connection's sequence and the recorded
+        moment. The seq belongs to the ordering of this socket; the
+        timestamp belongs to the run, and a replay wearing this
+        process's clock would put yesterday on screen as if it were now.
+        """
+        frames = self.store.connect_frames(self._live_state())
+        if self._replay is None:
+            return frames
+        return frames + [
+            self.store.publish(
+                frame.get("topic", ""),
+                Kind(frame.get("kind", Kind.EVENT.value)),
+                frame.get("data") or {},
+                # Verbatim. Where a value came from is what this layer
+                # is for being right about, so an unfamiliar `src` from
+                # an older recording travels rather than being coerced.
+                src=frame.get("src", Src.BRIDGE.value),
+                replay=False,
+                ts=frame.get("ts"),
+            )
+            for frame in self._replay_frames
+        ]
+
     async def _handler(self, connection) -> None:
         self._connections.add(connection)
         try:
-            await connection.send(encode(self.store.connect_frames(self._live_state())))
+            await connection.send(encode(self._connect_payload()))
             async for message in connection:
                 try:
                     self._handle_uplink(message)
@@ -290,6 +364,12 @@ class Bridge:
                 self._reject(f"halt: session is {self.session.phase.value}")
             else:
                 self.spawn(self._halt_command(command, uplink.data))
+            return
+        if self._replay is not None:
+            # A recording cannot be driven. Refused with a reason rather
+            # than accepted and ignored: a control that silently does
+            # nothing is worse than one that says why it cannot.
+            self._reject("target: this is a replay; there is no machine to launch")
             return
         demo = uplink.data.get("demo")
         if not demo:
@@ -731,7 +811,10 @@ class Bridge:
                 "from": first,
                 "to": last,
                 "n": len(found),
-                "freq_hz": self._tracer.geometry.freq_hz if self._tracer else 0,
+                # From the history that holds the records, not from the
+                # reader that filled it: the reader is gone in a replay,
+                # and one of the two would have had to be believed.
+                "freq_hz": self._history.freq_hz,
             },
             "span": span.as_dict(),
         }
@@ -980,7 +1063,7 @@ async def _serve_forever(
     try:
         # Topology first: a client racing the startup must never replay
         # an empty world.
-        bridge.store.set_topology(initial_topology())
+        bridge.store.adopt_topology(initial_topology())
         await bridge.open(host, port)
         print(f"[workbench] serving http://{host}:{bridge.port}/ (WebSocket on {WS_PATH})")
         if target is not None:
@@ -989,6 +1072,60 @@ async def _serve_forever(
     finally:
         await bridge.close()
         surfaces.release()
+
+
+async def _replay_forever(*, host: str, port: int, ui_root: Path, directory: Path) -> None:
+    if not ui_root.is_dir():
+        raise SystemExit(f"[workbench] UI root missing: {ui_root}")
+    try:
+        loaded = recording.load(directory)
+    except (recording.Unreadable, OSError) as error:
+        raise SystemExit(f"[workbench] {error}") from error
+    # No surfaces: there is no machine, so there is nothing to give one.
+    # The absence is the point — a replay that needed QEMU would not be
+    # a thing you could send somebody.
+    bridge = Bridge(ui_root=ui_root)
+    asyncio.get_running_loop().add_signal_handler(
+        signal.SIGTERM, asyncio.current_task().cancel
+    )
+    try:
+        bridge.store.adopt_topology(initial_topology())
+        bridge.load_replay(loaded)
+        await bridge.open(host, port)
+        meta = loaded.meta
+        print(
+            f"[workbench] replaying {directory} — {meta.get('demo') or 'unknown demo'}, "
+            f"{len(loaded.frames)} frames, {len(loaded.records)} records, "
+            f"recorded {meta.get('started', '?')}"
+        )
+        print(f"[workbench] serving http://{host}:{bridge.port}/ (WebSocket on {WS_PATH})")
+        await asyncio.Future()
+    finally:
+        await bridge.close()
+
+
+def replay(
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8787,
+    directory: Path,
+    ui_root: Path | None = None,
+) -> int:
+    try:
+        asyncio.run(
+            _replay_forever(
+                host=host,
+                port=port,
+                ui_root=ui_root or config.WORKBENCH_UI_DIR,
+                directory=directory,
+            )
+        )
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    except OSError as error:
+        print(f"nova workbench: cannot serve on {host}:{port}: {error}", file=sys.stderr)
+        return 2
+    return 0
 
 
 def serve(

@@ -95,18 +95,31 @@ class Envelopes:
         kind: Kind,
         data: dict,
         *,
-        src: Src = Src.BRIDGE,
+        src: Src | str = Src.BRIDGE,
+        ts: int | None = None,
     ) -> dict:
         # S-layer topics come from the observation manifest as plain
-        # strings; the fixed enum covers only the structural topics.
+        # strings; the fixed enum covers only the structural topics. A
+        # `src` may arrive as a string for a different reason: a
+        # recording carries whatever the run that made it wrote, and
+        # coercing an unfamiliar one into this enum would either kill
+        # the replay or relabel where a value came from — and this
+        # layer's entire job is being right about that.
+        #
+        # `ts` is given only when the moment being published is not now:
+        # a replayed frame happened when the recording says it did, and
+        # stamping it with this process's clock would put a run from
+        # yesterday on the reader's screen as if it were live. The seq
+        # is never given, because it belongs to this connection's
+        # ordering and not to the run.
         self._seq += 1
         return {
             "v": PROTOCOL_VERSION,
             "seq": self._seq,
             "topic": topic.value if isinstance(topic, Topic) else topic,
             "kind": kind.value,
-            "ts": self._clock.now(),
-            "src": src.value,
+            "ts": self._clock.now() if ts is None else ts,
+            "src": src.value if isinstance(src, Src) else src,
             "data": data,
         }
 

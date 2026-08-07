@@ -431,6 +431,29 @@ class PathTourTest(unittest.TestCase):
         self.assertRegex(self.timeline, r"if \(touring\) \{[\s\S]{0,200}select\(0\);")
 
 
+class ReplayViewTest(unittest.TestCase):
+    """A replay is real and was real, and a reader has to know which."""
+
+    def setUp(self):
+        self.main = (UI / "js" / "main.mjs").read_text()
+
+    def test_the_phase_is_named_rather_than_shown_as_idle(self):
+        self.assertRegex(self.main, r"replay: \{ text:")
+
+    def test_a_recorded_lifecycle_is_history_not_a_transition(self):
+        """A recording replays its own 'running' and 'exited'. Obeyed,
+        they would put a live badge on a screen with no machine."""
+        self.assertRegex(
+            self.main, r'function setPhase\([\s\S]{0,80}if \(replaying && phase !== "replay"\)')
+
+    def test_launching_is_refused_from_one_place(self):
+        """Seven call sites re-armed the button directly. A replay has
+        to refuse all of them, which is one rule about the session and
+        not seven about them."""
+        self.assertNotIn("runButton.disabled = false", self.main)
+        self.assertRegex(self.main, r"function armRun\(on\) \{\n  runButton\.disabled = replaying")
+
+
 class StepperTest(unittest.TestCase):
     """The controls that stop the machine at an event."""
 

@@ -43,6 +43,10 @@ const PHASES = {
   verifying: { text: "검증 중", tone: "busy" },
   exited: { text: "종료", tone: "idle" },
   failed: { text: "실패", tone: "crit" },
+  /* A run read back from a file. Named rather than shown as idle: what
+     is on screen is real and was real, and a reader has to know which
+     of those two it is looking at. */
+  replay: { text: "리플레이", tone: "idle" },
 };
 
 let latestTs = 0;
@@ -232,7 +236,7 @@ const topology = createTopology({
     rerunButton.hidden = true;
     /* One start per click storm: the next terminal phase (or a
        rejection) re-arms the button. */
-    runButton.disabled = true;
+    armRun(false);
     events.addNotice(latestTs, `실행 요청 — ${demo}`);
   },
   onNotice: notify,
@@ -240,7 +244,21 @@ const topology = createTopology({
 
 /* ---------------- top bar state ---------------- */
 
+/* True once the connect topology says this bridge is showing a file.
+   A recording replays its own lifecycle — started, ran, exited — and
+   those are history to look at, not transitions to obey: acting on them
+   would put "실행 중" on a screen with no machine behind it. */
+let replaying = false;
+
+/* One owner for whether the machine can be launched. Seven places
+   re-armed the button directly, and a replay has to refuse all of them
+   — which is a rule about the session, not seven rules about them. */
+function armRun(on) {
+  runButton.disabled = replaying || !on;
+}
+
 function setPhase(phase, override) {
+  if (replaying && phase !== "replay") return;
   const info = PHASES[phase];
   phaseBadge.dataset.tone = info ? info.tone : "idle";
   phaseText.textContent = override || (info ? info.text : phase || "—");
@@ -251,6 +269,13 @@ function setPhase(phase, override) {
      there sends commands the bridge can only reject. */
   for (const control of [advanceButton, stepButton, autoButton]) {
     control.disabled = phase !== "running";
+  }
+  /* There is no machine to launch, and no run to re-run. The strip and
+     the panels stay live, because those are what a replay is for. */
+  if (phase === "replay") {
+    armRun(false);
+    ref("target").disabled = true;
+    rerunButton.hidden = true;
   }
 }
 
@@ -382,6 +407,9 @@ function onTopo(data) {
      only reliable carrier for a late joiner. */
   if (topo.phase !== undefined) {
     const phase = String(topo.phase);
+    /* Set before the switch below, so the guard in setPhase is already
+       true for the very first thing it is asked to show. */
+    replaying = phase === "replay";
     if (phase === "running" && topo.paused) {
       setPaused(true);
       setPhase("running", "일시정지 (H)");
@@ -446,7 +474,7 @@ function onLife(ts, data) {
   switch (phase) {
     case "idle":
       setPhase(phase);
-      runButton.disabled = false;
+      armRun(true);
       events.addNotice(ts, "세션 대기");
       break;
     case "building":
@@ -457,7 +485,7 @@ function onLife(ts, data) {
       break;
     case "running":
       setPhase(phase);
-      runButton.disabled = false;
+      armRun(true);
       rerunButton.hidden = true;
       setPaused(false);
       setAuto(false);
@@ -535,7 +563,7 @@ function onLife(ts, data) {
       break;
     case "exited":
       setPhase(phase, `종료 (code=${data.code ?? "?"})`);
-      runButton.disabled = false;
+      armRun(true);
       rerunButton.hidden = false;
       events.addNotice(ts, `세션 종료 code=${data.code ?? "?"}`, {
         severity: exitSeverity(data.code),
@@ -543,7 +571,7 @@ function onLife(ts, data) {
       break;
     case "failed":
       setPhase(phase);
-      runButton.disabled = false;
+      armRun(true);
       rerunButton.hidden = false;
       events.addNotice(ts, `실패: ${data.error || "원인 미상"}`, { severity: "CRIT" });
       break;
@@ -588,7 +616,7 @@ function onLife(ts, data) {
       events.addNotice(ts, `미지원 업링크 토픽: ${data.topic || "?"}`, { dim: true });
       break;
     case "uplink-rejected":
-      runButton.disabled = false; /* a rejected select ends its attempt */
+      armRun(true); /* a rejected select ends its attempt */
       events.addNotice(ts, `업링크 거부: ${data.reason || "?"}`, { dim: true });
       break;
     case "frames-dropped":
@@ -679,7 +707,7 @@ function onReset() {
   lostFrames = 0;
   lossBadge.hidden = true;
   bootMark.hidden = true;
-  runButton.disabled = false;
+  armRun(true);
   rerunButton.hidden = true;
   currentRun = null;
   setPaused(false);
