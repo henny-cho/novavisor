@@ -147,7 +147,10 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     const next = data.span;
     if (span && next.to < span.to) reset(); /* a new machine, a new epoch */
     span = next;
-    if (freq === 0 && data.freq_hz) freq = data.freq_hz;
+    /* The clock those timestamps are in travels with them: a range of
+       counter values is not a duration without it, and the live window
+       is stated in seconds. */
+    if (next.freq_hz) freq = next.freq_hz;
     schedule();
   }
 

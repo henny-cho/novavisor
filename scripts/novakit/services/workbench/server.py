@@ -159,6 +159,10 @@ class Bridge:
         )
         self._flusher = asyncio.create_task(self._flush_loop())
         if self.session.surfaces is not None:
+            # Beside the sockets, so the CLI twin that already globs for
+            # a session can ask this bridge for its history instead of
+            # reading the firmware's rings over its shoulder.
+            self.session.surfaces.port_path.write_text(str(self.port))
             self.spawn(self._poll_loop())
             self.spawn(self._trace_loop())
 
@@ -632,6 +636,10 @@ class Bridge:
             # amount of asking again resolves a version skew.
             self._set_trace_state("mismatch", reason=str(error))
             return False
+        # The clock the history's timestamps are in. Known only once a
+        # region has been read, and needed by everything that turns a
+        # range of them back into a duration.
+        self._history.freq_hz = self._tracer.geometry.freq_hz
         # Constant for the run, so it rides the transition rather than
         # every summary frame.
         self._set_trace_state("active", early=self._tracer.geometry.early)

@@ -197,13 +197,28 @@ class Surfaces:
     def gdb_path(self) -> Path:
         return self.directory / "gdb.sock"
 
+    @property
+    def port_path(self) -> Path:
+        """Where the bridge says which port it answers on.
+
+        The observation surfaces are already how a second process finds
+        a session — the CLI twin globs for them — and the bridge's own
+        history is reachable only over its socket. A port beside the
+        sockets is the same discovery answering one more question,
+        rather than a second convention for finding the same session.
+        """
+        return self.directory / "port"
+
     def reset(self) -> None:
+        # The port outlives a target change: it belongs to the bridge,
+        # not to the machine the bridge happens to be running.
         self.shm_path.unlink(missing_ok=True)
         self.qmp_path.unlink(missing_ok=True)
         self.gdb_path.unlink(missing_ok=True)
 
     def release(self) -> None:
         self.reset()
+        self.port_path.unlink(missing_ok=True)
         try:
             self.directory.rmdir()
         except OSError:

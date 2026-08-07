@@ -378,11 +378,12 @@ def decode(record: Record) -> dict:
 
 
 def report(shm_path: Path, ram_base: int, trace_pa: int, limit: int = 40) -> int:
-    """The terminal twin of the T layer: what the firmware recorded.
+    """The terminal twin of the T layer, read off the rings themselves.
 
-    The same reader the bridge uses, against a live session's surface —
-    no browser, and no image either. What arrives here is everything the
-    rings hold; the wire only ever carries the summary.
+    The fallback path: no bridge, so no history, and what arrives here
+    is only what the rings still hold — about 2.7 seconds. Needs no
+    browser and no image either, which is what makes it the answer when
+    there is nothing else running.
     """
     try:
         reader = TraceReader(shm_path, ram_base, trace_pa)
@@ -412,19 +413,30 @@ def report(shm_path: Path, ram_base: int, trace_pa: int, limit: int = 40) -> int
             f"[workbench] {geometry.early} event(s) emitted before the rings were placed",
             file=sys.stderr,
         )
+    print_records(records, geometry.freq_hz, limit)
+    return 0
+
+
+def print_records(records: list[Record], freq_hz: int, limit: int) -> None:
+    """Ordered records as lines, newest `limit` of them.
+
+    One printer for both sources. The rings and the bridge's history
+    hold the same records at the same width, and two renderings of one
+    thing is how they come to disagree about what a run looked like.
+    """
     counts: dict[str, int] = {}
     for record in records:
         counts[record.event or str(record.code)] = counts.get(record.event or str(record.code), 0) + 1
     if counts:
         print("  " + "  ".join(f"{name}={count}" for name, count in sorted(counts.items())))
-    base = records[0].ts if records else 0
-    for record in records[-limit:]:
+    shown = records[-limit:]
+    base = shown[0].ts if shown else 0
+    for record in shown:
         fields = decode(record)
         detail = " ".join(
             f"{key}={value}" for key, value in fields.items() if key not in ("event", "cpu", "ts")
         )
         # Relative to the first record shown: absolute counter values
         # say nothing a reader can use, and the frequency is right here.
-        micros = (record.ts - base) * 1_000_000 // max(1, geometry.freq_hz)
+        micros = (record.ts - base) * 1_000_000 // max(1, freq_hz)
         print(f"  {micros:>10}us cpu{record.cpu} {fields['event']:<13} {detail}")
-    return 0

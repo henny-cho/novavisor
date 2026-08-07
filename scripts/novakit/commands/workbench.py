@@ -9,7 +9,7 @@ from typing import Annotated
 import typer
 
 from ..services import manifest
-from ..services.workbench import hardware, history, server, session, trace
+from ..services.workbench import client, hardware, history, server, session, trace
 
 app = typer.Typer(
     help="Observe and drive the firmware under QEMU.",
@@ -79,22 +79,55 @@ def serve(
 
 
 Limit = Annotated[int, typer.Option(min=1, max=4096, help="How many of the newest records to print.")]
+Follow = Annotated[
+    bool,
+    typer.Option("--follow", "-f", help="Keep printing records as they arrive."),
+]
+Since = Annotated[
+    float,
+    typer.Option(
+        "--since",
+        metavar="SECONDS",
+        min=0.0,
+        help=(
+            "How far back to start, against a running bridge. A wider stretch "
+            "than a terminal can list comes back as a count instead of lines. "
+            "Ignored without a bridge: the rings hold only what they hold."
+        ),
+    ),
+]
 
 
 @app.command("trace")
-def show_trace(limit: Limit = 40) -> None:
-    """Drain a live session's trace rings to the terminal.
+def show_trace(limit: Limit = 40, follow: Follow = False, since: Since = 5.0) -> None:
+    """Print a live session's trace records to the terminal.
 
-    The CLI twin of the T layer. It reads the running machine's shared
-    RAM directly, so it needs no browser — and no image either: the
-    region describes its own geometry, which is what lets this work on a
-    build with no debug info at all.
+    The CLI twin of the T layer, and — when a bridge is running — a
+    reader of the same history the browser draws from. Two consumers
+    reading the firmware's rings with two cursors would answer
+    differently about one run, and the rings hold seconds where the
+    bridge holds minutes.
+
+    With no bridge it falls back to the rings themselves, which is what
+    makes this work with no browser and no image at all: the region
+    describes its own geometry.
     """
+    ports = sorted(Path("/dev/shm").glob("nova-wb-*/port"))
+    if ports:
+        code = client.tail(int(ports[-1].read_text()), since, limit, follow)
+        if code:
+            raise typer.Exit(code)
+        return
     surfaces = sorted(Path("/dev/shm").glob("nova-wb-*/guest-ram"))
     if not surfaces:
         raise typer.Exit(
             code=_no_session("no workbench session is running (nova workbench serve ...)")
         )
+    if follow:
+        # Said rather than silently ignored: the rings have no history
+        # to seek in and no notification to wait on, so these options
+        # describe something this path cannot do.
+        _no_session("--follow needs a running bridge; showing the rings once")
     board = hardware.platform()
     code = trace.report(
         surfaces[-1], board["NOVA_BOARD_PHYS_RAM_BASE"], board["NOVA_BOARD_TRACE_PA"], limit

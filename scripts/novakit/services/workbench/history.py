@@ -49,9 +49,20 @@ class Span:
     last: int  # newest timestamp retained, 0 when empty
     count: int  # records retained
     full: bool  # has wrapped: nothing before `first` exists any more
+    # Ticks per second, so the two ends above are a duration and not
+    # two opaque counters. A consumer told a range without its clock
+    # cannot ask for "the last five seconds" of it — both of ours tried
+    # to, and both silently computed with a frequency of zero.
+    freq_hz: int = 0
 
     def as_dict(self) -> dict:
-        return {"from": self.first, "to": self.last, "n": self.count, "full": self.full}
+        return {
+            "from": self.first,
+            "to": self.last,
+            "n": self.count,
+            "full": self.full,
+            "freq_hz": self.freq_hz,
+        }
 
 
 class History:
@@ -70,6 +81,11 @@ class History:
             raise ValueError("history capacity must be at least one record")
         self.capacity = capacity
         self._bytes = bytearray(capacity * trace.REC_SIZE)
+        # The clock its timestamps are in, learned when a reader
+        # attaches and the region says so. Published with the span,
+        # because a range of counter values is not a duration without
+        # it.
+        self.freq_hz = 0
         # Total ever appended. The live window is the last `capacity` of
         # them, so "how much was forgotten" is arithmetic and not a
         # counter that could drift from the buffer it describes.
@@ -90,8 +106,8 @@ class History:
     def span(self) -> Span:
         held = len(self)
         if held == 0:
-            return Span(0, 0, 0, False)
-        return Span(self._at(0), self._at(held - 1), held, self.full)
+            return Span(0, 0, 0, False, self.freq_hz)
+        return Span(self._at(0), self._at(held - 1), held, self.full, self.freq_hz)
 
     def _slot(self, index: int) -> int:
         """Where the index'th oldest retained record sits in the ring."""

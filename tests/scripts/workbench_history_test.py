@@ -40,7 +40,17 @@ class AppendTest(unittest.TestCase):
 
     def test_an_empty_history_spans_nothing_and_says_so(self):
         span = history.History(capacity=8).span()
-        self.assertEqual(span.as_dict(), {"from": 0, "to": 0, "n": 0, "full": False})
+        self.assertEqual(
+            span.as_dict(), {"from": 0, "to": 0, "n": 0, "full": False, "freq_hz": 0}
+        )
+
+    def test_the_span_carries_the_clock_its_timestamps_are_in(self):
+        """A range of counter values is not a duration without it, and
+        both consumers ask for "the last N seconds" of the history."""
+        ring = history.History(capacity=8)
+        ring.freq_hz = 62_500_000
+        ring.append(records([10, 20]))
+        self.assertEqual(ring.span().as_dict()["freq_hz"], 62_500_000)
 
 
 class WrapTest(unittest.TestCase):
