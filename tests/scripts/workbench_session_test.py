@@ -493,6 +493,11 @@ class InitialTopologyTest(unittest.TestCase):
         self.assertIn("badges", topology["taxonomy"])
 
 
+def _no_image(_elf_path):
+    """A scripted run has no ELF; the provider fake stands for both."""
+    return None
+
+
 class PollLoopTest(unittest.IsolatedAsyncioTestCase):
     """The S-layer loop against scripted providers: faults and restarts
     must end one run's polling, never the loop."""
@@ -506,6 +511,10 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
         bridge.session.phase = Phase.RUNNING
         bridge.session.elf_path = directory / "novavisor.elf"
         bridge.session.run_id = 1
+        # Resolve in-process: a scripted image cannot cross a process
+        # boundary, and this is the same fallback a host without a
+        # usable pool takes.
+        bridge._images_unavailable = True
         return bridge
 
     async def drain_until(self, bridge, predicate, timeout: float = 2.0) -> list[dict]:
@@ -535,14 +544,20 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
 
         state = {"fail": True}
 
-        def factory(_elf, _shm, _base):
+        def factory(_elf, _shm, _base, _view=None):
             if state["fail"]:
                 raise RuntimeError("boom")
             return GoodProvider()
 
         with tempfile.TemporaryDirectory() as name:
             bridge = self.bridge_with_run(Path(name))
-            with mock.patch.object(server_module.snapshot, "ElfRamProvider", factory):
+            # The image side is faked with the provider: a scripted run
+            # has no ELF to resolve, and the split only matters to where
+            # the resolving happens.
+            with (
+                mock.patch.object(server_module.snapshot, "resolve_image", _no_image),
+                mock.patch.object(server_module.snapshot, "ElfRamProvider", factory),
+            ):
                 poll = asyncio.create_task(bridge._poll_loop())
                 try:
                     await self.drain_until(
@@ -579,7 +594,7 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
 
         instances: list[Provider] = []
 
-        def factory(_elf, _shm, _base):
+        def factory(_elf, _shm, _base, _view=None):
             provider = Provider()
             instances.append(provider)
             if len(instances) == 1:
@@ -590,7 +605,13 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as name:
             bridge = self.bridge_with_run(Path(name))
-            with mock.patch.object(server_module.snapshot, "ElfRamProvider", factory):
+            # The image side is faked with the provider: a scripted run
+            # has no ELF to resolve, and the split only matters to where
+            # the resolving happens.
+            with (
+                mock.patch.object(server_module.snapshot, "resolve_image", _no_image),
+                mock.patch.object(server_module.snapshot, "ElfRamProvider", factory),
+            ):
                 poll = asyncio.create_task(bridge._poll_loop())
                 try:
                     await self.drain_until(

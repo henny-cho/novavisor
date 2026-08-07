@@ -9,9 +9,11 @@ without a socket.
 from __future__ import annotations
 
 import asyncio
+import multiprocessing
 import signal
 import sys
 import uuid
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from ...core import config
@@ -116,6 +118,10 @@ class Bridge:
         # published on the transition rather than on every tick.
         self._trace_state = ""
         self._board: dict[str, int] | None = None
+        # Where images are parsed. Built on first use and kept, so a
+        # restart's re-parse does not pay for a process as well.
+        self._images: ProcessPoolExecutor | None = None
+        self._images_unavailable = False
         # Stamped into every connect topo: a changed token is the one
         # reliable restart signal, whatever the seq counter says.
         self._token = uuid.uuid4().hex[:8]
@@ -171,6 +177,12 @@ class Bridge:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
+        if self._images is not None:
+            # Not waited on: a parse in flight has nothing left to
+            # deliver to, and a supervisor's SIGTERM should not queue
+            # behind three seconds of DWARF.
+            self._images.shutdown(wait=False, cancel_futures=True)
+            self._images = None
         self._release()
         await self.session.stop()
 
@@ -483,6 +495,31 @@ class Bridge:
             self._board = hardware.platform()
         return self._board
 
+    def _image_pool(self):
+        """Where an image gets parsed: another process, if there is one.
+
+        Reading the DWARF is 3.3 s of pure Python, and it runs while the
+        guest boots — exactly when the trace rings burst, at ~89k
+        events/s into a ring that laps in 46 ms. On a thread it holds
+        the GIL through that window; in its own process it competes for
+        one of eight cores and for nothing this interpreter needs. The
+        measurement that pointed here was blunt: with the S layer off
+        entirely, demo 13's loss fell from 24890 records to 250.
+
+        One worker, because there is one image at a time, and it is
+        kept: a restart re-parses, and paying to respawn for that would
+        put the cost back where it was taken from. If a pool cannot be
+        started, the work still happens — on a thread, as before.
+        """
+        if self._images is None and not self._images_unavailable:
+            try:
+                self._images = ProcessPoolExecutor(
+                    max_workers=1, mp_context=multiprocessing.get_context("forkserver")
+                )
+            except (OSError, ValueError, ImportError):
+                self._images_unavailable = True
+        return self._images
+
     def _set_trace_state(self, state: str, **detail) -> None:
         """Say where the T layer stands, once per transition."""
         if self._trace_state == state:
@@ -601,13 +638,7 @@ class Bridge:
         # creating and sizing the backend.
         if not shm_path.exists() or shm_path.stat().st_size == 0:
             return None
-        built = await asyncio.get_running_loop().run_in_executor(
-            None,
-            snapshot.ElfRamProvider,
-            session.elf_path,
-            shm_path,
-            hardware.platform()["NOVA_BOARD_PHYS_RAM_BASE"],
-        )
+        built = await self._build_provider(session.elf_path, shm_path)
         if session.run_id != current:
             # A restart landed mid-build: this provider maps the
             # previous run's RAM file.
@@ -618,11 +649,21 @@ class Bridge:
         self._provider_run = current
         return self._poller
 
+    async def _build_provider(self, elf_path: Path, shm_path: Path):
+        """This run's S reader: the image parsed elsewhere, RAM mapped
+        here. Split so the expensive half can leave this process."""
+        view = await asyncio.get_running_loop().run_in_executor(
+            self._image_pool(), snapshot.resolve_image, elf_path
+        )
+        return snapshot.ElfRamProvider(
+            elf_path, shm_path, self._board_numbers()["NOVA_BOARD_PHYS_RAM_BASE"], view
+        )
+
     async def _poll_loop(self) -> None:
         """Publish S-layer snapshots while a run is live.
 
-        Construction — one full DWARF walk — happens off the loop. RAM
-        backend races at startup retry silently; any other fault ends
+        Construction — one full DWARF walk — happens in another process.
+        RAM backend races at startup retry silently; any other fault ends
         this run's S layer, is reported once, and never kills the loop.
         """
         try:
@@ -666,11 +707,11 @@ class Bridge:
         already independent in what they read; this makes them
         independent in when they read it, at their own rates.
 
-        The drain runs on a worker so a burst cannot stall the socket,
-        but the *question* is asked here: two eight-byte reads say
-        whether there is anything to hand off at all, and at this period
-        the answer is usually no. Paying the thread round trip for that
-        would cost thirty times what the reads do.
+        Draining happens right here rather than on a worker. Measured,
+        the hand-off is 122 us against a 6 us look, and it needs the GIL
+        twice more per tick at a period the interpreter hands the GIL
+        over at — so the worker cost more than the work. A full ring is
+        ~8 ms of loop time, which the 50 ms flush absorbs.
         """
         try:
             while True:
@@ -683,7 +724,7 @@ class Bridge:
                 try:
                     if self._tracer is not None and self._tracer.pending() == 0:
                         continue
-                    await asyncio.get_running_loop().run_in_executor(None, self._pump_trace)
+                    self._pump_trace()
                 except (FileNotFoundError, ValueError):
                     # The backing file went out from under the run.
                     self._drop_tracer()

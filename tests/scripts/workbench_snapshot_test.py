@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pickle
 import struct
 import sys
 import tempfile
@@ -167,6 +168,38 @@ class ElfRamProviderTest(unittest.TestCase):
             ram_path.write_bytes(b"\0" * 4096)
             with self.assertRaises(ValueError):
                 snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE)
+
+
+@unittest.skipUnless(ELF.is_file(), "debug ELF not built")
+class ImageViewTest(unittest.TestCase):
+    """Reading the image is separable from using it.
+
+    The point of the split is that the reading — three seconds of pure
+    Python, landing while the guest boots and the trace rings burst —
+    can happen in another process. That only holds if what comes back
+    is data, so the test is that it survives the trip.
+    """
+
+    def test_a_resolved_image_survives_being_sent_between_processes(self):
+        view = snapshot.resolve_image(ELF)
+        restored = pickle.loads(pickle.dumps(view))
+
+        self.assertEqual(restored.resolved.keys(), view.resolved.keys())
+        for topic, symbol in view.resolved.items():
+            self.assertEqual(restored.resolved[topic], symbol)
+        self.assertTrue(restored.symbols.has("nova::trace::g_ring"))
+
+    def test_a_provider_given_a_view_never_opens_the_image(self):
+        """Which is what lets the parse happen somewhere else: the
+        provider that maps RAM is not the thing that read the ELF."""
+        view = snapshot.resolve_image(ELF)
+        with tempfile.TemporaryDirectory() as directory:
+            ram_path = Path(directory) / "guest-ram"
+            with ram_path.open("wb") as ram:
+                ram.truncate(_observed_top() - RAM_BASE)  # sparse
+            provider = snapshot.ElfRamProvider(Path("/nonexistent.elf"), ram_path, RAM_BASE, view)
+            self.addCleanup(provider.close)
+            self.assertTrue(provider.symbols.has("nova::trace::g_ring"))
 
 
 if __name__ == "__main__":
