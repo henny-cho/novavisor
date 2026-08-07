@@ -11,6 +11,7 @@ from __future__ import annotations
 import mmap
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -79,28 +80,57 @@ class SnapshotProvider(Protocol):
     def close(self) -> None: ...
 
 
+@dataclass(frozen=True)
+class ImageView:
+    """Everything the S layer needs from an image, holding nothing open.
+
+    Plain data by construction — resolved addresses, decoded type
+    layouts, and the symbol table — so producing it is separable from
+    using it. That matters because producing it is three seconds of
+    pure Python that lands during guest boot, which is the busiest the
+    trace rings ever get: work this shape can be sent somewhere it
+    cannot compete with the drain.
+    """
+
+    resolved: dict[str, elfsym.ResolvedSymbol]
+    symbols: elfsym.SymbolTable
+
+
+def resolve_image(elf_path: Path) -> ImageView:
+    """Resolve every observation against an image.
+
+    Pure: opens the ELF, reads it, closes it, and returns data. No mmap
+    of guest RAM and no live handle in the result, so the caller is free
+    to run this in another process.
+    """
+    index = elfsym.ElfIndex(elf_path)
+    try:
+        return ImageView(
+            {obs.topic: index.resolve(obs.symbol) for obs in OBSERVATIONS if obs.pa is None},
+            index.symbols,
+        )
+    finally:
+        index.close()
+
+
 class ElfRamProvider:
     """Decode firmware globals straight out of the shared RAM file.
 
     `ram_base` is where the machine's RAM aperture starts: QEMU backs
     exactly that span with this file, so a physical address is read at
     `pa - ram_base`. It is a board fact, and the caller supplies it.
+
+    A caller that already has the image resolved passes it in; the
+    provider itself never holds the ELF open past construction.
     """
 
-    def __init__(self, elf_path: Path, ram_path: Path, ram_base: int):
+    def __init__(self, elf_path: Path, ram_path: Path, ram_base: int, view: ImageView | None = None):
         self._base = ram_base
-        self._index = elfsym.ElfIndex(elf_path)
-        try:
-            self._resolved = {
-                obs.topic: self._index.resolve(obs.symbol)
-                for obs in OBSERVATIONS
-                if obs.pa is None
-            }
-            with ram_path.open("rb") as backing:
-                self._ram = mmap.mmap(backing.fileno(), 0, prot=mmap.PROT_READ)
-        except BaseException:
-            self._index.close()
-            raise
+        image = resolve_image(elf_path) if view is None else view
+        self._resolved = image.resolved
+        self._symbols = image.symbols
+        with ram_path.open("rb") as backing:
+            self._ram = mmap.mmap(backing.fileno(), 0, prot=mmap.PROT_READ)
         highest = max(entry.address + entry.size for entry in self._resolved.values())
         # PA-declared pages sit far above the image (IVC at +512 MiB);
         # a short backend must fail here, not decode as silent zeros.
@@ -129,9 +159,56 @@ class ElfRamProvider:
             value = obs.shape(value, info)
         return _hexify(value) if obs.hex else value
 
+    @property
+    def symbols(self) -> elfsym.SymbolTable:
+        """What this image carries, for questions about capability.
+
+        The symtab is already parsed behind this provider, so asking it
+        costs a dictionary lookup — where opening the ELF again to ask
+        the same thing costs a third of a second.
+        """
+        return self._symbols
+
     def close(self) -> None:
         self._ram.close()
-        self._index.close()
+
+
+def changed_paths(before, after, prefix: str = "") -> list[str]:
+    """Leaf paths that differ between two readings of one topic.
+
+    What a stop is *for* is seeing what moved, and a stop publishes the
+    whole machine — twenty-eight topics of it. Between two consecutive
+    binds three or four values actually changed, and finding them by eye
+    across every panel is the work this removes.
+
+    Leaves, not containers: "the scheduler changed" is true of almost
+    every stop and says nothing, where `sched.cpu[1].current` is the
+    answer. A path that appears on one side only is a change too — a
+    reading that grew or lost a field is exactly the kind of thing worth
+    being told about.
+    """
+    if isinstance(before, dict) and isinstance(after, dict):
+        out = []
+        for key in dict.fromkeys([*before, *after]):
+            out += changed_paths(before.get(key), after.get(key), f"{prefix}.{key}" if prefix else key)
+        return out
+    if isinstance(before, list) and isinstance(after, list):
+        out = []
+        for index in range(max(len(before), len(after))):
+            here = before[index] if index < len(before) else None
+            there = after[index] if index < len(after) else None
+            out += changed_paths(here, there, f"{prefix}[{index}]")
+        return out
+    return [] if before == after else [prefix or "value"]
+
+
+def image_symbols(provider) -> elfsym.SymbolTable | None:
+    """The symbol table behind a provider, if it has one.
+
+    A scripted provider has no image, and a capability question it
+    cannot answer is unknown rather than no.
+    """
+    return getattr(provider, "symbols", None)
 
 
 class SnapshotPoller:

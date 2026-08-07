@@ -14,6 +14,15 @@ Observation is layered by cost and fidelity:
 | **T** (trace) | in-firmware trace ring, drained | ordered causality | M3 |
 | **H** (halt) | QMP stop + gdb register read | ground truth at a frozen instant | M2 |
 
+A path on the board is stroked by what watches it, and never by more
+than that. Nine of the eleven are direct evidence on a debug image —
+a breakpoint can arrive at them, or the rings record them — and the
+grade is computed from what *this* run can do, so the same board drawn
+against a stripped image with no rings shows none of them as direct.
+The two that stay inferred are `dma` and `walk`: hardware performs them
+without entering EL2, so only faults reach us, and a hook that fires
+only on a fault has watched nothing about the working path.
+
 This document covers both how to *use* the workbench (Part I) and how to
 *extend* it (Part II).
 
@@ -183,18 +192,40 @@ on coverage. A sampled layer misses anything shorter than its interval
 no matter how fast it runs — the interrupt bind was never once caught at
 10 Hz or at 500 Hz — and a ring simply has it.
 
-The wire carries counts per path and the last event of each, ~650 bytes
-per window. The records stay on the bridge; ask for them from a
-terminal, against a live session:
+The rings are a handover buffer, not a memory: 4096 records a core is
+about 2.7 seconds at the run's average rate and a good deal less through
+a burst — guest boot on demo 17 reaches ~89k events/s, which laps a ring
+in 46 ms. So the drain loop runs at 5 ms on its own clock, and what it
+drains goes into a 16 MiB history on the bridge, minutes deep, sized by
+`--trace-history`.
+
+Two kinds of overwrite, named apart. A firmware ring lapped before a
+drain means the bridge was late, and is reported as `dropped`. The
+history wrapping onto its own oldest record means the horizon was
+reached, which is normal running, and is published as `span.full`.
+Reporting the second as the first would leave the one actionable number
+permanently non-zero on any session past a few minutes.
+
+The wire still carries counts per path and the last event of each,
+~650 bytes per window, plus the span. The records are asked for — by
+the timeline strip and by a terminal, from the same history:
 
 ```console
-$ ./scripts/nova workbench trace
-rings 2  capacity 4096  cntfrq 62500000  records 4096  dropped 5147
-  mmio=3  sched.switch=1  trap=4086  vgic.bind=2  vgic.eoi=2  vgic.inject=2
+$ ./scripts/nova workbench trace --since 0.05
+  ivc.doorbell=138  sched.switch=138  trap=277  vgic.inject=138  vgic.private=138
     270296us cpu0 vgic.bind     vm=0 vintid=37 pintid=37 generation=3
     270407us cpu0 vgic.inject   slot=0 vintid=37 lr=0 generation=3
     270732us cpu0 vgic.eoi      slot=0 vintid=37 pintid=37 generation=3
 ```
+
+With a bridge running this reads that bridge's history, not the rings:
+two consumers with two cursors over one ring answer differently about
+one run, and the rings hold seconds where the history holds minutes.
+`--since` says how far back to start and `--follow` keeps printing. With
+no bridge it falls back to the rings, which is what lets it work with no
+browser and no image at all. A stretch holding more records than a
+terminal was asked to list comes back as a count rather than as lines —
+the same rule the strip follows, and the reason a reader narrows.
 
 An interrupt bound, injected 111 µs later, completed 325 µs after that.
 Neither sampling nor a halt can produce that: one misses it, the other
@@ -281,13 +312,42 @@ Bridge modules (`scripts/novakit/services/workbench/`):
 | `observations.py` | **the observation manifest** (see below) |
 | `snapshot.py` | `SnapshotProvider` seam, `ElfRamProvider`, `SnapshotPoller`, hand-declared guest-page layouts |
 | `halt.py` | `QmpClient` (read-only), `GdbClient` (RSP), `HaltInspector` |
-| `trace.py` | `TraceReader` (T layer), the wire summary, and the `nova workbench trace` report |
-| `events.py` | **the event catalogue** — where the machine can be stopped, and which path each stop is evidence for |
+| `trace.py` | `TraceReader` (T layer), the wire summary, window shaping, and the `nova workbench trace` report |
+| `history.py` | the bridge's memory of a run: an overwriting ring of drained records, and the span it publishes |
+| `events.py` | **the event catalogue** — where the machine can be stopped, which path each stop is evidence for, and what this run can actually witness |
+| `paths.py` | the paths the board draws, and the rule that none may look more certain than what watches it |
 | `checks.py` | manifest-vs-image contract (CI step) and the `inspect symbols` report |
 
 UI modules (`web/workbench/js/`): `main.mjs` (wiring), `net.mjs`
 (reconnect + seq dedup), `topology.mjs`, `console.mjs`, `cards.mjs`,
-`events.mjs`, `panels.mjs` (measurement panels), `format.mjs`.
+`events.mjs`, `panels.mjs` (measurement panels), `timeline.mjs` (the
+time axis), `format.mjs`.
+
+### The time axis
+
+Under the board, in the same view so its height comes from the board's
+share rather than from the column the console already negotiates for.
+One `<canvas>`: a few thousand marks as DOM nodes would spend the board's
+per-batch layout budget many times over.
+
+Everything is binned into the columns the strip actually has. Two
+hundred events in one pixel drawn as two hundred marks is a solid block,
+and a solid block reads as "continuously busy" whether it was two events
+or two thousand; a window of single events falls out of the same
+arithmetic as plain ticks, so there is no mode to switch.
+
+The canvas is an output and never the storage. Following moves the x
+mapping every frame and a resize rescales it, so a strip keeping its
+history in painted pixels would lose it at the first resize and — since
+following asks only for the tail — never get it back.
+
+Drag narrows and stops following, double-click widens to everything the
+bridge holds, and the follow button returns to the present. Clicking a
+mark names the record and lights its path on the board; shift-clicking a
+second gives the gap between them. A picked mark offers **여기서 멈추기**,
+which is where one catalogue for two consumers is repaid: the moment
+found in the trace is already a stop point, so wanting the next one is a
+lookup rather than a second table.
 
 ### Observation surfaces
 

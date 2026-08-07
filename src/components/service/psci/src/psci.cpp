@@ -10,6 +10,7 @@
 #include "psci/psci_model.hpp"
 #include "psci/smccc_model.hpp"
 #include "smp/smp.hpp"
+#include "trace/trace.hpp"
 #include "vgic/vgic.hpp"
 
 namespace nova {
@@ -40,6 +41,9 @@ void psci_component::handle_hvc(HvcCall* call) noexcept {
     return; // not ours — leave unclaimed for other subscribers
   }
   call->handled = true;
+  // The power call itself, not the SMCCC arch service that shares this
+  // subscriber: the edge is about a VM's power state changing.
+  trace_emit(NOVA_TRACE_EV_PSCI, call->func_id, call->ctx->x[1], static_cast<std::uint64_t>(v.action));
 
   switch (v.action) {
   case psci::Action::kSystemOff:

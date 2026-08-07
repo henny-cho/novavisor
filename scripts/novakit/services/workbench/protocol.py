@@ -17,6 +17,13 @@ from enum import StrEnum
 
 PROTOCOL_VERSION = 1
 
+# Columns a window request may ask to be answered in. A limit on a
+# request field is part of the contract, not an implementation detail of
+# whoever enforces it: it lives here and rides the topology, so the two
+# clients ask within it instead of each carrying a copy of the number to
+# drift from.
+MAX_BUCKETS = 8192
+
 
 class Topic(StrEnum):
     # downlink
@@ -40,10 +47,14 @@ class Topic(StrEnum):
 DOWNLINK = frozenset(
     {Topic.TOPO, Topic.CONSOLE, Topic.EV, Topic.LIFE, Topic.VERIFY, Topic.SYSREG, Topic.TRACE}
 )
-UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.HALT, Topic.CMD, Topic.PROBE})
+# `trace` travels both ways. A second topic for "asking about traces"
+# would double SUPPORTED_UPLINK, the validation and the documentation to
+# say the same word twice; the Kind already distinguishes a request from
+# what the bridge sends unasked.
+UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.HALT, Topic.CMD, Topic.PROBE, Topic.TRACE})
 # Recognised-but-deferred uplink topics are answered explicitly instead
 # of being dropped, so the UI degrades visibly.
-SUPPORTED_UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.HALT})
+SUPPORTED_UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.HALT, Topic.TRACE})
 
 
 class Kind(StrEnum):

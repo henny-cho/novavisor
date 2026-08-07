@@ -6,6 +6,7 @@
 #include "nova/abi/hvc_abi.h"
 #include "nova/arch/trap_context.hpp"
 #include "smp/smp.hpp"
+#include "trace/trace.hpp"
 
 #include <cstddef>
 
@@ -32,6 +33,7 @@ void ivc_component::handle_hvc(HvcCall* call) noexcept {
     call->ctx->x[0] = kSmcccNotSupported;
     return;
   }
+  trace_emit(NOVA_TRACE_EV_IVC_DOORBELL, static_cast<std::uint32_t>(target), NOVA_IVC_DOORBELL_VINTID);
   call->ctx->x[0] = smp::post_virq(slot_of(target), NOVA_IVC_DOORBELL_VINTID) ? 0 : kSmcccNotSupported;
 }
 

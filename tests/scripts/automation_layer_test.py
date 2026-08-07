@@ -81,11 +81,14 @@ class LayerTests(unittest.TestCase):
         # The verification state machine stays testable against a fake child.
         self.assertEqual(modules_importing("pexpect"), ["services/spawn.py"])
 
-    def test_only_the_bridge_server_talks_websockets(self):
-        # The frame content stays testable without a socket.
+    def test_only_the_wire_modules_talk_websockets(self):
+        # The frame content stays testable without a socket. Two files,
+        # because there are two ends: the bridge serves and the terminal
+        # twin asks. Everything else — the region reader, the history,
+        # the shaping — has no idea a socket exists.
         self.assertEqual(
             modules_importing("websockets"),
-            ["services/workbench/server.py"],
+            ["services/workbench/client.py", "services/workbench/server.py"],
         )
 
     def test_only_the_symbol_reader_parses_the_image(self):

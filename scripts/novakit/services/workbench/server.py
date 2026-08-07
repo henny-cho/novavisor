@@ -9,14 +9,17 @@ without a socket.
 from __future__ import annotations
 
 import asyncio
+import multiprocessing
 import signal
 import sys
 import uuid
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from ...core import config
-from . import halt, hardware, snapshot, static, trace
+from . import halt, hardware, history, snapshot, static, trace
 from .protocol import (
+    MAX_BUCKETS,
     SUPPORTED_UPLINK,
     Clock,
     Envelopes,
@@ -56,10 +59,19 @@ HALT_COMMANDS = ("stop", "cont", "step", "run", "abort")
 # covers a cold build ahead of the machine it is waiting for.
 LAUNCH_POLL_SECONDS = 0.005
 LAUNCH_ARM_TIMEOUT_SECONDS = 600.0
-# Ticks to keep looking for a formatted region before concluding the
-# image has no trace layer. EL2 formats it in its first init action,
-# which is still later than QEMU creating the backing file.
-TRACE_ATTEMPTS = 200
+# The trace loop's period. The rings are a latency budget rather than
+# memory, so this is the number that has to fit inside them — and it is
+# set by the peak, not the average. Measured on demo 17: the run
+# averages ~1500 events/s, but guest boot bursts to ~89k/s, which laps
+# a 4096-record ring in 46 ms. Ten times under that, and an idle look
+# costs two eight-byte reads because the drain is skipped outright when
+# nothing is waiting.
+TRACE_DRAIN_SECONDS = 0.005
+# Columns a window request is answered in, when it does not say. A
+# resolution, not a cap on data: the density always covers the whole
+# window and only the individual marks are gated on it, because more
+# points than pixels is a density by definition.
+DEFAULT_BUCKETS = 1200
 
 
 def _require_websockets():
@@ -84,6 +96,7 @@ class Bridge:
         ui_root: Path,
         deps: Deps | None = None,
         surfaces: Surfaces | None = None,
+        trace_history: int = history.DEFAULT_CAPACITY,
     ):
         self.store = StateStore(Envelopes(Clock()))
         self.session = Session(self.store, deps, surfaces)
@@ -108,8 +121,20 @@ class Bridge:
         # must not take the event stream with it.
         self._tracer: trace.TraceReader | None = None
         self._tracer_run: int | None = None
-        self._trace_attempts = 0
-        self._trace_absent = False
+        # What has been said about the T layer this run, so a state is
+        # published on the transition rather than on every tick.
+        self._trace_state = ""
+        self._board: dict[str, int] | None = None
+        # The previous stop's reading, per topic. A stop publishes the
+        # whole machine; this is what lets it also say what moved.
+        self._stopped_at: dict[str, object] = {}
+        # The bridge's memory of the run. The firmware's rings are a
+        # handover buffer sized in milliseconds; this is where a reader
+        # who noticed something late can still find its cause.
+        self._history = history.History(trace_history)
+        # Where images are parsed. Built on first use and kept, so a
+        # restart's re-parse does not pay for a process as well.
+        self._images: ProcessPoolExecutor | None = None
         # Stamped into every connect topo: a changed token is the one
         # reliable restart signal, whatever the seq counter says.
         self._token = uuid.uuid4().hex[:8]
@@ -132,7 +157,12 @@ class Bridge:
         )
         self._flusher = asyncio.create_task(self._flush_loop())
         if self.session.surfaces is not None:
+            # Beside the sockets, so the CLI twin that already globs for
+            # a session can ask this bridge for its history instead of
+            # reading the firmware's rings over its shoulder.
+            self.session.surfaces.port_path.write_text(str(self.port))
             self.spawn(self._poll_loop())
+            self.spawn(self._trace_loop())
 
     @property
     def port(self) -> int:
@@ -164,6 +194,12 @@ class Bridge:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
+        if self._images is not None:
+            # Not waited on: a parse in flight has nothing left to
+            # deliver to, and a supervisor's SIGTERM should not queue
+            # behind three seconds of DWARF.
+            self._images.shutdown(wait=False, cancel_futures=True)
+            self._images = None
         self._release()
         await self.session.stop()
 
@@ -219,6 +255,9 @@ class Bridge:
             reason = self.session.send_bytes(decode_bytes(str(uplink.data.get("bytes", ""))))
             if reason is not None:
                 self._reject(f"uart: {reason}")
+            return
+        if uplink.topic is Topic.TRACE:
+            self._answer_window(uplink.data)
             return
         if uplink.topic is Topic.HALT:
             command = str(uplink.data.get("cmd", ""))
@@ -311,7 +350,11 @@ class Bridge:
         self.session.paused = True
         # Same data shape as the S-layer topics: the UI panels read every
         # snapshot's payload from "values".
-        self.store.publish(Topic.SYSREG, Kind.SNAPSHOT, {"values": data}, src=Src.HALT)
+        was, self._stopped_at = self._stopped_at, {Topic.SYSREG.value: data}
+        self.store.publish(
+            Topic.SYSREG, Kind.SNAPSHOT, self._with_delta(data, was, Topic.SYSREG.value),
+            src=Src.HALT,
+        )
         try:
             # Built here if the poll loop has not got to it: arming at
             # launch stops the machine during EL2 boot, long before the
@@ -327,7 +370,24 @@ class Bridge:
             )
             return
         for obs, value in values:
-            self.store.publish(obs.topic, Kind.SNAPSHOT, {"values": value}, src=Src.HALT)
+            self._stopped_at[obs.topic] = value
+            self.store.publish(
+                obs.topic, Kind.SNAPSHOT, self._with_delta(value, was, obs.topic), src=Src.HALT
+            )
+
+    @staticmethod
+    def _with_delta(value, previous: dict, topic: str) -> dict:
+        """A stopped reading, and what moved since the last stop.
+
+        Absent on the first stop of a run rather than reported as
+        "everything changed": there was nothing to change from, and a UI
+        that highlighted every field would be pointing at the reading
+        itself.
+        """
+        payload = {"values": value}
+        if topic in previous:
+            payload["changed"] = snapshot.changed_paths(previous[topic], value)
+        return payload
 
     async def _advance(self, inspector: halt.HaltInspector, data: dict) -> None:
         """Run until a catalogued event, as many times as asked.
@@ -465,10 +525,181 @@ class Bridge:
     def _drop_tracer(self) -> None:
         tracer, self._tracer = self._tracer, None
         self._tracer_run = None
-        self._trace_attempts = 0
-        self._trace_absent = False
+        self._trace_state = ""
+        # A new machine's timestamps are a new epoch, and merging them
+        # with the last run's would put the two in one order. The same
+        # goes for a stop-to-stop delta across a restart.
+        self._history = history.History(self._history.capacity)
+        self._stopped_at = {}
         if tracer is not None:
             tracer.close()
+
+    def _board_numbers(self) -> dict[str, int]:
+        """Board constants, read once. The headers do not change while
+        the bridge runs, and the attach probe asks at 200 Hz."""
+        if self._board is None:
+            self._board = hardware.platform()
+        return self._board
+
+    def _image_pool(self):
+        """Where an image gets parsed: another process, if there is one.
+
+        Reading the DWARF is 3.3 s of pure Python, and it runs while the
+        guest boots — exactly when the trace rings burst, at ~89k
+        events/s into a ring that laps in 46 ms. On a thread it holds
+        the GIL through that window; in its own process it competes for
+        one of eight cores and for nothing this interpreter needs. The
+        measurement that pointed here was blunt: with the S layer off
+        entirely, demo 13's loss fell from 24890 records to 250.
+
+        One worker, because there is one image at a time, and it is kept
+        once made: a restart re-parses, and paying to respawn for that
+        would put the cost back where it was taken from.
+
+        A failure to start one is not remembered. It costs a constructor
+        call to try — the workers spawn lazily — and this is asked once
+        per run, so a latched "no pool" would trade nothing for turning
+        one bad moment (an exhausted fd table, a transient) into the
+        rest of the session on a thread. Falling back per attempt is the
+        same behaviour without the memory.
+        """
+        if self._images is None:
+            try:
+                self._images = ProcessPoolExecutor(
+                    max_workers=1, mp_context=multiprocessing.get_context("forkserver")
+                )
+            except (OSError, ValueError, ImportError):
+                return None  # this attempt runs on a thread; the next may not
+        return self._images
+
+    def _set_trace_state(self, state: str, **detail) -> None:
+        """Say where the T layer stands, once per transition."""
+        if self._trace_state == state:
+            return
+        self._trace_state = state
+        self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "trace", "state": state, **detail})
+
+    def _image_has_tracing(self) -> bool:
+        """Does this build carry the ring writer?
+
+        Asked of the image, which knows, rather than inferred from how
+        many times the region has come back empty — that inference told
+        a slow machine its image had no tracing, and the tick after it
+        called drain() on the None it had just decided on.
+
+        Asked of the S layer's index, which is already parsed, rather
+        than by opening the ELF here: the answer costs a third of a
+        second to obtain and only ever changes the wording of a notice,
+        so paying for it on the attach path would delay the drain to
+        improve a log line. Until that index exists the answer is
+        unknown — which is not the same as no, so the probing carries
+        on either way.
+        """
+        symbols = snapshot.image_symbols(self._provider)
+        return symbols is None or symbols.has(trace.WRITER_SYMBOL)
+
+    def _attach_tracer(self) -> bool:
+        """Bind the T reader to this run's region, if it is there yet.
+
+        Two questions, kept apart. Whether the image has a trace layer
+        is settled by the image; whether the region has been formatted
+        yet is settled by the region, at the cost of a stat and a header
+        read. Neither is answered by a retry budget, so nothing here
+        latches: the probe is cheap enough to run for the life of a run,
+        and an appearing region corrects whatever was said before it.
+        """
+        session = self.session
+        if session.surfaces is None:
+            return False
+        if self._tracer_run != session.run_id:
+            self._drop_tracer()
+            self._tracer_run = session.run_id
+        if self._tracer is not None:
+            return True
+        shm_path = session.surfaces.shm_path
+        if not shm_path.exists() or shm_path.stat().st_size == 0:
+            return False
+        board = self._board_numbers()
+        try:
+            self._tracer = trace.TraceReader(
+                shm_path, board["NOVA_BOARD_PHYS_RAM_BASE"], board["NOVA_BOARD_TRACE_PA"]
+            )
+        except trace.NotYetFormatted as error:
+            self._set_trace_state(
+                "waiting" if self._image_has_tracing() else "none", reason=str(error)
+            )
+            return False
+        except trace.NotFormatted as error:
+            # A region that is there and disagrees about its layout. No
+            # amount of asking again resolves a version skew.
+            self._set_trace_state("mismatch", reason=str(error))
+            return False
+        # The clock the history's timestamps are in. Known only once a
+        # region has been read, and needed by everything that turns a
+        # range of them back into a duration.
+        self._history.freq_hz = self._tracer.geometry.freq_hz
+        # Constant for the run, so it rides the transition rather than
+        # every summary frame.
+        self._set_trace_state("active", early=self._tracer.geometry.early)
+        # A layer arriving is a change in what the board may claim.
+        self.session.regrade_paths(tracing=True)
+        return True
+
+    def _answer_window(self, data: dict) -> None:
+        """Answer a request for part of the history, at its resolution.
+
+        The request carries how many columns the caller can draw, and
+        that single number settles both halves of the answer: the
+        density always covers the whole window, and the individual
+        records come only when there are few enough to be drawn as
+        marks. There is no separate cap to pick and no cliff at which
+        marks vanish — more points than pixels is a density by
+        definition.
+        """
+        if str(data.get("op", "")) != "window":
+            self._reject(f"trace: unknown op {data.get('op')!r}")
+            return
+        span = self._history.span()
+        try:
+            first = int(data.get("from", span.first))
+            last = int(data.get("to", span.last))
+            buckets = int(data.get("buckets", DEFAULT_BUCKETS))
+        except (TypeError, ValueError):
+            self._reject("trace: window bounds must be integers")
+            return
+        if not 1 <= buckets <= MAX_BUCKETS:
+            # Refused rather than clamped: the response array is as long
+            # as this number, and a caller that asked for a million
+            # columns has misunderstood something worth telling it about.
+            self._reject(f"trace: buckets must be 1..{MAX_BUCKETS}")
+            return
+        if last < first:
+            self._reject("trace: window ends before it starts")
+            return
+        wanted = {str(name) for name in data.get("events", [])}
+        found = self._history.window(first, last)
+        if wanted:
+            found = [record for record in found if record.event in wanted]
+        payload = {
+            "window": {
+                "from": first,
+                "to": last,
+                "n": len(found),
+                "freq_hz": self._tracer.geometry.freq_hz if self._tracer else 0,
+            },
+            "span": span.as_dict(),
+        }
+        # The records, or the density that stands in for them — never
+        # both. A density is what a window says when its records will
+        # not fit on the screen; once they do fit, they are sent, and
+        # any histogram of them is a loop the client already has the
+        # data for. Sending both put 1200 mostly-zero buckets beside
+        # four marks, on the request shape live following uses most.
+        if len(found) <= buckets:
+            payload["cols"] = trace.columns(found, first)
+        else:
+            payload["hist"] = trace.histogram(found, first, last, buckets)
+        self.store.publish(Topic.TRACE, Kind.SNAPSHOT, payload, src=Src.TRACE, replay=False)
 
     def _pump_trace(self) -> None:
         """Drain the firmware's rings and publish what fired.
@@ -478,41 +709,17 @@ class Bridge:
         with a silent drop would make "everything that happened" a lie.
         The records stay here for `nova workbench trace` to ask for.
         """
-        session = self.session
-        if session.surfaces is None:
+        if not self._attach_tracer():
             return
-        if self._tracer_run != session.run_id:
-            self._drop_tracer()
-            self._tracer_run = session.run_id
-        if self._tracer is None:
-            if self._trace_absent:
-                return
-            shm_path = session.surfaces.shm_path
-            if not shm_path.exists() or shm_path.stat().st_size == 0:
-                return
-            self._trace_attempts += 1
-            board = hardware.platform()
-            try:
-                self._tracer = trace.TraceReader(
-                    shm_path, board["NOVA_BOARD_PHYS_RAM_BASE"], board["NOVA_BOARD_TRACE_PA"]
-                )
-            except trace.NotFormatted:
-                # EL2 formats the region in its first init action, but
-                # that is still later than QEMU creating the backing
-                # file — so an empty region right after launch is a
-                # transient, not an image without a trace layer. Retry
-                # for a bounded while before believing it.
-                if self._trace_attempts < TRACE_ATTEMPTS:
-                    return
-                self._trace_absent = True
-                raise
         records, lost = self._tracer.drain()
         if not records and not lost:
             return
+        self._history.append(records)
         self.store.publish(
             Topic.TRACE,
             Kind.EVENT,
-            trace.summarise(records) | {"dropped": lost, "count": len(records)},
+            trace.summarise(records)
+            | {"dropped": lost, "count": len(records), "span": self._history.span().as_dict()},
             src=Src.TRACE,
         )
 
@@ -547,13 +754,7 @@ class Bridge:
         # creating and sizing the backend.
         if not shm_path.exists() or shm_path.stat().st_size == 0:
             return None
-        built = await asyncio.get_running_loop().run_in_executor(
-            None,
-            snapshot.ElfRamProvider,
-            session.elf_path,
-            shm_path,
-            hardware.platform()["NOVA_BOARD_PHYS_RAM_BASE"],
-        )
+        built = await self._build_provider(session.elf_path, shm_path)
         if session.run_id != current:
             # A restart landed mid-build: this provider maps the
             # previous run's RAM file.
@@ -564,29 +765,26 @@ class Bridge:
         self._provider_run = current
         return self._poller
 
+    async def _build_provider(self, elf_path: Path, shm_path: Path):
+        """This run's S reader: the image parsed elsewhere, RAM mapped
+        here. Split so the expensive half can leave this process."""
+        view = await asyncio.get_running_loop().run_in_executor(
+            self._image_pool(), snapshot.resolve_image, elf_path
+        )
+        return snapshot.ElfRamProvider(
+            elf_path, shm_path, self._board_numbers()["NOVA_BOARD_PHYS_RAM_BASE"], view
+        )
+
     async def _poll_loop(self) -> None:
         """Publish S-layer snapshots while a run is live.
 
-        Construction — one full DWARF walk — happens off the loop. RAM
-        backend races at startup retry silently; any other fault ends
+        Construction — one full DWARF walk — happens in another process.
+        RAM backend races at startup retry silently; any other fault ends
         this run's S layer, is reported once, and never kills the loop.
         """
         try:
             while True:
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
-                if self.session.phase is Phase.RUNNING:
-                    try:
-                        await asyncio.get_running_loop().run_in_executor(None, self._pump_trace)
-                    except trace.NotFormatted as error:
-                        # Only after the retries: an image built without
-                        # the trace component, or one older than this
-                        # reader. Said once, and the S layer carries on.
-                        self.store.publish(
-                            Topic.LIFE, Kind.EVENT,
-                            {"phase": "trace-unavailable", "error": str(error)},
-                        )
-                    except (FileNotFoundError, ValueError):
-                        self._drop_tracer()
                 try:
                     poller = await self._ensure_poller()
                     if poller is None:
@@ -615,6 +813,38 @@ class Bridge:
                     self._drop_provider()
         finally:
             self._drop_provider()
+
+    async def _trace_loop(self) -> None:
+        """Drain the firmware's rings, on the T layer's own clock.
+
+        Separate from the S loop on purpose. The two have very different
+        costs — one DWARF walk is three seconds — and a shared loop puts
+        the T layer behind whatever the S layer is doing. They were
+        already independent in what they read; this makes them
+        independent in when they read it, at their own rates.
+
+        Draining happens right here rather than on a worker. Measured,
+        the hand-off is 122 us against a 6 us look, and it needs the GIL
+        twice more per tick at a period the interpreter hands the GIL
+        over at — so the worker cost more than the work. A full ring is
+        ~8 ms of loop time, which the 50 ms flush absorbs.
+        """
+        try:
+            while True:
+                # Nothing to hurry for once the image itself says there
+                # is no ring to attach to, or that its layout disagrees.
+                hurry = self._tracer is not None or self._trace_state in ("", "waiting")
+                await asyncio.sleep(TRACE_DRAIN_SECONDS if hurry else POLL_INTERVAL_SECONDS)
+                if self.session.phase is not Phase.RUNNING:
+                    continue
+                try:
+                    if self._tracer is not None and self._tracer.pending() == 0:
+                        continue
+                    self._pump_trace()
+                except (FileNotFoundError, ValueError):
+                    # The backing file went out from under the run.
+                    self._drop_tracer()
+        finally:
             self._drop_tracer()
 
     async def _flush_loop(self) -> None:
@@ -646,11 +876,13 @@ class Bridge:
                 pass  # the transport is already beyond a clean close
 
 
-async def _serve_forever(*, host: str, port: int, target: Target | None, ui_root: Path) -> None:
+async def _serve_forever(
+    *, host: str, port: int, target: Target | None, ui_root: Path, trace_history: int
+) -> None:
     if not ui_root.is_dir():
         raise SystemExit(f"[workbench] UI root missing: {ui_root}")
     surfaces = make_surfaces()
-    bridge = Bridge(ui_root=ui_root, surfaces=surfaces)
+    bridge = Bridge(ui_root=ui_root, surfaces=surfaces, trace_history=trace_history)
     # A supervisor's SIGTERM must walk the same teardown as Ctrl-C, or
     # QEMU (its own session, immune to the terminal) outlives the bridge
     # with a gigabyte of tmpfs pinned.
@@ -677,6 +909,7 @@ def serve(
     port: int = 8787,
     target: Target | None = None,
     ui_root: Path | None = None,
+    trace_history: int = history.DEFAULT_CAPACITY,
 ) -> int:
     try:
         asyncio.run(
@@ -685,6 +918,7 @@ def serve(
                 port=port,
                 target=target,
                 ui_root=ui_root or config.WORKBENCH_UI_DIR,
+                trace_history=trace_history,
             )
         )
     except (KeyboardInterrupt, asyncio.CancelledError):

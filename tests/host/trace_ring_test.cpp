@@ -70,16 +70,56 @@ auto drain(void* base, std::size_t index, std::uint64_t cursor) -> Drain {
   return out;
 }
 
-TEST(TraceRing, AnUnplacedRingDropsRatherThanFaults) {
+TEST(TraceRing, AnUnplacedRingCountsRatherThanFaults) {
   Ring ring;
   EXPECT_FALSE(ring.placed());
+  const std::uint32_t before = nova::trace::g_early.load(std::memory_order_relaxed);
   ring.emit(1, NOVA_TRACE_EV_TRAP, 0, 2, 3, 4); // must not crash
   EXPECT_EQ(ring.head(), 0U);
+  // The event is gone — there is nowhere for it to go — but it is not
+  // gone silently. A loss nobody counts reads as nothing happening.
+  EXPECT_EQ(nova::trace::g_early.load(std::memory_order_relaxed), before + 1);
+}
+
+TEST(TraceRing, PlacementPublishesWhatWasLostBeforeIt) {
+  Region<1> region;
+  nova::trace::g_early.store(0, std::memory_order_relaxed);
+  // Three events with no ring to land in, then the region arrives.
+  for (int i = 0; i < 3; ++i) {
+    nova::trace::g_ring[0].emit(1, NOVA_TRACE_EV_TRAP, 0, 0, 0, 0);
+  }
+  nova::trace::place(region.base(), 1, 1'000'000);
+
+  EXPECT_EQ(region.header()->early, 3U);
+
+  // And from here the same emit lands, so the counter stops moving.
+  nova::trace::g_ring[0].emit(9, NOVA_TRACE_EV_TRAP, 0, 0, 0, 0);
+  EXPECT_EQ(nova::trace::g_early.load(std::memory_order_relaxed), 3U);
+  EXPECT_EQ(drain(region.base(), 0, 0).records.size(), 1U);
+
+  // g_ring is inline storage shared by the whole binary: leave it inert
+  // so a later test does not write into this stack region.
+  nova::trace::g_ring[0] = Ring{};
+}
+
+TEST(TraceRing, AFormattedRegionIsNotFindableUntilPublished) {
+  // The magic is the promise that everything beside it is true, and one
+  // field is not true until the rings are bound. A reader that found
+  // the region in between would cache a zero for it.
+  Region<2> region;
+  nova::trace::format(region.base(), 2, 62'500'000);
+  EXPECT_NE(region.header()->magic, NOVA_TRACE_MAGIC);
+  EXPECT_EQ(region.header()->stride, nova::trace::kRingStride);
+
+  nova::trace::publish(region.base(), 7);
+  EXPECT_EQ(region.header()->magic, NOVA_TRACE_MAGIC);
+  EXPECT_EQ(region.header()->early, 7U);
 }
 
 TEST(TraceRing, FormatPublishesGeometryAndMagicLast) {
   Region<2> region;
   nova::trace::format(region.base(), 2, 62'500'000);
+  nova::trace::publish(region.base(), 0);
 
   const Header* header = region.header();
   EXPECT_EQ(header->magic, NOVA_TRACE_MAGIC);

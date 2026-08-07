@@ -46,7 +46,7 @@ class Region:
     """A trace region on disk, written the way the firmware writes one."""
 
     def __init__(self, rings: int = 2, *, magic: int | None = None, version: int | None = None,
-                 capacity: int = CAPACITY):
+                 capacity: int = CAPACITY, early: int = 0):
         self.rings = rings
         self.capacity = capacity
         self.path = Path(tempfile.mkstemp(dir="/dev/shm", suffix="-ram")[1])
@@ -54,10 +54,10 @@ class Region:
         self.buffer = bytearray(size)
         self.offset = TRACE_PA - RAM_BASE
         struct.pack_into(
-            "<QIIIIII", self.buffer, self.offset,
+            "<QIIIIIII", self.buffer, self.offset,
             L["NOVA_TRACE_MAGIC"] if magic is None else magic,
             L["NOVA_TRACE_VERSION"] if version is None else version,
-            L["NOVA_TRACE_REC_SIZE"], STRIDE, rings, capacity, 62_500_000,
+            L["NOVA_TRACE_REC_SIZE"], STRIDE, rings, capacity, 62_500_000, early,
         )
         self.heads = [0] * rings
         self.flush()
@@ -103,6 +103,16 @@ class GeometryTest(unittest.TestCase):
         self.assertEqual(reader.geometry.capacity, CAPACITY)
         # ts -> seconds has one source and it travels with the geometry.
         self.assertEqual(reader.geometry.freq_hz, 62_500_000)
+
+    def test_the_pre_placement_drop_count_travels_with_the_geometry(self):
+        """Events emitted before the region existed have no ring and no
+        cursor arithmetic that could recover them. Unpublished, they are
+        indistinguishable from a quiet boot."""
+        region = Region(early=17)
+        self.addCleanup(region.cleanup)
+        reader = region.reader()
+        self.addCleanup(reader.close)
+        self.assertEqual(reader.geometry.early, 17)
 
     def test_a_wrong_magic_is_refused_not_decoded(self):
         """Decoding anyway would turn a version skew into events that
@@ -246,6 +256,33 @@ class CatalogueTest(unittest.TestCase):
     def test_codes_are_unique(self):
         codes = [event.code for event in events.EVENTS]
         self.assertEqual(len(set(codes)), len(codes))
+
+    def test_every_code_the_firmware_defines_is_catalogued(self):
+        """The other direction, and the one that fails quietly: a hook
+        added to the ABI header and not here writes records that arrive
+        as a number nothing can name, and summarise() skips them without
+        a word. The codes are read as a family, so the header is the
+        only list — this checks nobody added to it alone."""
+        for name, code in events._CODES.items():
+            with self.subTest(code=name):
+                self.assertIn(code, events.BY_CODE, f"{name} has no catalogue entry")
+
+    def test_every_event_with_arguments_decodes_them(self):
+        """An event whose record falls through decode() reaches the UI
+        as a bare code and a timestamp — catalogued, and still unread."""
+        for event in events.EVENTS:
+            if not event.args:
+                continue
+            with self.subTest(event=event.id):
+                decoded = trace.decode(trace.Record(ts=1, code=event.code, cpu=0, a=1, b=2, c=3))
+                named = set(decoded) - {"event", "cpu", "ts"}
+                self.assertTrue(named, f"{event.id} names arguments but decodes none")
+
+    def test_a_fault_only_moment_lights_no_path(self):
+        """The grade rule in paths.py: an edge may not look more certain
+        than what watches it, and a hook that fires only on a fault has
+        watched nothing about the working path."""
+        self.assertEqual(events.BY_ID["smmu.fault"].edge, "")
 
 
 if __name__ == "__main__":

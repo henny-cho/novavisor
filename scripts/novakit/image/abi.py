@@ -41,6 +41,25 @@ def read_define(path: Path, name: str) -> int:
     return read_defines(path, [name])[name]
 
 
+def read_define_family(path: Path, prefix: str) -> dict[str, int]:
+    """Every integer #define whose name starts with `prefix`.
+
+    For a family that grows. Naming each member in a second list is a
+    list to forget: a trace event added to the header and not to that
+    list arrives on the wire as a number nothing can name, and the
+    record is skipped without a word. Read the family and there is one
+    place to add to.
+    """
+    return {
+        match.group(1): int(match.group(2), 0)
+        for match in re.finditer(
+            rf"^#define\s+({re.escape(prefix)}\w+)\s+(0[xX][0-9a-fA-F]+|\d+)",
+            path.read_text(),
+            re.MULTILINE,
+        )
+    }
+
+
 def read_string_define(path: Path, name: str) -> str:
     match = re.search(
         rf'^#define\s+{re.escape(name)}\s+"([^"]+)"',

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pickle
 import struct
 import sys
 import tempfile
@@ -167,6 +168,70 @@ class ElfRamProviderTest(unittest.TestCase):
             ram_path.write_bytes(b"\0" * 4096)
             with self.assertRaises(ValueError):
                 snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE)
+
+
+class ChangedPathTest(unittest.TestCase):
+    """What a stop is for is seeing what moved.
+
+    A stop publishes the whole machine — twenty-eight topics — and
+    between two consecutive binds three or four values actually changed.
+    Finding those by eye across every panel is the work this removes.
+    """
+
+    def test_only_the_leaf_that_moved_is_named(self):
+        before = {"cpu": [{"current": 1, "fp": None}, {"current": 0, "fp": 0}]}
+        after = {"cpu": [{"current": 1, "fp": None}, {"current": 2, "fp": 0}]}
+        # "the scheduler changed" is true of almost every stop and says
+        # nothing; the index and the field are the answer.
+        self.assertEqual(snapshot.changed_paths(before, after), ["cpu[1].current"])
+
+    def test_identical_readings_name_nothing(self):
+        reading = {"a": 1, "b": {"c": [1, 2, 3]}}
+        self.assertEqual(snapshot.changed_paths(reading, dict(reading)), [])
+
+    def test_a_field_that_appeared_or_left_is_a_change(self):
+        """A reading that grew or lost a field is exactly the kind of
+        thing worth being told about, not a comparison to skip."""
+        self.assertEqual(snapshot.changed_paths({"a": 1}, {"a": 1, "b": 2}), ["b"])
+        self.assertEqual(snapshot.changed_paths({"a": [1]}, {"a": [1, 2]}), ["a[1]"])
+
+    def test_a_scalar_topic_names_itself(self):
+        self.assertEqual(snapshot.changed_paths(3, 4), ["value"])
+
+    def test_a_type_change_is_a_change_not_a_descent(self):
+        self.assertEqual(snapshot.changed_paths({"a": 1}, [1]), ["value"])
+
+
+@unittest.skipUnless(ELF.is_file(), "debug ELF not built")
+class ImageViewTest(unittest.TestCase):
+    """Reading the image is separable from using it.
+
+    The point of the split is that the reading — three seconds of pure
+    Python, landing while the guest boots and the trace rings burst —
+    can happen in another process. That only holds if what comes back
+    is data, so the test is that it survives the trip.
+    """
+
+    def test_a_resolved_image_survives_being_sent_between_processes(self):
+        view = snapshot.resolve_image(ELF)
+        restored = pickle.loads(pickle.dumps(view))
+
+        self.assertEqual(restored.resolved.keys(), view.resolved.keys())
+        for topic, symbol in view.resolved.items():
+            self.assertEqual(restored.resolved[topic], symbol)
+        self.assertTrue(restored.symbols.has("nova::trace::g_ring"))
+
+    def test_a_provider_given_a_view_never_opens_the_image(self):
+        """Which is what lets the parse happen somewhere else: the
+        provider that maps RAM is not the thing that read the ELF."""
+        view = snapshot.resolve_image(ELF)
+        with tempfile.TemporaryDirectory() as directory:
+            ram_path = Path(directory) / "guest-ram"
+            with ram_path.open("wb") as ram:
+                ram.truncate(_observed_top() - RAM_BASE)  # sparse
+            provider = snapshot.ElfRamProvider(Path("/nonexistent.elf"), ram_path, RAM_BASE, view)
+            self.addCleanup(provider.close)
+            self.assertTrue(provider.symbols.has("nova::trace::g_ring"))
 
 
 if __name__ == "__main__":

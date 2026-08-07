@@ -34,6 +34,13 @@
  * that finds the wrong magic or version fails loudly rather than
  * decoding a stale layout into plausible nonsense.
  *
+ * It also carries the one loss the ring protocol above cannot express:
+ * events emitted before the region was placed have no ring to land in,
+ * and dropping them silently would make the header's own account of the
+ * run incomplete at exactly the moment — early boot — a reader is most
+ * likely to be looking for something. They are counted and published
+ * beside the geometry.
+ *
  * Plain #defines only: this header is the single source for the C++
  * writer and the Python reader alike.
  */
@@ -47,7 +54,7 @@
 
 /* 'NVTRACE\0' little-endian, and the version of everything below it. */
 #define NOVA_TRACE_MAGIC   0x004543415254564E
-#define NOVA_TRACE_VERSION 1
+#define NOVA_TRACE_VERSION 2
 
 /* Region header (64 B, one cache line). */
 #define NOVA_TRACE_MAGIC_OFF   0x00
@@ -57,6 +64,7 @@
 #define NOVA_TRACE_RINGS_OFF   0x14
 #define NOVA_TRACE_CAP_OFF     0x18
 #define NOVA_TRACE_FREQ_OFF    0x1C /* CNTFRQ_EL0: ts -> seconds, one source */
+#define NOVA_TRACE_EARLY_OFF   0x20 /* u32 events emitted before placement */
 #define NOVA_TRACE_HEADER_SIZE 0x40
 
 /* Per-ring header, then the records. `head` sits alone on its line: it
@@ -107,6 +115,12 @@
 #define NOVA_TRACE_EV_VGIC_EOI     6
 #define NOVA_TRACE_EV_SCHED_SWITCH 7
 #define NOVA_TRACE_EV_MMIO         8
+#define NOVA_TRACE_EV_GIC_ACK      9
+#define NOVA_TRACE_EV_CROSS_CALL   10
+#define NOVA_TRACE_EV_IVC_DOORBELL 11
+#define NOVA_TRACE_EV_PSCI         12
+#define NOVA_TRACE_EV_UART_LINE    13
+#define NOVA_TRACE_EV_SMMU_FAULT   14
 
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 

@@ -9,6 +9,7 @@ import { createCards } from "./cards.mjs";
 import { createConsole } from "./console.mjs";
 import { createEvents } from "./events.mjs";
 import { createPanels } from "./panels.mjs";
+import { createTimeline } from "./timeline.mjs";
 import { createTopology } from "./topology.mjs";
 
 const THEME_KEY = "nv-wb-theme";
@@ -79,6 +80,71 @@ const boardView = createBoard({
 });
 
 const panels = createPanels({ tabs: ref("panel-tabs"), host: ref("panels") });
+
+const timelineNote = ref("tl-note"); /* what the run holds */
+const stopHereButton = ref("tl-stop");
+let markedEvent = null; /* the event a picked mark names, for "stop here" */
+const timelineSel = ref("tl-sel"); /* what the reader picked */
+const timeline = createTimeline({
+  strip: ref("tl"),
+  canvas: ref("tl-canvas"),
+  foldButton: ref("tl-fold"),
+  followButton: ref("tl-follow"),
+  /* The window request goes out on the same topic the summaries come
+     back on: the kind already distinguishes an answer from something
+     sent unasked. */
+  request: (data) => send("trace", data),
+  /* A mark is a moment on a path, so selecting one says both: the
+     fields the firmware recorded, and the path lit on the board. The
+     board already knows how to focus, and pointing it at the edge the
+     catalogue names keeps one focus vocabulary rather than two. */
+  onSelect: (choice) => {
+    if (choice.kind === "delta") {
+      const gap = choice.micros === null ? "—" : `${choice.micros}us`;
+      timelineSel.textContent = `${choice.from.id} → ${choice.to.id} · Δt ${gap}`;
+      events.addNotice(latestTs, `Δt ${choice.from.id} → ${choice.to.id} = ${gap}`);
+      return;
+    }
+    const record = choice.record;
+    timelineSel.textContent = `${record.id} · cpu${record.cpu} · ${traceFields(record)}`;
+    if (record.edge) boardView.focusPath(record.edge);
+    /* One catalogue, two consumers, and this is where that is repaid:
+       the moment a reader picked out of the trace is already a stop
+       point, so wanting to see the next one is a lookup and not a
+       second table. */
+    markedEvent = record.id;
+    stopHereButton.hidden = false;
+    stopHereButton.title = `다음 ${record.id}에서 정지`;
+  },
+});
+
+/* The catalogue names the record's three words; an unnamed position
+   holds nothing for that event. Naming happens there and not here, so
+   the UI never learns a layout the bridge already knows. */
+function traceFields(record) {
+  const values = [record.a, record.b, record.c];
+  return (record.fields || [])
+    .map((name, index) => (name ? `${name}=${values[index] ?? 0}` : ""))
+    .filter(Boolean)
+    .join(" ");
+}
+/* The stop is taken through the same path the picker uses, because a
+   mark and a stop point are one fact: the catalogue that named the
+   record is the catalogue the halt layer breaks on. */
+stopHereButton.addEventListener("click", () => {
+  if (!markedEvent) return;
+  stopPick.value = markedEvent;
+  if (halt({ cmd: "run", stops: [markedEvent] })) {
+    say(`대기 · ${markedEvent}`);
+    events.addNotice(latestTs, `타임라인 마크에서 정지 요청 — ${markedEvent}`);
+  }
+});
+
+/* The strip owns the state — a drag turns following off from inside —
+   so the button asks for a change and the strip decides what it says. */
+ref("tl-follow").addEventListener("click", (event) => {
+  timeline.setFollow(event.currentTarget.getAttribute("aria-pressed") !== "true");
+});
 
 const consoleView = createConsole({
   tabs: ref("tabs"),
@@ -236,6 +302,8 @@ function onTopo(data) {
   panels.setTopology(topo);
   boardView.setTopology(topo);
   setStops(topo.stops);
+  timeline.setCatalogue(topo.stops);
+  timeline.setLimits(topo.limits);
   /* Connect-time session state: the life events that built this picture
      may already be evicted from the backlog, so the fresh topo is the
      only reliable carrier for a late joiner. */
@@ -259,6 +327,25 @@ function onTopo(data) {
       cards.reset();
     }
     currentRun = topo.run_id;
+  }
+}
+
+/* The `early` count is a different fact from a drain loss: those events
+   predate the rings, so no drainer however prompt could have had them. */
+function traceStateText(data) {
+  switch (String(data.state || "")) {
+    case "active":
+      return data.early
+        ? `트레이스 연결 — 배치 전 유실 ${data.early}건`
+        : "트레이스 연결";
+    case "waiting":
+      return "트레이스 영역 대기 중";
+    case "none":
+      return "트레이스 계층 없음 (이미지에 링 기록자 심볼이 없음)";
+    case "mismatch":
+      return `트레이스 레이아웃 불일치: ${data.reason || "?"}`;
+    default:
+      return `트레이스 상태: ${data.state || "?"}`;
   }
 }
 
@@ -286,8 +373,14 @@ function onLife(ts, data) {
       say("");
       consoleView.setBanner(null); /* a panic banner lives until the next run */
       /* Run boundary: measurements and counters from the previous
-         machine must not read as this one's. */
+         machine must not read as this one's. The timeline goes too —
+         a new machine restarts CNTPCT, so merging the two would put
+         them in one order. */
       panels.clearAll();
+      timeline.reset();
+      timelineNote.textContent = "트레이스 대기";
+      timelineSel.textContent = "";
+      stopHereButton.hidden = true;
       boardView.clearAll();
       cards.reset();
       consoleView.mark(`── ${data.demo || "?"} ──`);
@@ -303,6 +396,9 @@ function onLife(ts, data) {
       setPaused(false);
       setAuto(false);
       setPhase("running");
+      /* A delta is only true of the pair of stops it was measured
+         across; a running machine has moved past both. */
+      panels.clearMoved();
       events.addNotice(ts, "머신 재개");
       break;
     /* Stopped *at* something, rather than wherever the reader clicked.
@@ -389,6 +485,14 @@ function onLife(ts, data) {
         { severity: "CRIT" },
       );
       break;
+    /* Where the T layer stands, said once per transition rather than
+       inferred from the absence of trace frames. */
+    case "trace":
+      events.addNotice(ts, traceStateText(data), {
+        dim: data.state !== "mismatch",
+        severity: data.state === "mismatch" ? "WARN" : undefined,
+      });
+      break;
     case "unsupported":
       events.addNotice(ts, `미지원 업링크 토픽: ${data.topic || "?"}`, { dim: true });
       break;
@@ -428,9 +532,20 @@ function onFrame(frame) {
       events.addEvent(frame.ts, data);
       boardView.note(frame.ts, data);
       break;
-    /* T layer: what the firmware recorded, drained from its rings. */
+    /* T layer: what the firmware recorded, drained from its rings. The
+       summary lights the board; the window answers draw the order. */
     case "trace":
+      if (frame.kind === "snapshot") {
+        timeline.apply(data);
+        break;
+      }
       boardView.traced(frame.ts, data);
+      timeline.note(data);
+      if (data.span) {
+        timelineNote.textContent = data.span.full
+          ? `${data.span.n} 레코드 · 지평선 도달`
+          : `${data.span.n} 레코드`;
+      }
       if (data.dropped) noteLoss(data.dropped);
       break;
     case "life":

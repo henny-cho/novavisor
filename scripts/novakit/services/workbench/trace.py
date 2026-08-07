@@ -35,30 +35,54 @@ _LAYOUT = abi.read_defines(
         "NOVA_TRACE_HEAD_OFF",
         "NOVA_TRACE_RECORDS_OFF",
         "NOVA_TRACE_REC_SIZE",
+        "NOVA_TRACE_TS_OFF",
         "NOVA_TRACE_SIZE",
     ],
 )
 MAGIC = _LAYOUT["NOVA_TRACE_MAGIC"]
 VERSION = _LAYOUT["NOVA_TRACE_VERSION"]
 REGION_SIZE = _LAYOUT["NOVA_TRACE_SIZE"]
+# Public: anything keeping records keeps them at the firmware's width,
+# so the layout stays one number rather than one per holder.
+REC_SIZE = _LAYOUT["NOVA_TRACE_REC_SIZE"]
 _HEADER_SIZE = _LAYOUT["NOVA_TRACE_HEADER_SIZE"]
 _HEAD_OFF = _LAYOUT["NOVA_TRACE_HEAD_OFF"]
 _RECORDS_OFF = _LAYOUT["NOVA_TRACE_RECORDS_OFF"]
-_REC_SIZE = _LAYOUT["NOVA_TRACE_REC_SIZE"]
 
 # Region header, then one record. Both are fixed by the ABI header the
 # firmware compiles against; the struct strings only spell its fields.
-_HEADER = struct.Struct("<QIIIIII")
+_HEADER = struct.Struct("<QIIIIIII")
 _RECORD = struct.Struct("<QHBBIQQ")
+_TS = struct.Struct("<Q")
+_TS_OFF = _LAYOUT["NOVA_TRACE_TS_OFF"]
 
 
 class NotFormatted(RuntimeError):
     """The region carries no ring this reader understands.
 
-    Raised rather than papered over: a wrong magic or version means the
-    firmware and this file disagree about the layout, and decoding
+    Raised rather than papered over: a wrong version or geometry means
+    the firmware and this file disagree about the layout, and decoding
     anyway would turn that into plausible-looking events.
     """
+
+
+class NotYetFormatted(NotFormatted):
+    """Nothing has been placed here — so far.
+
+    EL2 formats the region in its first init action, which is later
+    than QEMU creating and sizing the backing file, so an empty region
+    right after launch is a moment in a launch rather than a fact about
+    an image. Distinct from its parent because the two call for
+    opposite responses: this one is answered by asking again, and a
+    version disagreement never will be.
+    """
+
+
+# The image symbol that settles whether a build carries the ring
+# writer. One-sided: present means certainly yes, absent only means
+# this reader cannot tell, since an optimised image inlines every use
+# and keeps no name.
+WRITER_SYMBOL = "nova::trace::g_ring"
 
 
 @dataclass(frozen=True)
@@ -81,12 +105,48 @@ class Record:
         return entry.edge if entry else ""
 
 
+def pack_into(buffer, offset: int, record: Record) -> None:
+    """Write a record back in the firmware's own layout.
+
+    Anything holding many records holds them like this. As Record
+    objects the same count costs several times the bytes, and a holder
+    that decoded on the way in would pay for every record to answer
+    about the few a reader asks for.
+    """
+    _RECORD.pack_into(
+        buffer, offset, record.ts, record.code, record.cpu, 0, record.a, record.b, record.c
+    )
+
+
+def timestamp_at(buffer, offset: int) -> int:
+    """A stored record's timestamp, without decoding the rest of it.
+
+    Eight bytes at the offset the layout already fixes — read from the
+    ABI header like every other offset here, so nothing has to remember
+    that ts happens to come first. A holder that mirrored the timestamps
+    into an array of its own would have a second thing to keep true on
+    every write, and the first edit that forgot would search the wrong
+    order over records that are all still there.
+    """
+    return _TS.unpack_from(buffer, offset + _TS_OFF)[0]
+
+
+def unpack_from(buffer, offset: int) -> Record:
+    ts, code, cpu, _flags, a, b, c = _RECORD.unpack_from(buffer, offset)
+    return Record(ts, code, cpu, a, b, c)
+
+
 @dataclass(frozen=True)
 class Geometry:
     rings: int
     capacity: int
     stride: int
     freq_hz: int
+    # Events the firmware emitted before it had a ring to put them in.
+    # Not a drain loss — it happened before this reader could exist —
+    # but the one part of the run no cursor arithmetic can recover, so
+    # it travels with the geometry rather than going unmentioned.
+    early: int = 0
 
 
 class TraceReader:
@@ -103,7 +163,9 @@ class TraceReader:
             self._ram = mmap.mmap(backing.fileno(), 0, prot=mmap.PROT_READ)
         try:
             if len(self._ram) < self._offset + REGION_SIZE:
-                raise NotFormatted("RAM backend is smaller than the trace region")
+                # QEMU sizes the backend as it comes up, so a short file
+                # is a launch in progress, not a machine without room.
+                raise NotYetFormatted("RAM backend is smaller than the trace region")
             self.geometry = self._read_geometry()
         except BaseException:
             self._ram.close()
@@ -111,29 +173,44 @@ class TraceReader:
         self._cursor = [0] * self.geometry.rings
 
     def _read_geometry(self) -> Geometry:
-        magic, version, record_size, stride, rings, capacity, freq = _HEADER.unpack_from(
+        magic, version, record_size, stride, rings, capacity, freq, early = _HEADER.unpack_from(
             self._ram, self._offset
         )
         if magic != MAGIC:
-            raise NotFormatted(f"no trace region at {self._offset:#x} (magic {magic:#x})")
+            # The magic is written last, so its absence says nothing
+            # about the layout — only that nobody has finished placing
+            # one here. Stale bytes from a previous boot read the same
+            # way, and mean the same thing for this run.
+            raise NotYetFormatted(f"no trace region at {self._offset:#x} (magic {magic:#x})")
         if version != VERSION:
             raise NotFormatted(f"trace region version {version}, expected {VERSION}")
-        if record_size != _REC_SIZE:
-            raise NotFormatted(f"trace record is {record_size} bytes, expected {_REC_SIZE}")
+        if record_size != REC_SIZE:
+            raise NotFormatted(f"trace record is {record_size} bytes, expected {REC_SIZE}")
         if rings < 1 or capacity < 1 or capacity & (capacity - 1):
             raise NotFormatted(f"trace geometry is not usable: {rings} rings, capacity {capacity}")
-        return Geometry(rings, capacity, stride, freq)
+        return Geometry(rings, capacity, stride, freq, early)
 
     def _record(self, at: int) -> Record:
         # The reserved byte is unpacked and dropped: it belongs to the
         # layout, not to the event, and carrying it would put a field
         # with no meaning on the wire.
-        ts, code, cpu, _flags, a, b, c = _RECORD.unpack_from(self._ram, at)
-        return Record(ts, code, cpu, a, b, c)
+        return unpack_from(self._ram, at)
 
     def _head(self, ring: int) -> int:
         base = self._offset + _HEADER_SIZE + ring * self.geometry.stride
         return int.from_bytes(self._ram[base + _HEAD_OFF : base + _HEAD_OFF + 8], "little")
+
+    def pending(self) -> int:
+        """Records waiting across every ring.
+
+        Two eight-byte reads and no decode, so a caller can ask far more
+        often than it can afford to drain — which is what lets an idle
+        tick skip the work rather than budget for it.
+        """
+        return sum(
+            max(0, self._head(ring) - self._cursor[ring])
+            for ring in range(self.geometry.rings)
+        )
 
     def drain(self) -> tuple[list[Record], int]:
         """Everything written since the last call, oldest first.
@@ -163,7 +240,7 @@ class TraceReader:
             cursor = 0
         oldest = max(0, head - capacity)
         records = [
-            self._record(base + (index % capacity) * _REC_SIZE)
+            self._record(base + (index % capacity) * REC_SIZE)
             for index in range(max(cursor, oldest), head)
         ]
         # Re-read: anything the writer lapped while we were copying has
@@ -199,6 +276,52 @@ def summarise(records: list[Record]) -> dict:
         edges[entry.edge] = edges.get(entry.edge, 0) + 1
         last[entry.edge] = decode(record)
     return {"edges": edges, "last": last}
+
+
+def histogram(records: list[Record], first: int, last: int, buckets: int) -> dict[str, list[int]]:
+    """How many of each event fell in each column of a window.
+
+    Always the whole window. A wide request answered with the first N
+    records and a count of the rest is honest arithmetic about a
+    question nobody asked: a reader who dragged the window out wants to
+    know what happened and how much of it, and a 1200-pixel strip could
+    not draw fifty thousand separate marks anyway.
+
+    Keyed by event rather than by path. Three events share the `post`
+    edge, and a lane per path would sum them into one column that no
+    longer says which fired; the UI has the catalogue and can group.
+    """
+    span = max(1, last - first + 1)
+    out: dict[str, list[int]] = {}
+    for record in records:
+        entry = events.BY_CODE.get(record.code)
+        if entry is None:
+            continue
+        column = min(buckets - 1, (record.ts - first) * buckets // span)
+        lane = out.get(entry.id)
+        if lane is None:
+            lane = out[entry.id] = [0] * buckets
+        lane[max(0, column)] += 1
+    return out
+
+
+def columns(records: list[Record], first: int) -> dict[str, list[int]]:
+    """Records as parallel arrays, timestamps relative to the window.
+
+    Repeating six field names per record costs ~110 bytes against ~40
+    for the columns, and the browser's decode is an indexed loop either
+    way. Relative timestamps keep the numbers small and well inside the
+    range a JSON number carries exactly, which a raw 64-bit counter is
+    not guaranteed to be.
+    """
+    return {
+        "ts": [record.ts - first for record in records],
+        "code": [record.code for record in records],
+        "cpu": [record.cpu for record in records],
+        "a": [record.a for record in records],
+        "b": [record.b for record in records],
+        "c": [record.c for record in records],
+    }
 
 
 def decode(record: Record) -> dict:
@@ -239,15 +362,28 @@ def decode(record: Record) -> dict:
                 "ipa": f"{record.b:#x}", "value": f"{record.c:#x}"}
     elif entry.id == "sched.switch":
         out |= {"next": record.a, "prev": record.b}
+    elif entry.id == "gic.ack":
+        out |= {"intid": record.a}
+    elif entry.id == "smp.cross":
+        out |= {"vm": record.a, "owner": record.b}
+    elif entry.id == "ivc.doorbell":
+        out |= {"vm": record.a, "vintid": record.b}
+    elif entry.id == "psci.call":
+        out |= {"func": f"{record.a:#x}", "arg": f"{record.b:#x}", "action": record.c}
+    elif entry.id == "uart.line":
+        out |= {"slot": record.a, "bytes": record.b}
+    elif entry.id == "smmu.fault":
+        out |= {"stream": record.a, "vm": record.b, "generation": record.c}
     return out
 
 
 def report(shm_path: Path, ram_base: int, trace_pa: int, limit: int = 40) -> int:
-    """The terminal twin of the T layer: what the firmware recorded.
+    """The terminal twin of the T layer, read off the rings themselves.
 
-    The same reader the bridge uses, against a live session's surface —
-    no browser, and no image either. What arrives here is everything the
-    rings hold; the wire only ever carries the summary.
+    The fallback path: no bridge, so no history, and what arrives here
+    is only what the rings still hold — about 2.7 seconds. Needs no
+    browser and no image either, which is what makes it the answer when
+    there is nothing else running.
     """
     try:
         reader = TraceReader(shm_path, ram_base, trace_pa)
@@ -262,25 +398,45 @@ def report(shm_path: Path, ram_base: int, trace_pa: int, limit: int = 40) -> int
 
     print(
         f"rings {geometry.rings}  capacity {geometry.capacity}  "
-        f"cntfrq {geometry.freq_hz}  records {len(records)}  dropped {lost}"
+        f"cntfrq {geometry.freq_hz}  records {len(records)}  dropped {lost}  "
+        f"early {geometry.early}"
     )
     if lost:
         # Never silently: a ring that lapped is a fact about the run,
         # and a report that hid it would read as a complete history.
         print(f"[workbench] {lost} record(s) overwritten before this drain", file=sys.stderr)
+    if geometry.early:
+        # A different fact from `dropped`, and not actionable the same
+        # way: these predate the region, so no drain could have caught
+        # them however prompt it was.
+        print(
+            f"[workbench] {geometry.early} event(s) emitted before the rings were placed",
+            file=sys.stderr,
+        )
+    print_records(records, geometry.freq_hz, limit)
+    return 0
+
+
+def print_records(records: list[Record], freq_hz: int, limit: int) -> None:
+    """Ordered records as lines, newest `limit` of them.
+
+    One printer for both sources. The rings and the bridge's history
+    hold the same records at the same width, and two renderings of one
+    thing is how they come to disagree about what a run looked like.
+    """
     counts: dict[str, int] = {}
     for record in records:
         counts[record.event or str(record.code)] = counts.get(record.event or str(record.code), 0) + 1
     if counts:
         print("  " + "  ".join(f"{name}={count}" for name, count in sorted(counts.items())))
-    base = records[0].ts if records else 0
-    for record in records[-limit:]:
+    shown = records[-limit:]
+    base = shown[0].ts if shown else 0
+    for record in shown:
         fields = decode(record)
         detail = " ".join(
             f"{key}={value}" for key, value in fields.items() if key not in ("event", "cpu", "ts")
         )
         # Relative to the first record shown: absolute counter values
         # say nothing a reader can use, and the frequency is right here.
-        micros = (record.ts - base) * 1_000_000 // max(1, geometry.freq_hz)
+        micros = (record.ts - base) * 1_000_000 // max(1, freq_hz)
         print(f"  {micros:>10}us cpu{record.cpu} {fields['event']:<13} {detail}")
-    return 0

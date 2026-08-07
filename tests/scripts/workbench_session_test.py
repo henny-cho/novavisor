@@ -6,6 +6,7 @@ import asyncio
 import importlib.util
 import json
 import socket
+import struct
 import sys
 import tempfile
 import unittest
@@ -492,6 +493,11 @@ class InitialTopologyTest(unittest.TestCase):
         self.assertIn("badges", topology["taxonomy"])
 
 
+def _no_image(_elf_path):
+    """A scripted run has no ELF; the provider fake stands for both."""
+    return None
+
+
 class PollLoopTest(unittest.IsolatedAsyncioTestCase):
     """The S-layer loop against scripted providers: faults and restarts
     must end one run's polling, never the loop."""
@@ -505,6 +511,10 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
         bridge.session.phase = Phase.RUNNING
         bridge.session.elf_path = directory / "novavisor.elf"
         bridge.session.run_id = 1
+        # Resolve in-process. Where the work runs is environmental, and
+        # a scripted image cannot cross a process boundary; this is the
+        # same path a host that cannot start a pool takes.
+        bridge._image_pool = lambda: None
         return bridge
 
     async def drain_until(self, bridge, predicate, timeout: float = 2.0) -> list[dict]:
@@ -534,14 +544,20 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
 
         state = {"fail": True}
 
-        def factory(_elf, _shm, _base):
+        def factory(_elf, _shm, _base, _view=None):
             if state["fail"]:
                 raise RuntimeError("boom")
             return GoodProvider()
 
         with tempfile.TemporaryDirectory() as name:
             bridge = self.bridge_with_run(Path(name))
-            with mock.patch.object(server_module.snapshot, "ElfRamProvider", factory):
+            # The image side is faked with the provider: a scripted run
+            # has no ELF to resolve, and the split only matters to where
+            # the resolving happens.
+            with (
+                mock.patch.object(server_module.snapshot, "resolve_image", _no_image),
+                mock.patch.object(server_module.snapshot, "ElfRamProvider", factory),
+            ):
                 poll = asyncio.create_task(bridge._poll_loop())
                 try:
                     await self.drain_until(
@@ -578,7 +594,7 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
 
         instances: list[Provider] = []
 
-        def factory(_elf, _shm, _base):
+        def factory(_elf, _shm, _base, _view=None):
             provider = Provider()
             instances.append(provider)
             if len(instances) == 1:
@@ -589,7 +605,13 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as name:
             bridge = self.bridge_with_run(Path(name))
-            with mock.patch.object(server_module.snapshot, "ElfRamProvider", factory):
+            # The image side is faked with the provider: a scripted run
+            # has no ELF to resolve, and the split only matters to where
+            # the resolving happens.
+            with (
+                mock.patch.object(server_module.snapshot, "resolve_image", _no_image),
+                mock.patch.object(server_module.snapshot, "ElfRamProvider", factory),
+            ):
                 poll = asyncio.create_task(bridge._poll_loop())
                 try:
                     await self.drain_until(
@@ -602,6 +624,130 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(instances), 2)
         self.assertTrue(instances[0].closed, "the mid-build provider must be dropped")
         self.assertFalse(instances[1].closed)
+
+
+class TraceAttachTest(unittest.TestCase):
+    """Binding the T reader to a run.
+
+    Two questions live here — does this image have a trace layer, and
+    has the region been formatted yet — and the point of these tests is
+    that neither is answered by counting failures of the other.
+    """
+
+    def setUp(self):
+        from novakit.image import abi
+
+        self.layout = abi.read_defines(
+            abi.TRACE_RING,
+            [
+                "NOVA_TRACE_MAGIC",
+                "NOVA_TRACE_VERSION",
+                "NOVA_TRACE_SIZE",
+                "NOVA_TRACE_HEADER_SIZE",
+                "NOVA_TRACE_RECORDS_OFF",
+                "NOVA_TRACE_REC_SIZE",
+            ],
+        )
+
+    def region_bytes(self, *, formatted: bool, version: int | None = None, early: int = 0) -> bytes:
+        buffer = bytearray(self.layout["NOVA_TRACE_SIZE"])
+        if formatted:
+            stride = self.layout["NOVA_TRACE_RECORDS_OFF"] + 16 * self.layout["NOVA_TRACE_REC_SIZE"]
+            struct.pack_into(
+                "<QIIIIIII", buffer, 0,
+                self.layout["NOVA_TRACE_MAGIC"],
+                self.layout["NOVA_TRACE_VERSION"] if version is None else version,
+                self.layout["NOVA_TRACE_REC_SIZE"], stride, 1, 16, 62_500_000, early,
+            )
+        return bytes(buffer)
+
+    def bridge_at(self, directory: Path):
+        from novakit.services.workbench.server import Bridge
+
+        surfaces = Surfaces(directory)
+        bridge = Bridge(ui_root=directory, surfaces=surfaces)
+        bridge.session.phase = Phase.RUNNING
+        bridge.session.elf_path = directory / "novavisor.elf"
+        bridge.session.run_id = 1
+        # The region sits at the very start of the RAM aperture here, so
+        # the fixture is the region and not half a gigabyte of run-up.
+        bridge._board = {"NOVA_BOARD_PHYS_RAM_BASE": 0, "NOVA_BOARD_TRACE_PA": 0}
+        return bridge
+
+    def states(self, bridge) -> list[str]:
+        return [
+            frame["data"]["state"]
+            for frame in bridge.store.drain()
+            if frame["data"].get("phase") == "trace"
+        ]
+
+    def test_an_unformatted_region_is_waited_on_never_concluded_absent(self):
+        """The old reader gave up after a fixed number of ticks, which
+        on a slow machine told an image with tracing that it had none —
+        and then called drain() on the None it had just decided on."""
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            bridge = self.bridge_at(directory)
+            bridge.session.surfaces.shm_path.write_bytes(self.region_bytes(formatted=False))
+
+            for _ in range(500):  # far past any budget the old code had
+                self.assertFalse(bridge._attach_tracer())
+            self.assertEqual(self.states(bridge), ["waiting"])  # said once
+
+            # And a tick after all that must still be a working tick.
+            bridge._pump_trace()
+
+            # EL2 gets there eventually; nothing had to be reset for the
+            # reader to notice.
+            bridge.session.surfaces.shm_path.write_bytes(
+                self.region_bytes(formatted=True, early=4)
+            )
+            self.assertTrue(bridge._attach_tracer())
+            self.assertEqual(self.states(bridge), ["active"])
+            self.assertEqual(bridge._tracer.geometry.early, 4)
+            bridge._drop_tracer()
+
+    def test_an_image_without_the_writer_says_so_and_keeps_looking(self):
+        """The image answers whether to expect a ring, once the S layer
+        has parsed it. A one-sided answer, so it changes what is said
+        and not what is done."""
+
+        class NoWriter:
+            symbols = type("T", (), {"has": staticmethod(lambda _q: False)})()
+
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            bridge = self.bridge_at(directory)
+            bridge.session.surfaces.shm_path.write_bytes(self.region_bytes(formatted=False))
+
+            # Before the index exists the answer is unknown, which is
+            # not the same as no.
+            self.assertFalse(bridge._attach_tracer())
+            self.assertEqual(self.states(bridge), ["waiting"])
+
+            bridge._provider = NoWriter()
+            self.assertFalse(bridge._attach_tracer())
+            self.assertEqual(self.states(bridge), ["none"])
+
+            # A region turning up anyway wins: the report was a reading
+            # of the image, not a verdict on the run.
+            bridge.session.surfaces.shm_path.write_bytes(self.region_bytes(formatted=True))
+            self.assertTrue(bridge._attach_tracer())
+            self.assertEqual(self.states(bridge), ["active"])
+            bridge._drop_tracer()
+
+    def test_a_layout_disagreement_is_loud_and_not_retried_away(self):
+        """A version skew is the one refusal asking again cannot fix,
+        and decoding past it would produce plausible-looking events."""
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            bridge = self.bridge_at(directory)
+            bridge.session.surfaces.shm_path.write_bytes(
+                self.region_bytes(formatted=True, version=self.layout["NOVA_TRACE_VERSION"] + 1)
+            )
+
+            self.assertFalse(bridge._attach_tracer())
+            self.assertEqual(self.states(bridge), ["mismatch"])
 
 
 class ConnectionHandlerTest(unittest.IsolatedAsyncioTestCase):

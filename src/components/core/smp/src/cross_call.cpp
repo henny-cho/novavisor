@@ -15,6 +15,7 @@
 #include "nova/sync.hpp"
 #include "smp/smp.hpp"
 #include "smp_internal.hpp"
+#include "trace/trace.hpp"
 #include "vgic/vgic_model.hpp"
 
 #include <array>
@@ -67,9 +68,12 @@ auto invoke_vm_owner(std::size_t vm, VmOwnerCall fn, std::uint64_t a, std::uint6
   }
   const std::size_t owner = slot_cpu(slot_of(vm));
   if (owner == cpu::id()) {
-    fn(vm, a, b, c);
+    fn(vm, a, b, c); // no wire crossed; nothing to record
     return true;
   }
+  // Emitted only on the crossing branch: the edge this lights is drawn
+  // between two cores, and a same-core call is not evidence for it.
+  trace_emit(NOVA_TRACE_EV_CROSS_CALL, static_cast<std::uint32_t>(vm), owner);
   return enqueue(
       owner, {.op = Op::kVmOwnerCall, .idx = static_cast<std::uint32_t>(vm), .a = a, .b = b, .c = c, .callback = fn});
 }
