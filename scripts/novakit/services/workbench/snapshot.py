@@ -168,3 +168,26 @@ class SnapshotPoller:
                 self._last[obs.topic] = value
                 changes.append((obs, value))
         return changes
+
+    def sweep(self) -> list[tuple[Obs, object]]:
+        """Every observation at once, rate and change gate ignored.
+
+        Only meaningful while the machine is stopped. Then nothing is
+        moving, so these reads are all of one instant — no torn value, no
+        writer racing the reader — and the point is the complete picture
+        rather than the delta the gate exists to find. A reader who has
+        just arrived at an event wants the whole machine, including every
+        field that happens not to have changed since the last poll.
+
+        The cache is updated, so resuming does not replay as changes the
+        values this already sent.
+        """
+        values = []
+        for obs in self._observations:
+            try:
+                value = self._provider.read(obs)
+            except elfsym.TornRead:
+                continue
+            self._last[obs.topic] = value
+            values.append((obs, value))
+        return values

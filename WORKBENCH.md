@@ -112,23 +112,67 @@ Reading values:
 
 The `일시정지` (pause) button appears while a session runs:
 
-1. The bridge issues QMP `stop` — the whole machine freezes, **including the
-   virtual clock**, so the guest cannot observe the pause.
-2. A gdb remote-protocol client reads, per core:
-   `pc, HCR_EL2, VTTBR_EL2, VTCR_EL2, SCTLR_EL2, CNTVOFF_EL2, CNTV_CTL_EL0,
-   CNTV_CVAL_EL0, ELR_EL2, SPSR_EL2` — published to the **Sysreg** panel.
+1. The bridge attaches to QEMU's gdb stub, which stops the whole machine —
+   **including the virtual clock**, so the guest cannot observe the pause.
+   The connection *is* the stop and is held until you resume.
+2. It reads, per core: `pc, HCR_EL2, VTTBR_EL2, VTCR_EL2, SCTLR_EL2,
+   CNTVOFF_EL2, CNTV_CTL_EL0, CNTV_CVAL_EL0, ELR_EL2, SPSR_EL2` — published
+   to the **Sysreg** panel — and then the whole observation manifest.
 3. The machine **stays stopped** until you press `재개` (resume).
 
 While paused, console input is rejected (the pty would buffer it and replay
-it into the guest on resume). If the register sweep fails after the stop
+it into the guest on resume). If the register sweep fails after the attach
 already landed — say the gdb socket is taken by an external debugger — the
-bridge rolls the stop back and resumes the machine, so a failed pause never
-leaves a silently frozen machine. Reloading the page while paused is safe:
+bridge lets go of the machine before reporting, so a failed pause never
+leaves a silently frozen one. Reloading the page while paused is safe:
 the pause state (and the 재개 button) is restored on connect.
 
 Known limit: QEMU's gdbstub exposes no `ICH_*`/`ICC_*` registers, so GIC and
 list-register state is not part of the halt sweep; the S-layer vGIC shadow is
 the source for interrupt state.
+
+### Stopping at an event
+
+`일시정지` stops the machine wherever it happens to be, which on a live
+machine is the idle wait almost every time — ten pauses in a row land on the
+same instruction. The **정지 지점** controls stop it somewhere that means
+something instead:
+
+| Control | What it does |
+|---|---|
+| **정지 지점** | which event to stop at, from the bridge's catalogue |
+| **다음 사건** | run until that event, then stop |
+| **40 명령** | advance by instructions — for looking *inside* an event |
+| **자동** | repeat, one second apart, so events pass at a readable speed |
+| **중지** | take the machine back from a run that is still going |
+
+A stop publishes more than a pause does. The event's own arguments are read
+out of the argument registers — so stopping at the interrupt bind shows the
+physical INTID, the virtual one it was bound to, and the generation — and the
+**whole** observation manifest is re-read and published as `src H`. Nothing is
+moving, so those reads are all of one instant, with no torn value and no
+writer racing the reader. This is the one place the S layer is exact.
+
+Paths on the board that can be stopped on are drawn solid and legended **M**.
+A pulse there is not a sample or a log line; it is the event.
+
+Two things worth knowing:
+
+- **Stepping is for looking inside an event, not for reaching one.** A step
+  costs about 700 µs over the debug socket, so forty is a fraction of a second
+  and a million would be a day. Breakpoints are how you arrive.
+- **A step at `wfi` does not finish.** The hypervisor idles there between
+  events and the instruction retires only when an interrupt arrives, so the
+  control reports `대기 중` and hands the machine back rather than hanging.
+
+Short demos are over before a browser could ask for anything — the DMA demo
+finishes its transfers inside the first second of guest time. Selecting a stop
+before pressing 실행 arms it during EL2 boot, ahead of any guest code.
+
+The gdb connection *is* the stop: it is held while the machine is stopped and
+dropped to resume. QMP is read-only here. Mixing a QMP stop in deadlocks the
+stub — a QMP-stopped machine answers no `vCont` and no breakpoint packet at
+all, with no error — which is why `QmpClient` no longer offers `stop`/`cont`.
 
 ### Verify runs
 
@@ -160,7 +204,7 @@ the same reader the poller uses.
 |---|---|
 | Panels show `실측 대기 중` | No session is running yet, or the S provider could not attach. Watch the event log for `snapshot-unavailable` (symbol resolution failed — rebuild the image) |
 | `유실 N` badge | The frame window overflowed (oldest console frames are dropped first); click to reset the counter |
-| Pause rejected (`qmp: session is …`) | The pause path needs a RUNNING interactive session with observation surfaces; it is unavailable while building, verifying, or idle |
+| Pause rejected (`halt: session is …`) | The pause path needs a RUNNING interactive session with observation surfaces; it is unavailable while building, verifying, or idle |
 | Port already in use | Another bridge is running; pick `--port` or stop it |
 
 ---
@@ -196,7 +240,8 @@ Bridge modules (`scripts/novakit/services/workbench/`):
 | `elfsym.py` | forward Itanium mangling, symtab lookup, DWARF layout reader, `decode()` |
 | `observations.py` | **the observation manifest** (see below) |
 | `snapshot.py` | `SnapshotProvider` seam, `ElfRamProvider`, `SnapshotPoller`, hand-declared guest-page layouts |
-| `halt.py` | `QmpClient`, `GdbClient` (RSP), `HaltInspector` |
+| `halt.py` | `QmpClient` (read-only), `GdbClient` (RSP), `HaltInspector` |
+| `events.py` | **the event catalogue** — where the machine can be stopped, and which path each stop is evidence for |
 | `checks.py` | manifest-vs-image contract (CI step) and the `inspect symbols` report |
 
 UI modules (`web/workbench/js/`): `main.mjs` (wiring), `net.mjs`
@@ -239,7 +284,10 @@ flushed every 50 ms:
 - Every panel-consumed snapshot (S topics and `sysreg`) carries its payload
   under `data.values` — one contract for the whole panel drawer.
 - Uplink (client → bridge): `target` (launch a demo), `uart` (bytes to the
-  focused guest), `qmp` (`{"cmd": "stop"|"cont"}`). Recognised-but-deferred
+  focused guest), `halt` (`{"cmd": "stop"|"cont"|"step"|"run"|"abort", ...}`
+  — `run` takes `stops`, `repeat` and `period`; `step` takes `count`).
+  A `target` uplink may carry `stops` to arm them as the machine boots.
+  Recognised-but-deferred
   topics are answered with an explicit `unsupported` event so the UI degrades
   visibly.
 

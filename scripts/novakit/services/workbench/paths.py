@@ -37,9 +37,18 @@ CHIPS = ("trap", "sched", "timer", "vgic", "vuart", "ivc")
 # Anchors on the address strip.
 SEGMENTS = ("mem", "pa:shared")
 
+GRADE_DIRECT = "direct"  # the machine stopped on it — measured, exact
 GRADE_CONSOLE = "console"  # a classified log line — exact in time
 GRADE_POLL = "poll"  # a snapshot delta — quantised to the sample
 GRADE_NONE = "none"  # structure, with nothing watching it
+
+# Edge names other modules refer to. The event catalogue says which path
+# a stop is evidence for, and a literal there would let a rename here
+# leave it pointing at nothing.
+EDGE_TRAP = "trap"
+EDGE_POST = "post"
+EDGE_INJECT = "inject"
+EDGE_MMIO = "mmio"
 
 # Expansion groups. A path between two instances of the same thing names
 # the group, because how many there are is the machine's answer.
@@ -58,13 +67,13 @@ class Edge:
 
 
 EDGES: tuple[Edge, ...] = (
-    Edge("trap", BAND_EL1, "trap", GRADE_POLL, "ctx.syndrome", (Badge.TRAP,)),
+    Edge(EDGE_TRAP, BAND_EL1, "trap", GRADE_POLL, "ctx.syndrome", (Badge.TRAP,)),
     Edge("phys", "gicd", BAND_PE, GRADE_CONSOLE, badges=(Badge.IRQ, Badge.GIC)),
     # The hop between a device posting and the list register taking it,
     # read from the token store the post writes and the refill empties.
-    Edge("post", "gicd", "vgic", GRADE_POLL, "vgic.token"),
-    Edge("inject", "vgic", BAND_EL1, GRADE_POLL, "vgic.lr"),
-    Edge("mmio", BAND_EL1, "vgic", GRADE_CONSOLE, badges=(Badge.VGIC,)),
+    Edge(EDGE_POST, "gicd", "vgic", GRADE_POLL, "vgic.token"),
+    Edge(EDGE_INJECT, "vgic", BAND_EL1, GRADE_POLL, "vgic.lr"),
+    Edge(EDGE_MMIO, BAND_EL1, "vgic", GRADE_CONSOLE, badges=(Badge.VGIC,)),
     Edge("dma", BAND_DEV, "smmu", GRADE_POLL, "dev.dma", (Badge.DMA,)),
     Edge("walk", "smmu", "mem", GRADE_CONSOLE, badges=(Badge.SMMU,)),
     Edge("cross", "", "", GRADE_POLL, "smp.mail", (Badge.SMP,), pair=PAIR_CORES),
@@ -80,15 +89,22 @@ def _expand(edge: Edge, cpus: int) -> list[tuple[str, str]]:
     return [(edge.source, edge.target)]
 
 
-def edges(cpus: int, blocks: Iterable[str]) -> list[dict]:
+def edges(cpus: int, blocks: Iterable[str], direct: Iterable[str] = ()) -> list[dict]:
     """Concrete paths for one board.
 
     Expanded and filtered here so the UI gets a flat list and resolves
     every endpoint by name. A board with no SMMU has fewer paths — a fact
     about the board, not a line drawn to nowhere.
+
+    `direct` names the paths the machine can be stopped on. Those are
+    upgraded, because a breakpoint is not another sample: it is the
+    event itself, with the whole machine held still around it. The
+    caller supplies the set rather than this module reading the event
+    catalogue, which names paths from here — one direction only.
     """
     known = set(blocks) | set(BANDS) | set(CHIPS) | set(SEGMENTS)
     known |= {f"core{cpu}" for cpu in range(cpus)}
+    observable = set(direct)
     out = []
     for edge in EDGES:
         for index, (source, target) in enumerate(_expand(edge, cpus)):
@@ -98,7 +114,7 @@ def edges(cpus: int, blocks: Iterable[str]) -> list[dict]:
                 "id": edge.id if index == 0 else f"{edge.id}{index}",
                 "from": source,
                 "to": target,
-                "grade": edge.grade,
+                "grade": GRADE_DIRECT if edge.id in observable else edge.grade,
                 "topic": edge.topic,
                 "badges": [badge.value for badge in edge.badges],
             })

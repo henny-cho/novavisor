@@ -302,6 +302,52 @@ class BoardAnchorTest(unittest.TestCase):
         self.assertEqual({edge.id for edge in paths.EDGES}, captioned)
 
 
+class StepperTest(unittest.TestCase):
+    """The controls that stop the machine at an event."""
+
+    def setUp(self):
+        self.html = (UI / "index.html").read_text()
+        self.main = (UI / "js" / "main.mjs").read_text()
+        self.css = (UI / "css" / "workbench.css").read_text()
+
+    def test_every_element_the_script_reaches_for_exists(self):
+        """A `ref()` that finds nothing throws on the first click, and
+        the header looks fine until then."""
+        ids = set(re.findall(r'\bid="([\w-]+)"', self.html))
+        for name in re.findall(r'\bref\("([\w-]+)"\)', self.main):
+            with self.subTest(id=name):
+                self.assertIn(name, ids)
+
+    def test_the_stop_choices_come_from_the_bridge(self):
+        """The catalogue lives beside the firmware symbols it names. A
+        list typed here would be a second copy, free to disagree."""
+        self.assertIn("setStops(topo.stops)", self.main)
+        for event in ("post_spi_tracked", "drain_eois", "handle_lower_sync"):
+            self.assertNotIn(event, self.main)
+        self.assertNotIn("vgic.bind", self.html)
+
+    def test_the_grade_a_stop_earns_is_styled(self):
+        from novakit.services.workbench import paths
+
+        self.assertIn(f".edge.{paths.GRADE_DIRECT}{{", self.css)
+        self.assertIn(f'"{paths.GRADE_DIRECT}"', (UI / "js" / "board.mjs").read_text())
+
+    def test_the_legend_names_every_grade_the_bridge_can_publish(self):
+        """A path drawn in a style the legend does not explain is a
+        stroke the reader has no way to read."""
+        for swatch in ("direct", "poll", "none"):
+            with self.subTest(swatch=swatch):
+                self.assertIn(f'class="{swatch}"', self.html)
+
+    def test_a_stop_reaches_the_board_as_measurement(self):
+        """The stop carries the event's own argument registers, so the
+        board states them rather than describing how closely it looked."""
+        self.assertIn("boardView.stopped(ts, data)", self.main)
+        board = (UI / "js" / "board.mjs").read_text()
+        self.assertRegex(board, r"function stopped\(ts, data\)")
+        self.assertIn("stopped,", board)
+
+
 class FocusLayerTest(unittest.TestCase):
     """Two reasons to hide a row, kept apart."""
 

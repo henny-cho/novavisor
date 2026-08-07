@@ -145,6 +145,25 @@ class ElfIndex:
         info = self._type_of(die)
         return ResolvedSymbol(qualified, address, size or info.size, info)
 
+    def resolve_function(self, qualified: str) -> int:
+        """A function's entry address, by qualified name.
+
+        A function's mangled name carries its parameter types, which
+        only the compiler can spell. The *variable* mangling of the same
+        name is exactly the prefix those types follow, and Itanium's
+        length-prefixed components mean no shorter name can be a prefix
+        of a longer one — so matching on it resolves the entry without
+        this reader having to encode C++ types.
+        """
+        prefix = mangle(qualified)
+        matches = sorted(name for name in self._symbols if name.startswith(prefix))
+        if not matches:
+            raise KeyError(f"function not in .symtab: {qualified} ({prefix}...)")
+        addresses = {self._symbols[name][0] for name in matches}
+        if len(addresses) > 1:
+            raise KeyError(f"{qualified} is overloaded; cannot pick one: {matches}")
+        return addresses.pop()
+
     def enum_labels(self, qualified: str) -> dict[int, str]:
         """The enumerators of a firmware enum, by its qualified name.
 

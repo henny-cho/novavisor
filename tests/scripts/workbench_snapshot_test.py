@@ -79,6 +79,52 @@ class PollerTest(unittest.TestCase):
         self.assertEqual([obs.topic for obs, _ in recovered], ["fast"])
 
 
+class SweepTest(unittest.TestCase):
+    """A stopped machine can be read exhaustively; a running one cannot.
+
+    The change gate answers "what moved", which is the right question
+    while time passes and the wrong one at a breakpoint, where the
+    reader wants the whole machine at that instant.
+    """
+
+    def setUp(self):
+        self.now = 0.0
+        self.provider = FakeProvider()
+        self.observations = (
+            Obs("fast", "nova::fast", rate_hz=20),
+            Obs("slow", "nova::slow", rate_hz=2),
+        )
+        self.provider.values = {"fast": 1, "slow": 1}
+        self.poller = snapshot.SnapshotPoller(
+            self.provider, self.observations, monotonic=lambda: self.now
+        )
+
+    def test_sweep_reports_everything_including_the_unchanged(self):
+        self.poller.tick()  # prime the cache with both values
+        swept = self.poller.sweep()
+        self.assertEqual([obs.topic for obs, _ in swept], ["fast", "slow"])
+
+    def test_sweep_ignores_the_rate_gate(self):
+        """The slow topic is not due for half a second; at a stop that
+        is irrelevant, because nothing will change in the meantime."""
+        self.poller.tick()
+        self.now += 0.01
+        self.assertEqual(self.poller.tick(), [])
+        self.assertEqual(len(self.poller.sweep()), 2)
+
+    def test_a_sweep_does_not_replay_as_changes_afterwards(self):
+        """Resuming must not re-send what the stop already published."""
+        self.provider.values = {"fast": 9, "slow": 9}
+        self.poller.sweep()
+        self.now += 10.0
+        self.assertEqual(self.poller.tick(), [])
+
+    def test_a_torn_value_is_skipped_not_faked(self):
+        self.provider.torn.add("slow")
+        swept = self.poller.sweep()
+        self.assertEqual([obs.topic for obs, _ in swept], ["fast"])
+
+
 @unittest.skipUnless(ELF.is_file(), "debug ELF not built")
 class ElfRamProviderTest(unittest.TestCase):
     """End-to-end address arithmetic against a synthetic RAM file."""

@@ -42,6 +42,20 @@ from .store import StateStore
 FLUSH_INTERVAL_SECONDS = 0.05
 POLL_INTERVAL_SECONDS = 0.05
 WS_PATH = "/ws"
+# Waiting for a breakpoint is sliced so an abort is answered promptly;
+# the machine keeps running across slices, only the listening pauses.
+RUN_SLICE_SECONDS = 0.25
+# How long to run before saying so. A chosen event may be rare or may
+# never occur on this demo; silence reads as a hung bridge.
+WAIT_NOTICE_SECONDS = 2.0
+# ~700 us per instruction over RSP, so this caps one request at a couple
+# of seconds. Stepping is for looking inside an event, not reaching one.
+MAX_STEPS = 2000
+HALT_COMMANDS = ("stop", "cont", "step", "run", "abort")
+# Arming at launch races the guest, so the watch is tight; the budget
+# covers a cold build ahead of the machine it is waiting for.
+LAUNCH_POLL_SECONDS = 0.005
+LAUNCH_ARM_TIMEOUT_SECONDS = 600.0
 
 
 def _require_websockets():
@@ -75,6 +89,16 @@ class Bridge:
         self._server = None
         self._flusher: asyncio.Task | None = None
         self._halting = False
+        # The gdb connection *is* the stop, so the inspector outlives the
+        # command that took it: held while paused, dropped on resume.
+        self._inspector: halt.HaltInspector | None = None
+        self._inspector_run = 0
+        self._abort = False
+        # The poll loop owns it; the halt path borrows it to read the
+        # whole machine at a stop, where every value is of one instant.
+        self._poller: snapshot.SnapshotPoller | None = None
+        self._provider: snapshot.SnapshotProvider | None = None
+        self._provider_run: int | None = None
         # Stamped into every connect topo: a changed token is the one
         # reliable restart signal, whatever the seq counter says.
         self._token = uuid.uuid4().hex[:8]
@@ -129,6 +153,7 @@ class Bridge:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
+        self._release()
         await self.session.stop()
 
     def _live_state(self) -> dict:
@@ -184,14 +209,14 @@ class Bridge:
             if reason is not None:
                 self._reject(f"uart: {reason}")
             return
-        if uplink.topic is Topic.QMP:
+        if uplink.topic is Topic.HALT:
             command = str(uplink.data.get("cmd", ""))
-            if command not in ("stop", "cont"):
-                self._reject(f"qmp: unknown cmd {command!r}")
+            if command not in HALT_COMMANDS:
+                self._reject(f"halt: unknown cmd {command!r}")
             elif self.session.phase is not Phase.RUNNING or self.session.surfaces is None:
-                self._reject(f"qmp: session is {self.session.phase.value}")
+                self._reject(f"halt: session is {self.session.phase.value}")
             else:
-                self.spawn(self._halt_command(command))
+                self.spawn(self._halt_command(command, uplink.data))
             return
         demo = uplink.data.get("demo")
         if not demo:
@@ -203,6 +228,12 @@ class Bridge:
             self._reject(f"target: session is {self.session.phase.value}")
             return
         variant = uplink.data.get("variant")
+        # Hand the outgoing machine back before it is torn down; a run
+        # that ends while we hold its stop leaves QEMU frozen mid-exit.
+        self._release()
+        stops = [str(name) for name in uplink.data.get("stops", [])]
+        if stops:
+            self.spawn(self._arm_at_launch(self.session.run_id, stops))
         self.spawn(
             self.session.select(
                 Target(
@@ -223,86 +254,270 @@ class Bridge:
             replay=False,
         )
 
-    async def _halt_command(self, command: str) -> None:
-        """Pause = QMP stop + a per-CPU register sweep; the machine stays
-        stopped (virtual clock frozen) until the resume command."""
+    def _hold(self) -> halt.HaltInspector:
+        """The inspector for this run, made once and kept.
+
+        Attaching stops the machine, so a fresh inspector per command
+        would take a new stop on every click and leak the previous one.
+        Keyed on the run: a restart replaces the sockets underneath, and
+        an inspector still holding the old ones answers for a machine
+        that no longer exists.
+        """
+        if self._inspector_run != self.session.run_id:
+            self._release()
+        if self._inspector is None:
+            surfaces = self.session.surfaces
+            self._inspector = halt.HaltInspector(
+                surfaces.qmp_path, surfaces.gdb_path, self.session.elf_path
+            )
+            self._inspector_run = self.session.run_id
+        return self._inspector
+
+    def _release(self) -> None:
+        """Give the machine back and forget the inspector.
+
+        Called on resume and at every run boundary: the next run has new
+        sockets, and an inspector still holding the old ones would answer
+        for a machine that no longer exists.
+        """
+        inspector, self._inspector = self._inspector, None
+        if inspector is not None:
+            inspector.resume()
+
+    async def _sweep_to_panels(self, inspector: halt.HaltInspector) -> None:
+        """Everything the machine knows about the instant it stopped.
+
+        Registers come from the stub; the rest is the whole observation
+        manifest read from a machine that is not moving. Polling has to
+        sample and can only report what changed since last time; a
+        stopped machine can be read exhaustively, with no torn value and
+        no writer racing the reader, so this is the one place the S layer
+        is exact. It goes out as H for that reason — same reading, a
+        different claim about how much it can be trusted.
+        """
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(None, inspector.pause)
+        self.session.paused = True
+        # Same data shape as the S-layer topics: the UI panels read every
+        # snapshot's payload from "values".
+        self.store.publish(Topic.SYSREG, Kind.SNAPSHOT, {"values": data}, src=Src.HALT)
+        try:
+            # Built here if the poll loop has not got to it: arming at
+            # launch stops the machine during EL2 boot, long before the
+            # first successful poll, and a stop that silently skipped
+            # the manifest would be the emptiest one of the run.
+            poller = await self._ensure_poller()
+            if poller is None:
+                return
+            values = await loop.run_in_executor(None, poller.sweep)
+        except Exception as error:
+            self.store.publish(
+                Topic.LIFE, Kind.EVENT, {"phase": "snapshot-unavailable", "error": str(error)}
+            )
+            return
+        for obs, value in values:
+            self.store.publish(obs.topic, Kind.SNAPSHOT, {"values": value}, src=Src.HALT)
+
+    async def _advance(self, inspector: halt.HaltInspector, data: dict) -> None:
+        """Run until a catalogued event, as many times as asked.
+
+        The wait is sliced rather than blocking: a machine that never
+        reaches the chosen event would otherwise pin an executor thread
+        and ignore the abort button. `period` paces the repeats so the
+        reader can watch events at a human speed — the unit of a step is
+        an *event*, because a fixed slice of time holds anywhere from
+        zero of them to thousands.
+        """
+        stops = [str(name) for name in data.get("stops", [])]
+        period = max(0.0, min(float(data.get("period", 0.0)), 10.0))
+        repeat = max(1, min(int(data.get("repeat", 1)), 1000))
+        loop = asyncio.get_running_loop()
+        for index in range(repeat):
+            if self._abort:
+                break
+            if index and period:
+                await asyncio.sleep(period)
+                if self._abort:
+                    break
+            await loop.run_in_executor(None, inspector.begin, stops)
+            self.session.paused = False
+            stop = None
+            waited = 0.0
+            noticed = False
+            while stop is None and not self._abort:
+                stop = await loop.run_in_executor(None, inspector.wait, RUN_SLICE_SECONDS)
+                waited += RUN_SLICE_SECONDS
+                if stop is None and not noticed and waited >= WAIT_NOTICE_SECONDS:
+                    # The chosen event may be rare, or may not happen at
+                    # all on this demo. Silence would be indistinguishable
+                    # from a hung bridge, so say which stops are pending.
+                    noticed = True
+                    self.store.publish(
+                        Topic.LIFE, Kind.EVENT,
+                        {"phase": "waiting", "stops": sorted(inspector.armed)},
+                    )
+            if stop is None:
+                stop = await loop.run_in_executor(None, inspector.interrupt)
+            self.session.paused = True
+            self.store.publish(
+                Topic.LIFE, Kind.EVENT, {"phase": "stopped", **stop.payload()}
+            )
+            await self._sweep_to_panels(inspector)
+
+    async def _arm_at_launch(self, previous_run: int, stops: list[str]) -> None:
+        """Take the stop before the guest can reach the event.
+
+        Short demos are over in well under a second — the DMA demo has
+        finished its transfers before a browser could send a command — so
+        "stop at the first X" is unreachable if arming has to wait for a
+        reader to click. Attaching to the stub stops the machine by
+        itself and the socket exists from QEMU's first moments, so taking
+        it during EL2 boot arrives long before any guest code runs.
+        """
+        deadline = asyncio.get_running_loop().time() + LAUNCH_ARM_TIMEOUT_SECONDS
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(LAUNCH_POLL_SECONDS)
+            if self.session.phase in (Phase.FAILED, Phase.IDLE, Phase.EXITED):
+                return  # the launch did not happen; nothing to arm
+            if self.session.run_id == previous_run:
+                continue
+            surfaces = self.session.surfaces
+            if surfaces is None or not surfaces.gdb_path.exists():
+                continue
+            break
+        else:
+            self._reject("halt: the machine never came up to be armed")
+            return
         if self._halting:
-            self._reject("qmp: inspection in progress")
+            return  # a reader got there first; theirs wins
+        self._halting = True
+        self._abort = False
+        try:
+            inspector = self._hold()
+            await self._sweep_to_panels(inspector)
+            self.store.publish(
+                Topic.LIFE, Kind.EVENT, {"phase": "armed", "stops": sorted(stops)}
+            )
+            await self._advance(inspector, {"stops": stops})
+        except Exception as error:
+            self._reject(f"halt: {error}")
+        finally:
+            self._halting = False
+            self._abort = False
+
+    async def _halt_command(self, command: str, data: dict) -> None:
+        """Pause is a held gdb connection; the machine stays stopped
+        (virtual clock frozen) until it is advanced or resumed."""
+        if command == "abort":
+            # Checked before the busy guard, not after: an abort is only
+            # ever sent *while* an advance is running, so guarding it the
+            # same way would reject it exactly when it is needed.
+            self._abort = True
+            return
+        if self._halting:
+            self._reject("halt: inspection in progress")
             return
         self._halting = True
+        self._abort = False
         try:
-            surfaces = self.session.surfaces
-            inspector = halt.HaltInspector(surfaces.qmp_path, surfaces.gdb_path)
+            inspector = self._hold()
             loop = asyncio.get_running_loop()
             if command == "stop":
-                data = await loop.run_in_executor(None, inspector.pause)
-                self.session.paused = True
-                # Same data shape as the S-layer topics: the UI panels
-                # read every snapshot's payload from "values".
-                self.store.publish(
-                    Topic.SYSREG, Kind.SNAPSHOT, {"values": data}, src=Src.HALT
-                )
+                await self._sweep_to_panels(inspector)
                 self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "paused"})
-            else:
-                await loop.run_in_executor(None, inspector.resume)
+            elif command == "cont":
+                await loop.run_in_executor(None, self._release)
                 self.session.paused = False
                 self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "resumed"})
+            elif command == "step":
+                if not inspector.paused:
+                    await self._sweep_to_panels(inspector)
+                count = max(1, min(int(data.get("count", 1)), MAX_STEPS))
+                result = await loop.run_in_executor(None, inspector.step, count)
+                self.store.publish(
+                    Topic.LIFE, Kind.EVENT, {"phase": "stepped", **result}
+                )
+                await self._sweep_to_panels(inspector)
+            else:  # "run"
+                if not inspector.paused:
+                    await self._sweep_to_panels(inspector)
+                await self._advance(inspector, data)
         except Exception as error:
             # This coroutine is the request boundary: any protocol fault
             # (bad JSON, corrupt RSP hex, a missing XML attribute) must
             # become a reply, not an unretrieved task exception.
-            self._reject(f"qmp: {error}")
+            self._reject(f"halt: {error}")
         finally:
             self._halting = False
+            self._abort = False
+
+    def _drop_provider(self) -> None:
+        provider, self._provider = self._provider, None
+        self._poller = None
+        self._provider_run = None
+        if provider is not None:
+            provider.close()
+
+    async def _ensure_poller(self) -> snapshot.SnapshotPoller | None:
+        """The S reader for this run, built once and shared.
+
+        Both the poll loop and the halt path need it, and a stop can
+        arrive before the loop's first successful build — arming at
+        launch stops the machine during EL2 boot, well ahead of the
+        first poll — so whoever needs it first builds it. Returns None
+        while the backend is not ready yet; the caller retries.
+        """
+        session = self.session
+        if session.phase is not Phase.RUNNING or session.elf_path is None:
+            return None
+        if session.surfaces is None:
+            return None
+        current = session.run_id
+        if self._provider_run == current:
+            return self._poller
+        # A rebuild moves symbols, so a new run needs a new reader.
+        self._drop_provider()
+        shm_path = session.surfaces.shm_path
+        # Cheap gate: no per-retry DWARF walk while QEMU is still
+        # creating and sizing the backend.
+        if not shm_path.exists() or shm_path.stat().st_size == 0:
+            return None
+        built = await asyncio.get_running_loop().run_in_executor(
+            None,
+            snapshot.ElfRamProvider,
+            session.elf_path,
+            shm_path,
+            hardware.platform()["NOVA_BOARD_PHYS_RAM_BASE"],
+        )
+        if session.run_id != current:
+            # A restart landed mid-build: this provider maps the
+            # previous run's RAM file.
+            built.close()
+            return None
+        self._provider = built
+        self._poller = snapshot.SnapshotPoller(built)
+        self._provider_run = current
+        return self._poller
 
     async def _poll_loop(self) -> None:
         """Publish S-layer snapshots while a run is live.
 
-        The provider is rebuilt per run (a rebuild moves symbols) and its
-        construction — one full DWARF walk — happens off the loop. RAM
+        Construction — one full DWARF walk — happens off the loop. RAM
         backend races at startup retry silently; any other fault ends
         this run's S layer, is reported once, and never kills the loop.
         """
-        provider = None
-        poller = None
-        run_id = None
         try:
             while True:
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
-                session = self.session
-                if (
-                    session.phase is not Phase.RUNNING
-                    or session.elf_path is None
-                    or session.surfaces is None
-                ):
-                    continue
-                current = session.run_id
                 try:
-                    if current != run_id:
-                        if provider is not None:
-                            provider.close()
-                            provider = poller = None
-                        shm_path = session.surfaces.shm_path
-                        # Cheap gate: no per-retry DWARF walk while QEMU
-                        # is still creating and sizing the backend.
-                        if not shm_path.exists() or shm_path.stat().st_size == 0:
-                            continue
-                        built = await asyncio.get_running_loop().run_in_executor(
-                            None,
-                            snapshot.ElfRamProvider,
-                            session.elf_path,
-                            shm_path,
-                            hardware.platform()["NOVA_BOARD_PHYS_RAM_BASE"],
-                        )
-                        if session.run_id != current:
-                            # A restart landed mid-build: this provider
-                            # maps the previous run's RAM file.
-                            built.close()
-                            continue
-                        provider = built
-                        poller = snapshot.SnapshotPoller(provider)
-                        run_id = current
+                    poller = await self._ensure_poller()
                     if poller is None:
+                        continue
+                    if self.session.paused:
+                        # Nothing can change while the machine is
+                        # stopped, and the stop already published a full
+                        # sweep. Polling static RAM would only spend
+                        # reads to confirm it.
                         continue
                     for obs, value in poller.tick():
                         self.store.publish(
@@ -319,13 +534,9 @@ class Bridge:
                         Kind.EVENT,
                         {"phase": "snapshot-unavailable", "error": str(error)},
                     )
-                    if provider is not None:
-                        provider.close()
-                    provider = poller = None
-                    run_id = current
+                    self._drop_provider()
         finally:
-            if provider is not None:
-                provider.close()
+            self._drop_provider()
 
     async def _flush_loop(self) -> None:
         while True:
