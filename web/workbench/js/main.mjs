@@ -43,6 +43,10 @@ const PHASES = {
   verifying: { text: "검증 중", tone: "busy" },
   exited: { text: "종료", tone: "idle" },
   failed: { text: "실패", tone: "crit" },
+  /* A run read back from a file. Named rather than shown as idle: what
+     is on screen is real and was real, and a reader has to know which
+     of those two it is looking at. */
+  replay: { text: "리플레이", tone: "idle" },
 };
 
 let latestTs = 0;
@@ -77,6 +81,11 @@ const boardView = createBoard({
      The board decides which those are, from the paths touching it; the
      log keeps that separate from what the reader muted by hand. */
   onFocus: (badges) => events.narrow(badges),
+  /* Click a path, walk what actually went down it. The board names the
+     path; the catalogue says which recorded moments light it; the strip
+     already knows how to ask for a filtered window and walk the answer.
+     Nothing here is new machinery — it is those three, composed. */
+  onTour: (edge) => startTour(edge),
 });
 
 const panels = createPanels({ tabs: ref("panel-tabs"), host: ref("panels") });
@@ -106,7 +115,15 @@ const timeline = createTimeline({
       return;
     }
     const record = choice.record;
-    timelineSel.textContent = `${record.id} · cpu${record.cpu} · ${traceFields(record)}`;
+    /* The chain, not the mark. What a reader takes from the strip is
+       `bind → +111us inject`, and the neighbours arrive with the
+       selection precisely so this line can say it. The gap is always
+       the real one, whatever rate the cursor is being moved at. */
+    const gap = choice.dt === null || choice.dt === undefined ? "" : ` · Δt ${choice.dt}us`;
+    const where = choice.total ? ` · ${choice.index + 1}/${choice.total}` : "";
+    const ahead = choice.next ? ` → ${choice.next.id}` : "";
+    timelineSel.textContent =
+      `${record.id}${ahead} · cpu${record.cpu}${gap}${where} · ${traceFields(record)}`;
     if (record.edge) boardView.focusPath(record.edge);
     /* One catalogue, two consumers, and this is where that is repaid:
        the moment a reader picked out of the trace is already a stop
@@ -115,8 +132,34 @@ const timeline = createTimeline({
     markedEvent = record.id;
     stopHereButton.hidden = false;
     stopHereButton.title = `다음 ${record.id}에서 정지`;
+    /* In a replay the selection is the whole view's cursor: the moment
+       a reader picks on the strip is the moment the panels and the
+       console are returned to. Live there is only now, and asking
+       would be asking a machine to have been something it is not. */
+    if (replaying) send("cursor", { ts: record.ts });
   },
 });
+
+/* The catalogue the bridge published this run, so a path can be turned
+   into the recorded moments that light it without a second table. */
+let catalogue = [];
+
+function startTour(edge) {
+  const ids = catalogue.filter((stop) => stop.edge === edge).map((stop) => stop.id);
+  if (!ids.length) {
+    /* A path with no recorded moment is drawn from structure alone.
+       Saying so beats a tour that starts and shows nothing. */
+    timelineSel.textContent = `${edge} — 이 경로를 기록하는 훅이 없습니다`;
+    return;
+  }
+  if (!timeline.tour(ids, edge)) {
+    timelineSel.textContent = `${edge} — 아직 기록된 통과가 없습니다`;
+    return;
+  }
+  setPlaying(true);
+  timelineSel.textContent = `투어 · ${edge} — 녹화된 순서 재생 중`;
+  events.addNotice(latestTs, `경로 투어 — ${edge}`);
+}
 
 /* The catalogue names the record's three words; an unnamed position
    holds nothing for that event. Naming happens there and not here, so
@@ -146,6 +189,39 @@ ref("tl-follow").addEventListener("click", (event) => {
   timeline.setFollow(event.currentTarget.getAttribute("aria-pressed") !== "true");
 });
 
+/* The same three movers the keys use. Buttons because a reader who has
+   not clicked the strip yet has nowhere to press a key, and stepping is
+   the first thing they want. */
+const playButton = ref("tl-play");
+function setPlaying(on) {
+  playButton.setAttribute("aria-pressed", String(on));
+  playButton.textContent = on ? "정지" : "재생";
+}
+ref("tl-prev").addEventListener("click", () => {
+  timeline.stop();
+  setPlaying(false);
+  timeline.setFollow(false);
+  timeline.step(-1);
+});
+ref("tl-next").addEventListener("click", () => {
+  timeline.stop();
+  setPlaying(false);
+  timeline.setFollow(false);
+  timeline.step(+1);
+});
+playButton.addEventListener("click", () => {
+  const on = !timeline.isPlaying();
+  if (on) {
+    /* Playing the tail while the tail keeps moving is two cursors
+       chasing each other. */
+    timeline.setFollow(false);
+    timeline.play();
+  } else {
+    timeline.stop();
+  }
+  setPlaying(on);
+});
+
 const consoleView = createConsole({
   tabs: ref("tabs"),
   logs: ref("logs"),
@@ -165,7 +241,7 @@ const topology = createTopology({
     rerunButton.hidden = true;
     /* One start per click storm: the next terminal phase (or a
        rejection) re-arms the button. */
-    runButton.disabled = true;
+    armRun(false);
     events.addNotice(latestTs, `실행 요청 — ${demo}`);
   },
   onNotice: notify,
@@ -173,7 +249,21 @@ const topology = createTopology({
 
 /* ---------------- top bar state ---------------- */
 
+/* True once the connect topology says this bridge is showing a file.
+   A recording replays its own lifecycle — started, ran, exited — and
+   those are history to look at, not transitions to obey: acting on them
+   would put "실행 중" on a screen with no machine behind it. */
+let replaying = false;
+
+/* One owner for whether the machine can be launched. Seven places
+   re-armed the button directly, and a replay has to refuse all of them
+   — which is a rule about the session, not seven rules about them. */
+function armRun(on) {
+  runButton.disabled = replaying || !on;
+}
+
 function setPhase(phase, override) {
+  if (replaying && phase !== "replay") return;
   const info = PHASES[phase];
   phaseBadge.dataset.tone = info ? info.tone : "idle";
   phaseText.textContent = override || (info ? info.text : phase || "—");
@@ -184,6 +274,13 @@ function setPhase(phase, override) {
      there sends commands the bridge can only reject. */
   for (const control of [advanceButton, stepButton, autoButton]) {
     control.disabled = phase !== "running";
+  }
+  /* There is no machine to launch, and no run to re-run. The strip and
+     the panels stay live, because those are what a replay is for. */
+  if (phase === "replay") {
+    armRun(false);
+    ref("target").disabled = true;
+    rerunButton.hidden = true;
   }
 }
 
@@ -217,6 +314,11 @@ function setStops(stops) {
   const previous = stopPick.value;
   clear(stopPick);
   for (const stop of stops || []) {
+    /* One catalogue, two uses. Everything in it names a lane; only the
+       entries backed by a firmware function name a place to halt, and
+       the bridge says which those are rather than the client guessing
+       from an id. */
+    if (stop.stop === false) continue;
     const option = el("option", "", stop.label ? `${stop.id} — ${stop.label}` : stop.id);
     option.value = stop.id;
     stopPick.append(option);
@@ -301,6 +403,7 @@ function onTopo(data) {
   events.setBadges(taxonomy.badges);
   panels.setTopology(topo);
   boardView.setTopology(topo);
+  catalogue = Array.isArray(topo.stops) ? topo.stops : [];
   setStops(topo.stops);
   timeline.setCatalogue(topo.stops);
   timeline.setLimits(topo.limits);
@@ -309,6 +412,9 @@ function onTopo(data) {
      only reliable carrier for a late joiner. */
   if (topo.phase !== undefined) {
     const phase = String(topo.phase);
+    /* Set before the switch below, so the guard in setPhase is already
+       true for the very first thing it is asked to show. */
+    replaying = phase === "replay";
     if (phase === "running" && topo.paused) {
       setPaused(true);
       setPhase("running", "일시정지 (H)");
@@ -330,14 +436,32 @@ function onTopo(data) {
   }
 }
 
+/* What the ring depth buys on this host, in the two numbers that set
+   it: how fast the busiest core filled a ring, and how long this
+   process actually went between looks. Both measured, because a
+   horizon quoted from a design note is not a fact about the machine
+   the reader is looking at. */
+function budgetText(budget) {
+  if (!budget.peak_rate) return `링 ${budget.capacity}건`;
+  const rate =
+    budget.peak_rate >= 1000
+      ? `${Math.round(budget.peak_rate / 1000)}k/s`
+      : `${budget.peak_rate}/s`;
+  return `링 ${(budget.horizon_ms / 1000).toFixed(1)}초 @ ${rate} · 최악 정체 ${Math.round(
+    budget.worst_gap_ms,
+  )}ms`;
+}
+
 /* The `early` count is a different fact from a drain loss: those events
    predate the rings, so no drainer however prompt could have had them. */
 function traceStateText(data) {
   switch (String(data.state || "")) {
-    case "active":
+    case "active": {
+      const shape = data.capacity ? ` — 링 ${data.rings}×${data.capacity}` : "";
       return data.early
-        ? `트레이스 연결 — 배치 전 유실 ${data.early}건`
-        : "트레이스 연결";
+        ? `트레이스 연결${shape} · 배치 전 유실 ${data.early}건`
+        : `트레이스 연결${shape}`;
+    }
     case "waiting":
       return "트레이스 영역 대기 중";
     case "none":
@@ -355,7 +479,7 @@ function onLife(ts, data) {
   switch (phase) {
     case "idle":
       setPhase(phase);
-      runButton.disabled = false;
+      armRun(true);
       events.addNotice(ts, "세션 대기");
       break;
     case "building":
@@ -366,7 +490,7 @@ function onLife(ts, data) {
       break;
     case "running":
       setPhase(phase);
-      runButton.disabled = false;
+      armRun(true);
       rerunButton.hidden = true;
       setPaused(false);
       setAuto(false);
@@ -444,7 +568,7 @@ function onLife(ts, data) {
       break;
     case "exited":
       setPhase(phase, `종료 (code=${data.code ?? "?"})`);
-      runButton.disabled = false;
+      armRun(true);
       rerunButton.hidden = false;
       events.addNotice(ts, `세션 종료 code=${data.code ?? "?"}`, {
         severity: exitSeverity(data.code),
@@ -452,7 +576,7 @@ function onLife(ts, data) {
       break;
     case "failed":
       setPhase(phase);
-      runButton.disabled = false;
+      armRun(true);
       rerunButton.hidden = false;
       events.addNotice(ts, `실패: ${data.error || "원인 미상"}`, { severity: "CRIT" });
       break;
@@ -497,7 +621,7 @@ function onLife(ts, data) {
       events.addNotice(ts, `미지원 업링크 토픽: ${data.topic || "?"}`, { dim: true });
       break;
     case "uplink-rejected":
-      runButton.disabled = false; /* a rejected select ends its attempt */
+      armRun(true); /* a rejected select ends its attempt */
       events.addNotice(ts, `업링크 거부: ${data.reason || "?"}`, { dim: true });
       break;
     case "frames-dropped":
@@ -521,7 +645,7 @@ function onFrame(frame) {
       }
       break;
     case "console":
-      consoleView.append(data);
+      consoleView.append(data, frame.ts);
       if (Number.isInteger(data.vm) && data.vm >= 0 && data.vm < MAX_VM_SLOT) {
         cards.touch(data.vm, data.text);
       }
@@ -542,14 +666,29 @@ function onFrame(frame) {
       boardView.traced(frame.ts, data);
       timeline.note(data);
       if (data.span) {
-        timelineNote.textContent = data.span.full
+        const held = data.span.full
           ? `${data.span.n} 레코드 · 지평선 도달`
           : `${data.span.n} 레코드`;
+        timelineNote.textContent = data.budget ? `${held} · ${budgetText(data.budget)}` : held;
+        /* The promise and the reality side by side, and the crossing
+           marked. A budget that only ever appeared in a design note is
+           one nobody checks against the machine in front of them. */
+        timelineNote.classList.toggle("over", Boolean(data.budget?.overrun));
       }
       if (data.dropped) noteLoss(data.dropped);
       break;
     case "life":
       onLife(frame.ts, data);
+      break;
+    /* Where in the run the reader is looking. The strip, the panels and
+       the console were three views that could only agree about the
+       present; this is the one number that makes them agree about a
+       past. The panels arrive as ordinary snapshots just before it, so
+       nothing here has to put them anywhere. */
+    case "cursor":
+      consoleView.cutAt(data.wire ?? null);
+      events.cutAt(data.wire ?? null);
+      panels.setUnread(data.unread);
       break;
     /* One matched expectation of a --verify run; index is 1-based. */
     case "verify":
@@ -583,7 +722,7 @@ function onReset() {
   lostFrames = 0;
   lossBadge.hidden = true;
   bootMark.hidden = true;
-  runButton.disabled = false;
+  armRun(true);
   rerunButton.hidden = true;
   currentRun = null;
   setPaused(false);

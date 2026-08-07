@@ -69,10 +69,15 @@ class TraceRegionTest(unittest.TestCase):
         )
         values = abi.read_defines(
             header,
-            ["NOVA_BOARD_IVC_SHM_PA", "NOVA_BOARD_TRACE_PA", "NOVA_BOARD_PRISTINE_PA"],
+            [
+                "NOVA_BOARD_IVC_SHM_PA",
+                "NOVA_BOARD_TRACE_PA",
+                "NOVA_BOARD_TRACE_SIZE",
+                "NOVA_BOARD_PRISTINE_PA",
+                "NOVA_BOARD_SMP_CPUS",
+            ],
         )
         values |= abi.read_defines(abi.GUEST_LAYOUT, ["NOVA_IVC_SHM_SIZE"])
-        values |= abi.read_defines(abi.TRACE_RING, ["NOVA_TRACE_SIZE"])
         return values
 
     def test_every_board_reserves_the_region(self):
@@ -85,43 +90,55 @@ class TraceRegionTest(unittest.TestCase):
             with self.subTest(board=board):
                 values = self.layout(board)
                 start = values["NOVA_BOARD_TRACE_PA"]
-                end = start + values["NOVA_TRACE_SIZE"]
+                end = start + values["NOVA_BOARD_TRACE_SIZE"]
                 after_ivc = values["NOVA_BOARD_IVC_SHM_PA"] + values["NOVA_IVC_SHM_SIZE"]
                 self.assertGreaterEqual(start, after_ivc)
                 self.assertLessEqual(end, values["NOVA_BOARD_PRISTINE_PA"])
 
-    def test_the_region_holds_every_ring_the_writer_will_place(self):
-        """Sizing is the header's own arithmetic; if it stops adding up,
-        rings would silently overlap each other rather than fail."""
+    def test_every_board_reserves_enough_for_a_ring_worth_having(self):
+        """Capacity is not declared anywhere: it is the region divided
+        by the cores that write to it. So the reservation is the whole
+        sizing decision, and the way to get it wrong is to reserve too
+        little.
+
+        The per-board form of this is the static_assert in the trace
+        component, and it only fires for the board being built. Held
+        here for all three from one host lane, which is where a port
+        that never gets built on this machine is caught.
+        """
         from novakit.image import abi
 
-        values = abi.read_defines(
+        limits = abi.read_defines(
             abi.TRACE_RING,
             [
-                "NOVA_TRACE_SIZE",
                 "NOVA_TRACE_HEADER_SIZE",
                 "NOVA_TRACE_RECORDS_OFF",
                 "NOVA_TRACE_REC_SIZE",
-                "NOVA_TRACE_CAPACITY",
+                "NOVA_TRACE_MIN_CAPACITY",
+                "NOVA_TRACE_MAX_RINGS",
             ],
         )
-        cpus = abi.read_defines(
-            REPO / "src" / "hal" / "board" / "qemu_virt" / "include"
-            / "hal" / "board" / "active" / "board_layout.h",
-            ["NOVA_BOARD_SMP_CPUS"],
-        )["NOVA_BOARD_SMP_CPUS"]
-        stride = (
-            values["NOVA_TRACE_RECORDS_OFF"]
-            + values["NOVA_TRACE_REC_SIZE"] * values["NOVA_TRACE_CAPACITY"]
+        floor_stride = (
+            limits["NOVA_TRACE_RECORDS_OFF"]
+            + limits["NOVA_TRACE_REC_SIZE"] * limits["NOVA_TRACE_MIN_CAPACITY"]
         )
-        needed = values["NOVA_TRACE_HEADER_SIZE"] + stride * cpus
-        self.assertLessEqual(needed, values["NOVA_TRACE_SIZE"])
+        for board in self.BOARDS:
+            with self.subTest(board=board):
+                values = self.layout(board)
+                cpus = values["NOVA_BOARD_SMP_CPUS"]
+                # A core past the last ring would index the writer's
+                # inline array out of bounds on every emit.
+                self.assertLessEqual(cpus, limits["NOVA_TRACE_MAX_RINGS"])
+                needed = limits["NOVA_TRACE_HEADER_SIZE"] + floor_stride * cpus
+                self.assertLessEqual(needed, values["NOVA_BOARD_TRACE_SIZE"])
 
-    def test_a_record_is_a_power_of_two(self):
-        """Indexing is a mask, and no record may straddle a cache line."""
+    def test_the_sizes_indexing_relies_on_are_powers_of_two(self):
+        """Indexing is a mask, and no record may straddle a cache line.
+        The floor is one too, so it names a depth a division can land
+        on exactly rather than one it can only overshoot."""
         from novakit.image import abi
 
-        size = abi.read_define(abi.TRACE_RING, "NOVA_TRACE_REC_SIZE")
-        self.assertEqual(size & (size - 1), 0)
-        capacity = abi.read_define(abi.TRACE_RING, "NOVA_TRACE_CAPACITY")
-        self.assertEqual(capacity & (capacity - 1), 0)
+        for name in ("NOVA_TRACE_REC_SIZE", "NOVA_TRACE_MIN_CAPACITY"):
+            with self.subTest(define=name):
+                value = abi.read_define(abi.TRACE_RING, name)
+                self.assertEqual(value & (value - 1), 0)

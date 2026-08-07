@@ -171,8 +171,8 @@ class StopPointTest(unittest.TestCase):
         self.index = elfsym.ElfIndex(ELF)
         self.addCleanup(self.index.close)
 
-    def test_every_event_resolves_to_an_entry_address(self):
-        for event in events.EVENTS:
+    def test_every_stop_point_resolves_to_an_entry_address(self):
+        for event in events.STOPS:
             with self.subTest(event=event.id):
                 address = self.index.resolve_function(event.symbol)
                 self.assertGreater(address, 0)
@@ -180,7 +180,7 @@ class StopPointTest(unittest.TestCase):
     def test_addresses_are_distinct(self):
         """Two events at one address would be one stop wearing two
         names: arming either would fire both."""
-        seen = {event.id: self.index.resolve_function(event.symbol) for event in events.EVENTS}
+        seen = {event.id: self.index.resolve_function(event.symbol) for event in events.STOPS}
         self.assertEqual(len(set(seen.values())), len(seen), seen)
 
     def test_the_bind_carries_the_binding_in_its_arguments(self):
@@ -239,7 +239,10 @@ class StopCatalogueTest(unittest.TestCase):
         with.
         """
         for entry in events.catalogue():
-            self.assertEqual(set(entry), {"id", "edge", "args", "label", "code", "fields"})
+            self.assertEqual(
+                set(entry),
+                {"id", "edge", "args", "label", "code", "fields", "stop", "span"},
+            )
 
     def test_every_record_word_the_bridge_decodes_is_also_named(self):
         """decode() knows the packing; the catalogue names the words.

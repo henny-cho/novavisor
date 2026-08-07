@@ -34,6 +34,10 @@ from . import paths
 # header both sides compile against, so a renumbered event cannot mean
 # one thing to the ring writer and another to this reader.
 _CODES = abi.read_define_family(abi.TRACE_RING, "NOVA_TRACE_EV_")
+# Codes the host writes into the same stream. A separate family, not a
+# continuation: the list above is "what the firmware emits", and this
+# one inside it would read as a hook nobody implemented.
+_HOST_CODES = abi.read_define_family(abi.TRACE_RING, "NOVA_TRACE_HOST_EV_")
 
 
 @dataclass(frozen=True)
@@ -59,6 +63,22 @@ class Event:
     # A packed word is named as the pair it is — splitting it belongs in
     # decode(), the one place that knows the packing.
     fields: tuple[str, str, str] = ("", "", "")
+    # Whether the record describes a stretch of time rather than an
+    # instant. Almost nothing does; a hole in the stream is the whole
+    # exception, and drawn as a tick it would claim the axis around it
+    # was watched.
+    span: bool = False
+
+    @property
+    def stop(self) -> bool:
+        """Whether the machine can be halted here.
+
+        Every firmware moment can. A record the host writes about the
+        stream itself cannot — there is no instruction to break on —
+        and the missing symbol is that fact rather than a hole in the
+        table.
+        """
+        return bool(self.symbol)
 
 
 # Ordered by the injection path they sit on: a physical interrupt is
@@ -120,7 +140,20 @@ EVENTS: tuple[Event, ...] = (
     Event("smmu.fault", "nova::smmu::(anonymous)::dispatch_faults", "", ("stream", "vm"),
           "SMMU 변환 폴트", code=_CODES["NOVA_TRACE_EV_SMMU_FAULT"],
           fields=("stream", "vm", "generation")),
+    # Not a moment in the firmware but a statement about the stream:
+    # written by the reader where the records it could not recover
+    # would have been. No symbol, so it is never offered as a stop
+    # point; no edge, because the grade rule in paths.py says exactly
+    # this — a stretch nothing was watching is evidence for no path.
+    Event("trace.gap", "", "", label="관측되지 않은 구간",
+          code=_HOST_CODES["NOVA_TRACE_HOST_EV_GAP"],
+          fields=("count", "from", ""), span=True),
 )
+
+# Where the machine can actually be stopped. The catalogue is one list
+# because a stop point and a trace hook are one fact, and the entries
+# that are only a record kind are the exception this names once.
+STOPS: tuple[Event, ...] = tuple(event for event in EVENTS if event.stop)
 
 BY_ID = {event.id: event for event in EVENTS}
 BY_CODE = {event.code: event for event in EVENTS if event.code}
@@ -170,6 +203,12 @@ def catalogue() -> list[dict]:
             # clicks a mark. Named here so the UI never learns a layout
             # the bridge already knows.
             "fields": list(event.fields),
+            # Whether this entry can be armed, and whether its records
+            # cover a stretch rather than an instant. The UI builds a
+            # picker and a lane from one list, and these are what let it
+            # do both without a copy of the catalogue's exceptions.
+            "stop": event.stop,
+            "span": event.span,
         }
         for event in EVENTS
     ]

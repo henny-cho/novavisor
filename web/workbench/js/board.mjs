@@ -142,7 +142,7 @@ function evidence(kind, label) {
   return el("span", `src ${kind}`, label);
 }
 
-export function createBoard({ view, board, bands, wires, split, foldButton, onFocus }) {
+export function createBoard({ view, board, bands, wires, split, foldButton, onFocus, onTour }) {
   const latest = new Map(); // topic -> value
   /* Nodes the tick writes into, filled in while the skeleton is built.
      Rebuilding markup instead would drop hover, selection and focus. */
@@ -487,6 +487,15 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
       const group = key(spec);
       const rank = seen.get(group) || 0;
       seen.set(group, rank + 1);
+      /* An invisible companion, wide enough to be aimed at. A path is
+         drawn 1.25px thin on purpose — the width is what says how well
+         it is observed — so the click target cannot be the line itself
+         without changing what a reader reads from it. */
+      const hit = document.createElementNS(NS, "path");
+      hit.setAttribute("class", "edge-hit");
+      hit.setAttribute("fill", "none");
+      hit.dataset.edge = spec.id;
+      wires.append(hit);
       const line = document.createElementNS(NS, "path");
       line.setAttribute("class", `edge ${spec.grade}`);
       line.setAttribute("fill", "none");
@@ -500,6 +509,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
       const edge = {
         ...spec,
         line,
+        hit,
         tip,
         shown: false,
         d: "",
@@ -593,6 +603,9 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     if (edge.shown === on) return;
     edge.shown = on;
     edge.line.style.display = on ? "" : "none";
+    /* Together, always: a hit area left behind by a hidden path is a
+       click target for something not on screen. */
+    edge.hit.style.display = on ? "" : "none";
   }
 
   function drawEdges() {
@@ -607,6 +620,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
       if (edge.d !== d) {
         edge.d = d;
         edge.line.setAttribute("d", d);
+        edge.hit.setAttribute("d", d);
       }
       put(edge.tip, edgeTitle(edge));
       showEdge(edge, true);
@@ -1473,6 +1487,18 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     const hit = event.target.closest?.("[data-anchor]");
     const id = hit && !hit.classList.contains("band") ? hit.dataset.anchor : null;
     setFocus(id === focused ? null : id);
+  });
+
+  /* Click a path to walk what actually went down it. The board knows
+     which path was clicked and nothing about the trace, so it says so
+     and lets the strip answer — the recorded order lives there, and a
+     second way of reading it here would be a second answer. */
+  wires.addEventListener("click", (event) => {
+    const id = event.target.dataset?.edge;
+    if (!id) return;
+    const edge = byId.get(id);
+    if (edge) setFocus(edge.from);
+    if (onTour) onTour(id);
   });
   view.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && focused) {

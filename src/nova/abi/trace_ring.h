@@ -17,8 +17,14 @@
  * the reader keeps its cursor on its own side and computes what it
  * missed:
  *
- *   lost   = max(0, head - CAPACITY - cursor)
- *   window = [max(cursor, head - CAPACITY), head)
+ *   window = [max(cursor, head - capacity + 1), head)
+ *   lost   = (head - cursor) - |window|
+ *
+ * The `+ 1` is the whole depth story. Head at H means the writer has
+ * published H records and is inside the slot for index H — the same
+ * slot index H - capacity occupies — so that record is already being
+ * destroyed and the recoverable depth is capacity - 1. Keeping the
+ * `capacity`th would hand out one record assembled from two events.
  *
  * A record body is written before `head` is published with a release
  * store, so a slot at or beyond `head` is never read. A reader re-reads
@@ -62,7 +68,7 @@
 #define NOVA_TRACE_RECSIZE_OFF 0x0C
 #define NOVA_TRACE_STRIDE_OFF  0x10
 #define NOVA_TRACE_RINGS_OFF   0x14
-#define NOVA_TRACE_CAP_OFF     0x18
+#define NOVA_TRACE_CAP_OFF     0x18 /* records per ring, derived at placement */
 #define NOVA_TRACE_FREQ_OFF    0x1C /* CNTFRQ_EL0: ts -> seconds, one source */
 #define NOVA_TRACE_EARLY_OFF   0x20 /* u32 events emitted before placement */
 #define NOVA_TRACE_HEADER_SIZE 0x40
@@ -88,21 +94,26 @@
 #define NOVA_TRACE_B_OFF    0x10 /* u64 */
 #define NOVA_TRACE_C_OFF    0x18 /* u64 */
 
-/* Records per ring. 4096 * 32 B = 128 KiB each; four of those plus
- * headers fit the reserved region with room left. At a 20 Hz drain that
- * is ~82k events per second per core before anything is lost. */
-#define NOVA_TRACE_CAPACITY 4096
+/* The smallest ring worth placing, in records.
+ *
+ * Capacity is deliberately not a constant. It falls out of the region a
+ * board reserves divided by the rings that board fills, and the writer
+ * publishes the result in the header the reader already parses — so the
+ * whole sizing decision is one number per board and there is no second
+ * number to keep in agreement with it. A two-core board gets twice the
+ * depth of a four-core one out of the same reservation, because the
+ * divisor is the real ring count rather than the ceiling.
+ *
+ * What a floor buys is that a board reserving too little fails to build
+ * rather than quietly handing the T layer a ring that laps inside one
+ * drain interval. */
+#define NOVA_TRACE_MIN_CAPACITY 4096
 
-/* Rings the region is sized for. The board decides how many it fills;
- * this is the ceiling every board's reservation must cover, so porting
- * to a wider machine does not silently overrun into the pristine
- * images. */
+/* The ABI ceiling on the header's `rings` field, and the number of
+ * rings the writer keeps inline storage for. A reader sizes nothing
+ * from a header it has not yet vetted, so this is also what an
+ * implausible `rings` is checked against. */
 #define NOVA_TRACE_MAX_RINGS 4
-
-/* The whole reserved region: header + MAX_RINGS * (header + records),
- * rounded up. Bounded by the 1020 KiB gap every board leaves between
- * the IVC page and the pristine images. */
-#define NOVA_TRACE_SIZE 0x000A0000 /* 640 KiB */
 
 /* Event kinds. The bridge's event catalogue names the same moments for
  * its breakpoints; a stop point and a trace hook are one fact about the
@@ -121,6 +132,26 @@
 #define NOVA_TRACE_EV_PSCI         12
 #define NOVA_TRACE_EV_UART_LINE    13
 #define NOVA_TRACE_EV_SMMU_FAULT   14
+
+/* Codes the host writes into the same stream, far above the firmware's
+ * numbering and read as a separate family — so one can never arrive as
+ * a hook nobody implemented.
+ *
+ * The ring protocol above can say how much a reader missed but not
+ * where, and a count is the wrong shape for that knowledge: a drain
+ * holds both ends of the hole and throws them away on the way out.
+ * Written as a record instead, a hole sorts by timestamp, decodes,
+ * lands in a lane and answers a window like anything else, so nothing
+ * downstream needs a second path for the part of the run that is
+ * missing. */
+#define NOVA_TRACE_HOST_CODE_BASE 0x8000
+
+/* A stretch nothing was watching: a ring lapped before a drain reached
+ * it, or the events predate the region entirely. `ts` closes the hole
+ * at the first record that survived it, `cpu` names the ring, `a`
+ * counts what was lost, and `b` opens it at the last record handed out
+ * before — zero when even that is unknown. */
+#define NOVA_TRACE_HOST_EV_GAP 0x8000
 
 // NOLINTEND(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 

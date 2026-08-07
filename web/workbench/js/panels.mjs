@@ -12,10 +12,64 @@
 
 import { clear, el, stamp } from "./format.mjs";
 
-function fmt(value) {
-  if (typeof value === "boolean") return value ? "●" : "·";
-  return String(value ?? "—");
+function fmt(shown) {
+  if (typeof shown === "boolean") return shown ? "●" : "·";
+  /* A nested value has no column of its own; its shape is still the
+     truth, so it travels as JSON rather than as "[object Object]". */
+  if (shown !== null && typeof shown === "object") return JSON.stringify(shown);
+  return String(shown ?? "—");
 }
+
+/* One cell: what to show, and whether it moved since the previous stop.
+   Both, always, because a cell drawn from a bare number has already
+   thrown away the thing a stop is for. */
+class Cell {
+  constructor(shown, moved) {
+    this.shown = shown;
+    this.moved = Boolean(moved);
+  }
+}
+
+/* A reading and the mask of what moved in it, walked together.
+ *
+ * The alternative was for each renderer to rebuild the address of its
+ * own cell — `sched.cpu[1].current` — and look it up in a list. That
+ * puts the mask's grammar in the client a second time, and a cell whose
+ * address is spelled wrong is silently never highlighted. Nine
+ * renderers is nine chances, and every new panel is another.
+ *
+ * Here the mask is shaped like the value, so descending the value
+ * descends the mask by the same key. The cursor arrives at the cell
+ * carrying both; there is nothing to look up and nothing to forget. */
+class Cursor extends Cell {
+  constructor(shown, mask) {
+    super(shown, mask === true);
+    this.mask = mask;
+  }
+
+  /* A child by key or index. `true` at a node means the node itself
+     changed shape, and everything under it with it. */
+  get(key) {
+    const inner = this.mask === true ? true : this.mask?.[String(key)];
+    return new Cursor(this.shown?.[key], inner);
+  }
+
+  /* An array's elements, as cursors. Not a plain map(), because the
+     index has to reach the mask as the string key the bridge sent. */
+  rows() {
+    return Array.isArray(this.shown) ? this.shown.map((_, index) => this.get(index)) : [];
+  }
+
+  keys() {
+    return this.shown && typeof this.shown === "object" ? Object.keys(this.shown) : [];
+  }
+}
+
+/* A cell with no provenance, said so out loud: a row number, a label, a
+   unit — something computed here rather than read from the machine.
+   The point is that `plain()` is a claim a reader can grep for, where a
+   bare value in a cell is indistinguishable from a forgotten cursor. */
+const plain = (shown) => new Cell(shown, false);
 
 function table(headers, rows) {
   const node = el("table", "ptable");
@@ -24,41 +78,56 @@ function table(headers, rows) {
   node.append(head);
   for (const cells of rows) {
     const row = el("tr");
-    for (const cell of cells) row.append(el("td", "", fmt(cell)));
+    for (const cell of cells) {
+      /* Refused rather than rendered. A bare value here would draw
+         correctly and never highlight, which is the failure this whole
+         arrangement exists to make impossible — so it must not be a
+         thing that draws correctly. */
+      if (!(cell instanceof Cell)) {
+        throw new TypeError(`table cell is neither a cursor nor plain(): ${String(cell)}`);
+      }
+      row.append(el("td", cell.moved ? "moved" : "", fmt(cell.shown)));
+    }
     node.append(row);
   }
   return node;
 }
 
-function section(title) {
-  return el("div", "psec-h", title);
+/* A section heading. `moved` because a reading is sometimes clearer in
+   a heading than in a column, and a value that escapes the table must
+   not escape the highlight with it — otherwise the tab's count points
+   at a drawer where nothing appears to have changed. */
+function section(title, moved = false) {
+  return el("div", moved ? "psec-h moved" : "psec-h", title);
+}
+
+function note(text, moved = false) {
+  return el("div", moved ? "pnote moved" : "pnote", text);
 }
 
 /* Any decoded value, without knowing what it is. The field names come
    from the firmware's own debug info, so a table of them is already
    readable — what a hand-written panel adds is ordering, units and
    which columns matter, not the ability to show the value at all. */
-function generic(held) {
+function generic(cursor) {
+  const held = cursor.shown;
   if (Array.isArray(held)) {
-    const rows = held.map((item, index) => [index, item]);
+    const rows = cursor.rows();
     const shaped = held.find((item) => item && typeof item === "object" && !Array.isArray(item));
-    if (!shaped) return table(["#", "value"], rows.map(([at, item]) => [at, format(item)]));
+    if (!shaped) return table(["#", "value"], rows.map((row, index) => [plain(index), row]));
     const columns = [...new Set(held.flatMap((item) => Object.keys(item || {})))];
     return table(
       ["#", ...columns],
-      held.map((item, index) => [index, ...columns.map((key) => format(item?.[key]))]),
+      rows.map((row, index) => [plain(index), ...columns.map((key) => row.get(key))]),
     );
   }
   if (held && typeof held === "object") {
-    return table(["key", "value"], Object.entries(held).map(([key, item]) => [key, format(item)]));
+    return table(
+      ["key", "value"],
+      cursor.keys().map((key) => [plain(key), cursor.get(key)]),
+    );
   }
-  return el("div", "pnote", fmt(held));
-}
-
-/* A nested value has no column of its own; its shape is still the
-   truth, so it travels as JSON rather than as "[object Object]". */
-function format(item) {
-  return item !== null && typeof item === "object" ? JSON.stringify(item) : item;
+  return note(fmt(held), cursor.moved);
 }
 
 /* Which panels were open, so a reload does not undo the choice. */
@@ -66,6 +135,14 @@ const OPEN_KEY = "nv-wb-panels";
 
 export function createPanels({ tabs, host }) {
   const latest = new Map(); // topic -> {value, ts, src}
+  /* Per topic, the mask of what moved between the last two stops.
+     Cleared when the machine resumes: a delta is only true of the pair
+     it came from. Beside `latest` because the two are read together and
+     never apart — that pairing is the whole design here. */
+  const moved = new Map();
+  /* Topics the run had not read yet at the point the reader is looking
+     at. Empty live, where the only point is now. */
+  let unread = new Set();
   const visible = new Set(); // panels switched on; screen order is PANELS order
   const dirty = new Set(); // panels whose topics changed since the last settle
   let timerSlots = [];
@@ -89,7 +166,11 @@ export function createPanels({ tabs, host }) {
     }
   }
 
-  const value = (topic) => latest.get(topic)?.value;
+  /* The only way into a reading. There is deliberately no accessor
+     that hands back a bare value: one existed, every renderer used it,
+     and the mask arrived at the panel with nowhere to be applied. */
+  const at = (topic) =>
+    unread.has(topic) ? new Cursor(undefined, undefined) : new Cursor(latest.get(topic)?.value, moved.get(topic));
 
   const PANELS = [
     {
@@ -97,29 +178,44 @@ export function createPanels({ tabs, host }) {
       title: "Scheduler",
       topics: ["sched.cpu", "sched.slots", "sched.run", "sched.affinity", "sched.valid", "sched.slice"],
       render(body) {
-        const cpus = value("sched.cpu") || [];
         body.append(section("pCPU"));
         body.append(
           table(
             ["cpu", "current", "fp", "fp_trap", "idling"],
-            cpus.map((cpu, index) => [index, cpu.current, cpu.fp, cpu.fp_trap, cpu.idling]),
+            at("sched.cpu")
+              .rows()
+              .map((cpu, index) => [
+                plain(index),
+                cpu.get("current"),
+                cpu.get("fp"),
+                cpu.get("fp_trap"),
+                cpu.get("idling"),
+              ]),
           ),
         );
-        const power = value("sched.slots") || [];
-        const run = value("sched.run") || [];
-        const affinity = value("sched.affinity") || [];
-        const valid = value("sched.valid") || [];
-        const rows = power.map((state, slot) => [
-          slot,
-          state,
-          run[slot]?.state,
-          affinity[slot],
-          valid[slot],
-        ]);
+        const power = at("sched.slots");
+        const run = at("sched.run");
+        const affinity = at("sched.affinity");
+        const valid = at("sched.valid");
         body.append(section("vCPU 슬롯"));
-        body.append(table(["slot", "power", "run", "aff", "valid"], rows));
-        const slice = value("sched.slice");
-        if (slice !== undefined) body.append(el("div", "pnote", `slice ticks: ${fmt(slice)}`));
+        body.append(
+          table(
+            ["slot", "power", "run", "aff", "valid"],
+            power
+              .rows()
+              .map((state, slot) => [
+                plain(slot),
+                state,
+                run.get(slot).get("state"),
+                affinity.get(slot),
+                valid.get(slot),
+              ]),
+          ),
+        );
+        const slice = at("sched.slice");
+        if (slice.shown !== undefined) {
+          body.append(note(`slice ticks: ${fmt(slice.shown)}`, slice.moved));
+        }
       },
     },
     {
@@ -127,25 +223,33 @@ export function createPanels({ tabs, host }) {
       title: "Timer",
       topics: ["timer.queue", "timer.programmed", "timer.cntvoff", "vm.generation"],
       render(body) {
-        const queues = value("timer.queue") || [];
-        const programmed = value("timer.programmed") || [];
-        queues.forEach((slots, cpu) => {
-          body.append(section(`cpu${cpu} — programmed ${fmt(programmed[cpu])}`));
-          body.append(
-            table(
-              ["slot", "owner", "deadline"],
-              slots.map((slot) => [slot.slot, timerSlots[slot.slot] ?? "?", slot.deadline]),
-            ),
-          );
-          if (!slots.length) body.append(el("div", "pnote", "armed 슬롯 없음"));
-        });
-        const cntvoff = value("timer.cntvoff") || [];
-        const generation = value("vm.generation") || [];
+        const programmed = at("timer.programmed");
+        at("timer.queue")
+          .rows()
+          .forEach((slots, cpu) => {
+            const armed = programmed.get(cpu);
+            body.append(section(`cpu${cpu} — programmed ${fmt(armed.shown)}`, armed.moved));
+            body.append(
+              table(
+                ["slot", "owner", "deadline"],
+                slots.rows().map((slot) => [
+                  slot.get("slot"),
+                  /* The manifest's label for that slot, not a reading. */
+                  plain(timerSlots[slot.get("slot").shown] ?? "?"),
+                  slot.get("deadline"),
+                ]),
+              ),
+            );
+            if (!slots.rows().length) body.append(el("div", "pnote", "armed 슬롯 없음"));
+          });
+        const generation = at("vm.generation");
         body.append(section("per-VM"));
         body.append(
           table(
             ["vm", "cntvoff", "generation"],
-            cntvoff.map((offset, vm) => [vm, offset, generation[vm]]),
+            at("timer.cntvoff")
+              .rows()
+              .map((offset, vm) => [plain(vm), offset, generation.get(vm)]),
           ),
         );
       },
@@ -155,16 +259,16 @@ export function createPanels({ tabs, host }) {
       title: "Context",
       topics: ["ctx.trap", "ctx.el1", "sched.valid"],
       render(body) {
-        const valid = value("sched.valid") || [];
-        const traps = value("ctx.trap") || [];
-        const banks = value("ctx.el1") || [];
+        const valid = at("sched.valid");
+        const traps = at("ctx.trap");
+        const banks = at("ctx.el1");
         const picker = el("div", "pslots");
-        const count = Math.max(traps.length, banks.length);
+        const count = Math.max(traps.rows().length, banks.rows().length);
         for (let slot = 0; slot < count; slot += 1) {
           const pick = el("button", "pslot", `s${slot}`);
           pick.type = "button";
           if (slot === ctxSlot) pick.classList.add("on");
-          if (valid[slot] === false) pick.classList.add("off");
+          if (valid.get(slot).shown === false) pick.classList.add("off");
           pick.addEventListener("click", () => {
             ctxSlot = slot;
             render("ctx");
@@ -172,20 +276,33 @@ export function createPanels({ tabs, host }) {
           picker.append(pick);
         }
         body.append(picker);
-        const trap = traps[ctxSlot]?.ctx;
-        if (trap) {
-          const named = trap.x.map((reg, index) => [`x${index}`, reg]);
-          named.push(["sp", trap.sp], ["elr", trap.elr], ["spsr", trap.spsr]);
-          named.push(["esr", trap.esr], ["far", trap.far]);
+        const trap = traps.get(ctxSlot).get("ctx");
+        if (trap.shown) {
+          /* Two register pairs per row, so the dump reads in a column
+             rather than forty rows deep. `named` is [label, cursor]. */
+          const named = trap
+            .get("x")
+            .rows()
+            .map((reg, index) => [plain(`x${index}`), reg]);
+          for (const name of ["sp", "elr", "spsr", "esr", "far"]) {
+            named.push([plain(name), trap.get(name)]);
+          }
           const rows = [];
-          for (let at = 0; at < named.length; at += 2) rows.push(named.slice(at, at + 2).flat());
+          for (let index = 0; index < named.length; index += 2) {
+            rows.push(named.slice(index, index + 2).flat());
+          }
           body.append(section(`s${ctxSlot} TrapContext — 마지막 EL2 진입 시점`));
           body.append(table(["reg", "value", "reg", "value"], rows));
         }
-        const bank = banks[ctxSlot]?.el1;
-        if (bank) {
+        const bank = banks.get(ctxSlot).get("el1");
+        if (bank.shown) {
           body.append(section(`s${ctxSlot} EL1 뱅크 — 마지막 스위치 아웃 시점`));
-          body.append(table(["reg", "value"], Object.entries(bank)));
+          body.append(
+            table(
+              ["reg", "value"],
+              bank.keys().map((name) => [plain(name), bank.get(name)]),
+            ),
+          );
         }
       },
     },
@@ -194,19 +311,27 @@ export function createPanels({ tabs, host }) {
       title: "IVC",
       topics: ["ivc.page"],
       render(body) {
-        const page = value("ivc.page");
-        if (!page) return;
-        for (const name of Object.keys(page)) {
-          const ring = page[name];
-          const width = ring.slots.length;
-          const used = (parseInt(ring.widx, 16) - parseInt(ring.ridx, 16)) >>> 0;
-          const tail = parseInt(ring.ridx, 16) % width;
-          body.append(section(`${name} — ${used}/${width} 사용 · widx ${ring.widx} ridx ${ring.ridx}`));
+        const page = at("ivc.page");
+        if (!page.shown) return;
+        for (const name of page.keys()) {
+          const ring = page.get(name);
+          const slots = ring.get("slots");
+          const width = slots.rows().length;
+          const widx = ring.get("widx").shown;
+          const ridx = ring.get("ridx").shown;
+          const used = (parseInt(widx, 16) - parseInt(ridx, 16)) >>> 0;
+          const tail = parseInt(ridx, 16) % width;
+          body.append(section(`${name} — ${used}/${width} 사용 · widx ${widx} ridx ${ridx}`));
+          /* Not a table: the point of the strip is occupancy at a
+             glance, so a cell carries its own class rather than the
+             shared `moved` one. Provenance still travels — a slot that
+             moved gets the same mark the tables use. */
           const strip = el("div", "pcells");
-          ring.slots.forEach((slot, index) => {
+          slots.rows().forEach((slot, index) => {
             const cell = el("div", "pcell");
             if ((index - tail + width) % width < Math.min(used, width)) cell.classList.add("on");
-            cell.title = `slot ${index}: ${slot}`;
+            if (slot.moved) cell.classList.add("moved");
+            cell.title = `slot ${index}: ${slot.shown}`;
             strip.append(cell);
           });
           body.append(strip);
@@ -218,32 +343,42 @@ export function createPanels({ tabs, host }) {
       title: "PSCI·SMP",
       topics: ["smp.lifecycle", "smp.mode", "smp.online", "smp.mail", "smp.budget"],
       render(body) {
-        const life = value("smp.lifecycle") || [];
-        const mode = value("smp.mode") || [];
-        const budget = value("smp.budget") || [];
-        const online = value("smp.online") || [];
-        const mail = value("smp.mail") || [];
-        const bits = Math.max(online.length, 1);
+        const mode = at("smp.mode");
+        const budget = at("smp.budget");
+        const online = at("smp.online");
+        const mail = at("smp.mail");
+        const bits = Math.max(online.rows().length, 1);
         body.append(section("VM 라이프사이클"));
         body.append(
           table(
             ["vm", "mode", "epoch", "pending", "retries", "active", "budget"],
-            life.map((vm, index) => [
-              index,
-              mode[index],
-              vm.epoch_,
-              `0b${(vm.pending_mask_ ?? 0).toString(2).padStart(bits, "0")}`,
-              vm.retries_,
-              vm.active_,
-              budget[index],
-            ]),
+            at("smp.lifecycle")
+              .rows()
+              .map((vm, index) => {
+                const pending = vm.get("pending_mask_");
+                return [
+                  plain(index),
+                  mode.get(index),
+                  vm.get("epoch_"),
+                  /* Rendered as bits, so the cell is the reading in
+                     another base rather than a computed one — it keeps
+                     the cursor's provenance. */
+                  new Cell(
+                    `0b${(pending.shown ?? 0).toString(2).padStart(bits, "0")}`,
+                    pending.moved,
+                  ),
+                  vm.get("retries_"),
+                  vm.get("active_"),
+                  budget.get(index),
+                ];
+              }),
           ),
         );
         body.append(section("코어"));
         body.append(
           table(
             ["cpu", "online", "mail"],
-            online.map((state, cpu) => [cpu, state, mail[cpu]?.count]),
+            online.rows().map((state, cpu) => [plain(cpu), state, mail.get(cpu).get("count")]),
           ),
         );
       },
@@ -253,38 +388,51 @@ export function createPanels({ tabs, host }) {
       title: "Devices",
       topics: ["dev.uart", "dev.dma", "dev.watchdog"],
       render(body) {
-        const uarts = value("dev.uart") || [];
         body.append(section("vUART FIFO"));
         body.append(
           table(
             ["vm", "count", "head", "imsc"],
-            uarts.map((uart, vm) => [vm, uart.count, uart.head, uart.imsc]),
+            at("dev.uart")
+              .rows()
+              .map((uart, vm) => [
+                plain(vm),
+                uart.get("count"),
+                uart.get("head"),
+                uart.get("imsc"),
+              ]),
           ),
         );
-        const registry = value("dev.dma");
-        if (registry) {
-          const entries = registry.entries_ || [];
-          const known = Number.isInteger(registry.count_)
-            ? entries.slice(0, registry.count_)
-            : entries.filter((entry) => entry.state !== "kUnavailable");
+        const registry = at("dev.dma");
+        if (registry.shown) {
+          const entries = registry.get("entries_").rows();
+          const count = registry.get("count_").shown;
+          const known = Number.isInteger(count)
+            ? entries.slice(0, count)
+            : entries.filter((entry) => entry.get("state").shown !== "kUnavailable");
           body.append(section(`DMA 레지스트리 — ${known.length} 등록`));
           body.append(
             table(
               ["dev", "owner", "state", "gen", "deadline", "blocked"],
               known.map((entry) => [
-                entry.device_id,
-                entry.owner_vm,
-                entry.state,
-                entry.generation,
-                entry.deadline,
-                entry.bus_master_blocked,
+                entry.get("device_id"),
+                entry.get("owner_vm"),
+                entry.get("state"),
+                entry.get("generation"),
+                entry.get("deadline"),
+                entry.get("bus_master_blocked"),
               ]),
             ),
           );
         }
-        const sequence = value("dev.watchdog") || [];
         body.append(section("워치독 갱신 시퀀스"));
-        body.append(table(["vm", "seq"], sequence.map((seq, vm) => [vm, seq])));
+        body.append(
+          table(
+            ["vm", "seq"],
+            at("dev.watchdog")
+              .rows()
+              .map((seq, vm) => [plain(vm), seq]),
+          ),
+        );
       },
     },
     {
@@ -292,15 +440,15 @@ export function createPanels({ tabs, host }) {
       title: "Sysreg",
       topics: ["sysreg"],
       render(body) {
-        const data = latest.get("sysreg")?.value;
-        if (!data) return;
-        const registers = data.registers || [];
-        const cpus = data.cpus || [];
+        const data = at("sysreg");
+        if (!data.shown) return;
+        const registers = data.get("registers").rows();
+        const cpus = data.get("cpus").rows();
         body.append(section("정지 시점 실측 (H)"));
         body.append(
           table(
             ["reg", ...cpus.map((_, index) => `cpu${index}`)],
-            registers.map((name) => [name, ...cpus.map((cpu) => cpu[name] ?? "—")]),
+            registers.map((name) => [name, ...cpus.map((cpu) => cpu.get(name.shown))]),
           ),
         );
       },
@@ -321,8 +469,8 @@ export function createPanels({ tabs, host }) {
     topics: [],
     render(body) {
       for (const topic of FALLBACK.topics) {
-        const held = value(topic);
-        if (held === undefined) continue;
+        const held = at(topic);
+        if (held.shown === undefined) continue;
         body.append(section(topic));
         body.append(generic(held));
       }
@@ -342,9 +490,6 @@ export function createPanels({ tabs, host }) {
   }
   index();
 
-  /* Per topic, what moved between the last two stops. Cleared when the
-     machine resumes: a delta is only true of the pair it came from. */
-  const moved = new Map();
   const bodies = new Map();
   for (const panel of PANELS) {
     /* A toggle, not a tab: several panels may be open at once, so the
@@ -354,10 +499,15 @@ export function createPanels({ tabs, host }) {
     chip.setAttribute("aria-pressed", "false");
     chip.title = `${panel.title} 표시 전환`;
     chip.append(el("span", "tt", panel.title));
-    /* How many of this panel's fields moved since the previous stop.
-       A stop publishes the whole machine; between two consecutive binds
-       three or four values actually changed, and this is what says
-       which drawer to open for them. */
+    /* How many values in this panel's topics moved since the previous
+       stop. A stop publishes the whole machine; between two consecutive
+       binds three or four values actually changed, and this is what
+       says which drawer to open for them.
+
+       Counted over the reading, not over what is drawn — those differ
+       where a panel shows a subset (the context dump is one slot at a
+       time), and the count has to be right for a closed drawer, which
+       has drawn nothing at all. */
     chip.append(el("b", "tmoved", ""));
     chip.addEventListener("click", () => toggle(panel.id));
     /* Nothing is unclaimed until a topology says what is published. */
@@ -393,10 +543,21 @@ export function createPanels({ tabs, host }) {
     if (visible.has(id)) render(id);
   }
 
+  /* Leaves in a mask: how many values actually moved. The mask is
+     shaped like the value it describes, so this is the same walk a
+     renderer does — and the only arithmetic the client needs over it. */
+  function movedCount(mask) {
+    if (mask === true) return 1;
+    if (!mask || typeof mask !== "object") return 0;
+    let total = 0;
+    for (const key of Object.keys(mask)) total += movedCount(mask[key]);
+    return total;
+  }
+
   function markMoved() {
     for (const entry of bodies.values()) {
       let count = 0;
-      for (const topic of entry.panel.topics) count += (moved.get(topic) || []).length;
+      for (const topic of entry.panel.topics) count += movedCount(moved.get(topic));
       const badge = entry.tab.querySelector(".tmoved");
       if (badge) badge.textContent = count ? String(count) : "";
       entry.tab.classList.toggle("moved", count > 0);
@@ -454,7 +615,9 @@ export function createPanels({ tabs, host }) {
       const data = frame.data && typeof frame.data === "object" ? frame.data : null;
       if (!data || data.values === undefined) return;
       latest.set(frame.topic, { value: data.values, ts: frame.ts, src: frame.src });
-      if (Array.isArray(data.changed)) moved.set(frame.topic, data.changed);
+      /* Absent on the first stop of a run; `false` or `{}` when a stop
+         genuinely moved nothing, which is a different answer. */
+      if (data.changed !== undefined) moved.set(frame.topic, data.changed);
       /* Coalesced to one render per flush window, and only for the
          panels this topic actually feeds: six topics at 20 Hz would
          otherwise rebuild the same table over a hundred times a second,
@@ -469,6 +632,15 @@ export function createPanels({ tabs, host }) {
       if (!dirty.size) return;
       for (const id of dirty) render(id);
       dirty.clear();
+    },
+    /* Topics with no reading at the cursor's moment. Held rather than
+       cleared, so moving the cursor back and forth costs nothing — and
+       drawn as "not yet read", because the alternative is leaving a
+       later value on screen at a moment the machine had not produced
+       it, which is the one thing a cursor exists to prevent. */
+    setUnread(topics) {
+      unread = new Set(Array.isArray(topics) ? topics : []);
+      for (const id of visible) dirty.add(id);
     },
     /* A delta belongs to the pair of stops it was measured across, so
        resuming retires it rather than leaving a stale count on a tab. */

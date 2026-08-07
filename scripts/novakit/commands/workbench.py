@@ -62,6 +62,21 @@ TraceHistory = Annotated[
 ]
 
 
+Record = Annotated[
+    Path | None,
+    typer.Option(
+        "--record",
+        metavar="DIR",
+        help=(
+            "Write the run to DIR as the wire saw it, for replay without "
+            "QEMU or an image. Explicit, and never on by default: a busy "
+            "twenty-minute run is a few hundred megabytes, and the size is "
+            "reported on exit."
+        ),
+    ),
+]
+
+
 @app.command()
 def serve(
     demo: Demo = None,
@@ -70,10 +85,36 @@ def serve(
     variant: Variant = None,
     verify: Verify = False,
     trace_history: TraceHistory = history.DEFAULT_CAPACITY,
+    record: Record = None,
 ) -> None:
     """Serve the workbench UI against a live QEMU session."""
     target = session.Target(demo=demo, variant=variant, verify=verify) if demo else None
-    code = server.serve(host=host, port=port, target=target, trace_history=trace_history)
+    code = server.serve(
+        host=host, port=port, target=target, trace_history=trace_history, record=record
+    )
+    if code:
+        raise typer.Exit(code)
+
+
+RecordingDir = Annotated[
+    Path,
+    typer.Argument(metavar="DIR", help="A directory written by `serve --record`."),
+]
+
+
+@app.command()
+def replay(
+    directory: RecordingDir,
+    host: Host = "127.0.0.1",
+    port: Port = 8787,
+) -> None:
+    """Serve a recorded session — no QEMU, no image, no toolchain.
+
+    The same UI answered by the same code: a replay served by a path of
+    its own would be a second bridge, free to answer differently about
+    one run, and then it would not be evidence.
+    """
+    code = server.replay(host=host, port=port, directory=directory)
     if code:
         raise typer.Exit(code)
 
@@ -130,7 +171,11 @@ def show_trace(limit: Limit = 40, follow: Follow = False, since: Since = 5.0) ->
         _no_session("--follow needs a running bridge; showing the rings once")
     board = hardware.platform()
     code = trace.report(
-        surfaces[-1], board["NOVA_BOARD_PHYS_RAM_BASE"], board["NOVA_BOARD_TRACE_PA"], limit
+        surfaces[-1],
+        board["NOVA_BOARD_PHYS_RAM_BASE"],
+        board["NOVA_BOARD_TRACE_PA"],
+        board["NOVA_BOARD_TRACE_SIZE"],
+        limit,
     )
     if code:
         raise typer.Exit(code)

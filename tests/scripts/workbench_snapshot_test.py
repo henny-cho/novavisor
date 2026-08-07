@@ -170,7 +170,7 @@ class ElfRamProviderTest(unittest.TestCase):
                 snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE)
 
 
-class ChangedPathTest(unittest.TestCase):
+class ChangedMaskTest(unittest.TestCase):
     """What a stop is for is seeing what moved.
 
     A stop publishes the whole machine — twenty-eight topics — and
@@ -178,28 +178,57 @@ class ChangedPathTest(unittest.TestCase):
     Finding those by eye across every panel is the work this removes.
     """
 
-    def test_only_the_leaf_that_moved_is_named(self):
+    def test_only_the_leaf_that_moved_is_marked(self):
         before = {"cpu": [{"current": 1, "fp": None}, {"current": 0, "fp": 0}]}
         after = {"cpu": [{"current": 1, "fp": None}, {"current": 2, "fp": 0}]}
         # "the scheduler changed" is true of almost every stop and says
         # nothing; the index and the field are the answer.
-        self.assertEqual(snapshot.changed_paths(before, after), ["cpu[1].current"])
+        self.assertEqual(snapshot.changed_mask(before, after), {"cpu": {"1": {"current": True}}})
 
-    def test_identical_readings_name_nothing(self):
+    def test_the_mask_is_shaped_like_the_value(self):
+        """The whole point. A renderer walking the reading walks the
+        mask by the same indexing, so there is no path grammar for the
+        two sides to disagree about — and list indices are string keys
+        so an array and an object are one walk on the far side.
+        """
+        before = {"rows": [{"a": 1}, {"a": 2}], "n": 1}
+        after = {"rows": [{"a": 1}, {"a": 9}], "n": 1}
+        mask = snapshot.changed_mask(before, after)
+        self.assertIs(mask["rows"]["1"]["a"], True)
+        self.assertNotIn("0", mask["rows"])  # sparse: only what moved
+        self.assertNotIn("n", mask)
+
+    def test_identical_readings_mark_nothing(self):
         reading = {"a": 1, "b": {"c": [1, 2, 3]}}
-        self.assertEqual(snapshot.changed_paths(reading, dict(reading)), [])
+        self.assertEqual(snapshot.changed_mask(reading, dict(reading)), {})
 
     def test_a_field_that_appeared_or_left_is_a_change(self):
         """A reading that grew or lost a field is exactly the kind of
         thing worth being told about, not a comparison to skip."""
-        self.assertEqual(snapshot.changed_paths({"a": 1}, {"a": 1, "b": 2}), ["b"])
-        self.assertEqual(snapshot.changed_paths({"a": [1]}, {"a": [1, 2]}), ["a[1]"])
+        self.assertEqual(snapshot.changed_mask({"a": 1}, {"a": 1, "b": 2}), {"b": True})
+        self.assertEqual(snapshot.changed_mask({"a": [1]}, {"a": [1, 2]}), {"a": {"1": True}})
 
-    def test_a_scalar_topic_names_itself(self):
-        self.assertEqual(snapshot.changed_paths(3, 4), ["value"])
+    def test_a_reading_that_changed_shape_is_a_change_at_that_node(self):
+        """A list where a dict was is not a comparison to descend into;
+        it is the change."""
+        self.assertIs(snapshot.changed_mask({"a": [1]}, {"a": {"0": 1}})["a"], True)
+
+    def test_a_scalar_topic_marks_itself(self):
+        self.assertIs(snapshot.changed_mask(3, 4), True)
+        self.assertIs(snapshot.changed_mask(3, 3), False)
+
+    def test_the_badge_count_is_the_number_of_leaves(self):
+        """One number the tab shows and the cells must add up to. Counted
+        here because the mask's shape belongs to this module."""
+        before = {"cpu": [{"a": 1, "b": 1}, {"a": 1, "b": 1}]}
+        after = {"cpu": [{"a": 2, "b": 1}, {"a": 1, "b": 3}]}
+        self.assertEqual(snapshot.moved_count(snapshot.changed_mask(before, after)), 2)
+        self.assertEqual(snapshot.moved_count({}), 0)
+        self.assertEqual(snapshot.moved_count(True), 1)
+        self.assertEqual(snapshot.moved_count(False), 0)
 
     def test_a_type_change_is_a_change_not_a_descent(self):
-        self.assertEqual(snapshot.changed_paths({"a": 1}, [1]), ["value"])
+        self.assertIs(snapshot.changed_mask({"a": 1}, [1]), True)
 
 
 @unittest.skipUnless(ELF.is_file(), "debug ELF not built")

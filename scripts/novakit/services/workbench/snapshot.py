@@ -173,8 +173,9 @@ class ElfRamProvider:
         self._ram.close()
 
 
-def changed_paths(before, after, prefix: str = "") -> list[str]:
-    """Leaf paths that differ between two readings of one topic.
+def changed_mask(before, after):
+    """What moved between two readings of one topic, shaped like the
+    value itself.
 
     What a stop is *for* is seeing what moved, and a stop publishes the
     whole machine — twenty-eight topics of it. Between two consecutive
@@ -182,24 +183,55 @@ def changed_paths(before, after, prefix: str = "") -> list[str]:
     across every panel is the work this removes.
 
     Leaves, not containers: "the scheduler changed" is true of almost
-    every stop and says nothing, where `sched.cpu[1].current` is the
-    answer. A path that appears on one side only is a change too — a
+    every stop and says nothing, where the one cell holding `current` is
+    the answer. A key present on one side only is a change too — a
     reading that grew or lost a field is exactly the kind of thing worth
-    being told about.
+    being told about — and so is one whose shape changed, which lands on
+    the scalar comparison and comes back true.
+
+    A mask rather than a list of paths like `sched.cpu[1].current`,
+    because a renderer walking the value would then have to build that
+    string to look itself up, and building it means implementing this
+    function's grammar a second time in another language. Shaped the
+    same as the value, the mask is walked with the value by the same
+    indexing, and there is no grammar to agree about. List indices are
+    string keys so that walking an array and walking an object are the
+    same code on the far side.
+
+    Sparse: only what moved appears, so the cost is the size of the
+    answer rather than the size of the reading.
     """
     if isinstance(before, dict) and isinstance(after, dict):
-        out = []
+        out = {}
         for key in dict.fromkeys([*before, *after]):
-            out += changed_paths(before.get(key), after.get(key), f"{prefix}.{key}" if prefix else key)
+            inner = changed_mask(before.get(key), after.get(key))
+            if inner:
+                out[str(key)] = inner
         return out
     if isinstance(before, list) and isinstance(after, list):
-        out = []
+        out = {}
         for index in range(max(len(before), len(after))):
             here = before[index] if index < len(before) else None
             there = after[index] if index < len(after) else None
-            out += changed_paths(here, there, f"{prefix}[{index}]")
+            inner = changed_mask(here, there)
+            if inner:
+                out[str(index)] = inner
         return out
-    return [] if before == after else [prefix or "value"]
+    return before != after
+
+
+def moved_count(mask) -> int:
+    """Leaves in a mask: how many values actually moved.
+
+    Here rather than in the caller because the mask's shape is this
+    module's, and a badge counting it by hand would be the second
+    implementation the mask exists to prevent.
+    """
+    if mask is True:
+        return 1
+    if not isinstance(mask, dict):
+        return 0
+    return sum(moved_count(inner) for inner in mask.values())
 
 
 def image_symbols(provider) -> elfsym.SymbolTable | None:

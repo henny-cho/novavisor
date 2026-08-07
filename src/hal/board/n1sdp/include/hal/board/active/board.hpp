@@ -33,6 +33,7 @@ inline constexpr std::uint64_t kGuestPaBase      = NOVA_BOARD_GUEST_PA_BASE;
 inline constexpr std::uint64_t kGuestPaSize      = NOVA_BOARD_GUEST_PA_SIZE;
 inline constexpr std::uint64_t kIvcShmPa         = NOVA_BOARD_IVC_SHM_PA;
 inline constexpr std::uint64_t kTracePa          = NOVA_BOARD_TRACE_PA;
+inline constexpr std::size_t   kTraceSize        = NOVA_BOARD_TRACE_SIZE;
 inline constexpr std::uint64_t kGuestPristinePa  = NOVA_BOARD_PRISTINE_PA;
 inline constexpr std::uint64_t kPristineSize     = NOVA_BOARD_PRISTINE_SIZE;
 inline constexpr std::uint32_t kSmmuEventIntid   = NOVA_BOARD_SMMU_EVENT_INTID;

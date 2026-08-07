@@ -49,6 +49,7 @@ class StateStore:
         envelopes: Envelopes,
         window: FrameWindow | None = None,
         backlog_limit: int = 500,
+        on_frame=None,
     ):
         self._envelopes = envelopes
         self.window = window if window is not None else FrameWindow()
@@ -56,6 +57,10 @@ class StateStore:
         # Recent history replayed to late joiners, console included so a
         # fresh browser is not blank until the next event.
         self._backlog: deque[dict] = deque(maxlen=backlog_limit)
+        # Someone who wants every frame, ahead of the window that may
+        # drop them. A callable rather than a recorder, so this file
+        # stays as free of the recording layer as it is of the socket.
+        self._on_frame = on_frame
 
     def publish(
         self,
@@ -65,10 +70,18 @@ class StateStore:
         *,
         src: Src = Src.BRIDGE,
         replay: bool = True,
+        ts: int | None = None,
     ) -> dict:
         """`replay=False` keeps a frame out of the connect backlog — for
-        per-request noise (rejections) that must not evict history."""
-        frame = self._envelopes.make(topic, kind, data, src=src)
+        per-request noise (rejections) that must not evict history.
+
+        `ts` names the moment when it is not now — a recorded frame
+        happened when the recording says it did."""
+        frame = self._envelopes.make(topic, kind, data, src=src, ts=ts)
+        # Before the window, which drops console frames on overrun: an
+        # observer of everything must not be given a client's view.
+        if self._on_frame is not None:
+            self._on_frame(frame)
         self.window.add(frame)
         if replay:
             self._backlog.append(frame)
@@ -79,6 +92,18 @@ class StateStore:
         """The world as last published. Read-only to callers; a late
         joiner is replayed from exactly this."""
         return self._topology
+
+    def adopt_topology(self, data: dict) -> None:
+        """The world, without announcing it.
+
+        For startup, before the socket is open: there is nobody to
+        announce it to, and the frame would sit in the backlog to be
+        replayed *after* every future connect's fresh topo — an older
+        description of the world arriving second. Live that is merely
+        redundant. In a replay the stale copy carries no phase, so it
+        re-enables the controls the fresh one had just disabled.
+        """
+        self._topology = data
 
     def set_topology(self, data: dict) -> dict:
         self._topology = data

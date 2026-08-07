@@ -12,12 +12,13 @@ import asyncio
 import multiprocessing
 import signal
 import sys
+import time
 import uuid
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from ...core import config
-from . import halt, hardware, history, snapshot, static, trace
+from . import halt, hardware, history, recording, snapshot, static, trace
 from .protocol import (
     MAX_BUCKETS,
     SUPPORTED_UPLINK,
@@ -97,8 +98,16 @@ class Bridge:
         deps: Deps | None = None,
         surfaces: Surfaces | None = None,
         trace_history: int = history.DEFAULT_CAPACITY,
+        recorder: recording.Recorder | None = None,
     ):
-        self.store = StateStore(Envelopes(Clock()))
+        # The tee sits on publish(), the one funnel every fact passes
+        # through, so a recording cannot be missing something a live
+        # viewer had — and sits ahead of the frame window, so it is not
+        # missing what a throttled tab lost either.
+        self._recorder = recorder
+        self.store = StateStore(
+            Envelopes(Clock()), on_frame=None if recorder is None else recorder.frame
+        )
         self.session = Session(self.store, deps, surfaces)
         self._ui_root = ui_root
         self._connections: set = set()
@@ -121,6 +130,10 @@ class Bridge:
         # must not take the event stream with it.
         self._tracer: trace.TraceReader | None = None
         self._tracer_run: int | None = None
+        # What the ring depth is worth on this host, measured rather
+        # than assumed. Built with the geometry, so it dies with the run
+        # whose rings it describes.
+        self._budget: trace.Budget | None = None
         # What has been said about the T layer this run, so a state is
         # published on the transition rather than on every tick.
         self._trace_state = ""
@@ -138,6 +151,49 @@ class Bridge:
         # Stamped into every connect topo: a changed token is the one
         # reliable restart signal, whatever the seq counter says.
         self._token = uuid.uuid4().hex[:8]
+        # A run read back from disk, if this bridge is showing one.
+        self._replay: recording.Recording | None = None
+        self._replay_frames: list[dict] = []
+
+    def load_replay(self, rec: recording.Recording) -> None:
+        """Show a recorded run instead of a live machine.
+
+        Everything below feeds the structures the live bridge already
+        answers from — the history the window protocol reads, the
+        topology the UI builds itself from — because a replay served by
+        its own code would be a second bridge, free to answer
+        differently about one run. The identity test is that contract.
+        """
+        self._replay = rec
+        self.session.phase = Phase.REPLAY
+        # A range of counter values is not a duration without this, and
+        # nothing in a replay will read a region header to learn it.
+        self._history.freq_hz = int(rec.meta.get("freq_hz", 0))
+        self._history.append(rec.records)
+        # The world the recording was made in — its catalogue, its board
+        # map, its request limits — rather than this process's guesses
+        # about a machine that is not here.
+        for frame in rec.frames:
+            if frame.get("topic") == Topic.TOPO.value:
+                # The world, without the session state the recorded run
+                # merged into it on the way out. Phase, pause and run
+                # identity are facts about a connection to a machine,
+                # and this connection is to a file — carried over, they
+                # would tell the reader the machine is still running.
+                session_keys = set(self._live_state())
+                world = {
+                    key: value
+                    for key, value in (frame.get("data") or {}).items()
+                    if key not in session_keys
+                }
+                self.store.adopt_topology(world)
+                break
+        # Everything but the topology, which is published once above.
+        # Two topologies would put the recorded run's phase over the
+        # replay's, and the reader would be told the machine is running.
+        self._replay_frames = [
+            frame for frame in rec.frames if frame.get("topic") != Topic.TOPO.value
+        ]
 
     async def open(self, host: str, port: int) -> None:
         websocket_server, headers_type, response_type = _require_websockets()
@@ -202,6 +258,16 @@ class Bridge:
             self._images = None
         self._release()
         await self.session.stop()
+        if self._recorder is not None:
+            # After the session, so the last frames of a shutdown are in
+            # the file the run is judged by.
+            meta = self._recorder.close()
+            sizes = self._recorder.sizes()
+            total = sum(sizes.values())
+            print(
+                f"[workbench] recorded {meta['frames']} frames and {meta['records']} records "
+                f"to {self._recorder.directory} ({total / 1e6:.1f} MB)"
+            )
 
     def _live_state(self) -> dict:
         """Session truth a late joiner cannot recover from the backlog:
@@ -214,10 +280,41 @@ class Bridge:
             "run_id": self.session.run_id,
         }
 
+    def _connect_payload(self) -> list[dict]:
+        """What a joining client is given to build the world from.
+
+        Live, that is the topology and a bounded backlog. In a replay it
+        is the whole run: a window of the last few hundred frames would
+        hand back the tail of a recording made precisely so the earlier
+        ones survive.
+
+        Re-stamped with this connection's sequence and the recorded
+        moment. The seq belongs to the ordering of this socket; the
+        timestamp belongs to the run, and a replay wearing this
+        process's clock would put yesterday on screen as if it were now.
+        """
+        frames = self.store.connect_frames(self._live_state())
+        if self._replay is None:
+            return frames
+        return frames + [
+            self.store.publish(
+                frame.get("topic", ""),
+                Kind(frame.get("kind", Kind.EVENT.value)),
+                frame.get("data") or {},
+                # Verbatim. Where a value came from is what this layer
+                # is for being right about, so an unfamiliar `src` from
+                # an older recording travels rather than being coerced.
+                src=frame.get("src", Src.BRIDGE.value),
+                replay=False,
+                ts=frame.get("ts"),
+            )
+            for frame in self._replay_frames
+        ]
+
     async def _handler(self, connection) -> None:
         self._connections.add(connection)
         try:
-            await connection.send(encode(self.store.connect_frames(self._live_state())))
+            await connection.send(encode(self._connect_payload()))
             async for message in connection:
                 try:
                     self._handle_uplink(message)
@@ -259,6 +356,9 @@ class Bridge:
         if uplink.topic is Topic.TRACE:
             self._answer_window(uplink.data)
             return
+        if uplink.topic is Topic.CURSOR:
+            self._answer_cursor(uplink.data)
+            return
         if uplink.topic is Topic.HALT:
             command = str(uplink.data.get("cmd", ""))
             if command not in HALT_COMMANDS:
@@ -267,6 +367,12 @@ class Bridge:
                 self._reject(f"halt: session is {self.session.phase.value}")
             else:
                 self.spawn(self._halt_command(command, uplink.data))
+            return
+        if self._replay is not None:
+            # A recording cannot be driven. Refused with a reason rather
+            # than accepted and ignored: a control that silently does
+            # nothing is worse than one that says why it cannot.
+            self._reject("target: this is a replay; there is no machine to launch")
             return
         demo = uplink.data.get("demo")
         if not demo:
@@ -386,7 +492,7 @@ class Bridge:
         """
         payload = {"values": value}
         if topic in previous:
-            payload["changed"] = snapshot.changed_paths(previous[topic], value)
+            payload["changed"] = snapshot.changed_mask(previous[topic], value)
         return payload
 
     async def _advance(self, inspector: halt.HaltInspector, data: dict) -> None:
@@ -526,6 +632,9 @@ class Bridge:
         tracer, self._tracer = self._tracer, None
         self._tracer_run = None
         self._trace_state = ""
+        # Measured against a geometry that is about to go away, and
+        # about a machine that no longer exists.
+        self._budget = None
         # A new machine's timestamps are a new epoch, and merging them
         # with the last run's would put the two in one order. The same
         # goes for a stop-to-stop delta across a restart.
@@ -622,7 +731,10 @@ class Bridge:
         board = self._board_numbers()
         try:
             self._tracer = trace.TraceReader(
-                shm_path, board["NOVA_BOARD_PHYS_RAM_BASE"], board["NOVA_BOARD_TRACE_PA"]
+                shm_path,
+                board["NOVA_BOARD_PHYS_RAM_BASE"],
+                board["NOVA_BOARD_TRACE_PA"],
+                board["NOVA_BOARD_TRACE_SIZE"],
             )
         except trace.NotYetFormatted as error:
             self._set_trace_state(
@@ -638,12 +750,81 @@ class Bridge:
         # region has been read, and needed by everything that turns a
         # range of them back into a duration.
         self._history.freq_hz = self._tracer.geometry.freq_hz
+        self._budget = trace.Budget(self._tracer.geometry.capacity)
+        if self._recorder is not None:
+            # A range of counter values is not a duration without this,
+            # and a replay needs it before it can answer the first
+            # window — so it goes in the meta, not in a frame.
+            self._recorder.note(
+                freq_hz=self._tracer.geometry.freq_hz, run_id=session.run_id
+            )
         # Constant for the run, so it rides the transition rather than
-        # every summary frame.
-        self._set_trace_state("active", early=self._tracer.geometry.early)
+        # every summary frame. The geometry travels with it: the depth
+        # is what the budget below is measured against, and a reader
+        # told a stall without it cannot tell a close call from a
+        # comfortable one.
+        self._set_trace_state(
+            "active",
+            early=self._tracer.geometry.early,
+            rings=self._tracer.geometry.rings,
+            capacity=self._tracer.geometry.capacity,
+            region_bytes=board["NOVA_BOARD_TRACE_SIZE"],
+        )
         # A layer arriving is a change in what the board may claim.
         self.session.regrade_paths(tracing=True)
         return True
+
+    def _answer_cursor(self, data: dict) -> None:
+        """Put the whole view at one point in the run.
+
+        The strip, the panels and the console were three views of one
+        run that could only ever agree about the present. This is what
+        makes them agree about a past: one timestamp moves all three,
+        because the reader's question — "what did the machine look like
+        *then*" — is one question.
+
+        Only a replay can answer it. A live machine's now is the only
+        point it has, and a panel returned to an earlier reading would
+        be showing a value nothing can be checked against.
+        """
+        if self._replay is None:
+            self._reject("cursor: only a replay can be moved in time")
+            return
+        try:
+            ts = int(data.get("ts"))
+        except (TypeError, ValueError):
+            self._reject("cursor: ts must be an integer")
+            return
+        wire = self._replay.wire_ts(ts)
+        state = self._replay.at(wire)
+        # As ordinary snapshot frames, in the shape the panels already
+        # apply: a seek that sent a special payload would teach the
+        # client a second way to take a value, and the two would come
+        # to disagree about which is a reading.
+        for frame in state.values():
+            self.store.publish(
+                frame["topic"],
+                Kind.SNAPSHOT,
+                frame.get("data") or {},
+                src=frame.get("src", Src.BRIDGE.value),
+                replay=False,
+                ts=frame.get("ts"),
+            )
+        # Both clocks, because the client cuts its console by the wire's
+        # and draws its strip by the machine's. And the topics with no
+        # reading yet at this moment — said out loud, because silence
+        # about them leaves their later value on screen, which is a
+        # value the machine had not produced when the reader is looking.
+        self.store.publish(
+            Topic.CURSOR,
+            Kind.SNAPSHOT,
+            {
+                "ts": ts,
+                "wire": wire,
+                "unread": [topic for topic in self._replay.topics if topic not in state],
+            },
+            replay=False,
+        )
 
     def _answer_window(self, data: dict) -> None:
         """Answer a request for part of the history, at its resolution.
@@ -685,7 +866,10 @@ class Bridge:
                 "from": first,
                 "to": last,
                 "n": len(found),
-                "freq_hz": self._tracer.geometry.freq_hz if self._tracer else 0,
+                # From the history that holds the records, not from the
+                # reader that filled it: the reader is gone in a replay,
+                # and one of the two would have had to be believed.
+                "freq_hz": self._history.freq_hz,
             },
             "span": span.as_dict(),
         }
@@ -708,18 +892,37 @@ class Bridge:
         is nothing to the bridge and a great deal to a browser, and a cap
         with a silent drop would make "everything that happened" a lie.
         The records stay here for `nova workbench trace` to ask for.
+
+        What the drain could not recover arrives as records too, so the
+        history holds the holes in the same order and the same shape as
+        everything else, and the summary's loss count is read back off
+        them rather than tallied beside them.
         """
         if not self._attach_tracer():
             return
-        records, lost = self._tracer.drain()
-        if not records and not lost:
+        # The cheap gate sits here rather than in the loop, so every
+        # tick with a reader attached is a look the budget can measure:
+        # the exposure a ring runs is the time between opportunities to
+        # empty it, and a tick that found it empty is still one.
+        records = self._tracer.drain() if self._tracer.pending() else []
+        self._budget.looked(records, time.monotonic())
+        if not records:
             return
         self._history.append(records)
+        if self._recorder is not None:
+            # The records themselves, because the wire carries only the
+            # summary: a recording of the frames alone would replay a
+            # run whose timeline is empty.
+            self._recorder.drained(records)
         self.store.publish(
             Topic.TRACE,
             Kind.EVENT,
             trace.summarise(records)
-            | {"dropped": lost, "count": len(records), "span": self._history.span().as_dict()},
+            | {
+                "count": len(records),
+                "span": self._history.span().as_dict(),
+                "budget": self._budget.as_dict(),
+            },
             src=Src.TRACE,
         )
 
@@ -838,8 +1041,6 @@ class Bridge:
                 if self.session.phase is not Phase.RUNNING:
                     continue
                 try:
-                    if self._tracer is not None and self._tracer.pending() == 0:
-                        continue
                     self._pump_trace()
                 except (FileNotFoundError, ValueError):
                     # The backing file went out from under the run.
@@ -850,6 +1051,12 @@ class Bridge:
     async def _flush_loop(self) -> None:
         while True:
             await asyncio.sleep(FLUSH_INTERVAL_SECONDS)
+            if self._recorder is not None:
+                # Ahead of the connection check on purpose: a recording
+                # made with nobody watching is the ordinary case, and a
+                # writer that only ran while a browser was attached
+                # would record whoever happened to be looking.
+                self._recorder.flush()
             if not self._connections:
                 # Leave frames in the window: the first joiner gets them
                 # on the next flush instead of a silent discard.
@@ -877,12 +1084,31 @@ class Bridge:
 
 
 async def _serve_forever(
-    *, host: str, port: int, target: Target | None, ui_root: Path, trace_history: int
+    *,
+    host: str,
+    port: int,
+    target: Target | None,
+    ui_root: Path,
+    trace_history: int,
+    record: Path | None = None,
 ) -> None:
     if not ui_root.is_dir():
         raise SystemExit(f"[workbench] UI root missing: {ui_root}")
     surfaces = make_surfaces()
-    bridge = Bridge(ui_root=ui_root, surfaces=surfaces, trace_history=trace_history)
+    recorder = None
+    if record is not None:
+        recorder = recording.Recorder(
+            record,
+            {
+                "demo": target.demo if target else None,
+                "variant": target.variant if target else None,
+                "board": hardware.DEFAULT_BOARD,
+            },
+        )
+        print(f"[workbench] recording to {recorder.directory}")
+    bridge = Bridge(
+        ui_root=ui_root, surfaces=surfaces, trace_history=trace_history, recorder=recorder
+    )
     # A supervisor's SIGTERM must walk the same teardown as Ctrl-C, or
     # QEMU (its own session, immune to the terminal) outlives the bridge
     # with a gigabyte of tmpfs pinned.
@@ -892,7 +1118,7 @@ async def _serve_forever(
     try:
         # Topology first: a client racing the startup must never replay
         # an empty world.
-        bridge.store.set_topology(initial_topology())
+        bridge.store.adopt_topology(initial_topology())
         await bridge.open(host, port)
         print(f"[workbench] serving http://{host}:{bridge.port}/ (WebSocket on {WS_PATH})")
         if target is not None:
@@ -903,6 +1129,60 @@ async def _serve_forever(
         surfaces.release()
 
 
+async def _replay_forever(*, host: str, port: int, ui_root: Path, directory: Path) -> None:
+    if not ui_root.is_dir():
+        raise SystemExit(f"[workbench] UI root missing: {ui_root}")
+    try:
+        loaded = recording.load(directory)
+    except (recording.Unreadable, OSError) as error:
+        raise SystemExit(f"[workbench] {error}") from error
+    # No surfaces: there is no machine, so there is nothing to give one.
+    # The absence is the point — a replay that needed QEMU would not be
+    # a thing you could send somebody.
+    bridge = Bridge(ui_root=ui_root)
+    asyncio.get_running_loop().add_signal_handler(
+        signal.SIGTERM, asyncio.current_task().cancel
+    )
+    try:
+        bridge.store.adopt_topology(initial_topology())
+        bridge.load_replay(loaded)
+        await bridge.open(host, port)
+        meta = loaded.meta
+        print(
+            f"[workbench] replaying {directory} — {meta.get('demo') or 'unknown demo'}, "
+            f"{len(loaded.frames)} frames, {len(loaded.records)} records, "
+            f"recorded {meta.get('started', '?')}"
+        )
+        print(f"[workbench] serving http://{host}:{bridge.port}/ (WebSocket on {WS_PATH})")
+        await asyncio.Future()
+    finally:
+        await bridge.close()
+
+
+def replay(
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8787,
+    directory: Path,
+    ui_root: Path | None = None,
+) -> int:
+    try:
+        asyncio.run(
+            _replay_forever(
+                host=host,
+                port=port,
+                ui_root=ui_root or config.WORKBENCH_UI_DIR,
+                directory=directory,
+            )
+        )
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    except OSError as error:
+        print(f"nova workbench: cannot serve on {host}:{port}: {error}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def serve(
     *,
     host: str = "127.0.0.1",
@@ -910,6 +1190,7 @@ def serve(
     target: Target | None = None,
     ui_root: Path | None = None,
     trace_history: int = history.DEFAULT_CAPACITY,
+    record: Path | None = None,
 ) -> int:
     try:
         asyncio.run(
@@ -919,6 +1200,7 @@ def serve(
                 target=target,
                 ui_root=ui_root or config.WORKBENCH_UI_DIR,
                 trace_history=trace_history,
+                record=record,
             )
         )
     except (KeyboardInterrupt, asyncio.CancelledError):

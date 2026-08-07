@@ -40,6 +40,9 @@ class Topic(StrEnum):
     # The machine's stop and its advance. Named for what it owns rather
     # than the socket it once used: QMP no longer holds the stop.
     HALT = "halt"
+    # Where in the run the reader is looking. Only a replay can answer
+    # it: a live machine's "now" is the only point it has.
+    CURSOR = "cursor"
     CMD = "cmd"
     PROBE = "probe"
 
@@ -51,10 +54,14 @@ DOWNLINK = frozenset(
 # would double SUPPORTED_UPLINK, the validation and the documentation to
 # say the same word twice; the Kind already distinguishes a request from
 # what the bridge sends unasked.
-UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.HALT, Topic.CMD, Topic.PROBE, Topic.TRACE})
+UPLINK = frozenset(
+    {Topic.UART, Topic.TARGET, Topic.HALT, Topic.CMD, Topic.PROBE, Topic.TRACE, Topic.CURSOR}
+)
 # Recognised-but-deferred uplink topics are answered explicitly instead
 # of being dropped, so the UI degrades visibly.
-SUPPORTED_UPLINK = frozenset({Topic.UART, Topic.TARGET, Topic.HALT, Topic.TRACE})
+SUPPORTED_UPLINK = frozenset(
+    {Topic.UART, Topic.TARGET, Topic.HALT, Topic.TRACE, Topic.CURSOR}
+)
 
 
 class Kind(StrEnum):
@@ -95,18 +102,31 @@ class Envelopes:
         kind: Kind,
         data: dict,
         *,
-        src: Src = Src.BRIDGE,
+        src: Src | str = Src.BRIDGE,
+        ts: int | None = None,
     ) -> dict:
         # S-layer topics come from the observation manifest as plain
-        # strings; the fixed enum covers only the structural topics.
+        # strings; the fixed enum covers only the structural topics. A
+        # `src` may arrive as a string for a different reason: a
+        # recording carries whatever the run that made it wrote, and
+        # coercing an unfamiliar one into this enum would either kill
+        # the replay or relabel where a value came from — and this
+        # layer's entire job is being right about that.
+        #
+        # `ts` is given only when the moment being published is not now:
+        # a replayed frame happened when the recording says it did, and
+        # stamping it with this process's clock would put a run from
+        # yesterday on the reader's screen as if it were live. The seq
+        # is never given, because it belongs to this connection's
+        # ordering and not to the run.
         self._seq += 1
         return {
             "v": PROTOCOL_VERSION,
             "seq": self._seq,
             "topic": topic.value if isinstance(topic, Topic) else topic,
             "kind": kind.value,
-            "ts": self._clock.now(),
-            "src": src.value,
+            "ts": self._clock.now() if ts is None else ts,
+            "src": src.value if isinstance(src, Src) else src,
             "data": data,
         }
 

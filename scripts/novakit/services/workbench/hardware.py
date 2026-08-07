@@ -72,6 +72,7 @@ def platform(board: str = DEFAULT_BOARD) -> dict[str, int]:
                 "NOVA_BOARD_SMP_CPUS",
                 "NOVA_BOARD_IVC_SHM_PA",
                 "NOVA_BOARD_TRACE_PA",
+                "NOVA_BOARD_TRACE_SIZE",
             ],
         )
     except ValueError as error:

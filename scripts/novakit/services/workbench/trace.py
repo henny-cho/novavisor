@@ -13,6 +13,10 @@ host's own memory, and works out what it missed:
 Derived rather than accumulated. Counting the pre-copy and post-copy
 skips separately double-counts wherever a lapping writer makes the two
 overlap — a mistake the firmware-side test made first.
+
+The recoverable depth is capacity - 1, not capacity: see
+`_oldest_intact`. The difference only ever shows when the reader is
+already behind.
 """
 
 from __future__ import annotations
@@ -36,18 +40,26 @@ _LAYOUT = abi.read_defines(
         "NOVA_TRACE_RECORDS_OFF",
         "NOVA_TRACE_REC_SIZE",
         "NOVA_TRACE_TS_OFF",
-        "NOVA_TRACE_SIZE",
+        "NOVA_TRACE_MAX_RINGS",
     ],
 )
 MAGIC = _LAYOUT["NOVA_TRACE_MAGIC"]
 VERSION = _LAYOUT["NOVA_TRACE_VERSION"]
-REGION_SIZE = _LAYOUT["NOVA_TRACE_SIZE"]
+MAX_RINGS = _LAYOUT["NOVA_TRACE_MAX_RINGS"]
 # Public: anything keeping records keeps them at the firmware's width,
 # so the layout stays one number rather than one per holder.
 REC_SIZE = _LAYOUT["NOVA_TRACE_REC_SIZE"]
 _HEADER_SIZE = _LAYOUT["NOVA_TRACE_HEADER_SIZE"]
 _HEAD_OFF = _LAYOUT["NOVA_TRACE_HEAD_OFF"]
 _RECORDS_OFF = _LAYOUT["NOVA_TRACE_RECORDS_OFF"]
+
+# The code this reader writes where records should have been. Taken
+# from the catalogue rather than read out of the header a second time:
+# one entry names the moment, its number, and what its words mean.
+GAP_CODE = events.BY_ID["trace.gap"].code
+# `a` is a u32 on the wire. A loss past four billion events is a
+# saturated count rather than a wrapped one.
+_MAX_COUNT = 0xFFFF_FFFF
 
 # Region header, then one record. Both are fixed by the ABI header the
 # firmware compiles against; the struct strings only spell its fields.
@@ -149,20 +161,99 @@ class Geometry:
     early: int = 0
 
 
+class Budget:
+    """What the ring's depth is worth, in the terms that decide it.
+
+    Capacity is a latency budget: how long the host may go without
+    emptying a ring before the firmware laps it. Both sides of that are
+    runtime facts — how fast the busiest ring fills, and how long this
+    host actually goes between looks — and neither was ever measured.
+    The depth was picked from one afternoon's numbers on one laptop,
+    which is a number that stops being true on the next machine and
+    says nothing when it does.
+
+    So the instrument states its own terms, and the moment the observed
+    stall passes the horizon those terms promise, that crossing is
+    itself something to observe rather than something to rediscover by
+    hand next time the marks look wrong.
+    """
+
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+        self._at: float | None = None
+        self._peak = 0.0  # records per second into one ring
+        self._worst = 0.0  # seconds between looks
+
+    def looked(self, records: list[Record], at: float) -> None:
+        """One opportunity to drain, and what it found.
+
+        The interval is between *looks*, not between drains that found
+        something. A ring that was empty was never at risk, so counting
+        an idle stretch as a stall would turn the worst case into a
+        measure of how quiet the run was.
+
+        The rate is per ring, because the depth is per ring: `cpu` is
+        which ring wrote the record, and a total across four of them
+        would claim a horizon four times shorter than the real one.
+        """
+        if self._at is not None:
+            interval = at - self._at
+            self._worst = max(self._worst, interval)
+            if interval > 0 and records:
+                per_ring: dict[int, int] = {}
+                for record in records:
+                    if record.code != GAP_CODE:
+                        per_ring[record.cpu] = per_ring.get(record.cpu, 0) + 1
+                if per_ring:
+                    self._peak = max(self._peak, max(per_ring.values()) / interval)
+        self._at = at
+
+    @property
+    def horizon_seconds(self) -> float:
+        """How long the ring covers at the fastest fill yet seen.
+
+        Zero until something has been seen. An unmeasured budget is not
+        an unlimited one, and reporting it as zero rather than as
+        infinity is the difference between the two.
+        """
+        return self.capacity / self._peak if self._peak else 0.0
+
+    @property
+    def overrun(self) -> bool:
+        """Whether this run has already gone longer without looking than
+        the ring can cover. Not a prediction — a thing that happened."""
+        return bool(self._peak) and self._worst > self.horizon_seconds
+
+    def as_dict(self) -> dict:
+        return {
+            "capacity": self.capacity,
+            "peak_rate": round(self._peak),
+            "worst_gap_ms": round(self._worst * 1000, 1),
+            "horizon_ms": round(self.horizon_seconds * 1000, 1),
+            "overrun": self.overrun,
+        }
+
+
 class TraceReader:
     """One run's rings, read from the shared RAM file.
 
     `ram_base` is where the machine's RAM aperture starts, so a physical
     address is read at `pa - ram_base` — the same one constant the S
     layer's provider uses, and the only address arithmetic here.
+
+    `region_size` comes from the board too. It is how much a board chose
+    to spend on the T layer, and the depth of every ring follows from
+    it, so a copy kept here would be this reader's opinion of another
+    machine's memory map.
     """
 
-    def __init__(self, ram_path: Path, ram_base: int, trace_pa: int):
+    def __init__(self, ram_path: Path, ram_base: int, trace_pa: int, region_size: int):
         self._offset = trace_pa - ram_base
+        self._region_size = region_size
         with Path(ram_path).open("rb") as backing:
             self._ram = mmap.mmap(backing.fileno(), 0, prot=mmap.PROT_READ)
         try:
-            if len(self._ram) < self._offset + REGION_SIZE:
+            if len(self._ram) < self._offset + region_size:
                 # QEMU sizes the backend as it comes up, so a short file
                 # is a launch in progress, not a machine without room.
                 raise NotYetFormatted("RAM backend is smaller than the trace region")
@@ -171,6 +262,13 @@ class TraceReader:
             self._ram.close()
             raise
         self._cursor = [0] * self.geometry.rings
+        # The last timestamp handed out per ring, which is where the
+        # next hole opens, and what a drain that recovered nothing has
+        # to carry until a record gives it somewhere to end.
+        self._last_ts = [0] * self.geometry.rings
+        self._pending = [0] * self.geometry.rings
+        # The pre-placement drops, waiting for a timestamp to sit at.
+        self._early_pending = self.geometry.early
 
     def _read_geometry(self) -> Geometry:
         magic, version, record_size, stride, rings, capacity, freq, early = _HEADER.unpack_from(
@@ -186,8 +284,18 @@ class TraceReader:
             raise NotFormatted(f"trace region version {version}, expected {VERSION}")
         if record_size != REC_SIZE:
             raise NotFormatted(f"trace record is {record_size} bytes, expected {REC_SIZE}")
-        if rings < 1 or capacity < 1 or capacity & (capacity - 1):
-            raise NotFormatted(f"trace geometry is not usable: {rings} rings, capacity {capacity}")
+        # The depth is the region divided by the ring count, so it
+        # arrives here and nowhere else — there is no constant left to
+        # check it against. That makes vetting it this reader's job:
+        # every number below is one it is about to index with.
+        if not 1 <= rings <= MAX_RINGS:
+            raise NotFormatted(f"trace region declares {rings} rings, expected 1..{MAX_RINGS}")
+        if capacity < 1 or capacity & (capacity - 1):
+            raise NotFormatted(f"trace ring capacity {capacity} is not a power of two")
+        if stride != _RECORDS_OFF + capacity * REC_SIZE:
+            raise NotFormatted(f"trace stride {stride} disagrees with capacity {capacity}")
+        if _HEADER_SIZE + rings * stride > self._region_size:
+            raise NotFormatted(f"{rings} rings of {capacity} do not fit {self._region_size} bytes")
         return Geometry(rings, capacity, stride, freq, early)
 
     def _record(self, at: int) -> Record:
@@ -212,23 +320,62 @@ class TraceReader:
             for ring in range(self.geometry.rings)
         )
 
-    def drain(self) -> tuple[list[Record], int]:
-        """Everything written since the last call, oldest first.
+    def drain(self) -> list[Record]:
+        """Everything written since the last call, oldest first, and a
+        record for everything that was not.
 
         Ordered across rings by timestamp. CNTPCT is common to every PE,
         so that ordering is the machine's real one — which is the thing
         a sampled layer can never supply, whatever its rate.
+
+        A hole comes back as a record rather than as a count beside the
+        list. The count was the honest number and the wrong shape: this
+        function knows both ends of every hole, and a caller handed an
+        integer can only say that something was lost, never that it was
+        lost *there*. Two marks with eight thousand records missing
+        between them are drawn as neighbours, and the causal chain a
+        reader takes from that is fiction.
         """
         found: list[Record] = []
-        lost = 0
         for ring in range(self.geometry.rings):
-            records, missed = self._drain_one(ring)
-            found += records
-            lost += missed
+            found += self._drain_one(ring)
         found.sort(key=lambda record: record.ts)
-        return found, lost
+        return self._with_early(found)
 
-    def _drain_one(self, ring: int) -> tuple[list[Record], int]:
+    def _with_early(self, records: list[Record]) -> list[Record]:
+        """Fold the pre-placement drops in, once, at the front.
+
+        A different loss from a lapped ring — these predate the region,
+        so no drain however prompt could have caught them — but the same
+        hole in the run, and the boot they fall in is where a reader is
+        most likely to be looking for something. `b` is zero: nothing
+        precedes them, so the hole has no near end.
+        """
+        if not self._early_pending or not records:
+            return records
+        early, self._early_pending = self._early_pending, 0
+        records.insert(
+            0, Record(ts=records[0].ts, code=GAP_CODE, cpu=0, a=min(early, _MAX_COUNT), b=0, c=0)
+        )
+        return records
+
+    def _oldest_intact(self, head: int) -> int:
+        """The oldest index still whole when the writer's head reads
+        `head`.
+
+        One short of the capacity, and that is not caution. Head at H
+        means the writer has published H records and is *inside* the
+        slot for index H — which is the slot index H - capacity
+        occupies. That record is already being destroyed, so the
+        recoverable depth is capacity - 1, and a reader that kept the
+        last `capacity` would hand out one record built from two
+        events. It costs nothing while the reader keeps up: the cursor
+        is newer than this bound, so the bound never applies.
+        """
+        capacity = self.geometry.capacity
+        return head - capacity + 1 if head >= capacity else 0
+
+    def _drain_one(self, ring: int) -> list[Record]:
         capacity = self.geometry.capacity
         base = self._offset + _HEADER_SIZE + ring * self.geometry.stride + _RECORDS_OFF
         cursor = self._cursor[ring]
@@ -238,24 +385,55 @@ class TraceReader:
             # the same backing file). Start again rather than report a
             # loss of minus several thousand.
             cursor = 0
-        oldest = max(0, head - capacity)
+        keep = max(cursor, self._oldest_intact(head))
         records = [
             self._record(base + (index % capacity) * REC_SIZE)
-            for index in range(max(cursor, oldest), head)
+            for index in range(keep, head)
         ]
         # Re-read: anything the writer lapped while we were copying has
         # fallen out of the window, so it is discarded rather than
         # trusted. Reading a record that is being written is only
         # possible through exactly this race.
-        safe = max(0, self._head(ring) - capacity)
-        keep = max(cursor, oldest)
+        safe = self._oldest_intact(self._head(ring))
         if safe > keep:
             del records[: min(safe - keep, len(records))]
         self._cursor[ring] = head
-        return records, (head - cursor) - len(records)
+
+        missed = (head - cursor) - len(records) + self._pending[ring]
+        if not records:
+            # Nothing survived, so there is no timestamp to close a hole
+            # on. Carried rather than placed at a moment nothing
+            # happened: the count is never dropped, only deferred to the
+            # drain that can say where it ends.
+            self._pending[ring] = missed
+            return records
+        self._pending[ring] = 0
+        # Both ends, read before the cursor moves past them: the hole
+        # opened at the last record this ring handed out and closes at
+        # the first that survived it.
+        opened, closed = self._last_ts[ring], records[0].ts
+        self._last_ts[ring] = records[-1].ts
+        if missed:
+            records.insert(
+                0,
+                Record(ts=closed, code=GAP_CODE, cpu=ring, a=min(missed, _MAX_COUNT),
+                       b=opened, c=0),
+            )
+        return records
 
     def close(self) -> None:
         self._ram.close()
+
+
+def dropped_in(records: list[Record]) -> int:
+    """Events the gap records in this batch account for.
+
+    The one place the number is computed. A badge showing a count and a
+    window drawing the holes have to be two views of one drain, not two
+    accounts of it — so the summary derives its total from the same
+    records the window will hand out.
+    """
+    return sum(record.a for record in records if record.code == GAP_CODE)
 
 
 def summarise(records: list[Record]) -> dict:
@@ -275,7 +453,7 @@ def summarise(records: list[Record]) -> dict:
             continue
         edges[entry.edge] = edges.get(entry.edge, 0) + 1
         last[entry.edge] = decode(record)
-    return {"edges": edges, "last": last}
+    return {"edges": edges, "last": last, "dropped": dropped_in(records)}
 
 
 def histogram(records: list[Record], first: int, last: int, buckets: int) -> dict[str, list[int]]:
@@ -374,45 +552,39 @@ def decode(record: Record) -> dict:
         out |= {"slot": record.a, "bytes": record.b}
     elif entry.id == "smmu.fault":
         out |= {"stream": record.a, "vm": record.b, "generation": record.c}
+    elif entry.id == "trace.gap":
+        # The width, not the far end: `b` is a raw counter value, which
+        # is the one thing no reader can use. Zero when the hole opened
+        # before anything was recorded, so it has no measurable start.
+        out |= {"count": record.a, "ticks": record.ts - record.b if record.b else 0}
     return out
 
 
-def report(shm_path: Path, ram_base: int, trace_pa: int, limit: int = 40) -> int:
+def report(shm_path: Path, ram_base: int, trace_pa: int, region_size: int, limit: int = 40) -> int:
     """The terminal twin of the T layer, read off the rings themselves.
 
     The fallback path: no bridge, so no history, and what arrives here
-    is only what the rings still hold — about 2.7 seconds. Needs no
-    browser and no image either, which is what makes it the answer when
-    there is nothing else running.
+    is only what the rings still hold — however deep the board's region
+    divided into. Needs no browser and no image either, which is what
+    makes it the answer when there is nothing else running.
     """
     try:
-        reader = TraceReader(shm_path, ram_base, trace_pa)
+        reader = TraceReader(shm_path, ram_base, trace_pa, region_size)
     except (NotFormatted, OSError) as error:
         print(f"[workbench] trace: {error}", file=sys.stderr)
         return 1
     try:
-        records, lost = reader.drain()
+        records = reader.drain()
         geometry = reader.geometry
     finally:
         reader.close()
 
+    lost = dropped_in(records)
     print(
         f"rings {geometry.rings}  capacity {geometry.capacity}  "
         f"cntfrq {geometry.freq_hz}  records {len(records)}  dropped {lost}  "
         f"early {geometry.early}"
     )
-    if lost:
-        # Never silently: a ring that lapped is a fact about the run,
-        # and a report that hid it would read as a complete history.
-        print(f"[workbench] {lost} record(s) overwritten before this drain", file=sys.stderr)
-    if geometry.early:
-        # A different fact from `dropped`, and not actionable the same
-        # way: these predate the region, so no drain could have caught
-        # them however prompt it was.
-        print(
-            f"[workbench] {geometry.early} event(s) emitted before the rings were placed",
-            file=sys.stderr,
-        )
     print_records(records, geometry.freq_hz, limit)
     return 0
 
@@ -433,10 +605,21 @@ def print_records(records: list[Record], freq_hz: int, limit: int) -> None:
     base = shown[0].ts if shown else 0
     for record in shown:
         fields = decode(record)
+        # A field named `ticks` is a duration in the same clock as the
+        # stamp, and printed raw it is a counter value nobody can read.
+        # One rule rather than one case per event that has one.
+        if "ticks" in fields:
+            fields["ticks"] = f"{_micros(fields['ticks'], freq_hz)}us"
         detail = " ".join(
             f"{key}={value}" for key, value in fields.items() if key not in ("event", "cpu", "ts")
         )
         # Relative to the first record shown: absolute counter values
         # say nothing a reader can use, and the frequency is right here.
-        micros = (record.ts - base) * 1_000_000 // max(1, freq_hz)
-        print(f"  {micros:>10}us cpu{record.cpu} {fields['event']:<13} {detail}")
+        print(
+            f"  {_micros(record.ts - base, freq_hz):>10}us "
+            f"cpu{record.cpu} {fields['event']:<13} {detail}"
+        )
+
+
+def _micros(ticks: int, freq_hz: int) -> int:
+    return ticks * 1_000_000 // max(1, freq_hz)

@@ -80,6 +80,32 @@ class PanelReachTest(unittest.TestCase):
         )
         self.assertRegex(source, r"filter\(\(topic\)\s*=>\s*!claimed\.has\(topic\)\)")
 
+    def test_no_panel_reads_a_value_without_its_provenance(self):
+        """A stop's whole product is what moved, and a renderer handed a
+        bare number has already lost it.
+
+        Enforced by removal rather than by review: the accessor that
+        returned a value alone is gone, so the only ways into a reading
+        are `at()`, which carries the mask, and `plain()`, which states
+        out loud that a cell was computed here. Nine renderers were nine
+        chances to forget a highlight, and every new panel was another.
+        """
+        source = (UI / "js" / "panels.mjs").read_text()
+        self.assertNotIn("value(", source)
+        self.assertRegex(source, r"const at = \(topic\) =>")
+        self.assertRegex(source, r"const plain = \(shown\) =>")
+
+    def test_a_table_cell_that_lost_its_provenance_is_refused(self):
+        """Not merely unhighlighted — a bare value in a cell would draw
+        perfectly and silently never light up, which is the exact
+        failure this arrangement exists to make impossible."""
+        source = (UI / "js" / "panels.mjs").read_text()
+        self.assertRegex(source, r"if \(!\(cell instanceof Cell\)\)[\s\S]{0,200}throw new TypeError")
+
+    def test_the_moved_cell_has_a_style_to_be_seen_by(self):
+        css = (UI / "css" / "workbench.css").read_text()
+        self.assertRegex(css, r"\.ptable td\.moved")
+
 
 VIEW_HEADER = re.compile(r'<div class="view-h">(.*?)</div>\s*<div class="board"', re.S)
 # Any literal that looks like a hardware address or an interrupt number.
@@ -300,6 +326,132 @@ class BoardAnchorTest(unittest.TestCase):
         self.assertIsNotNone(table, "edge caption table not found")
         captioned = set(re.findall(r"^  (\w+):", table.group(1), re.M))
         self.assertEqual({edge.id for edge in paths.EDGES}, captioned)
+
+
+class SelectionTest(unittest.TestCase):
+    """One cursor over the strip, moved three ways.
+
+    A click, an arrow key and playback all push the same selection. A
+    playback path of its own would mean the caption, the board focus and
+    the grade badge exist twice — and two of anything that draws the
+    same fact is how they come to disagree.
+    """
+
+    def setUp(self):
+        self.source = (UI / "js" / "timeline.mjs").read_text()
+        self.main = (UI / "js" / "main.mjs").read_text()
+
+    def test_the_selection_is_an_index_not_an_event(self):
+        """"The next one" is the question a tour asks, and a record
+        cannot answer it."""
+        self.assertRegex(self.source, r"function select\(index")
+        self.assertRegex(self.source, r"function step\(by\)")
+
+    def test_playback_moves_the_same_cursor_a_click_moves(self):
+        # The tick calls step(), which calls select() — the one place a
+        # selection is announced.
+        play = re.search(r"function play\(speed = 1\) \{(.*?)\n  \}", self.source, re.S)
+        self.assertIsNotNone(play, "playback not found")
+        self.assertIn("step(+1)", play.group(1))
+        self.assertNotIn("onSelect(", play.group(1))
+        click = re.search(r'addEventListener\("pointerup".*?\n  \}\);', self.source, re.S)
+        self.assertIsNotNone(click)
+        self.assertIn("select(index)", click.group(0))
+        self.assertNotIn("onSelect({ kind: \"mark\"", click.group(0))
+
+    def test_playback_compresses_idle_time_and_never_the_order(self):
+        """Real time is either a blur or a wait; even spacing lies about
+        the timing. Between the bounds the delay tracks the real gap,
+        and the printed delta is always the real one."""
+        self.assertRegex(self.source, r"STEP_MIN_MS")
+        self.assertRegex(self.source, r"STEP_MAX_MS")
+        self.assertRegex(self.source, r"Math\.min\(STEP_MAX_MS, Math\.max\(STEP_MIN_MS")
+        # The caption's delta comes from the record timestamps, not from
+        # the delay the player happened to use.
+        self.assertRegex(self.source, r"dt: chosenAt > 0 \? micros\(")
+        self.assertIn("Δt ${choice.dt}us", self.main)
+
+    def test_a_new_set_of_records_drops_the_selection(self):
+        """An index into records that no longer exist points at whatever
+        lands in that slot next."""
+        self.assertRegex(self.source, r"function dropSelection\(\)")
+        reset = re.search(r"function reset\(\) \{(.*?)\n  \}", self.source, re.S)
+        self.assertIn("dropSelection()", reset.group(1))
+
+
+class PathTourTest(unittest.TestCase):
+    """Walking a path is the recorded order, not a script.
+
+    The earlier design was a static chain of numbered hops per path. A
+    script can be wrong about the machine and stay wrong quietly; a
+    recording cannot be wrong about itself. This is the composition
+    that replaced it: a filtered window the bridge already answers, and
+    the selection cursor that already walks whatever came back.
+    """
+
+    def setUp(self):
+        self.board = (UI / "js" / "board.mjs").read_text()
+        self.timeline = (UI / "js" / "timeline.mjs").read_text()
+        self.main = (UI / "js" / "main.mjs").read_text()
+
+    def test_a_path_can_be_aimed_at_without_widening_it(self):
+        """The drawn width is what says how well a path is observed, so
+        the click target is a companion rather than a thicker line."""
+        self.assertIn('hit.dataset.edge = spec.id', self.board)
+        css = (UI / "css" / "workbench.css").read_text()
+        self.assertRegex(css, r"\.edge-hit\{[^}]*stroke:\s*transparent")
+        self.assertRegex(css, r"\.edge-hit\{[^}]*pointer-events:\s*stroke")
+        # Shown and hidden with the path, or it is a target for
+        # something that is not on screen.
+        show = re.search(r"function showEdge\(edge, on\) \{(.*?)\n  \}", self.board, re.S)
+        self.assertIn("edge.hit.style.display", show.group(1))
+
+    def test_the_board_says_which_path_and_nothing_about_the_trace(self):
+        click = re.search(
+            r'wires\.addEventListener\("click".*?\n  \}\);', self.board, re.S)
+        self.assertIsNotNone(click, "no path click handler")
+        self.assertIn("onTour(id)", click.group(0))
+        # The recorded order lives in the strip; a second reading of it
+        # here would be a second answer.
+        self.assertNotIn("window", click.group(0))
+
+    def test_the_moments_that_light_a_path_come_from_the_catalogue(self):
+        """A per-path list of event ids typed into the client would be a
+        second copy of what the bridge already publishes."""
+        self.assertRegex(
+            self.main, r"catalogue\.filter\(\(stop\) => stop\.edge === edge\)")
+
+    def test_the_tour_is_a_filtered_window_walked_by_the_one_cursor(self):
+        tour = re.search(r"function tour\(eventIds, label\) \{(.*?)\n  \}", self.timeline, re.S)
+        self.assertIsNotNone(tour, "tour not found")
+        self.assertIn("events: eventIds", tour.group(1))
+        # No records are drawn here and no selection is announced here;
+        # the window answer starts the same cursor everything else uses.
+        self.assertNotIn("onSelect(", tour.group(1))
+        self.assertRegex(self.timeline, r"if \(touring\) \{[\s\S]{0,200}select\(0\);")
+
+
+class ReplayViewTest(unittest.TestCase):
+    """A replay is real and was real, and a reader has to know which."""
+
+    def setUp(self):
+        self.main = (UI / "js" / "main.mjs").read_text()
+
+    def test_the_phase_is_named_rather_than_shown_as_idle(self):
+        self.assertRegex(self.main, r"replay: \{ text:")
+
+    def test_a_recorded_lifecycle_is_history_not_a_transition(self):
+        """A recording replays its own 'running' and 'exited'. Obeyed,
+        they would put a live badge on a screen with no machine."""
+        self.assertRegex(
+            self.main, r'function setPhase\([\s\S]{0,80}if \(replaying && phase !== "replay"\)')
+
+    def test_launching_is_refused_from_one_place(self):
+        """Seven call sites re-armed the button directly. A replay has
+        to refuse all of them, which is one rule about the session and
+        not seven about them."""
+        self.assertNotIn("runButton.disabled = false", self.main)
+        self.assertRegex(self.main, r"function armRun\(on\) \{\n  runButton\.disabled = replaying")
 
 
 class StepperTest(unittest.TestCase):

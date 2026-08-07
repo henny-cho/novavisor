@@ -44,6 +44,13 @@ const GUTTER = 96; /* lane captions */
 const MARK_W = 2;
 /* How far off a mark a click may land and still mean it. */
 const SLACK_PX = 6;
+/* Playback pacing. The order is exact and the real gap is always
+   printed; what is compressed is idle time, because a run replayed at
+   its true rate is either a blur or a wait, and one replayed at even
+   spacing lies about the timing. Between these two bounds the delay
+   tracks the real gap, so a burst still reads as a burst. */
+const STEP_MIN_MS = 90;
+const STEP_MAX_MS = 900;
 
 const CPU_COLOURS = ["--vm0", "--vm1", "--vm2", "--vm3"];
 
@@ -62,7 +69,8 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
   };
   let head = 0; /* total ever appended; the live window is the last HOLD */
 
-  let byCode = new Map(); /* firmware code -> catalogue entry */
+  let byCode = new Map(); /* record code -> catalogue entry */
+  let byId = new Map(); /* event id -> catalogue entry */
   let order = []; /* catalogue order, for stable lane placement */
   const lanes = []; /* event ids seen this run, in catalogue order */
   let freq = 0; /* CNTFRQ, for the microsecond axis */
@@ -81,6 +89,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
   let pending = 0; /* ts already asked for, so a slow answer is not re-asked */
   let timer = null;
 
+  const cols_length = (cols) => (cols && cols.ts ? cols.ts.length : 0);
   const held_count = () => Math.min(head, HOLD);
   const slot = (index) => (head - held_count() + index) % HOLD;
   const newest = () => (held_count() ? held.ts[slot(held_count() - 1)] : 0);
@@ -93,10 +102,12 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
 
   function setCatalogue(stops) {
     byCode = new Map();
+    byId = new Map();
     order = [];
     for (const stop of stops || []) {
       if (!stop.code) continue;
       byCode.set(stop.code, stop);
+      byId.set(stop.id, stop);
       order.push(stop.id);
     }
   }
@@ -111,6 +122,10 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     view = null;
     pending = 0;
     follow = true;
+    /* A selection is an index into a set of records that no longer
+       exists. Carrying it across would point the cursor at whatever
+       happens to land in that slot on the new machine. */
+    dropSelection();
     draw();
   }
 
@@ -173,13 +188,31 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     if (!forView && view) return; /* a tail answer that a drag overtook */
     if (data.cols) {
       if (forView) {
+        /* A different set of records answers for this window now, and
+           an index into the old one means nothing against it. */
+        dropSelection();
         chosen = { from, to, cols: data.cols };
         dense = null;
+        /* The tour's answer arrived: start at its first passage and
+           walk. Through the same cursor as everything else. */
+        if (touring) {
+          touring = null;
+          if (cols_length(data.cols)) {
+            requestAnimationFrame(() => {
+              select(0);
+              play();
+            });
+          }
+        }
       } else {
         append(data.cols, from);
       }
       noteLanes(data.cols.code);
     } else if (data.hist) {
+      /* Even filtered to one path the stretch can be too busy to
+         enumerate. Said rather than left as a tour that quietly never
+         starts. */
+      touring = null;
       /* Too many records in the window to enumerate at the resolution
          asked for. Drawn as density, rather than as a sample of its
          marks that would read as a quiet stretch. */
@@ -301,9 +334,33 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     return {
       ink: style.getPropertyValue("--ink3").trim() || "#888",
       line: style.getPropertyValue("--line").trim() || "#333",
+      warn: style.getPropertyValue("--warn").trim() || "#a8770a",
       cpu: CPU_COLOURS.map((name) => style.getPropertyValue(name).trim() || "#888"),
       font: style.getPropertyValue("--mono").trim() || "monospace",
     };
+  }
+
+  /* Diagonal hatching, built once per colour. A gap is the one thing on
+     this strip that is not an observation, and a solid band would read
+     as one — the stripes say "nothing was here to draw". */
+  let hatchFor = null;
+  function hatch(colour, ratio) {
+    if (hatchFor && hatchFor.colour === colour && hatchFor.ratio === ratio) return hatchFor.pattern;
+    const step = Math.max(4, Math.round(5 * ratio));
+    const tile = document.createElement("canvas");
+    tile.width = tile.height = step;
+    const pen = tile.getContext("2d");
+    pen.strokeStyle = colour;
+    pen.globalAlpha = 0.55;
+    pen.lineWidth = Math.max(1, ratio);
+    pen.beginPath();
+    pen.moveTo(-step, step);
+    pen.lineTo(step, -step);
+    pen.moveTo(0, step * 2);
+    pen.lineTo(step * 2, 0);
+    pen.stroke();
+    hatchFor = { colour, ratio, pattern: context.createPattern(tile, "repeat") };
+    return hatchFor.pattern;
   }
 
   /* Always from the held records, never from what is already painted:
@@ -384,6 +441,8 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
       context.fillText(lanes[lane], 4 * ratio, middle);
     }
 
+    bands(window_, at, colours);
+
     const bar = MARK_W * ratio;
     const columns = Math.max(1, Math.floor(plot / bar));
     const { counts, owner } = bin(window_, columns);
@@ -413,6 +472,50 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
       }
     }
     context.globalAlpha = 1;
+    cursorLine(window_, at, colours);
+  }
+
+  /* Where the selection is. Drawn from the record rather than from
+     wherever the pointer was, so a cursor moved by a key and one moved
+     by a click land in the same place. */
+  function cursorLine(window_, at, colours) {
+    const record = chosenAt >= 0 ? ordered[chosenAt] : null;
+    if (!record) return;
+    const width = Math.max(1, window_.to - window_.from);
+    const x = at.gutter + ((record.ts - window_.from) / width) * at.plot;
+    if (x < at.gutter || x > at.gutter + at.plot) return;
+    context.fillStyle = colours.ink;
+    context.fillRect(Math.round(x), 0, Math.max(1, at.scale), at.height);
+  }
+
+  /* Records that cover a stretch rather than an instant, drawn as the
+     stretch. A gap's whole content is how much of the axis nothing was
+     watching, and a two-pixel tick at its far end says the opposite —
+     that the strip either side of it is continuous.
+
+     Painted before the marks, so a mark that survived inside a busy
+     window still sits on top. A `from` of zero means the hole opened
+     before anything was recorded, so the band runs off the left edge
+     rather than claiming a start it does not have. */
+  function bands(window_, at, colours) {
+    if (!lanes.some((id) => byId.get(id)?.span)) return;
+    const width = Math.max(1, window_.to - window_.from);
+    const x = (ts) => at.gutter + ((ts - window_.from) / width) * at.plot;
+    context.fillStyle = hatch(colours.warn, at.scale);
+    for (const record of visible(window_)) {
+      const entry = byCode.get(record.code);
+      if (!entry || !entry.span) continue;
+      const lane = lanes.indexOf(entry.id);
+      if (lane < 0) continue;
+      const from = Math.max(at.gutter, record.b ? x(record.b) : at.gutter);
+      const to = Math.min(at.gutter + at.plot, x(record.ts));
+      context.fillRect(
+        from,
+        lane * at.lane + 2 * at.scale,
+        Math.max(1, to - from),
+        at.lane - 4 * at.scale,
+      );
+    }
   }
 
   /* ---------------- interaction ---------------- */
@@ -485,6 +588,126 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
   let dragFrom = null;
   let marked = null; /* the record last clicked, for a second one to measure against */
 
+  /* ---------------- selection ---------------- */
+
+  /* One cursor over the records on screen, and three ways to move it:
+     a click, an arrow key, and playback. They share this because the
+     alternative is a second path into the board — and then the caption,
+     the focus and the grade badge exist twice and drift once.
+
+     An index rather than a record: "the next one" is the question a
+     tour asks, and a record cannot answer it. */
+  let ordered = []; /* the visible records in time order, rebuilt lazily */
+  let chosenAt = -1; /* index into `ordered`, -1 for nothing chosen */
+  let playing = null; /* the playback timer */
+
+  function laid() {
+    const window_ = bounds();
+    ordered = window_ ? [...visible(window_)].sort((a, b) => a.ts - b.ts) : [];
+    return ordered;
+  }
+
+  function named(record) {
+    const entry = record && byCode.get(record.code);
+    if (!entry) return null;
+    return { id: entry.id, edge: entry.edge, fields: entry.fields || [], ...record };
+  }
+
+  /* Move the cursor to `index` and say what is there, with what came
+     before and after it. The neighbours travel with the selection
+     because the caption a reader wants is the chain — `bind -> +111 us
+     inject` — and reassembling it from a bare record means keeping a
+     second copy of the order somewhere. */
+  function select(index, rows = laid()) {
+    if (!rows.length) return false;
+    chosenAt = Math.min(rows.length - 1, Math.max(0, index));
+    const record = named(rows[chosenAt]);
+    if (!record) return false;
+    marked = record;
+    onSelect({
+      kind: "mark",
+      record,
+      index: chosenAt,
+      total: rows.length,
+      prev: named(rows[chosenAt - 1]),
+      next: named(rows[chosenAt + 1]),
+      /* The gap from the previous mark, in real microseconds, whatever
+         speed the cursor is being moved at. */
+      dt: chosenAt > 0 ? micros(record.ts - rows[chosenAt - 1].ts) : null,
+      micros: micros(record.ts - (bounds()?.from ?? record.ts)),
+    });
+    draw();
+    return true;
+  }
+
+  function step(by) {
+    const rows = laid();
+    if (!rows.length) return false;
+    return select(chosenAt < 0 ? (by > 0 ? 0 : rows.length - 1) : chosenAt + by, rows);
+  }
+
+  /* Auto-advance. Not a second renderer: it pushes the same cursor the
+     click pushes, so everything downstream of a selection happens for
+     free and cannot disagree with the manual case. */
+  function play(speed = 1) {
+    stop();
+    laid();
+    if (chosenAt < 0 || chosenAt >= ordered.length - 1) select(0);
+    const tick = () => {
+      if (!step(+1)) return stop();
+      if (chosenAt >= ordered.length - 1) return stop();
+      const gap = ordered[chosenAt + 1].ts - ordered[chosenAt].ts;
+      const real = freq ? (gap * 1000) / freq : STEP_MIN_MS;
+      playing = setTimeout(tick, Math.min(STEP_MAX_MS, Math.max(STEP_MIN_MS, real / speed)));
+    };
+    playing = setTimeout(tick, STEP_MIN_MS);
+    return true;
+  }
+
+  function stop() {
+    if (playing !== null) clearTimeout(playing);
+    playing = null;
+    return false;
+  }
+
+  /* Everything a path actually carried this run, in the order it
+     carried it.
+     Not a new mechanism. The bridge already answers a window filtered
+     by event; the cursor already walks whatever the window returned.
+     A tour is those two composed, which is why the board gained a
+     click and this file gained no second way to draw a record.
+
+     It replaces a scripted chain of numbered hops. A script can be
+     wrong about the machine; a recording cannot be wrong about itself. */
+  let touring = null; /* the request in flight, so its answer can start it */
+  function tour(eventIds, label) {
+    if (!span || !span.n || !eventIds.length) return false;
+    dropSelection();
+    setFollow(false);
+    touring = { events: eventIds, label };
+    view = { from: span.from, to: span.to };
+    request({
+      op: "window",
+      from: view.from,
+      to: view.to,
+      buckets: ceiling,
+      events: eventIds,
+    });
+    draw();
+    return true;
+  }
+
+  const touringLabel = () => touring?.label ?? null;
+
+  function dropSelection() {
+    stop();
+    chosenAt = -1;
+    ordered = [];
+    marked = null;
+  }
+
+  const isPlaying = () => playing !== null;
+
   canvas.addEventListener("pointerdown", (event) => {
     dragFrom = timeAt(event);
     if (dragFrom !== null) canvas.setPointerCapture(event.pointerId);
@@ -516,8 +739,32 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
       onSelect({ kind: "delta", from: marked, to: hit, micros: micros(hit.ts - marked.ts) });
       return;
     }
-    marked = hit;
-    onSelect({ kind: "mark", record: hit, micros: micros(hit.ts - (bounds()?.from ?? hit.ts)) });
+    /* Through the cursor, not around it: a click is one of the three
+       ways to move the same selection. */
+    stop();
+    const rows = laid();
+    const index = rows.findIndex((row) => row.ts === hit.ts && row.code === hit.code);
+    if (index >= 0) select(index);
+  });
+
+  /* Arrow keys walk the selection, Space plays it, Home and End are the
+     two ends. On the canvas because that is what a reader has just
+     clicked; the strip is focusable so the keys work before any click. */
+  canvas.tabIndex = 0;
+  canvas.addEventListener("keydown", (event) => {
+    const acted = {
+      ArrowRight: () => step(+1),
+      ArrowLeft: () => step(-1),
+      Home: () => select(0),
+      End: () => select(laid().length - 1),
+      " ": () => (isPlaying() ? stop() : play()),
+    }[event.key];
+    if (!acted) return;
+    /* Space scrolls a page and the arrows scroll a strip; neither is
+       what a reader stepping through events asked for. */
+    event.preventDefault();
+    if (follow) setFollow(false); /* stepping is not following */
+    acted();
   });
 
   /* Everything the bridge still holds — the widest honest view, and not
@@ -551,5 +798,24 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
   new ResizeObserver(() => draw()).observe(canvas);
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => draw());
 
-  return { setCatalogue, setLimits, note, apply, reset, setFollow, draw, freqHz: () => freq };
+  return {
+    setCatalogue,
+    setLimits,
+    note,
+    apply,
+    reset,
+    setFollow,
+    draw,
+    freqHz: () => freq,
+    /* One cursor, three movers. Exposed so the chrome can drive it the
+       same way a key does — a second entry point into the board is how
+       the caption, the focus and the grade end up existing twice. */
+    select,
+    step,
+    play,
+    stop,
+    isPlaying,
+    tour,
+    touringLabel,
+  };
 }
