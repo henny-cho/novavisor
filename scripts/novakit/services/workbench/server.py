@@ -18,7 +18,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from ...core import config
-from . import halt, hardware, history, snapshot, static, trace
+from . import halt, hardware, history, recording, snapshot, static, trace
 from .protocol import (
     MAX_BUCKETS,
     SUPPORTED_UPLINK,
@@ -98,8 +98,16 @@ class Bridge:
         deps: Deps | None = None,
         surfaces: Surfaces | None = None,
         trace_history: int = history.DEFAULT_CAPACITY,
+        recorder: recording.Recorder | None = None,
     ):
-        self.store = StateStore(Envelopes(Clock()))
+        # The tee sits on publish(), the one funnel every fact passes
+        # through, so a recording cannot be missing something a live
+        # viewer had — and sits ahead of the frame window, so it is not
+        # missing what a throttled tab lost either.
+        self._recorder = recorder
+        self.store = StateStore(
+            Envelopes(Clock()), on_frame=None if recorder is None else recorder.frame
+        )
         self.session = Session(self.store, deps, surfaces)
         self._ui_root = ui_root
         self._connections: set = set()
@@ -207,6 +215,16 @@ class Bridge:
             self._images = None
         self._release()
         await self.session.stop()
+        if self._recorder is not None:
+            # After the session, so the last frames of a shutdown are in
+            # the file the run is judged by.
+            meta = self._recorder.close()
+            sizes = self._recorder.sizes()
+            total = sum(sizes.values())
+            print(
+                f"[workbench] recorded {meta['frames']} frames and {meta['records']} records "
+                f"to {self._recorder.directory} ({total / 1e6:.1f} MB)"
+            )
 
     def _live_state(self) -> dict:
         """Session truth a late joiner cannot recover from the backlog:
@@ -650,6 +668,13 @@ class Bridge:
         # range of them back into a duration.
         self._history.freq_hz = self._tracer.geometry.freq_hz
         self._budget = trace.Budget(self._tracer.geometry.capacity)
+        if self._recorder is not None:
+            # A range of counter values is not a duration without this,
+            # and a replay needs it before it can answer the first
+            # window — so it goes in the meta, not in a frame.
+            self._recorder.note(
+                freq_hz=self._tracer.geometry.freq_hz, run_id=session.run_id
+            )
         # Constant for the run, so it rides the transition rather than
         # every summary frame. The geometry travels with it: the depth
         # is what the budget below is measured against, and a reader
@@ -746,6 +771,11 @@ class Bridge:
         if not records:
             return
         self._history.append(records)
+        if self._recorder is not None:
+            # The records themselves, because the wire carries only the
+            # summary: a recording of the frames alone would replay a
+            # run whose timeline is empty.
+            self._recorder.drained(records)
         self.store.publish(
             Topic.TRACE,
             Kind.EVENT,
@@ -883,6 +913,12 @@ class Bridge:
     async def _flush_loop(self) -> None:
         while True:
             await asyncio.sleep(FLUSH_INTERVAL_SECONDS)
+            if self._recorder is not None:
+                # Ahead of the connection check on purpose: a recording
+                # made with nobody watching is the ordinary case, and a
+                # writer that only ran while a browser was attached
+                # would record whoever happened to be looking.
+                self._recorder.flush()
             if not self._connections:
                 # Leave frames in the window: the first joiner gets them
                 # on the next flush instead of a silent discard.
@@ -910,12 +946,31 @@ class Bridge:
 
 
 async def _serve_forever(
-    *, host: str, port: int, target: Target | None, ui_root: Path, trace_history: int
+    *,
+    host: str,
+    port: int,
+    target: Target | None,
+    ui_root: Path,
+    trace_history: int,
+    record: Path | None = None,
 ) -> None:
     if not ui_root.is_dir():
         raise SystemExit(f"[workbench] UI root missing: {ui_root}")
     surfaces = make_surfaces()
-    bridge = Bridge(ui_root=ui_root, surfaces=surfaces, trace_history=trace_history)
+    recorder = None
+    if record is not None:
+        recorder = recording.Recorder(
+            record,
+            {
+                "demo": target.demo if target else None,
+                "variant": target.variant if target else None,
+                "board": hardware.DEFAULT_BOARD,
+            },
+        )
+        print(f"[workbench] recording to {recorder.directory}")
+    bridge = Bridge(
+        ui_root=ui_root, surfaces=surfaces, trace_history=trace_history, recorder=recorder
+    )
     # A supervisor's SIGTERM must walk the same teardown as Ctrl-C, or
     # QEMU (its own session, immune to the terminal) outlives the bridge
     # with a gigabyte of tmpfs pinned.
@@ -943,6 +998,7 @@ def serve(
     target: Target | None = None,
     ui_root: Path | None = None,
     trace_history: int = history.DEFAULT_CAPACITY,
+    record: Path | None = None,
 ) -> int:
     try:
         asyncio.run(
@@ -952,6 +1008,7 @@ def serve(
                 target=target,
                 ui_root=ui_root or config.WORKBENCH_UI_DIR,
                 trace_history=trace_history,
+                record=record,
             )
         )
     except (KeyboardInterrupt, asyncio.CancelledError):

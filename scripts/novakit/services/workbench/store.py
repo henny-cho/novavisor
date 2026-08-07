@@ -49,6 +49,7 @@ class StateStore:
         envelopes: Envelopes,
         window: FrameWindow | None = None,
         backlog_limit: int = 500,
+        on_frame=None,
     ):
         self._envelopes = envelopes
         self.window = window if window is not None else FrameWindow()
@@ -56,6 +57,10 @@ class StateStore:
         # Recent history replayed to late joiners, console included so a
         # fresh browser is not blank until the next event.
         self._backlog: deque[dict] = deque(maxlen=backlog_limit)
+        # Someone who wants every frame, ahead of the window that may
+        # drop them. A callable rather than a recorder, so this file
+        # stays as free of the recording layer as it is of the socket.
+        self._on_frame = on_frame
 
     def publish(
         self,
@@ -69,6 +74,10 @@ class StateStore:
         """`replay=False` keeps a frame out of the connect backlog — for
         per-request noise (rejections) that must not evict history."""
         frame = self._envelopes.make(topic, kind, data, src=src)
+        # Before the window, which drops console frames on overrun: an
+        # observer of everything must not be given a client's view.
+        if self._on_frame is not None:
+            self._on_frame(frame)
         self.window.add(frame)
         if replay:
             self._backlog.append(frame)

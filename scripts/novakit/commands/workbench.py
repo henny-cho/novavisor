@@ -62,6 +62,21 @@ TraceHistory = Annotated[
 ]
 
 
+Record = Annotated[
+    Path | None,
+    typer.Option(
+        "--record",
+        metavar="DIR",
+        help=(
+            "Write the run to DIR as the wire saw it, for replay without "
+            "QEMU or an image. Explicit, and never on by default: a busy "
+            "twenty-minute run is a few hundred megabytes, and the size is "
+            "reported on exit."
+        ),
+    ),
+]
+
+
 @app.command()
 def serve(
     demo: Demo = None,
@@ -70,10 +85,13 @@ def serve(
     variant: Variant = None,
     verify: Verify = False,
     trace_history: TraceHistory = history.DEFAULT_CAPACITY,
+    record: Record = None,
 ) -> None:
     """Serve the workbench UI against a live QEMU session."""
     target = session.Target(demo=demo, variant=variant, verify=verify) if demo else None
-    code = server.serve(host=host, port=port, target=target, trace_history=trace_history)
+    code = server.serve(
+        host=host, port=port, target=target, trace_history=trace_history, record=record
+    )
     if code:
         raise typer.Exit(code)
 
