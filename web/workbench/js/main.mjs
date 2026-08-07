@@ -106,7 +106,15 @@ const timeline = createTimeline({
       return;
     }
     const record = choice.record;
-    timelineSel.textContent = `${record.id} · cpu${record.cpu} · ${traceFields(record)}`;
+    /* The chain, not the mark. What a reader takes from the strip is
+       `bind → +111us inject`, and the neighbours arrive with the
+       selection precisely so this line can say it. The gap is always
+       the real one, whatever rate the cursor is being moved at. */
+    const gap = choice.dt === null || choice.dt === undefined ? "" : ` · Δt ${choice.dt}us`;
+    const where = choice.total ? ` · ${choice.index + 1}/${choice.total}` : "";
+    const ahead = choice.next ? ` → ${choice.next.id}` : "";
+    timelineSel.textContent =
+      `${record.id}${ahead} · cpu${record.cpu}${gap}${where} · ${traceFields(record)}`;
     if (record.edge) boardView.focusPath(record.edge);
     /* One catalogue, two consumers, and this is where that is repaid:
        the moment a reader picked out of the trace is already a stop
@@ -144,6 +152,39 @@ stopHereButton.addEventListener("click", () => {
    so the button asks for a change and the strip decides what it says. */
 ref("tl-follow").addEventListener("click", (event) => {
   timeline.setFollow(event.currentTarget.getAttribute("aria-pressed") !== "true");
+});
+
+/* The same three movers the keys use. Buttons because a reader who has
+   not clicked the strip yet has nowhere to press a key, and stepping is
+   the first thing they want. */
+const playButton = ref("tl-play");
+function setPlaying(on) {
+  playButton.setAttribute("aria-pressed", String(on));
+  playButton.textContent = on ? "정지" : "재생";
+}
+ref("tl-prev").addEventListener("click", () => {
+  timeline.stop();
+  setPlaying(false);
+  timeline.setFollow(false);
+  timeline.step(-1);
+});
+ref("tl-next").addEventListener("click", () => {
+  timeline.stop();
+  setPlaying(false);
+  timeline.setFollow(false);
+  timeline.step(+1);
+});
+playButton.addEventListener("click", () => {
+  const on = !timeline.isPlaying();
+  if (on) {
+    /* Playing the tail while the tail keeps moving is two cursors
+       chasing each other. */
+    timeline.setFollow(false);
+    timeline.play();
+  } else {
+    timeline.stop();
+  }
+  setPlaying(on);
 });
 
 const consoleView = createConsole({

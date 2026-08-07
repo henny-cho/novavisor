@@ -44,6 +44,13 @@ const GUTTER = 96; /* lane captions */
 const MARK_W = 2;
 /* How far off a mark a click may land and still mean it. */
 const SLACK_PX = 6;
+/* Playback pacing. The order is exact and the real gap is always
+   printed; what is compressed is idle time, because a run replayed at
+   its true rate is either a blur or a wait, and one replayed at even
+   spacing lies about the timing. Between these two bounds the delay
+   tracks the real gap, so a burst still reads as a burst. */
+const STEP_MIN_MS = 90;
+const STEP_MAX_MS = 900;
 
 const CPU_COLOURS = ["--vm0", "--vm1", "--vm2", "--vm3"];
 
@@ -114,6 +121,10 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     view = null;
     pending = 0;
     follow = true;
+    /* A selection is an index into a set of records that no longer
+       exists. Carrying it across would point the cursor at whatever
+       happens to land in that slot on the new machine. */
+    dropSelection();
     draw();
   }
 
@@ -176,6 +187,9 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     if (!forView && view) return; /* a tail answer that a drag overtook */
     if (data.cols) {
       if (forView) {
+        /* A different set of records answers for this window now, and
+           an index into the old one means nothing against it. */
+        dropSelection();
         chosen = { from, to, cols: data.cols };
         dense = null;
       } else {
@@ -442,6 +456,20 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
       }
     }
     context.globalAlpha = 1;
+    cursorLine(window_, at, colours);
+  }
+
+  /* Where the selection is. Drawn from the record rather than from
+     wherever the pointer was, so a cursor moved by a key and one moved
+     by a click land in the same place. */
+  function cursorLine(window_, at, colours) {
+    const record = chosenAt >= 0 ? ordered[chosenAt] : null;
+    if (!record) return;
+    const width = Math.max(1, window_.to - window_.from);
+    const x = at.gutter + ((record.ts - window_.from) / width) * at.plot;
+    if (x < at.gutter || x > at.gutter + at.plot) return;
+    context.fillStyle = colours.ink;
+    context.fillRect(Math.round(x), 0, Math.max(1, at.scale), at.height);
   }
 
   /* Records that cover a stretch rather than an instant, drawn as the
@@ -544,6 +572,97 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
   let dragFrom = null;
   let marked = null; /* the record last clicked, for a second one to measure against */
 
+  /* ---------------- selection ---------------- */
+
+  /* One cursor over the records on screen, and three ways to move it:
+     a click, an arrow key, and playback. They share this because the
+     alternative is a second path into the board — and then the caption,
+     the focus and the grade badge exist twice and drift once.
+
+     An index rather than a record: "the next one" is the question a
+     tour asks, and a record cannot answer it. */
+  let ordered = []; /* the visible records in time order, rebuilt lazily */
+  let chosenAt = -1; /* index into `ordered`, -1 for nothing chosen */
+  let playing = null; /* the playback timer */
+
+  function laid() {
+    const window_ = bounds();
+    ordered = window_ ? [...visible(window_)].sort((a, b) => a.ts - b.ts) : [];
+    return ordered;
+  }
+
+  function named(record) {
+    const entry = record && byCode.get(record.code);
+    if (!entry) return null;
+    return { id: entry.id, edge: entry.edge, fields: entry.fields || [], ...record };
+  }
+
+  /* Move the cursor to `index` and say what is there, with what came
+     before and after it. The neighbours travel with the selection
+     because the caption a reader wants is the chain — `bind -> +111 us
+     inject` — and reassembling it from a bare record means keeping a
+     second copy of the order somewhere. */
+  function select(index, rows = laid()) {
+    if (!rows.length) return false;
+    chosenAt = Math.min(rows.length - 1, Math.max(0, index));
+    const record = named(rows[chosenAt]);
+    if (!record) return false;
+    marked = record;
+    onSelect({
+      kind: "mark",
+      record,
+      index: chosenAt,
+      total: rows.length,
+      prev: named(rows[chosenAt - 1]),
+      next: named(rows[chosenAt + 1]),
+      /* The gap from the previous mark, in real microseconds, whatever
+         speed the cursor is being moved at. */
+      dt: chosenAt > 0 ? micros(record.ts - rows[chosenAt - 1].ts) : null,
+      micros: micros(record.ts - (bounds()?.from ?? record.ts)),
+    });
+    draw();
+    return true;
+  }
+
+  function step(by) {
+    const rows = laid();
+    if (!rows.length) return false;
+    return select(chosenAt < 0 ? (by > 0 ? 0 : rows.length - 1) : chosenAt + by, rows);
+  }
+
+  /* Auto-advance. Not a second renderer: it pushes the same cursor the
+     click pushes, so everything downstream of a selection happens for
+     free and cannot disagree with the manual case. */
+  function play(speed = 1) {
+    stop();
+    laid();
+    if (chosenAt < 0 || chosenAt >= ordered.length - 1) select(0);
+    const tick = () => {
+      if (!step(+1)) return stop();
+      if (chosenAt >= ordered.length - 1) return stop();
+      const gap = ordered[chosenAt + 1].ts - ordered[chosenAt].ts;
+      const real = freq ? (gap * 1000) / freq : STEP_MIN_MS;
+      playing = setTimeout(tick, Math.min(STEP_MAX_MS, Math.max(STEP_MIN_MS, real / speed)));
+    };
+    playing = setTimeout(tick, STEP_MIN_MS);
+    return true;
+  }
+
+  function stop() {
+    if (playing !== null) clearTimeout(playing);
+    playing = null;
+    return false;
+  }
+
+  function dropSelection() {
+    stop();
+    chosenAt = -1;
+    ordered = [];
+    marked = null;
+  }
+
+  const isPlaying = () => playing !== null;
+
   canvas.addEventListener("pointerdown", (event) => {
     dragFrom = timeAt(event);
     if (dragFrom !== null) canvas.setPointerCapture(event.pointerId);
@@ -575,8 +694,32 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
       onSelect({ kind: "delta", from: marked, to: hit, micros: micros(hit.ts - marked.ts) });
       return;
     }
-    marked = hit;
-    onSelect({ kind: "mark", record: hit, micros: micros(hit.ts - (bounds()?.from ?? hit.ts)) });
+    /* Through the cursor, not around it: a click is one of the three
+       ways to move the same selection. */
+    stop();
+    const rows = laid();
+    const index = rows.findIndex((row) => row.ts === hit.ts && row.code === hit.code);
+    if (index >= 0) select(index);
+  });
+
+  /* Arrow keys walk the selection, Space plays it, Home and End are the
+     two ends. On the canvas because that is what a reader has just
+     clicked; the strip is focusable so the keys work before any click. */
+  canvas.tabIndex = 0;
+  canvas.addEventListener("keydown", (event) => {
+    const acted = {
+      ArrowRight: () => step(+1),
+      ArrowLeft: () => step(-1),
+      Home: () => select(0),
+      End: () => select(laid().length - 1),
+      " ": () => (isPlaying() ? stop() : play()),
+    }[event.key];
+    if (!acted) return;
+    /* Space scrolls a page and the arrows scroll a strip; neither is
+       what a reader stepping through events asked for. */
+    event.preventDefault();
+    if (follow) setFollow(false); /* stepping is not following */
+    acted();
   });
 
   /* Everything the bridge still holds — the widest honest view, and not
@@ -610,5 +753,22 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
   new ResizeObserver(() => draw()).observe(canvas);
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => draw());
 
-  return { setCatalogue, setLimits, note, apply, reset, setFollow, draw, freqHz: () => freq };
+  return {
+    setCatalogue,
+    setLimits,
+    note,
+    apply,
+    reset,
+    setFollow,
+    draw,
+    freqHz: () => freq,
+    /* One cursor, three movers. Exposed so the chrome can drive it the
+       same way a key does — a second entry point into the board is how
+       the caption, the focus and the grade end up existing twice. */
+    select,
+    step,
+    play,
+    stop,
+    isPlaying,
+  };
 }

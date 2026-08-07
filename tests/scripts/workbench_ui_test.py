@@ -328,6 +328,57 @@ class BoardAnchorTest(unittest.TestCase):
         self.assertEqual({edge.id for edge in paths.EDGES}, captioned)
 
 
+class SelectionTest(unittest.TestCase):
+    """One cursor over the strip, moved three ways.
+
+    A click, an arrow key and playback all push the same selection. A
+    playback path of its own would mean the caption, the board focus and
+    the grade badge exist twice — and two of anything that draws the
+    same fact is how they come to disagree.
+    """
+
+    def setUp(self):
+        self.source = (UI / "js" / "timeline.mjs").read_text()
+        self.main = (UI / "js" / "main.mjs").read_text()
+
+    def test_the_selection_is_an_index_not_an_event(self):
+        """"The next one" is the question a tour asks, and a record
+        cannot answer it."""
+        self.assertRegex(self.source, r"function select\(index")
+        self.assertRegex(self.source, r"function step\(by\)")
+
+    def test_playback_moves_the_same_cursor_a_click_moves(self):
+        # The tick calls step(), which calls select() — the one place a
+        # selection is announced.
+        play = re.search(r"function play\(speed = 1\) \{(.*?)\n  \}", self.source, re.S)
+        self.assertIsNotNone(play, "playback not found")
+        self.assertIn("step(+1)", play.group(1))
+        self.assertNotIn("onSelect(", play.group(1))
+        click = re.search(r'addEventListener\("pointerup".*?\n  \}\);', self.source, re.S)
+        self.assertIsNotNone(click)
+        self.assertIn("select(index)", click.group(0))
+        self.assertNotIn("onSelect({ kind: \"mark\"", click.group(0))
+
+    def test_playback_compresses_idle_time_and_never_the_order(self):
+        """Real time is either a blur or a wait; even spacing lies about
+        the timing. Between the bounds the delay tracks the real gap,
+        and the printed delta is always the real one."""
+        self.assertRegex(self.source, r"STEP_MIN_MS")
+        self.assertRegex(self.source, r"STEP_MAX_MS")
+        self.assertRegex(self.source, r"Math\.min\(STEP_MAX_MS, Math\.max\(STEP_MIN_MS")
+        # The caption's delta comes from the record timestamps, not from
+        # the delay the player happened to use.
+        self.assertRegex(self.source, r"dt: chosenAt > 0 \? micros\(")
+        self.assertIn("Δt ${choice.dt}us", self.main)
+
+    def test_a_new_set_of_records_drops_the_selection(self):
+        """An index into records that no longer exist points at whatever
+        lands in that slot next."""
+        self.assertRegex(self.source, r"function dropSelection\(\)")
+        reset = re.search(r"function reset\(\) \{(.*?)\n  \}", self.source, re.S)
+        self.assertIn("dropSelection()", reset.group(1))
+
+
 class StepperTest(unittest.TestCase):
     """The controls that stop the machine at an event."""
 

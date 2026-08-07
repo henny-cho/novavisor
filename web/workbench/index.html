@@ -114,6 +114,15 @@
                  drain erased the selection. -->
             <span class="tl-sel" id="tl-sel"></span>
             <button class="mini" id="tl-stop" type="button" hidden>여기서 멈추기</button>
+            <!-- One selection, moved three ways. These push the same
+                 cursor the arrow keys and a click push, so a tour is
+                 the selection advancing rather than a second path. -->
+            <button class="mini" id="tl-prev" type="button"
+                    title="이전 사건 (←)">◀</button>
+            <button class="mini" id="tl-play" type="button" aria-pressed="false"
+                    title="녹화된 순서대로 재생 (Space) — 순서는 정확하고 유휴만 압축된다">재생</button>
+            <button class="mini" id="tl-next" type="button"
+                    title="다음 사건 (→)">▶</button>
             <button class="mini" id="tl-follow" type="button" aria-pressed="true"
                     title="최신 구간 추종">추종</button>
             <button class="mini" id="tl-fold" type="button" aria-expanded="true"
