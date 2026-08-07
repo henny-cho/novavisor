@@ -24,6 +24,7 @@
 #include "nova/abi/hvc_abi.h"
 #include "nova/panic.hpp"
 #include "soft_timer/soft_timer.hpp"
+#include "trace/trace.hpp"
 #include "vcpu_internal.hpp"
 #include "vgic/vgic.hpp"
 #include "vgic/vgic_model.hpp"
@@ -98,6 +99,7 @@ auto pick_next() noexcept -> std::size_t {
 void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
   CpuSched& cs   = me();
   Vcpu&     next = g_vcpus[next_idx];
+  trace_emit(NOVA_TRACE_EV_SCHED_SWITCH, static_cast<std::uint32_t>(next_idx), cs.current);
 
   if (cs.current != kNoVcpu) {
     Vcpu& cur = g_vcpus[cs.current];

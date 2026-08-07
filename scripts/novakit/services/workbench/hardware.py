@@ -57,7 +57,7 @@ def platform(board: str = DEFAULT_BOARD) -> dict[str, int]:
     picture to draw: where the machine's RAM aperture starts (QEMU backs
     exactly that span with the file the bridge mmaps, so a physical
     address is an offset into it), how many PEs the scheduler runs on,
-    and where the IVC page sits.
+    where the IVC page sits, and where the trace rings are reserved.
 
     Same headers `board_map` reads — a value typed into the bridge
     instead would read the wrong offset on any board but this one.
@@ -70,6 +70,7 @@ def platform(board: str = DEFAULT_BOARD) -> dict[str, int]:
                 "NOVA_BOARD_PHYS_RAM_SIZE",
                 "NOVA_BOARD_SMP_CPUS",
                 "NOVA_BOARD_IVC_SHM_PA",
+                "NOVA_BOARD_TRACE_PA",
             ],
         )
     except ValueError as error:

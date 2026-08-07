@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 
 from ...core import config
-from . import halt, hardware, snapshot, static
+from . import halt, hardware, snapshot, static, trace
 from .protocol import (
     SUPPORTED_UPLINK,
     Clock,
@@ -56,6 +56,10 @@ HALT_COMMANDS = ("stop", "cont", "step", "run", "abort")
 # covers a cold build ahead of the machine it is waiting for.
 LAUNCH_POLL_SECONDS = 0.005
 LAUNCH_ARM_TIMEOUT_SECONDS = 600.0
+# Ticks to keep looking for a formatted region before concluding the
+# image has no trace layer. EL2 formats it in its first init action,
+# which is still later than QEMU creating the backing file.
+TRACE_ATTEMPTS = 200
 
 
 def _require_websockets():
@@ -99,6 +103,13 @@ class Bridge:
         self._poller: snapshot.SnapshotPoller | None = None
         self._provider: snapshot.SnapshotProvider | None = None
         self._provider_run: int | None = None
+        # The T layer reads the same file but needs no image, so it is
+        # built and torn down on its own: a failure to resolve symbols
+        # must not take the event stream with it.
+        self._tracer: trace.TraceReader | None = None
+        self._tracer_run: int | None = None
+        self._trace_attempts = 0
+        self._trace_absent = False
         # Stamped into every connect topo: a changed token is the one
         # reliable restart signal, whatever the seq counter says.
         self._token = uuid.uuid4().hex[:8]
@@ -451,6 +462,60 @@ class Bridge:
             self._halting = False
             self._abort = False
 
+    def _drop_tracer(self) -> None:
+        tracer, self._tracer = self._tracer, None
+        self._tracer_run = None
+        self._trace_attempts = 0
+        self._trace_absent = False
+        if tracer is not None:
+            tracer.close()
+
+    def _pump_trace(self) -> None:
+        """Drain the firmware's rings and publish what fired.
+
+        Counts per path, not the records: a few thousand events a second
+        is nothing to the bridge and a great deal to a browser, and a cap
+        with a silent drop would make "everything that happened" a lie.
+        The records stay here for `nova workbench trace` to ask for.
+        """
+        session = self.session
+        if session.surfaces is None:
+            return
+        if self._tracer_run != session.run_id:
+            self._drop_tracer()
+            self._tracer_run = session.run_id
+        if self._tracer is None:
+            if self._trace_absent:
+                return
+            shm_path = session.surfaces.shm_path
+            if not shm_path.exists() or shm_path.stat().st_size == 0:
+                return
+            self._trace_attempts += 1
+            board = hardware.platform()
+            try:
+                self._tracer = trace.TraceReader(
+                    shm_path, board["NOVA_BOARD_PHYS_RAM_BASE"], board["NOVA_BOARD_TRACE_PA"]
+                )
+            except trace.NotFormatted:
+                # EL2 formats the region in its first init action, but
+                # that is still later than QEMU creating the backing
+                # file — so an empty region right after launch is a
+                # transient, not an image without a trace layer. Retry
+                # for a bounded while before believing it.
+                if self._trace_attempts < TRACE_ATTEMPTS:
+                    return
+                self._trace_absent = True
+                raise
+        records, lost = self._tracer.drain()
+        if not records and not lost:
+            return
+        self.store.publish(
+            Topic.TRACE,
+            Kind.EVENT,
+            trace.summarise(records) | {"dropped": lost, "count": len(records)},
+            src=Src.TRACE,
+        )
+
     def _drop_provider(self) -> None:
         provider, self._provider = self._provider, None
         self._poller = None
@@ -509,6 +574,19 @@ class Bridge:
         try:
             while True:
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
+                if self.session.phase is Phase.RUNNING:
+                    try:
+                        await asyncio.get_running_loop().run_in_executor(None, self._pump_trace)
+                    except trace.NotFormatted as error:
+                        # Only after the retries: an image built without
+                        # the trace component, or one older than this
+                        # reader. Said once, and the S layer carries on.
+                        self.store.publish(
+                            Topic.LIFE, Kind.EVENT,
+                            {"phase": "trace-unavailable", "error": str(error)},
+                        )
+                    except (FileNotFoundError, ValueError):
+                        self._drop_tracer()
                 try:
                     poller = await self._ensure_poller()
                     if poller is None:
@@ -537,6 +615,7 @@ class Bridge:
                     self._drop_provider()
         finally:
             self._drop_provider()
+            self._drop_tracer()
 
     async def _flush_loop(self) -> None:
         while True:

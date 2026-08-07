@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from ..services import manifest
-from ..services.workbench import server, session
+from ..services.workbench import hardware, server, session, trace
 
 app = typer.Typer(
     help="Observe and drive the firmware under QEMU.",
@@ -59,3 +61,33 @@ def serve(
     code = server.serve(host=host, port=port, target=target)
     if code:
         raise typer.Exit(code)
+
+
+Limit = Annotated[int, typer.Option(min=1, max=4096, help="How many of the newest records to print.")]
+
+
+@app.command("trace")
+def show_trace(limit: Limit = 40) -> None:
+    """Drain a live session's trace rings to the terminal.
+
+    The CLI twin of the T layer. It reads the running machine's shared
+    RAM directly, so it needs no browser — and no image either: the
+    region describes its own geometry, which is what lets this work on a
+    build with no debug info at all.
+    """
+    surfaces = sorted(Path("/dev/shm").glob("nova-wb-*/guest-ram"))
+    if not surfaces:
+        raise typer.Exit(
+            code=_no_session("no workbench session is running (nova workbench serve ...)")
+        )
+    board = hardware.platform()
+    code = trace.report(
+        surfaces[-1], board["NOVA_BOARD_PHYS_RAM_BASE"], board["NOVA_BOARD_TRACE_PA"], limit
+    )
+    if code:
+        raise typer.Exit(code)
+
+
+def _no_session(message: str) -> int:
+    print(f"[workbench] trace: {message}", file=sys.stderr)
+    return 1

@@ -9,6 +9,7 @@
 #include "dispatch.hpp"
 #include "hal/console.hpp"
 #include "nova/panic.hpp"
+#include "trace/trace.hpp"
 #include "trap_handler/guest_fault.hpp"
 #include "trap_handler/mmio.hpp"
 #include "trap_handler/trap_handler.hpp"
@@ -50,6 +51,8 @@ void dispatch_data_abort(TrapContext* ctx) noexcept {
   if (da.write && da.srt != esr::kSrtZeroReg) {
     call.value = esr::extend_mmio_read(ctx->x[da.srt], da.size, false, true); // truncate to size
   }
+  // The access as the guest made it, before any device model sees it.
+  trace_emit(NOVA_TRACE_EV_MMIO, static_cast<std::uint32_t>(da.size) | (da.write ? 0x100U : 0U), call.ipa, call.value);
   cib::service<MmioService>(&call);
 
   if (!call.handled) {

@@ -50,11 +50,13 @@ def read_layout(path: Path, board_layout: Path) -> dict[str, int | str]:
             "NOVA_GICD_IPA_BASE", "NOVA_GICR_IPA_BASE",
         ])
         values |= abi.read_defines(GIC_REGS, ["NOVA_GICD_FRAME_SIZE", "NOVA_GICR_FRAME_SIZE"])
+        values |= abi.read_defines(abi.TRACE_RING, ["NOVA_TRACE_SIZE"])
         values |= abi.read_defines(board_layout, [
             "NOVA_BOARD_SMP_CPUS", "NOVA_BOARD_RAM_BASE", "NOVA_BOARD_RAM_SIZE",
             "NOVA_BOARD_PHYS_RAM_BASE", "NOVA_BOARD_PHYS_RAM_SIZE",
             "NOVA_BOARD_GUEST_PA_BASE", "NOVA_BOARD_GUEST_PA_SIZE",
             "NOVA_BOARD_IVC_SHM_PA",
+            "NOVA_BOARD_TRACE_PA",
             "NOVA_BOARD_PRISTINE_PA",
             "NOVA_BOARD_UART0_BASE", "NOVA_BOARD_UART0_INTID",
             "NOVA_BOARD_GICD_BASE", "NOVA_BOARD_GICR_BASE",
@@ -432,6 +434,9 @@ def load_config(path: Path, layout: dict[str, int], inventory: dict) -> tuple[li
         (guest["name"], guest["load_pa"], guest["memory_size"]) for guest in parsed
     ] + [
         ("IVC", layout["NOVA_BOARD_IVC_SHM_PA"], layout["NOVA_IVC_SHM_SIZE"]),
+        # Reserved, not merely unused: the overlap check below is what
+        # keeps a future guest window or a resized IVC page off it.
+        ("trace", layout["NOVA_BOARD_TRACE_PA"], layout["NOVA_TRACE_SIZE"]),
         ("pristine", layout["NOVA_BOARD_PRISTINE_PA"], pristine_size),
     ]
     ram_base = layout["NOVA_BOARD_PHYS_RAM_BASE"]

@@ -28,6 +28,9 @@
 #define NOVA_BOARD_GUEST_PA_BASE 0x50000000
 #define NOVA_BOARD_GUEST_PA_SIZE 0x10000000 /* windows end at the IVC page */
 #define NOVA_BOARD_IVC_SHM_PA    0x60000000
+/* Trace rings: the gap between the IVC page and the pristine
+ * images. EL2-mapped already, never in a guest's Stage 2. */
+#define NOVA_BOARD_TRACE_PA      0x60001000
 #define NOVA_BOARD_PRISTINE_PA   0x60100000
 #define NOVA_BOARD_PRISTINE_SIZE 0x0FF00000 /* up to the end of physical RAM */
 

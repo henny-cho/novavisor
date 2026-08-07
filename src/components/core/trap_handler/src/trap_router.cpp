@@ -14,6 +14,7 @@
 #include "nova/arch/sysreg_trap.hpp"
 #include "nova/arch/trap_context.hpp"
 #include "nova/panic.hpp"
+#include "trace/trace.hpp"
 #include "trap_handler/elr_policy.hpp"
 #include "trap_handler/fp_simd.hpp"
 #include "trap_handler/sysreg.hpp"
@@ -119,6 +120,9 @@ void dispatch_sysreg(TrapContext* ctx) noexcept {
 // exceptions are isolated through GuestFaultService.
 void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
   const auto ec = esr::get_ec(ctx->esr);
+  // Before the ELR policy moves anything: the syndrome and fault address
+  // as the exception arrived, not as the handler left them.
+  trace_emit(NOVA_TRACE_EV_TRAP, static_cast<std::uint32_t>(ec), ctx->esr, ctx->far);
 
   // Classes whose ELR must be stepped over before their handler runs
   // (trap_handler/elr_policy.hpp owns the full matrix).

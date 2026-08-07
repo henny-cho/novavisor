@@ -16,6 +16,7 @@
 #include "nova/arch/esr.hpp"
 #include "nova/arch/gicv3/vtr.hpp"
 #include "nova/sync.hpp"
+#include "trace/trace.hpp"
 #include "vgic/vgic_delivery.hpp"
 
 #include <algorithm>
@@ -98,12 +99,28 @@ void flush(std::size_t index) noexcept {
 
   sync_resident_lrs(index);
 
+  // The delivery model stays pure, so the injection is observed here
+  // instead: the shadow this function already reads is diffed across
+  // the refill, and a slot that newly holds an interrupt is the hop.
+  std::array<std::uint64_t, kMaxLrs> before{};
+  for (std::size_t i = 0; i < g_lr_count; ++i) {
+    before[i] = cpu.lr[i];
+  }
+
   bool overflow = false;
   {
     const std::size_t vm = vm_of(index);
     sync::Guard       guard{g_vm_lock[vm]}; // refill claims `pending` bits — races sibling-frame MMIO
     overflow = refill(cpu, g_lr_count, &g_dist[vm], static_cast<std::uint32_t>(vcpu_of(index)), guest_table()[vm].vcpus,
                       &g_spi_tokens[vm]);
+  }
+  for (std::size_t i = 0; i < g_lr_count; ++i) {
+    if (cpu.lr[i] != before[i] && (cpu.lr[i] & kLrStatePending) != 0U) {
+      // The generation says whether a physical interrupt is behind this
+      // one: refill moves the token here, so its presence is the answer.
+      trace_emit(NOVA_TRACE_EV_VGIC_INJECT, static_cast<std::uint32_t>(index),
+                 lr_vintid(cpu.lr[i]) | (static_cast<std::uint64_t>(i) << 32U), cpu.lr_token[i].generation);
+    }
   }
   const std::uint64_t hcr = gic_virt::kIchHcrBase | (overflow ? gic_virt::kIchHcrUie : 0U);
 
@@ -142,6 +159,9 @@ void drain_eois(std::size_t index) noexcept {
     }
   }
   for (std::size_t i = 0; i < harvest.count; ++i) {
+    trace_emit(NOVA_TRACE_EV_VGIC_EOI, static_cast<std::uint32_t>(index),
+               harvest.tokens[i].virtual_intid | (static_cast<std::uint64_t>(harvest.tokens[i].physical_intid) << 32U),
+               harvest.tokens[i].generation);
     VirtualEoiCall call{
         .slot          = index,
         .virtual_intid = harvest.tokens[i].virtual_intid,
@@ -321,6 +341,7 @@ auto post_private(std::size_t index, std::uint32_t vintid) noexcept -> bool {
     sync::Guard guard{g_vm_lock[vm_of(index)]}; // pending RMW races sibling-frame MMIO
     g_cpu[index].redist.pending |= 1U << vintid;
   }
+  trace_emit(NOVA_TRACE_EV_VGIC_PRIVATE, static_cast<std::uint32_t>(index), vintid);
   flush(index);
   return true;
 }
@@ -338,6 +359,9 @@ auto post_spi(std::size_t vm, std::uint32_t vintid) noexcept -> bool {
     g_dist[vm].spi_pending |= 1U << (vintid - kNumPrivate);
     target = slot_of(vm, spi_target(g_dist[vm], vintid, guest_table()[vm].vcpus));
   }
+  // No token: nothing physical is behind this one, and the absence is
+  // the fact — only post_spi_tracked binds one.
+  trace_emit(NOVA_TRACE_EV_VGIC_POST, static_cast<std::uint32_t>(vm), vintid);
   request_reevaluate(target);
   return true;
 }
@@ -359,6 +383,10 @@ auto post_spi_tracked(std::size_t vm, std::uint32_t vintid, std::uint32_t physic
     g_dist[vm].spi_pending |= 1U << spi_index;
     target = slot_of(vm, spi_target(g_dist[vm], vintid, guest_table()[vm].vcpus));
   }
+  // Both INTIDs in one word, physical in the high half: the binding is
+  // the whole content of this event.
+  trace_emit(NOVA_TRACE_EV_VGIC_BIND, static_cast<std::uint32_t>(vm),
+             vintid | (static_cast<std::uint64_t>(physical_intid) << 32U), generation);
   request_reevaluate(target);
   return true;
 }

@@ -8,6 +8,7 @@ set(NOVA_PROJECT_CAPABILITIES
 
 set(NOVA_COMPONENTS
     nova_panic
+    trace
     trap_handler
     boot_msg
     dtb_parser
