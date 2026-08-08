@@ -127,6 +127,12 @@ ROOTS = (VTTBR, DMA_CONTEXTS, DMA_CONTEXT_COUNT)
 
 WALK_SYMBOLS = TABLES + ROOTS
 
+# The page the host writes commands into. Named here with the rest of
+# the firmware's symbols rather than beside the writer that opens it: a
+# renamed global should fail the manifest check, which reads this list,
+# not a control that quietly stops working.
+COMMAND_PAGE = "nova::command::g_page"
+
 
 def observation_rates() -> dict[str, float]:
     """How often each topic is sampled, for the UI to say so.

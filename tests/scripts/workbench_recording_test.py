@@ -493,6 +493,9 @@ class IdentityTest(unittest.TestCase):
         bridge.store.drain()
         bridge._handle_uplink(json.dumps({"topic": "target", "data": {"demo": "09_guest_smp"}}))
         bridge._handle_uplink(json.dumps({"topic": "halt", "data": {"cmd": "stop"}}))
+        # The third application of one rule: a command ring reaches a
+        # machine, and a recording has none to reach.
+        bridge._handle_uplink(json.dumps({"topic": "cmd", "data": {"op": "mark"}}))
         said = [
             frame["data"].get("reason", "")
             for frame in bridge.store.drain()
@@ -500,6 +503,7 @@ class IdentityTest(unittest.TestCase):
         ]
         self.assertTrue(any("replay" in text for text in said), said)
         self.assertTrue(any("halt: session is replay" in text for text in said), said)
+        self.assertTrue(any("cmd: this is a replay" in text for text in said), said)
 
     def test_the_recorded_world_is_the_one_the_client_is_given(self):
         """Its catalogue, its board map, its limits — not this process's

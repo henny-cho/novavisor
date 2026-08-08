@@ -18,10 +18,20 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from ...core import config
-from . import halt, hardware, history, recording, regimes, snapshot, static, trace
+from . import (
+    commands,
+    halt,
+    hardware,
+    history,
+    observations,
+    recording,
+    regimes,
+    snapshot,
+    static,
+    trace,
+)
 from .protocol import (
     MAX_BUCKETS,
-    SUPPORTED_UPLINK,
     Clock,
     Envelopes,
     Kind,
@@ -137,6 +147,11 @@ class Bridge:
         # Which run's tables have been published. Built once and never
         # rewritten, so one capture per run is all of them.
         self._mapped_run: int | None = None
+        # The one writable view of the machine: the command ring's page,
+        # and nothing else this process can reach. Per run, like every
+        # other mapping of a RAM file that a restart replaces.
+        self._writer: commands.Writer | None = None
+        self._writer_run: int | None = None
         # The T layer reads the same file but needs no image, so it is
         # built and torn down on its own: a failure to resolve symbols
         # must not take the event stream with it.
@@ -354,15 +369,6 @@ class Bridge:
         except UplinkError as error:
             self._reject(str(error))
             return
-        if uplink.topic not in SUPPORTED_UPLINK:
-            # Recognised but deferred: answer explicitly so the UI
-            # degrades visibly instead of losing the command.
-            self.store.publish(
-                Topic.LIFE,
-                Kind.EVENT,
-                {"phase": "unsupported", "topic": uplink.topic.value},
-            )
-            return
         if uplink.topic is Topic.UART:
             reason = self.session.send_bytes(decode_bytes(str(uplink.data.get("bytes", ""))))
             if reason is not None:
@@ -376,6 +382,9 @@ class Bridge:
             return
         if uplink.topic is Topic.PROBE:
             self._answer_probe(uplink.data)
+            return
+        if uplink.topic is Topic.CMD:
+            self._issue_command(uplink.data)
             return
         if uplink.topic is Topic.HALT:
             command = str(uplink.data.get("cmd", ""))
@@ -806,6 +815,83 @@ class Bridge:
             return
         self.store.publish(Topic.PROBE, Kind.SNAPSHOT, answer, src=Src.SNAP, replay=False)
 
+    def _issue_command(self, data: dict) -> None:
+        """Put one command in this run's ring.
+
+        Nothing is published on success. EL2 answers by emitting a trace
+        record, so the acknowledgement arrives on the same axis as the
+        effects it caused rather than on a channel of its own — and a
+        reader who wants to know whether it worked looks where the
+        consequences already are.
+
+        A refusal is published, because nothing else will say it: the
+        ring never reached EL2, so no record can describe it.
+        """
+        if self._replay is not None:
+            # Same rule target and halt already follow. A recording is
+            # an observation, not a machine, and a control that silently
+            # does nothing is worse than one that says why it cannot.
+            self._reject("cmd: this is a replay; there is no machine to drive")
+            return
+        name = str(data.get("op", ""))
+        if name not in commands.OPS:
+            self._reject(f"cmd: unknown op {name!r}")
+            return
+        try:
+            a, b = int(data.get("a", 0)), int(data.get("b", 0))
+        except (TypeError, ValueError):
+            self._reject("cmd: a and b must be integers")
+            return
+        writer = self._ensure_writer()
+        if writer is None:
+            self._reject("cmd: this run has published no command ring")
+            return
+        try:
+            writer.issue(commands.OPS[name], a, b)
+        except (commands.Full, ValueError, OSError) as error:
+            self._reject(f"cmd: {error}")
+
+    def _ensure_writer(self) -> commands.Writer | None:
+        """This run's write window, opened once the page exists.
+
+        Attempted every poll until it lands, like the page tables: EL2
+        places the ring in its last init action, so a window opened when
+        the provider was built would find nothing there. What is placed
+        is published, so a reader arriving at any point knows whether
+        this run can be driven rather than finding out by trying.
+        """
+        if self._writer_run == self.session.run_id:
+            return self._writer
+        symbols = snapshot.image_symbols(self._provider)
+        if symbols is None or self.session.surfaces is None:
+            # No image behind this provider, so no way to find the page
+            # — and nothing this bridge could be driving either.
+            return None
+        try:
+            page, size = symbols.extent_of(observations.COMMAND_PAGE)
+            writer = commands.Writer(
+                self.session.surfaces.shm_path,
+                self._board_numbers()["NOVA_BOARD_PHYS_RAM_BASE"],
+                page,
+                size,
+            )
+        except commands.NotYetFormatted:
+            return None  # a moment in a boot; ask again
+        except (commands.NotFormatted, KeyError, ValueError) as error:
+            # Settled for this run: an image without the ring, or one
+            # whose layout this bridge does not understand. Marked as
+            # answered so the reason is given once rather than every
+            # fiftieth of a second.
+            self._writer_run = self.session.run_id
+            self._reject(f"cmd: {error}")
+            return None
+        except OSError:
+            return None  # the backend is not readable yet
+        self._writer = writer
+        self._writer_run = self.session.run_id
+        self.session.adopt_command_ring(writer.as_dict())
+        return writer
+
     def _answer_cursor(self, data: dict) -> None:
         """Put the whole view at one point in the run.
 
@@ -979,11 +1065,18 @@ class Bridge:
 
     def _drop_provider(self) -> None:
         provider, self._provider = self._provider, None
+        writer, self._writer = self._writer, None
         self._poller = None
         self._provider_run = None
         self._mapped_run = None
+        self._writer_run = None
         if provider is not None:
             provider.close()
+        # The write window maps the same file for the same run, so it
+        # goes with it: a mapping outliving its run points into the RAM
+        # of a machine that no longer exists.
+        if writer is not None:
+            writer.close()
 
     def _capture_memory_map(self) -> None:
         """Copy this run's page tables, once EL2 has built them.
@@ -1061,6 +1154,7 @@ class Bridge:
                     if poller is None:
                         continue
                     self._capture_memory_map()
+                    self._ensure_writer()
                     if self.session.paused:
                         # Nothing can change while the machine is
                         # stopped, and the stop already published a full

@@ -664,9 +664,6 @@ function onLife(ts, data) {
         severity: data.state === "mismatch" ? "WARN" : undefined,
       });
       break;
-    case "unsupported":
-      events.addNotice(ts, `미지원 업링크 토픽: ${data.topic || "?"}`, { dim: true });
-      break;
     case "uplink-rejected":
       armRun(true); /* a rejected select ends its attempt */
       events.addNotice(ts, `업링크 거부: ${data.reason || "?"}`, { dim: true });

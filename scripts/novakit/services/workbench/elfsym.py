@@ -114,6 +114,19 @@ class SymbolTable:
             raise KeyError(f"{qualified} is overloaded; cannot pick one: {matches}")
         return addresses.pop()
 
+    def extent_of(self, qualified: str) -> tuple[int, int]:
+        """Where a variable lives and how much of it there is.
+
+        The DWARF view answers this too, and with a decoded layout — but
+        a caller that only needs somewhere to write does not need the
+        layout, and building one would make writing depend on debug
+        information the .symtab already covers.
+        """
+        mangled = mangle(qualified)
+        if mangled not in self.entries:
+            raise KeyError(f"variable not in .symtab: {qualified} ({mangled})")
+        return self.entries[mangled]
+
 
 @dataclass(frozen=True)
 class TypeInfo:
