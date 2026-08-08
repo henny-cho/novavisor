@@ -9,6 +9,7 @@ frames when a batch overruns.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -58,7 +59,7 @@ class RoundTripTest(unittest.TestCase):
         back = recording.load(self.directory)
         self.assertEqual(back.frames, sent)
         self.assertEqual(back.meta["demo"], "13_linux")
-        self.assertEqual(back.meta["frames"], 5)
+        self.assertTrue(back.meta["complete"])
 
     def test_records_come_back_at_the_firmwares_own_width(self):
         recorder = recording.Recorder(self.directory)
@@ -68,7 +69,6 @@ class RoundTripTest(unittest.TestCase):
 
         back = recording.load(self.directory)
         self.assertEqual(back.records, written)
-        self.assertEqual(back.meta["records"], 7)
 
     def test_a_reader_sees_what_a_flush_has_not_reached_yet_as_absent(self):
         """Buffered on purpose: publish() is synchronous and on the
@@ -155,7 +155,49 @@ class RoundTripTest(unittest.TestCase):
         recorder.for_run(1)  # every flush tick asks; only a change rolls
         recorder.close()
         self.assertEqual([child.name for child in self.directory.iterdir()], ["run-1"])
-        self.assertEqual(recording.load(self.directory).meta["frames"], 1)
+        self.assertEqual(len(recording.load(self.directory).frames), 1)
+
+    def test_a_rolled_run_opens_with_the_world_it_is_a_recording_of(self):
+        """A run's own description is published while the previous run is
+        still the current one: a select builds and publishes the new
+        topology, and only the launch that follows bumps the id this
+        rolls on. Measured on a real two-demo session, the second demo's
+        world landed in the first demo's file and run-2 held no topology
+        at all — replayed, an empty pickable world with no guests.
+        """
+        recorder = recording.Recorder(self.directory, {"demo": "01_hello"})
+        recorder.frame({"seq": 1, "topic": "topo", "kind": "snapshot", "ts": 0,
+                        "data": {"demo": "01_hello", "guests": [{"name": "hello"}]}})
+        recorder.for_run(1)
+        recorder.frame({"seq": 2, "topic": "console", "kind": "event", "ts": 1, "data": {}})
+        # The reader picks a second demo: prepared, published, and only
+        # then launched.
+        recorder.frame({"seq": 3, "topic": "topo", "kind": "snapshot", "ts": 2,
+                        "data": {"demo": "02_timer", "guests": [{"name": "timer"}]}})
+        recorder.for_run(2)
+        recorder.close()
+
+        second = recording.load(self.directory / "run-2")
+        world = [frame for frame in second.frames if frame["topic"] == "topo"]
+        self.assertEqual([frame["data"]["demo"] for frame in world], ["02_timer"])
+        # Verbatim, not minted here: a fresh envelope would burn a
+        # sequence number every live client reads as a hole.
+        self.assertEqual(world[0]["seq"], 3)
+
+    def test_a_run_is_named_by_the_world_it_recorded(self):
+        """Not by the target the bridge was launched with. Those agree
+        only until somebody picks a second demo, after which the launch
+        names a run that ended — and both files claimed the first."""
+        recorder = recording.Recorder(self.directory, {"demo": "01_hello"})
+        recorder.for_run(1)
+        recorder.frame({"seq": 1, "topic": "topo", "kind": "snapshot", "ts": 0,
+                        "data": {"demo": "02_timer", "variant": "smp"}})
+        recorder.for_run(2)
+        recorder.close()
+
+        self.assertEqual(recording.load(self.directory / "run-1").meta["demo"], "01_hello")
+        second = recording.load(self.directory / "run-2").meta
+        self.assertEqual((second["demo"], second["variant"]), ("02_timer", "smp"))
 
     def test_the_newest_run_is_what_a_root_loads(self):
         """`--record DIR` leaves a directory of runs, so the thing a
@@ -166,11 +208,91 @@ class RoundTripTest(unittest.TestCase):
         recorder.close()
         self.assertEqual(recording.load(self.directory).meta["run_id"], 2)
 
+    def test_the_newest_run_is_the_one_the_writer_numbered_last(self):
+        """By the number the recorder handed out, not by the filesystem's
+        clock. A recording is a thing people copy to each other, and a
+        copy re-stamps every mtime in whatever order the directory was
+        walked in — which silently changed which run a replay showed.
+        Nor by name: run-10 follows run-9.
+        """
+        recorder = recording.Recorder(self.directory, {})
+        for run_id in range(1, 11):
+            recorder.for_run(run_id)
+        recorder.close()
+
+        for age, child in enumerate(sorted(self.directory.iterdir())):
+            os.utime(child / recording.META, (1_000 - age, 1_000 - age))
+        self.assertEqual(recording.load(self.directory).meta["run_id"], 10)
+
     def test_a_directory_holding_a_recording_is_not_opened_for_writing(self):
         """It is somebody's evidence, and "w" would have taken it."""
         recording.Recorder(self.directory, {}).close()
         with self.assertRaises(FileExistsError):
             recording.Recorder(self.directory, {})
+
+
+class KilledTest(unittest.TestCase):
+    """A recording is readable from the moment it is opened.
+
+    Deferring that to a clean exit made every file's readability
+    conditional on how the process ended — and the run somebody most
+    wants back is the one that ended badly.
+    """
+
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp(prefix="nova-kill-"))
+
+    def tearDown(self):
+        shutil.rmtree(self.directory, ignore_errors=True)
+
+    def killed(self) -> None:
+        """A recorder that got as far as a flush and no further."""
+        recorder = recording.Recorder(self.directory, {"demo": "13_linux"})
+        recorder.for_run(1)
+        recorder.note(freq_hz=62_500_000)
+        for index in range(3):
+            recorder.frame({"seq": index, "topic": "console", "kind": "event",
+                            "ts": index, "data": {"line": index}})
+        recorder.drained(records(4))
+        recorder.flush()
+        # What a SIGKILL leaves behind: everything flushed, nothing
+        # finished. The handles are released the way the kernel would
+        # have released them — close(), which is what a clean exit
+        # calls, is deliberately not called.
+        recorder._wire.close()
+        recorder._records.close()
+
+    def test_a_run_that_was_killed_is_still_a_recording(self):
+        self.killed()
+        back = recording.load(self.directory)
+        self.assertEqual(len(back.frames), 3)
+        self.assertEqual(len(back.records), 4)
+
+    def test_it_says_that_it_is_one(self):
+        """The one fact the files cannot answer: a killed run looks
+        exactly like a finished one, minus a line. A reader who is not
+        told reads the end of the file as the end of the run."""
+        self.killed()
+        self.assertFalse(recording.load(self.directory).meta["complete"])
+        recording.load(self.directory)  # and it is readable either way
+
+    def test_the_clock_its_timestamps_are_in_survives_the_kill(self):
+        """Learned from the region header partway through the run. Held
+        until close, a killed recording is a pile of counter values with
+        nothing to turn them back into a duration."""
+        self.killed()
+        self.assertEqual(recording.load(self.directory).meta["freq_hz"], 62_500_000)
+
+    def test_a_killed_recording_is_not_opened_for_writing(self):
+        """The guard exists to protect somebody's evidence, and this is
+        the recording that cannot be reproduced. It read the meta to
+        decide, so a run that never wrote one was invisible to it — and
+        the next `--record` to the same path truncated the wire log to
+        nothing."""
+        self.killed()
+        with self.assertRaises(FileExistsError):
+            recording.Recorder(self.directory, {})
+        self.assertGreater((self.directory / "run-1" / recording.WIRE).stat().st_size, 0)
 
 
 class TeeTest(unittest.TestCase):

@@ -18,14 +18,18 @@ have to unpick it before it could do anything the two files already
 allow directly.
 
     run-2608072210-13_linux/
-      meta.json   what this is: demo, run, clock, board, totals
-      wire.jsonl  one envelope per line, in publish order
-      trace.bin   drained records, arrival order, gaps included
+      run-1/
+        meta.json   what this is: demo, run, clock, board
+        wire.jsonl  one envelope per line, in publish order
+        trace.bin   drained records, arrival order, gaps included
 
-No keyframes. The obvious index — every N frames, the topic values as of
-then — is a cache that can disagree with the stream it summarises, and
-the reader can fold exactly the same thing out of the stream itself at
-load. A file with one record kind fewer cannot go stale in that way.
+No keyframes, and no totals. The obvious index — every N frames, the
+topic values as of then — is a cache that can disagree with the stream
+it summarises, and the reader can fold exactly the same thing out of the
+stream itself at load. The same argument retires the frame and record
+counts meta used to carry: both are `len()` of a file that is right
+there, and a count written at close is wrong for every run that did not
+reach one.
 """
 
 from __future__ import annotations
@@ -37,11 +41,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from . import trace
+from .protocol import Topic
 
-VERSION = 1
+# 2: the meta says whether the run ended, and no longer carries frame and
+# record totals — both are len() of a file beside it, and a count written
+# at close is wrong for every run that never reached one.
+VERSION = 2
 META = "meta.json"
 WIRE = "wire.jsonl"
 RECORDS = "trace.bin"
+# The topic carrying the world. Taken from the protocol rather than
+# spelled again: this file already has to know which frames are readings
+# and which is the world, and one spelling is what keeps that true.
+TOPO = Topic.TOPO.value
 
 
 class Unreadable(RuntimeError):
@@ -52,6 +64,23 @@ class Unreadable(RuntimeError):
     put plausible-looking nonsense on the same screen the live bridge
     uses — which is the one place it must not appear.
     """
+
+
+def _named(world: dict | None) -> dict:
+    """What a run's own description calls it.
+
+    Read at the moment the recorder learns which machine it is following,
+    which is the only point where the two are in step: the topology of a
+    demo is published while the *previous* run is still current, so the
+    launch target names the right run only until somebody picks a second
+    one, and the last topology in a file names the run after it.
+
+    Demo and variant travel together or not at all — a variant belongs to
+    the demo beside it, and taking one from here and the other from the
+    launch would name a pair that never ran.
+    """
+    data = (world or {}).get("data") or {}
+    return {"demo": data["demo"], "variant": data.get("variant")} if data.get("demo") else {}
 
 
 class Recorder:
@@ -72,17 +101,27 @@ class Recorder:
     which says nothing about any of that until somebody replays it. So
     runs go in `run-1`, `run-2`, ... under the directory asked for, and
     each is a recording in its own right.
+
+    A recording is readable from the moment it is opened, not from the
+    moment it is closed. The meta goes down at open and again at close,
+    because the alternative makes every file's readability conditional
+    on a clean exit — and the run somebody most wants back is the one
+    that ended badly.
     """
 
     def __init__(self, root: Path, meta: dict | None = None):
         self.root = Path(root)
         if any(self.root.glob(f"**/{META}")):
             # Never silently: a directory holding a recording is
-            # somebody's evidence, and "w" would have taken it.
+            # somebody's evidence, and "w" would have taken it. The
+            # meta below is written at open precisely so a recording
+            # that was killed is evidence this can see.
             raise FileExistsError(f"{self.root} already holds a recording")
         self._meta = dict(meta or {})
         self._run = 0  # the machine being recorded; 0 is "none yet"
         self._index = 0
+        # The world as last published, carried across a roll. See _open.
+        self._world: dict | None = None
         self.written: list[Path] = []
         self._open()
 
@@ -94,9 +133,19 @@ class Recorder:
         self._records = (self.directory / RECORDS).open("wb")
         self._pending: list[str] = []
         self._bytes = bytearray()
-        self.frames = 0
-        self.records = 0
         self._started = datetime.now(UTC).isoformat(timespec="seconds")
+        self._write_meta(complete=False)
+        if self._world is not None:
+            # A run's own description is published while the *previous*
+            # run is still the current one — a select builds and
+            # publishes the new topology, and only the launch that
+            # follows bumps the id this rolls on. Left alone, the second
+            # demo's world lands in the first demo's file and the second
+            # recording has none at all: replaying it shows the empty
+            # pickable world, no demo and no guests. Carried verbatim
+            # rather than minted here, because a fresh envelope would
+            # burn a sequence number every live client reads as a hole.
+            self.frame(self._world)
 
     def for_run(self, run_id: int) -> None:
         """Follow the machine, opening a new recording when it restarts.
@@ -112,7 +161,7 @@ class Recorder:
             self.close()
             self._open()
         self._run = run_id
-        self.note(run_id=run_id)
+        self.note(run_id=run_id, **_named(self._world))
 
     def note(self, **fields) -> None:
         """Facts about the run that are not known when it starts.
@@ -121,20 +170,22 @@ class Recorder:
         comes off the region header, which nobody has read yet at the
         moment the recorder opens. Merged rather than published as a
         frame, because a reader needs it before it can interpret the
-        first frame.
+        first frame — and written straight through, so a run that is
+        killed still says which clock it was stamped in.
         """
         self._meta.update(fields)
+        self._write_meta(complete=False)
 
     def frame(self, frame: dict) -> None:
         self._pending.append(json.dumps(frame, ensure_ascii=False))
-        self.frames += 1
+        if frame.get("topic") == TOPO:
+            self._world = frame
 
     def drained(self, records: list[trace.Record]) -> None:
         at = len(self._bytes)
         self._bytes.extend(bytes(len(records) * trace.REC_SIZE))
         for index, record in enumerate(records):
             trace.pack_into(self._bytes, at + index * trace.REC_SIZE, record)
-        self.records += len(records)
 
     def flush(self) -> None:
         if self._pending:
@@ -146,26 +197,31 @@ class Recorder:
             self._records.flush()
             self._bytes.clear()
 
-    def close(self) -> dict:
-        """Finish the files and write what this run turned out to be.
+    def _write_meta(self, *, complete: bool) -> dict:
+        """State what this recording is, as of now.
 
-        The totals go in last because they are not known until now, and
-        a meta written up front would be a promise about a run still
-        happening.
+        `complete` is the one fact a reader cannot work out from the
+        files: a run killed mid-flight leaves a wire log and a record
+        blob that look exactly like a finished one, minus a line. It is
+        false until close() says otherwise, so the answer is right at
+        every instant rather than only at the end.
         """
-        self.flush()
-        self._wire.close()
-        self._records.close()
         meta = {
             "v": VERSION,
             "started": self._started,
-            "frames": self.frames,
-            "records": self.records,
+            "complete": complete,
             **self._meta,
         }
         (self.directory / META).write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
-        self.written.append(self.directory)
         return meta
+
+    def close(self) -> dict:
+        """Finish the files and mark the run as one that ended."""
+        self.flush()
+        self._wire.close()
+        self._records.close()
+        self.written.append(self.directory)
+        return self._write_meta(complete=True)
 
     def sizes(self) -> dict[str, int]:
         """Bytes on disk, across every run this recorder has written."""
@@ -320,6 +376,17 @@ def fold(frames: list[dict], every: int = CHECKPOINT_EVERY) -> list[Checkpoint]:
     return marks
 
 
+def _run_index(directory: Path) -> tuple[int, str]:
+    """Where a `run-N` directory sits in the order it was written.
+
+    The name is not decoration — it is the sequence the recorder handed
+    out — so it is what orders them. Anything not of that shape sorts
+    first and by name, which is a stable answer rather than a guess.
+    """
+    suffix = directory.name.removeprefix("run-")
+    return (int(suffix), "") if suffix.isdigit() else (-1, directory.name)
+
+
 def load(directory: Path) -> Recording:
     """Everything a recording holds, in the order it was written.
 
@@ -335,9 +402,15 @@ def load(directory: Path) -> Recording:
         # thing a reader has in hand is as often the root as a run. The
         # newest is what somebody who just reproduced something wants,
         # and the caller is told which was taken.
+        #
+        # "Newest" by the number the writer assigned, not by the
+        # filesystem's clock. A recording is a thing people copy to each
+        # other, and a copy re-stamps every mtime in whatever order the
+        # directory was walked in — which silently changed which run a
+        # replay showed.
         runs = sorted(
             (child for child in directory.glob("run-*") if (child / META).is_file()),
-            key=lambda child: (child / META).stat().st_mtime,
+            key=_run_index,
         )
         if runs:
             return load(runs[-1])

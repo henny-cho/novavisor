@@ -54,9 +54,9 @@ TraceHistory = Annotated[
         min=1024,
         help=(
             "Drained trace records the bridge keeps, at 32 bytes each. "
-            f"The default {history.DEFAULT_CAPACITY} is 16 MiB, which the measured "
-            "~1500 events/s fills in about six minutes; a busier run fills it sooner, "
-            "and the summary publishes the span actually held."
+            f"The default {history.DEFAULT_CAPACITY} is 16 MiB. How long that "
+            "reaches back depends on the run's event rate, so the trace summary "
+            "publishes the span actually held rather than promising a duration."
         ),
     ),
 ]

@@ -1165,10 +1165,17 @@ async def _replay_forever(*, host: str, port: int, ui_root: Path, directory: Pat
         bridge.load_replay(loaded)
         await bridge.open(host, port)
         meta = loaded.meta
+        # Whether the run ended is a fact about the evidence, so it is
+        # said where the evidence is described: a truncated recording
+        # answers every question a whole one does, right up to the point
+        # it stops, and a reader who does not know that reads the end of
+        # the file as the end of the run.
+        ending = "" if meta.get("complete") else " — INCOMPLETE, the run was killed"
         print(
-            f"[workbench] replaying {directory} — {meta.get('demo') or 'unknown demo'}, "
+            f"[workbench] replaying {loaded.directory} — "
+            f"{meta.get('demo') or 'unknown demo'}, "
             f"{len(loaded.frames)} frames, {len(loaded.records)} records, "
-            f"recorded {meta.get('started', '?')}"
+            f"recorded {meta.get('started', '?')}{ending}"
         )
         print(f"[workbench] serving http://{host}:{bridge.port}/ (WebSocket on {WS_PATH})")
         await asyncio.Future()

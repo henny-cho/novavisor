@@ -1,11 +1,11 @@
 """The bridge's memory of a run: an overwriting ring of drained records.
 
-The firmware's rings hold about 2.7 seconds at the measured event rate,
-and a great deal less than that through a burst. That is the right size
-for what they are — a handover buffer, whose capacity is a *latency*
-budget and not a memory — but it means that by the time a reader has
-noticed something, its cause is already overwritten. Memory belongs in
-the layer that has memory.
+The firmware's rings are sized for one second at the peak fill a board
+declares, and a great deal less than that through a burst above it. That
+is the right size for what they are — a handover buffer, whose capacity
+is a *latency* budget and not a memory — but it means that by the time a
+reader has noticed something, its cause is already overwritten. Memory
+belongs in the layer that has memory.
 
 So the same discipline moves up one level: fixed budget, overwrite
 rather than block, and a reader that works out what it can no longer
@@ -32,12 +32,12 @@ from dataclasses import dataclass
 
 from . import trace
 
-# Records the history holds. 2^19 * 32 B = 16 MiB, which at the measured
-# ~1500 events/s is about six minutes, and about four through the higher
-# rate the full hook set produces. Not a duration, because the same
-# budget is twenty quiet minutes or three busy ones — which is why the
-# span goes on the wire rather than being left for a reader to discover
-# by hitting it.
+# Records the history holds: 2^19 * 32 B = 16 MiB of the bridge's own
+# memory. Stated in records because that is what it costs, and not in
+# seconds because the same budget is twenty quiet minutes or a Linux
+# boot's twenty seconds — a run's rate is a thing to measure, not to
+# assume. That is why the span goes on the wire rather than being left
+# for a reader to discover by hitting it.
 DEFAULT_CAPACITY = 1 << 19
 
 
