@@ -183,5 +183,195 @@ class DescriptorTest(unittest.TestCase):
         self.assertEqual(translation.STAGE1_FORMAT.decode(raw, 1).memory, "device-nGnRE")
 
 
+GIB = translation.STAGE2.span(0)
+MIB2 = translation.STAGE2.span(1)
+KIB4 = translation.STAGE2.span(2)
+
+
+class Memory:
+    """Tables written by hand, served the way RAM is.
+
+    Small enough that an address the walk should never reach is outside
+    it, which is how an unreadable table gets into these tests.
+    """
+
+    def __init__(self, base: int = 0x4000_0000, size: int = 64 * 1024):
+        self.base = base
+        self._bytes = bytearray(size)
+        self._next = base
+
+    def table(self, entries: dict[int, int]) -> int:
+        pa = self._next
+        self._next += translation.STAGE2.table_bytes
+        for index, word in entries.items():
+            at = pa - self.base + index * translation.DESCRIPTOR_BYTES
+            self._bytes[at : at + 8] = word.to_bytes(8, "little")
+        return pa
+
+    def read_bytes(self, pa: int, size: int) -> bytes:
+        offset = pa - self.base
+        if offset < 0 or size < 0 or offset + size > len(self._bytes):
+            raise ValueError(f"{pa:#x}+{size:#x} is outside this memory")
+        return bytes(self._bytes[offset : offset + size])
+
+
+def block(output: int, attrs: int | None = None) -> int:
+    return output | (S2["kAttrNormalRwx"] if attrs is None else attrs) | S2["kTypeBlock"]
+
+
+def page(output: int, attrs: int | None = None) -> int:
+    return output | (S2["kAttrNormalRwData"] if attrs is None else attrs) | S2["kTypePage"]
+
+
+def points_to(table: int) -> int:
+    return table | S2["kTypeTable"]
+
+
+class ProbeTest(unittest.TestCase):
+    """One address, followed down the way the hardware would."""
+
+    def test_a_gigabyte_block_answers_at_the_first_level(self):
+        memory = Memory()
+        root = memory.table({2: block(0x8000_0000)})
+        found = translation.probe(memory, translation.STAGE2_FORMAT, root, 2 * GIB + 0x1234)
+        self.assertEqual(found.output, 0x8000_0000 + 0x1234)
+        self.assertEqual((found.level, found.fault), (1, ""))
+        self.assertEqual(len(found.steps), 1)
+
+    def test_the_offset_into_a_block_comes_from_the_input_address(self):
+        """A block's output field is ignored below the block size, so the
+        low bits of the answer are the ones that were asked about."""
+        memory = Memory()
+        leaf = memory.table({1: block(0x9020_0000)})
+        root = memory.table({0: points_to(leaf)})
+        found = translation.probe(memory, translation.STAGE2_FORMAT, root, MIB2 + 0x1FFFF)
+        self.assertEqual(found.output, 0x9020_0000 + 0x1FFFF)
+        self.assertEqual(found.level, 2)
+
+    def test_a_full_descent_reaches_a_page(self):
+        memory = Memory()
+        l3 = memory.table({3: page(0xA000_3000)})
+        l2 = memory.table({0: points_to(l3)})
+        l1 = memory.table({0: points_to(l2)})
+        found = translation.probe(memory, translation.STAGE2_FORMAT, l1, 3 * KIB4 + 0x40)
+        self.assertEqual(found.output, 0xA000_3040)
+        self.assertEqual([step.index for step in found.steps], [0, 0, 3])
+        self.assertEqual([step.table for step in found.steps], [l1, l2, l3])
+
+    def test_an_empty_slot_faults_at_the_level_that_holds_it(self):
+        """The level is the number ESR_EL2 reports, which is what makes
+        this answer comparable with a fault the guest actually took."""
+        memory = Memory()
+        l2 = memory.table({})
+        l1 = memory.table({0: points_to(l2)})
+        found = translation.probe(memory, translation.STAGE2_FORMAT, l1, MIB2)
+        self.assertEqual((found.fault, found.level, found.output), ("translation", 2, None))
+        # The path taken is still worth having: it says how far it got.
+        self.assertEqual(len(found.steps), 2)
+
+    def test_an_address_wider_than_the_regime_never_starts(self):
+        memory = Memory()
+        root = memory.table({0: block(0)})
+        found = translation.probe(
+            memory, translation.STAGE2_FORMAT, root, 1 << translation.STAGE2.address_bits
+        )
+        self.assertEqual((found.fault, found.steps), ("address-size", ()))
+
+    def test_a_table_outside_memory_is_unreadable_not_unmapped(self):
+        memory = Memory()
+        root = memory.table({0: points_to(0xDEAD_0000)})
+        found = translation.probe(memory, translation.STAGE2_FORMAT, root, 0)
+        self.assertEqual(found.fault, "unreadable")
+
+    def test_el2_walks_its_own_regime_the_same_way(self):
+        memory = Memory()
+        root = memory.table({1: 0x4000_0000 | S1["kAttrNormalRx"] | S1["kTypeBlock"]})
+        found = translation.probe(memory, translation.STAGE1_FORMAT, root, GIB + 0x80)
+        self.assertEqual(found.output, 0x4000_0080)
+        self.assertFalse(found.steps[-1].descriptor.writable)
+
+
+class TreeTest(unittest.TestCase):
+    """Everything a root maps, folded the way the builder wrote it."""
+
+    def test_a_mapped_region_arrives_as_one_run(self):
+        memory = Memory()
+        l2 = memory.table({index: block(0x8000_0000 + index * MIB2) for index in range(8)})
+        l1 = memory.table({0: points_to(l2)})
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        (top,) = found.nodes
+        (run,) = top.children
+        self.assertEqual((run.index, run.count, run.base), (0, 8, 0))
+        self.assertEqual(run.descriptor.output, 0x8000_0000)
+
+    def test_a_gap_in_the_output_breaks_the_run(self):
+        memory = Memory()
+        l2 = memory.table({0: block(0x8000_0000), 1: block(0x9000_0000)})
+        l1 = memory.table({0: points_to(l2)})
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        self.assertEqual([node.count for node in found.nodes[0].children], [1, 1])
+
+    def test_a_changed_attribute_breaks_the_run(self):
+        """Two regions the builder mapped differently are two regions, and
+        folding them would report permissions over an address that never
+        had them."""
+        memory = Memory()
+        l2 = memory.table(
+            {
+                0: block(0x8000_0000),
+                1: block(0x8020_0000, S2["kAttrNormalRwData"]),
+            }
+        )
+        l1 = memory.table({0: points_to(l2)})
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        first, second = found.nodes[0].children
+        self.assertEqual((first.count, second.count), (1, 1))
+        self.assertTrue(first.descriptor.executable)
+        self.assertFalse(second.descriptor.executable)
+
+    def test_a_bit_this_module_does_not_decode_still_breaks_the_run(self):
+        """The contiguous hint is not read anywhere here. Folded over, the
+        run would claim a shape the builder did not write."""
+        memory = Memory()
+        l2 = memory.table(
+            {
+                0: block(0x8000_0000),
+                1: block(0x8020_0000) | S2["kContigBit"],
+            }
+        )
+        l1 = memory.table({0: points_to(l2)})
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        self.assertEqual([node.count for node in found.nodes[0].children], [1, 1])
+
+    def test_empty_slots_are_absent_rather_than_listed(self):
+        memory = Memory()
+        l1 = memory.table({7: block(0x8000_0000)})
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        (only,) = found.nodes
+        self.assertEqual((only.index, only.base), (7, 7 * GIB))
+
+    def test_a_walk_stops_at_the_pool_it_was_built_from(self):
+        """A word that is not a table pointer would otherwise send the
+        reader through every table-shaped thing it can reach."""
+        memory = Memory()
+        leaves = [memory.table({0: block(0x8000_0000)}) for _ in range(4)]
+        l1 = memory.table({index: points_to(leaf) for index, leaf in enumerate(leaves)})
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=3)
+        self.assertTrue(found.truncated)
+        self.assertEqual(found.tables, 3)
+        # Two levels reached, the rest left empty rather than guessed at.
+        self.assertEqual([len(node.children) for node in found.nodes], [1, 1, 0, 0])
+
+    def test_a_table_it_could_not_read_is_named(self):
+        """A short recording would otherwise come back as a smaller map
+        with nothing to say it was short."""
+        memory = Memory()
+        l1 = memory.table({0: points_to(0xDEAD_0000)})
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        self.assertEqual(found.unreadable, (0xDEAD_0000,))
+        self.assertFalse(found.truncated)
+        self.assertEqual(found.nodes[0].children, ())
+
+
 if __name__ == "__main__":
     unittest.main()

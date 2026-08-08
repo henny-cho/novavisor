@@ -17,8 +17,9 @@ once at boot and never rewritten.
 
 from __future__ import annotations
 
+import struct
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ...core import config
 from ...image import abi
@@ -240,3 +241,179 @@ STAGE1_FORMAT = Format(
     output_mask=_S1["kOutputAddrMask"],
     attributes=_stage1_attributes,
 )
+
+
+# --- The walk ---------------------------------------------------------------
+#
+# Pure functions over a `MemoryReader` and a `Format`. Live, the bytes
+# come from the mapped RAM file; in replay, from a recorded copy of the
+# same tables. Neither of these knows which, which is what lets a replay
+# answer a question the recording never asked.
+
+
+@dataclass(frozen=True)
+class Step:
+    """One level of a probe: the table read, the slot, what was in it."""
+
+    depth: int
+    index: int
+    table: int
+    descriptor: Descriptor
+
+
+@dataclass(frozen=True)
+class Probe:
+    """Where one address lands.
+
+    `output` is the translated address when the walk completed, and
+    `fault` names why it did not otherwise. `level` is the architectural
+    level the walk ended at either way, which is the number a translation
+    fault reports in ESR_EL2.
+    """
+
+    address: int
+    steps: tuple[Step, ...]
+    level: int
+    output: int | None = None
+    fault: str = ""
+
+
+@dataclass(frozen=True)
+class Node:
+    """A slot of a table, or a run of slots that say the same thing.
+
+    `map_range` lays a region down as consecutive entries differing only
+    in output address, so a guest's RAM window arrives here as hundreds
+    of identical block descriptors. Folded into one node with a count,
+    the run is both what a reader sees and what the builder wrote; a
+    table descriptor never folds, since each points somewhere else.
+    """
+
+    depth: int
+    index: int
+    count: int
+    base: int
+    descriptor: Descriptor
+    children: tuple[Node, ...] = ()
+
+
+@dataclass(frozen=True)
+class Tree:
+    """Every mapping under one root.
+
+    Invalid slots are absent rather than listed: they are the large
+    majority of every table here, and how many there were is the table's
+    size less what is present. `unreadable` names tables the walk could
+    not fetch — without it a short recording would come back as a smaller
+    map with nothing to say it was short.
+    """
+
+    root: int
+    nodes: tuple[Node, ...]
+    tables: int
+    unreadable: tuple[int, ...] = ()
+    truncated: bool = False
+
+
+class _Walk:
+    """One traversal, and the tables it is allowed to read.
+
+    The bound is the pool the firmware built these tables from, so a walk
+    that wants more is following a word that is not a table pointer. Left
+    unbounded, one such word costs the reader a gigabyte of reads.
+    """
+
+    def __init__(self, reader, fmt: Format, tables: int):
+        self.reader = reader
+        self.fmt = fmt
+        self.limit = tables
+        self.read = 0
+        self.unreadable: list[int] = []
+        self.truncated = False
+
+    def table(self, pa: int) -> tuple[int, ...] | None:
+        if self.read >= self.limit:
+            self.truncated = True
+            return None
+        self.read += 1
+        geometry = self.fmt.geometry
+        try:
+            raw = self.reader.read_bytes(pa, geometry.table_bytes)
+        except ValueError:
+            self.unreadable.append(pa)
+            return None
+        return struct.unpack(f"<{geometry.entries}Q", raw)
+
+
+def probe(reader, fmt: Format, root: int, address: int) -> Probe:
+    """Follow one address down, the way the hardware would.
+
+    Reads a single descriptor per level rather than a table, because a
+    probe is one path and the rest of each table is not on it.
+    """
+    geometry = fmt.geometry
+    if address >= 1 << geometry.address_bits:
+        return Probe(address, (), geometry.levels[0], fault="address-size")
+    steps: list[Step] = []
+    table = root
+    for depth in range(geometry.depth):
+        index = geometry.index(address, depth)
+        try:
+            raw = reader.read_bytes(table + index * DESCRIPTOR_BYTES, DESCRIPTOR_BYTES)
+        except ValueError:
+            return Probe(address, tuple(steps), geometry.levels[depth], fault="unreadable")
+        descriptor = fmt.decode(int.from_bytes(raw, "little"), depth)
+        steps.append(Step(depth, index, table, descriptor))
+        if descriptor.kind == "invalid":
+            return Probe(address, tuple(steps), geometry.levels[depth], fault="translation")
+        if descriptor.maps:
+            # Below the block size the output address field is ignored,
+            # and the offset into the block comes from the input.
+            span = geometry.span(depth)
+            output = (descriptor.output & ~(span - 1)) | (address & (span - 1))
+            return Probe(address, tuple(steps), geometry.levels[depth], output=output)
+        table = descriptor.output
+    return Probe(address, tuple(steps), geometry.levels[-1], fault="translation")
+
+
+def tree(reader, fmt: Format, root: int, tables: int) -> Tree:
+    """Everything one root maps, folded into runs."""
+    walk = _Walk(reader, fmt, tables)
+    nodes = _descend(walk, root, 0, 0)
+    return Tree(root, nodes, walk.read, tuple(walk.unreadable), walk.truncated)
+
+
+def _descend(walk: _Walk, table: int, depth: int, base: int) -> tuple[Node, ...]:
+    words = walk.table(table)
+    if words is None:
+        return ()
+    span = walk.fmt.geometry.span(depth)
+    nodes: list[Node] = []
+    for index, raw in enumerate(words):
+        descriptor = walk.fmt.decode(raw, depth)
+        if descriptor.kind == "invalid":
+            continue
+        at = base + index * span
+        if descriptor.kind == "table":
+            under = _descend(walk, descriptor.output, depth + 1, at)
+            nodes.append(Node(depth, index, 1, at, descriptor, under))
+        elif nodes and _extends(nodes[-1], descriptor, index, span, walk.fmt.output_mask):
+            nodes[-1] = replace(nodes[-1], count=nodes[-1].count + 1)
+        else:
+            nodes.append(Node(depth, index, 1, at, descriptor))
+    return tuple(nodes)
+
+
+def _extends(node: Node, descriptor: Descriptor, index: int, span: int, output_mask: int) -> bool:
+    """Is this slot the next step of the run `node` already holds?
+
+    Everything outside the output address field has to match, decoded or
+    not — a hint this module does not read is still a difference, and
+    folding across it would report a region the builder never wrote.
+    """
+    return (
+        node.descriptor.kind == descriptor.kind
+        and node.index + node.count == index
+        and node.descriptor.output + node.count * span == descriptor.output
+        and node.descriptor.raw & ~output_mask == descriptor.raw & ~output_mask
+    )
