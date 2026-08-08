@@ -8,6 +8,7 @@ import { createBoard } from "./board.mjs";
 import { createCards } from "./cards.mjs";
 import { createConsole } from "./console.mjs";
 import { createEvents } from "./events.mjs";
+import { createMemory } from "./memory.mjs";
 import { createPanels } from "./panels.mjs";
 import { createTimeline } from "./timeline.mjs";
 import { createTopology } from "./topology.mjs";
@@ -89,6 +90,41 @@ const boardView = createBoard({
 });
 
 const panels = createPanels({ tabs: ref("panel-tabs"), host: ref("panels") });
+
+const memory = createMemory({
+  pick: ref("mmap-pick"),
+  form: ref("mmap-probe"),
+  input: ref("mmap-at"),
+  note: ref("mmap-note"),
+  body: ref("mmap-body"),
+  /* Same topic out as in: the kind already says which direction a frame
+     went, and a second topic would be the word twice. */
+  request: (data) => send("probe", data),
+});
+
+/* The two things the view slot can hold. Naming them here keeps the tab
+   buttons free of any knowledge of what they switch to. */
+const VIEWS = {
+  board: { node: ref("board"), name: "실행 보드" },
+  memory: { node: ref("mmap"), name: "메모리 맵" },
+};
+const viewName = ref("view-name");
+
+function showView(wanted) {
+  for (const [id, view] of Object.entries(VIEWS)) view.node.hidden = id !== wanted;
+  for (const tab of document.querySelectorAll(".vtab[data-view]")) {
+    tab.setAttribute("aria-selected", String(tab.dataset.view === wanted));
+  }
+  viewName.textContent = VIEWS[wanted].name;
+  /* The board measures itself when it becomes visible again; it cannot
+     have done so while it had no size. */
+  if (wanted === "board") boardView.reveal();
+  else memory.refresh();
+}
+
+for (const tab of document.querySelectorAll(".vtab[data-view]")) {
+  tab.addEventListener("click", () => showView(tab.dataset.view));
+}
 
 const timelineNote = ref("tl-note"); /* what the run holds */
 const stopHereButton = ref("tl-stop");
@@ -403,6 +439,7 @@ function onTopo(data) {
   events.setBadges(taxonomy.badges);
   panels.setTopology(topo);
   boardView.setTopology(topo);
+  memory.setWorld(topo.memory);
   catalogue = Array.isArray(topo.stops) ? topo.stops : [];
   setStops(topo.stops);
   timeline.setCatalogue(topo.stops);
@@ -685,6 +722,11 @@ function onFrame(frame) {
         timelineNote.classList.toggle("over", Boolean(data.budget?.overrun));
       }
       if (data.dropped) noteLoss(data.dropped);
+      break;
+    /* An answer to a question this client asked: one regime's tables,
+       walked. Every reader asks its own, so nothing here is replayed. */
+    case "probe":
+      memory.apply(data);
       break;
     case "life":
       onLife(frame.ts, data);

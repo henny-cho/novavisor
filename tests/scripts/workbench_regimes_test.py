@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import struct
 import sys
 import tempfile
@@ -158,6 +159,87 @@ class CaptureTest(unittest.TestCase):
         copy = regimes.Tables.of(captured)
         with self.assertRaises(ValueError):
             copy.read_bytes(RAM_BASE, translation.STAGE2.table_bytes)
+
+
+class AnswerTest(unittest.TestCase):
+    """What a client is handed back, built without an image."""
+
+    GIB = translation.STAGE2.span(0)
+    MIB2 = translation.STAGE2.span(1)
+    ROOT = 0x4000_0000
+    LEAF = 0x4000_1000
+
+    def setUp(self):
+        block = 0x8000_0000 | 0x7FC | 0b01  # desc::kAttrNormalRwx, a block
+        words = {f"{self.ROOT:#x}": f"{self.LEAF | 0b11:#x}"}
+        for slot in range(4):
+            words[f"{self.LEAF + slot * 8:#x}"] = f"{block + slot * self.MIB2:#x}"
+        self.captured = {
+            "regimes": [
+                {
+                    "id": "vm0.cpu",
+                    "label": "VM 0 · CPU",
+                    "role": "cpu",
+                    "vm": 0,
+                    "kind": "stage2",
+                    "root": f"{self.ROOT:#x}",
+                    "tables": 6,
+                }
+            ],
+            "extents": [[f"{self.ROOT:#x}", 8192]],
+            "words": words,
+        }
+
+    def test_a_row_carries_the_span_it_covers(self):
+        """The client must not compute it. Deriving a span needs the
+        level shifts, and holding those in the UI is the second copy of
+        the encoding this whole path exists to avoid."""
+        answer = regimes.answer(self.captured, {"regime": "vm0.cpu"})
+        (top,) = answer["tree"]["nodes"]
+        (run,) = top["children"]
+        self.assertEqual(int(top["size"], 16), self.GIB)
+        self.assertEqual((run["count"], int(run["size"], 16)), (4, 4 * self.MIB2))
+        self.assertEqual((run["level"], run["kind"]), (2, "block"))
+
+    def test_a_table_row_carries_no_permission(self):
+        answer = regimes.answer(self.captured, {"regime": "vm0.cpu"})
+        (top,) = answer["tree"]["nodes"]
+        self.assertEqual(top["kind"], "table")
+        self.assertNotIn("w", top)
+        self.assertNotIn("memory", top)
+
+    def test_the_probe_answers_what_may_be_done_there(self):
+        """Half of what an address means is the permission the walk ended
+        on; sent without it the reader has to go back into the tree."""
+        answer = regimes.answer(self.captured, {"regime": "vm0.cpu", "address": "0x201000"})
+        probe = answer["probe"]
+        self.assertEqual(probe["output"], f"{0x8020_1000:#x}")
+        self.assertEqual((probe["level"], probe["fault"]), (2, ""))
+        self.assertEqual((probe["w"], probe["x"], probe["memory"]), (True, True, "normal-wb"))
+        self.assertEqual([step["index"] for step in probe["steps"]], [0, 1])
+
+    def test_an_unmapped_address_names_the_level_it_stopped_at(self):
+        answer = regimes.answer(self.captured, {"regime": "vm0.cpu", "address": "0x1000000"})
+        self.assertEqual(answer["probe"]["fault"], "translation")
+        self.assertIsNone(answer["probe"]["output"])
+        self.assertNotIn("w", answer["probe"])
+
+    def test_an_address_reads_with_or_without_its_prefix(self):
+        bare = regimes.answer(self.captured, {"regime": "vm0.cpu", "address": "201000"})
+        self.assertEqual(bare["probe"]["output"], f"{0x8020_1000:#x}")
+
+    def test_a_regime_or_an_address_it_cannot_read_is_refused(self):
+        with self.assertRaises(KeyError):
+            regimes.answer(self.captured, {"regime": "nope"})
+        with self.assertRaises(ValueError):
+            regimes.answer(self.captured, {"regime": "vm0.cpu", "address": "zzz"})
+
+    def test_every_value_survives_json(self):
+        """A descriptor is past 2^53, where a JSON number stops being
+        exact. Everything addressed travels as a string for that reason,
+        and a round trip is where a missed one shows."""
+        answer = regimes.answer(self.captured, {"regime": "vm0.cpu", "address": "0x201000"})
+        self.assertEqual(json.loads(json.dumps(answer)), answer)
 
 
 class TablesTest(unittest.TestCase):

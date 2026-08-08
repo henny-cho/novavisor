@@ -374,6 +374,9 @@ class Bridge:
         if uplink.topic is Topic.CURSOR:
             self._answer_cursor(uplink.data)
             return
+        if uplink.topic is Topic.PROBE:
+            self._answer_probe(uplink.data)
+            return
         if uplink.topic is Topic.HALT:
             command = str(uplink.data.get("cmd", ""))
             if command not in HALT_COMMANDS:
@@ -784,6 +787,26 @@ class Bridge:
         # A layer arriving is a change in what the board may claim.
         self.session.regrade_paths(tracing=True)
         return True
+
+    def _answer_probe(self, data: dict) -> None:
+        """Walk this run's page tables and hand back the map.
+
+        Answered from the tables on the topology rather than from RAM, so
+        a replay walks the bytes the recorded run had and reaches the
+        same answer by the same code. Kept out of the connect backlog: it
+        answers one reader's question, and every later reader asks its
+        own.
+        """
+        captured = self.store.topology.get("memory")
+        if not captured:
+            self._reject("probe: this run has published no page tables")
+            return
+        try:
+            answer = regimes.answer(captured, data)
+        except (KeyError, ValueError) as error:
+            self._reject(f"probe: {error}")
+            return
+        self.store.publish(Topic.PROBE, Kind.SNAPSHOT, answer, src=Src.SNAP, replay=False)
 
     def _answer_cursor(self, data: dict) -> None:
         """Put the whole view at one point in the run.

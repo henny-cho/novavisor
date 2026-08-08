@@ -204,3 +204,114 @@ class Tables:
             if word is not None:
                 out[offset : offset + stride] = word.to_bytes(stride, "little")
         return bytes(out)
+
+
+# --- Answering a client -----------------------------------------------------
+
+FORMATS = {"stage2": translation.STAGE2_FORMAT, "stage1": translation.STAGE1_FORMAT}
+
+
+def _address(value) -> int:
+    """A probe target, from whatever the client typed.
+
+    Hex because these are addresses and a reader has them in hex; the
+    prefix is optional because a reader pasting one from a fault message
+    has it either way.
+    """
+    try:
+        # Always hex, prefix or not. Reading a bare string as decimal
+        # would answer a different question than the one asked, and the
+        # answer would look perfectly ordinary.
+        return int(str(value).strip().replace("_", ""), 16)
+    except ValueError:
+        raise ValueError(f"{value!r} is not an address") from None
+
+
+def answer(captured: dict, request: dict) -> dict:
+    """Walk one regime for a client.
+
+    Live and in replay this reads the same captured tables, so the two
+    cannot answer differently — the walk is not reimplemented on either
+    side of a recording.
+    """
+    wanted = str(request.get("regime", ""))
+    regime = next((entry for entry in captured["regimes"] if entry["id"] == wanted), None)
+    if regime is None:
+        raise KeyError(f"no regime {wanted!r}")
+    fmt = FORMATS[regime["kind"]]
+    reader = Tables.of(captured)
+    root = int(regime["root"], 16)
+    data = {
+        "regime": regime["id"],
+        "tree": _tree_wire(translation.tree(reader, fmt, root, regime["tables"]), fmt),
+    }
+    if request.get("address") not in (None, ""):
+        found = translation.probe(reader, fmt, root, _address(request["address"]))
+        data["probe"] = _probe_wire(found, fmt)
+    return data
+
+
+def _tree_wire(found: translation.Tree, fmt: translation.Format) -> dict:
+    return {
+        "root": f"{found.root:#x}",
+        "tables": found.tables,
+        "truncated": found.truncated,
+        "unreadable": [f"{pa:#x}" for pa in found.unreadable],
+        "nodes": [_node_wire(node, fmt) for node in found.nodes],
+    }
+
+
+def _node_wire(node: translation.Node, fmt: translation.Format) -> dict:
+    """One row of the map.
+
+    Carries the span it covers rather than the level's shift: a client
+    computing that would be holding a second copy of the geometry, and
+    the whole point of reading it from the headers is that there is one.
+    """
+    descriptor = node.descriptor
+    wire = {
+        "level": fmt.geometry.levels[node.depth],
+        "index": node.index,
+        "count": node.count,
+        "base": f"{node.base:#x}",
+        "size": f"{node.count * fmt.geometry.span(node.depth):#x}",
+        "kind": descriptor.kind,
+        "output": f"{descriptor.output:#x}",
+    }
+    if descriptor.maps:
+        # Only where a walk ends. A table descriptor given permissions
+        # would be showing bits the hardware does not consult.
+        wire |= {
+            "w": descriptor.writable,
+            "x": descriptor.executable,
+            "af": descriptor.accessed,
+            "memory": descriptor.memory,
+        }
+    if node.children:
+        wire["children"] = [_node_wire(child, fmt) for child in node.children]
+    return wire
+
+
+def _probe_wire(found: translation.Probe, fmt: translation.Format) -> dict:
+    # Where it landed and what may be done there: half of what an address
+    # means is the permission the walk ended on, so the answer carries it
+    # rather than sending the reader back into the tree to look.
+    leaf = found.steps[-1].descriptor if found.steps else None
+    wire = {
+        "address": f"{found.address:#x}",
+        "level": found.level,
+        "fault": found.fault,
+        "output": None if found.output is None else f"{found.output:#x}",
+        "steps": [
+            {
+                "level": fmt.geometry.levels[step.depth],
+                "index": step.index,
+                "table": f"{step.table:#x}",
+                "kind": step.descriptor.kind,
+            }
+            for step in found.steps
+        ],
+    }
+    if found.output is not None and leaf is not None:
+        wire |= {"w": leaf.writable, "x": leaf.executable, "memory": leaf.memory}
+    return wire

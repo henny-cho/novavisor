@@ -700,3 +700,68 @@ b{font-weight:700}
 .pcells { display: flex; gap: 3px; padding: 2px 0 4px; }
 .pcell { width: 15px; height: 15px; border: 1px solid var(--line2); border-radius: 3px; }
 .pcell.on { background: var(--hyp); border-color: var(--hyp); }
+
+/* ---------------- memory map ----------------
+   The other occupant of the view slot. A tree of rows, one per run of
+   table slots, indented by how deep the walk was when it found them.
+   Monospace throughout and columns that do not move between rows: the
+   whole reading is addresses, and a column that shifts is a column that
+   cannot be compared down the page. */
+.mmap{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
+.view.folded>.mmap{display:none}
+.mmap-h{
+  display:flex;align-items:center;gap:10px;flex:none;flex-wrap:wrap;
+  padding:6px var(--wb-pad);border-bottom:1px solid var(--line);background:var(--panel)
+}
+.mmap-pick{display:flex;gap:4px;flex-wrap:wrap}
+.mmap-pick .chip{
+  padding:3px 9px;border:1px solid var(--line);border-radius:6px;background:var(--raised);
+  font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink2);white-space:nowrap
+}
+.mmap-pick .chip[aria-pressed="true"]{
+  color:var(--hyp);border-color:var(--hyp);background:var(--hyp-dim);font-weight:700
+}
+/* DMA is the same VM read by a different master, and telling the two
+   apart at a glance is the point of putting them side by side. */
+.mmap-pick .chip[data-role="dma"]{border-style:dashed}
+.mmap-probe{display:flex;align-items:center;gap:6px}
+.mmap-probe input{
+  width:13ch;padding:3px 7px;border:1px solid var(--line);border-radius:6px;
+  background:var(--sunken);color:var(--ink);font-family:var(--mono);font-size:var(--fs-meta)
+}
+.mmap-note{
+  margin-left:auto;font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+}
+.mmap-note.bad{color:var(--crit)}
+.mmap-body{flex:1;min-height:0;overflow:auto;padding:6px var(--wb-pad) 10px}
+
+.mrow{
+  display:flex;align-items:baseline;gap:10px;padding:1px 6px;border-radius:4px;
+  margin-left:calc(var(--depth,0) * 18px);
+  font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink2);white-space:nowrap
+}
+/* The path one probe took. Marked on the row rather than drawn beside
+   it: the row already says which slots it covers, and a probe lands
+   inside exactly one of them per level. */
+.mrow.on{background:var(--hyp-dim);color:var(--ink);box-shadow:inset 2px 0 0 var(--hyp)}
+.mslot{min-width:11ch;color:var(--ink3)}
+.mrange{min-width:24ch;color:var(--ink)}
+.marrow{color:var(--ink3)}
+.mout{min-width:13ch}
+.mperm{min-width:3ch;color:var(--ink)}
+/* Writable and executable at once. Nothing this hypervisor maps should
+   be both, and the view exists partly to make that checkable by eye. */
+.mperm.wx{color:var(--crit);font-weight:700}
+.mkind{color:var(--ink3)}
+.mattr{color:var(--ink3)}
+.mflag{color:var(--warn)}
+.mempty{
+  padding:8px 6px;font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink3)
+}
+/* A map that is short says so. Read as an ordinary map it would be a
+   machine with fewer mappings than it had. */
+.mwarn{
+  padding:6px;margin-top:6px;border:1px solid var(--warn);border-radius:5px;
+  font-family:var(--mono);font-size:var(--fs-meta);color:var(--warn)
+}
