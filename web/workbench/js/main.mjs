@@ -97,13 +97,13 @@ const memory = createMemory({
   input: ref("mmap-at"),
   note: ref("mmap-note"),
   body: ref("mmap-body"),
-  /* Same topic out as in: the kind already says which direction a frame
-     went, and a second topic would be the word twice. */
+  /* Same topic out as in: the kind already says which direction a
+     frame went. */
   request: (data) => send("probe", data),
 });
 
-/* The two things the view slot can hold. Naming them here keeps the tab
-   buttons free of any knowledge of what they switch to. */
+/* What the view slot can hold, named here so the tab buttons carry no
+   knowledge of what they switch to. */
 const VIEWS = {
   board: { node: ref("board"), name: "실행 보드" },
   memory: { node: ref("mmap"), name: "메모리 맵" },
@@ -723,8 +723,8 @@ function onFrame(frame) {
       }
       if (data.dropped) noteLoss(data.dropped);
       break;
-    /* An answer to a question this client asked: one regime's tables,
-       walked. Every reader asks its own, so nothing here is replayed. */
+    /* One regime's tables, walked, in answer to this client's own
+       request. */
     case "probe":
       memory.answer(data);
       break;

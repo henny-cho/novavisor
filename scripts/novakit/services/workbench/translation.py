@@ -1,18 +1,14 @@
-"""Address translation, read from the headers that encode it.
+"""Address translation: descriptor encodings, and the walk over them.
 
-A descriptor's bit layout is the firmware's fact and it is written down
-once, in the headers the hypervisor itself compiles. This module reads
-those headers instead of restating them, so a field that moves moves
-here too and a header this cannot parse stops the tool rather than
-decoding into plausible nonsense.
+Bit layouts are read from the headers the hypervisor compiles rather
+than restated here, so a field that moves moves here too and a header
+this cannot parse stops the tool instead of decoding into nonsense.
 
-Two regimes, two encodings. A guest's Stage 2 (IPA to PA) is EL2's own
-table with the memory type encoded directly in the descriptor; EL2's
-Stage 1 (its identity map of itself) indexes attributes through
-MAIR_EL2 and carries a single privilege level's AP field. Nothing here
-touches a guest's own Stage 1: those tables live in guest RAM and change
-under the guest's hand, where every table this module reads is built
-once at boot and never rewritten.
+Two regimes, two encodings: a guest's Stage 2 (IPA to PA) puts the
+memory type in the descriptor, EL2's Stage 1 indexes it through MAIR_EL2
+and carries a single privilege level's AP field. A guest's own Stage 1
+is not here — those tables live in guest RAM and change under the guest,
+where everything this reads is built once at boot.
 """
 
 from __future__ import annotations
@@ -46,9 +42,8 @@ DESCRIPTOR_BYTES = 8
 # The level whose entries are one granule; coarser levels count down.
 _GRANULE_LEVEL = 3
 # ARM ARM DDI0487 §D8.2.6: for a 4 KiB granule VTCR_EL2.SL0 names the
-# level a Stage 2 walk starts at. Architectural, and here to hold the
-# header's two declarations of one geometry against each other — T0SZ
-# and SL0 have to agree and nothing else says so.
+# level a Stage 2 walk starts at. Here to hold T0SZ and SL0 — two
+# declarations of one geometry — against each other.
 _SL0_START_LEVEL = {0b00: 2, 0b01: 1, 0b10: 0, 0b11: 3}
 
 
@@ -57,10 +52,10 @@ class Geometry:
     """How a walk descends.
 
     `shifts` is where each level's index field starts in the input
-    address, coarsest first, and `levels` is what the architecture calls
-    those levels. Both are derived rather than declared: a level number
-    follows from how far its index sits above the granule, and which
-    level a walk starts at follows from how wide the input address is.
+    address, coarsest first; `levels` is what the architecture calls
+    those levels. Both are derived: a level number from how far its
+    index sits above the granule, the starting level from the input
+    width.
     """
 
     name: str
@@ -141,9 +136,9 @@ STAGE1 = _geometry(
 class Descriptor:
     """One table slot as the hardware reads it.
 
-    `output` is the next table's address for a table descriptor and the
-    mapped output address for a leaf. The permission fields carry meaning
-    only at a leaf, where a walk ends and an access is actually decided.
+    `output` is the next table for a table descriptor and the mapped
+    address for a leaf. The permission fields mean anything only at a
+    leaf, where the walk ends and the access is decided.
     """
 
     raw: int
@@ -171,9 +166,8 @@ _S1_MEMORY = {
 
 
 def _stage2_attributes(raw: int) -> dict[str, object]:
-    # S2AP is a two-bit read/write pair, and the header names the value
-    # that is write alone — which is the write bit, without this file
-    # having to know where in the field it sits.
+    # S2AP is a two-bit read/write pair; the header's "write only" value
+    # is the write bit, so its position stays the header's business.
     s2ap = (raw & _S2["kS2apMask"]) >> _S2["kS2apShift"]
     attr = (raw & _S2["kMemAttrMask"]) >> _S2["kMemAttrShift"]
     return {
@@ -185,8 +179,8 @@ def _stage2_attributes(raw: int) -> dict[str, object]:
 
 
 def _stage1_attributes(raw: int) -> dict[str, object]:
-    # A single-privilege regime: AP[1] is RES1 and only AP[2] means
-    # anything, so read-only is the whole of the permission.
+    # A single-privilege regime: AP[1] is RES1 and only AP[2] carries
+    # meaning, so read-only is the whole of the permission.
     attr = (raw & _S1["kAttrIndxMask"]) >> _S1["kAttrIndxShift"]
     return {
         "writable": not raw & _S1["kApReadOnly"],
@@ -201,10 +195,8 @@ class Format:
     """One regime's descriptor encoding, and its walk geometry.
 
     `wxn` is whether the regime's control register forbids writable and
-    executable together. Read from the firmware rather than decided here:
-    EL2 sets SCTLR_EL2.WXN, so a descriptor granting both would mean the
-    map and the register disagree, where a guest's Stage 2 grants both on
-    purpose and the guest's own Stage 1 does the splitting.
+    executable together — read from the firmware, where EL2 sets
+    SCTLR_EL2.WXN and a guest's Stage 2 grants both on purpose.
     """
 
     geometry: Geometry
@@ -220,12 +212,12 @@ class Format:
 
         The depth separates a table descriptor from a page: both are the
         same two bits and only the level says which the hardware reads.
-        The same rule makes a block descriptor at the last level nothing
-        at all — the architecture reserves that encoding there.
+        By the same rule a block encoding at the last level is reserved,
+        so it decodes as invalid.
 
-        A leaf's output is aligned to what it maps, because the bits
-        below that are ignored by the hardware. Aligning here means the
-        tree and a probe cannot report the address differently.
+        A leaf's output is aligned to what it maps — the bits below are
+        ignored by the hardware — so the tree and a probe cannot report
+        the address differently.
         """
         leaf = depth == self.geometry.depth - 1
         bits = raw & self.type_mask
@@ -246,10 +238,10 @@ class Format:
 
 
 def _format(constants: dict[str, int], geometry: Geometry, attributes, wxn: bool = False) -> Format:
-    """One regime's Format, from the header dictionary it was read into.
+    """One regime's Format, from the dictionary its header was read into.
 
     Both headers name these fields the same way, so the two regimes are
-    the same construction over different dictionaries.
+    one construction over two dictionaries.
     """
     return Format(
         geometry=geometry,
@@ -270,10 +262,9 @@ STAGE1_FORMAT = _format(
 
 # --- The walk ---------------------------------------------------------------
 #
-# Pure functions over a `MemoryReader` and a `Format`. Live, the bytes
-# come from the mapped RAM file; in replay, from a recorded copy of the
-# same tables. Neither of these knows which, which is what lets a replay
-# answer a question the recording never asked.
+# Pure functions over a `MemoryReader` and a `Format`. The bytes come
+# from mapped RAM or from a recorded copy and nothing here knows which,
+# which is what lets a replay answer a question it never recorded.
 
 
 @dataclass(frozen=True)
@@ -290,10 +281,9 @@ class Step:
 class Probe:
     """Where one address lands.
 
-    `output` is the translated address when the walk completed, and
-    `fault` names why it did not otherwise. `level` is the architectural
-    level the walk ended at either way, which is the number a translation
-    fault reports in ESR_EL2.
+    `output` is the translated address when the walk completed and
+    `fault` says why it did not otherwise. `level` is where it ended
+    either way — the number a translation fault reports in ESR_EL2.
     """
 
     address: int
@@ -308,10 +298,9 @@ class Node:
     """A slot of a table, or a run of slots that say the same thing.
 
     `map_range` lays a region down as consecutive entries differing only
-    in output address, so a guest's RAM window arrives here as hundreds
-    of identical block descriptors. Folded into one node with a count,
-    the run is both what a reader sees and what the builder wrote; a
-    table descriptor never folds, since each points somewhere else.
+    in output address, so a mapped window arrives as hundreds of
+    identical descriptors; one node with a count is what the builder
+    wrote. Table descriptors never fold — each points somewhere else.
     """
 
     depth: int
@@ -326,11 +315,10 @@ class Node:
 class Tree:
     """Every mapping under one root.
 
-    Invalid slots are absent rather than listed: they are the large
-    majority of every table here, and how many there were is the table's
-    size less what is present. `read` counts the tables the walk fetched,
-    and `unreadable` names those it could not — without which a short
-    recording would come back as a smaller map that says nothing.
+    Invalid slots are absent: they are most of every table, and their
+    count is the table size less what is here. `read` counts the tables
+    fetched and `unreadable` names those that could not be — without
+    which a short recording reads as a machine with fewer mappings.
     """
 
     root: int
@@ -343,9 +331,9 @@ class Tree:
 class _Walk:
     """One traversal, and the tables it is allowed to read.
 
-    The limit is the pool the firmware built these tables from, so a walk
-    that wants more is following a word that is not a table pointer. Left
-    unbounded, one such word costs the reader a gigabyte of reads.
+    The limit is the pool the firmware built these tables from: wanting
+    more means following a word that is not a table pointer, which
+    unbounded costs the reader a gigabyte of reads.
     """
 
     def __init__(self, reader, fmt: Format, limit: int):
@@ -373,8 +361,8 @@ class _Walk:
 def probe(reader, fmt: Format, root: int, address: int) -> Probe:
     """Follow one address down, the way the hardware would.
 
-    Reads a single descriptor per level rather than a table, because a
-    probe is one path and the rest of each table is not on it.
+    One descriptor per level rather than a table: a probe is one path,
+    and the rest of each table is not on it.
     """
     geometry = fmt.geometry
     if address >= 1 << geometry.address_bits:
@@ -434,8 +422,8 @@ def _extends(node: Node, descriptor: Descriptor, index: int, span: int, output_m
     """Is this slot the next step of the run `node` already holds?
 
     Everything outside the output address field has to match, decoded or
-    not — a hint this module does not read is still a difference, and
-    folding across it would report a region the builder never wrote.
+    not: a hint this does not read is still a difference, and folding
+    across it would report a region the builder never wrote.
     """
     return (
         node.descriptor.kind == descriptor.kind

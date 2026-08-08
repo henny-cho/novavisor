@@ -32,12 +32,10 @@ class ConstexprReaderTest(unittest.TestCase):
         return path
 
     def test_it_folds_what_the_compiler_static_asserts(self):
-        """The strongest check available, and it costs nothing.
-
-        `stage1_tables.hpp` builds three register values out of its own
-        named fields and asserts each against the #define the assembler
-        uses. The compiler has already proved those pairs equal, so a
-        reader landing on the same numbers is folding shifts, masks and
+        """`stage1_tables.hpp` builds three register values out of its
+        own named fields and asserts each against the #define the
+        assembler uses. The compiler has proved those pairs equal, so a
+        reader landing on the same numbers folds shifts, masks and
         cross-references the way the compiler does.
         """
         folded = abi.read_constexprs(translation.STAGE1_TABLES)
@@ -70,8 +68,8 @@ class ConstexprReaderTest(unittest.TestCase):
             abi.read_constexprs(self.header("inline constexpr int kX = kNeverDeclared;\n"))
 
     def test_an_expression_it_cannot_fold_stops_the_tool(self):
-        """A guessed number is worse than none: it becomes a second copy
-        of the encoding, right until the day the header moves."""
+        """A guessed number becomes a second copy of the encoding, right
+        until the day the header moves."""
         for expression in ("width(3)", "~kMask", "kA ? kB : kC", "1 +"):
             with self.assertRaises(SystemExit, msg=expression):
                 abi.read_constexprs(self.header(f"inline constexpr int kX = {expression};\n"))
@@ -160,7 +158,7 @@ class DescriptorTest(unittest.TestCase):
         self.assertEqual(translation.STAGE2_FORMAT.decode(raw, 2).kind, "page")
 
     def test_a_block_encoding_at_the_last_level_maps_nothing(self):
-        """The block encoding is reserved at L3. Read as a mapping it
+        """The block encoding is reserved at L3; read as a mapping it
         would be a window the hardware never opened."""
         raw = FRAME | S2["kAttrNormalRwx"] | S2["kTypeBlock"]
         decoded = translation.STAGE2_FORMAT.decode(raw, 2)
@@ -171,8 +169,8 @@ class DescriptorTest(unittest.TestCase):
         self.assertEqual(translation.STAGE2_FORMAT.decode(0, 0).kind, "invalid")
 
     def test_el2_text_and_data_are_each_missing_what_the_other_has(self):
-        """W^X, as the two presets encode it. The view exists to show
-        this, and the decode is where it is either seen or lost."""
+        """W^X as the two presets encode it — the decode is where it is
+        either seen or lost."""
         text = translation.STAGE1_FORMAT.decode(FRAME | S1["kAttrNormalRx"] | S1["kTypeBlock"], 1)
         data = translation.STAGE1_FORMAT.decode(FRAME | S1["kAttrNormalRw"] | S1["kTypeBlock"], 1)
         self.assertEqual((text.writable, text.executable), (False, True))

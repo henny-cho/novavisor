@@ -134,8 +134,8 @@ class Bridge:
         self._poller: snapshot.SnapshotPoller | None = None
         self._provider: snapshot.SnapshotProvider | None = None
         self._provider_run: int | None = None
-        # Which run's tables have been published. They are built once and
-        # never rewritten, so one capture per run is the whole of them.
+        # Which run's tables have been published. Built once and never
+        # rewritten, so one capture per run is all of them.
         self._mapped_run: int | None = None
         # The T layer reads the same file but needs no image, so it is
         # built and torn down on its own: a failure to resolve symbols
@@ -792,10 +792,8 @@ class Bridge:
         """Walk this run's page tables and hand back the map.
 
         Answered from the tables on the topology rather than from RAM, so
-        a replay walks the bytes the recorded run had and reaches the
-        same answer by the same code. Kept out of the connect backlog: it
-        answers one reader's question, and every later reader asks its
-        own.
+        a replay walks the bytes its run had by the same code. Kept out
+        of the connect backlog: every reader asks its own.
         """
         captured = self.store.topology.get("memory")
         if not captured:
@@ -990,11 +988,10 @@ class Bridge:
     def _capture_memory_map(self) -> None:
         """Copy this run's page tables, once EL2 has built them.
 
-        Once is the whole of it: these tables are written during EL2 init
-        and never again, which is what lets a guest switch retarget VTTBR
-        without invalidating a TLB. Attempted every poll until it lands,
-        because the RAM backend exists from the moment QEMU starts and a
-        read before the build would copy a page of zeros.
+        Once is all of them: they are written during EL2 init and never
+        again. Attempted every poll until it lands, because the RAM
+        backend exists from the moment QEMU starts and a read before the
+        build would copy a page of zeros.
         """
         if self._mapped_run == self.session.run_id or self._provider is None:
             return

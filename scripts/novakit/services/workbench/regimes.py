@@ -1,14 +1,10 @@
 """The translation regimes a run has, and the tables behind them.
 
-Every table named here is built once during EL2 init and never rewritten
-— the same fact that lets `nova_stage2_switch` retarget VTTBR without
-invalidating a TLB. One copy per run is therefore the whole of them
-rather than a sample, so the copy rides out on the topology and the
-walker reads it instead of RAM. A client joining late, and a replay with
-no RAM behind it at all, then get the bytes the machine actually had.
-
-A guest's own Stage 1 is not here and cannot be: those tables live in
-guest RAM under the guest's hand, where nothing above holds.
+These tables are written during EL2 init and never again — the same fact
+that lets `nova_stage2_switch` retarget VTTBR without invalidating a
+TLB — so one copy per run is all of them rather than a sample. The copy
+rides the topology and the walker reads it instead of RAM, which is how
+a late joiner and a replay with no RAM get the same bytes.
 """
 
 from __future__ import annotations
@@ -17,8 +13,8 @@ from dataclasses import dataclass
 
 from . import elfsym, observations, translation
 
-# Every regime this run has, by the format its descriptors are in. The
-# key is what the wire calls the regime's kind, so the two cannot drift.
+# Descriptor formats by the name the wire calls their kind, so the two
+# cannot drift.
 FORMATS = {
     fmt.geometry.name: fmt for fmt in (translation.STAGE2_FORMAT, translation.STAGE1_FORMAT)
 }
@@ -41,9 +37,7 @@ _ROLE_WORD = {"cpu": "CPU", "dma": "DMA", "self": "self"}
 def _regime(role: str, vm: int | None, fmt: translation.Format, root: int, pool_bytes: int) -> dict:
     """One translation, named for who drives it.
 
-    `tables` is how many the pool behind this root holds, which is the
-    walk's limit: wanting more means following a word that is not a
-    table pointer.
+    `tables` is the pool behind this root, which is the walk's limit.
     """
     who = "el2" if vm is None else f"vm{vm}"
     owner = "EL2" if vm is None else f"VM {vm}"
@@ -99,17 +93,14 @@ def _el2_regime(resolved: dict[str, elfsym.ResolvedSymbol]) -> dict:
 def capture(reader, resolved: dict[str, elfsym.ResolvedSymbol]) -> dict | None:
     """Read every root and every table once, as the wire carries them.
 
-    Returns None until EL2 has built the tables. The RAM backend exists
-    from the moment QEMU starts, so an early read would copy a page of
-    zeros and publish it as the machine's whole address map.
+    None until EL2 has built the tables: the RAM backend exists from the
+    moment QEMU starts, and an early read would publish a page of zeros
+    as the machine's whole address map. None too for a reader with no
+    image behind it, which resolves nothing and has no map.
 
-    Only the words that are set travel. An empty slot is the invalid
-    descriptor, the large majority of every table here, and the extents
-    say where the zeros were — so what arrives is the same bytes, not a
-    smaller version of them.
-
-    A reader with no image behind it resolves nothing and has no map;
-    that is a capability, not a failure.
+    Only words that are set travel; an empty slot is the invalid
+    descriptor and the extents say where the zeros were, so what arrives
+    is the same bytes rather than fewer of them.
     """
     if not resolved:
         return None
@@ -137,9 +128,8 @@ def capture(reader, resolved: dict[str, elfsym.ResolvedSymbol]) -> dict | None:
 class Tables:
     """A `MemoryReader` over a captured copy.
 
-    The walker's only source, live and in replay alike. One reader means
-    a replay cannot answer differently from the run it recorded, where
-    two would agree only for as long as nobody changed one of them.
+    The walker's only source live and in replay alike, so a replay
+    cannot answer differently from the run it recorded.
     """
 
     words: dict[int, int]
@@ -156,11 +146,10 @@ class Tables:
         """Bytes from the copy, or nothing at all.
 
         A read outside what was captured fails rather than returning
-        zeros: zeros are invalid descriptors, and a walk given them would
-        call an address unmapped when the truth is that this copy never
-        held it. Reads are descriptor-aligned because that is all a table
-        is made of, and one that is not would land between the words this
-        holds and come back empty.
+        zeros — zeros are invalid descriptors, and a walk given them
+        would call an address unmapped when the copy is merely short.
+        Reads are descriptor-aligned because that is all a table holds;
+        an unaligned one would land between words and come back empty.
         """
         stride = translation.DESCRIPTOR_BYTES
         held = any(base <= pa and pa + size <= base + span for base, span in self.extents)
@@ -181,7 +170,7 @@ def _address(value) -> int:
     """A probe target, from whatever the client typed.
 
     Always hex, prefix or not: reading a bare string as decimal would
-    answer a different question and look perfectly ordinary doing it.
+    answer a different question and look ordinary doing it.
     """
     try:
         return int(str(value).strip().replace("_", ""), 16)
@@ -192,9 +181,8 @@ def _address(value) -> int:
 class _Walks:
     """One walk per regime per request, kept for whoever asks next.
 
-    A request wants the chosen regime's tree and, for a VM, both sides of
-    the isolation difference — which overlap. Walking twice would be the
-    same tables read twice and, worse, two places building one answer.
+    The chosen regime's tree and both sides of the isolation difference
+    overlap; walking twice would be two places building one answer.
     """
 
     def __init__(self, captured: dict):
@@ -221,10 +209,9 @@ class _Walks:
 def _windows(nodes: tuple[translation.Node, ...], geometry: translation.Geometry) -> list[tuple[int, int]]:
     """Every input range a walk ends in, merged and in order.
 
-    Where a run of slots is one range, adjacent runs that happen to abut
-    become one too: what matters here is which addresses are reachable,
-    and a boundary between two identically-reachable regions is an
-    artefact of how the builder laid them down.
+    Adjacent runs merge: the question is which addresses are reachable,
+    and a boundary between two reachable regions is an artefact of how
+    the builder laid them down.
     """
     spans: list[tuple[int, int]] = []
     for node in nodes:
@@ -272,10 +259,10 @@ def _siblings(captured: dict, regime: dict) -> list[dict]:
 def _isolation(walks: _Walks, captured: dict, regime: dict) -> dict | None:
     """One VM's two Stage 2 translations, by their difference.
 
-    They are separate table sets rather than one with an overlay, so what
-    is worth looking at is not where they agree but where they do not. A
-    window only the CPU reaches is memory no device can touch; one only
-    DMA reaches is a device able to write where the guest cannot look.
+    They are separate table sets rather than one with an overlay, so the
+    reading is where they disagree: a window only the CPU reaches is
+    memory no device can touch, one only DMA reaches is a device able to
+    write where the guest cannot look.
     """
     sides = {
         entry["role"]: entry
@@ -299,9 +286,8 @@ def _isolation(walks: _Walks, captured: dict, regime: dict) -> dict | None:
 def answer(captured: dict, request: dict) -> dict:
     """Walk one regime for a client.
 
-    Live and in replay this reads the same captured tables, so the two
-    cannot answer differently — the walk is not reimplemented on either
-    side of a recording.
+    Reads the captured tables live and in replay alike, so the walk is
+    not reimplemented on either side of a recording.
     """
     wanted = str(request.get("regime", ""))
     regime = next((entry for entry in captured["regimes"] if entry["id"] == wanted), None)
@@ -317,9 +303,9 @@ def answer(captured: dict, request: dict) -> dict:
         return data
     at = _address(request["address"])
     data["probe"] = _probe_wire(walks.probe(regime, at), fmt)
-    # The same address in this VM's other translation. One number, two
-    # answers: that is the comparison, and asking for the second in a
-    # separate request would let the two be about different addresses.
+    # The same address in this VM's other translation. Asking for the
+    # second in its own request would let the two answers be about
+    # different addresses.
     data["beside"] = [
         {
             "regime": other["id"],
@@ -334,9 +320,8 @@ def answer(captured: dict, request: dict) -> dict:
 def _wx_slots(nodes: tuple[translation.Node, ...]) -> int:
     """Slots this map makes both writable and executable.
 
-    A count rather than a verdict. Whether it is a defect depends on the
-    regime, and the regime says so: EL2's control register forbids the
-    combination where a guest's Stage 2 grants it deliberately.
+    A count, not a verdict: whether it is a defect is the regime's
+    answer, carried beside it as `wxn`.
     """
     total = 0
     for node in nodes:
@@ -349,8 +334,8 @@ def _wx_slots(nodes: tuple[translation.Node, ...]) -> int:
 def _rights(descriptor: translation.Descriptor) -> dict:
     """What may be done where a walk ends.
 
-    One spelling for the tree row and the probe answer, so a reader can
-    compare the two without either side naming a field differently.
+    One spelling for the tree row and the probe answer, so the two can
+    be compared without either naming a field differently.
     """
     return {
         "w": descriptor.writable,
@@ -372,10 +357,10 @@ def _tree_wire(found: translation.Tree, fmt: translation.Format) -> dict:
 
 
 def _node_wire(node: translation.Node, fmt: translation.Format) -> dict:
-    """One row of the map.
+    """One row of the map: a run of slots, with the span it covers.
 
-    Carries the span it covers rather than the level's shift: a client
-    deriving that would hold a second copy of the geometry.
+    The span rather than the level's shift, because a client deriving it
+    would hold a second copy of the geometry.
     """
     descriptor = node.descriptor
     wire = {
@@ -415,6 +400,6 @@ def _probe_wire(found: translation.Probe, fmt: translation.Format) -> dict:
     if found.output is not None:
         # Half of what an address means is the permission the walk ended
         # on, so the answer carries it rather than sending the reader
-        # back into the tree to look it up.
+        # back into the tree.
         wire |= _rights(found.steps[-1].descriptor)
     return wire

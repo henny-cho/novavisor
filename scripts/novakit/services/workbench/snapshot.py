@@ -83,12 +83,11 @@ class SnapshotProvider(Protocol):
 class MemoryReader(Protocol):
     """Bytes at a physical address, wherever they come from.
 
-    Kept apart from `SnapshotProvider` because the questions are shaped
-    differently: a snapshot is one named symbol decoded through the
-    layout its type declares, where a page table walk follows addresses
-    it only learns as it reads them. Apart, a replay can serve the walk
-    from a recorded copy of the tables without having to pretend it can
-    also serve a live symbol read.
+    Apart from `SnapshotProvider` because the questions differ: a
+    snapshot is one named symbol decoded through its declared layout,
+    where a walk follows addresses it learns as it reads. Apart, a
+    replay serves the walk from a recorded copy without pretending it
+    can also serve a live symbol read.
     """
 
     def read_bytes(self, pa: int, size: int) -> bytes: ...
@@ -105,9 +104,9 @@ class ImageView:
     trace rings ever get: work this shape can be sent somewhere it
     cannot compete with the drain.
 
-    `regimes` is keyed by symbol rather than by topic: the page tables
-    feed no observation, and what the map wants from them is where they
-    are and how big, not a decoded reading.
+    `regimes` is keyed by symbol rather than topic: the page tables feed
+    no observation, and what the map wants is where they are and how
+    big, not a decoded reading.
     """
 
     resolved: dict[str, elfsym.ResolvedSymbol]
@@ -187,10 +186,9 @@ class ElfRamProvider:
         """Raw memory, for readers that learn their addresses as they go.
 
         Slicing an mmap past its end returns what there is instead of
-        failing, so a read running off the backend has to be caught
-        here — a table half read decodes as invalid entries, and the
-        walk would then report an address as unmapped when it is only
-        unreadable.
+        failing, so a read running off the backend is caught here: a
+        half-read table decodes as invalid entries, and the walk would
+        call an address unmapped when it is only unreadable.
         """
         offset = pa - self._base
         if offset < 0 or size < 0 or offset + size > len(self._ram):

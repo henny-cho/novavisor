@@ -241,14 +241,12 @@ def timer_armed(value: object, info: elfsym.TypeInfo) -> object:
 def smmu_streams(value: object, info: elfsym.TypeInfo) -> object:
     """Stream table entries as what each one lets a device do.
 
-    Three states, and the difference between them is the whole of DMA
-    isolation: a stream translating through a VM's own Stage 2 tables,
-    one aborted so every transaction it makes is refused, and one never
-    configured. The root is carried rather than resolved to a VM here,
-    because which VM owns which root is published beside this and a
-    second answer to that would be a second place to be wrong.
+    Three states: translating through a VM's own Stage 2 tables, aborted
+    so every transaction is refused, or never configured. The root
+    travels rather than the VM that owns it, because which VM owns which
+    root is published beside this.
 
-    Only configured streams travel: a board declares far more stream IDs
+    Only configured streams travel — a board declares far more stream IDs
     than a run assigns, and the rest are an all-zero entry.
     """
     del info

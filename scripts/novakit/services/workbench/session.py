@@ -347,10 +347,9 @@ class Session:
         """Publish this run's page tables, once they exist.
 
         Held on the topology rather than sent as a frame: the frame
-        window has a capacity and sheds under load, where a late joiner
-        still has to be able to walk. The same placement is what carries
-        it into a recording and back out of one, since a replay adopts
-        the world the recorded run last published.
+        window sheds under load, where a late joiner still has to be able
+        to walk. The same placement carries it into a recording and back
+        out, since a replay adopts the world the run last published.
         """
         self._store.set_topology(self._store.topology | {"memory": captured})
 

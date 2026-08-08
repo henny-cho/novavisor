@@ -490,7 +490,7 @@ auto start_dma(dma::DeviceId device_id, std::size_t vm, std::uint64_t generation
                   generation != 0U && entry->generation == generation &&
                   backend_start(device_id, source, destination, count, to_ram);
   // A transaction leaving the device for the SMMU. The address is the
-  // one the device is given, which is the IPA the translation is about.
+  // one the device is given, which is the IPA the SMMU translates.
   if (ok) {
     trace_emit(NOVA_TRACE_EV_DMA_START, static_cast<std::uint32_t>(vm), to_ram ? source : destination, count);
   }

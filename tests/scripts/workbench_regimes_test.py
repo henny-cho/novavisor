@@ -126,9 +126,8 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual([entry for entry in captured["regimes"] if entry["role"] == "dma"], [])
 
     def test_the_copy_answers_exactly_what_ram_did(self):
-        """The one claim the whole capture rests on. A copy that answers
-        differently would make a replay a second program that reimplements
-        the walk's input."""
+        """The claim the capture rests on: a copy that answered
+        differently would make a replay a second program."""
         l1, _ = self.build_guest_tables()
         live = self.provider()
         captured = regimes.capture(live, self.symbols)
@@ -151,8 +150,8 @@ class CaptureTest(unittest.TestCase):
         self.assertLess(len(captured["words"]) * 8, copied // 100)
 
     def test_an_address_the_copy_never_held_is_unreadable(self):
-        """Served as zeros it would decode as invalid descriptors, and the
-        walk would call an address unmapped when the copy is simply short.
+        """Served as zeros it would decode as invalid descriptors, and
+        the walk would call an address unmapped when the copy is short.
         """
         self.build_guest_tables()
         captured = regimes.capture(self.provider(), self.symbols)
@@ -213,9 +212,8 @@ class AnswerTest(unittest.TestCase):
         self.assertEqual((run["level"], run["kind"]), (2, "block"))
 
     def test_a_guest_window_is_writable_and_executable_without_complaint(self):
-        """Counted, never judged here. Stage 2 grants both on purpose and
-        the guest's own Stage 1 splits them; the regime's own control
-        register is what says whether the pair is a defect."""
+        """Counted, never judged here: Stage 2 grants both on purpose and
+        the regime's control register says whether that is a defect."""
         tree = regimes.answer(self.captured, {"regime": "vm0.cpu"})["tree"]
         self.assertEqual(tree["wx"], 4)
         self.assertFalse(tree["wxn"])
@@ -254,10 +252,10 @@ class AnswerTest(unittest.TestCase):
             regimes.answer(self.captured, {"regime": "vm0.cpu", "address": "zzz"})
 
     def test_the_two_translations_of_one_vm_are_read_by_their_difference(self):
-        """They are separate table sets, not one with an overlay, so what
-        is worth looking at is where they disagree: a window only the CPU
-        reaches is memory no device can touch, and one only DMA reaches is
-        a device able to write where the guest cannot look."""
+        """Separate table sets, not one with an overlay, so the reading
+        is where they disagree: a window only the CPU reaches is memory
+        no device can touch, one only DMA reaches is a device able to
+        write where the guest cannot look."""
         isolation = regimes.answer(self.captured, {"regime": "vm0.cpu"})["isolation"]
         self.assertEqual((isolation["cpu"], isolation["dma"]), ("vm0.cpu", "vm0.dma"))
         self.assertEqual(isolation["cpu_only"], [[f"{2 * self.MIB2:#x}", f"{2 * self.MIB2:#x}"]])
@@ -276,8 +274,7 @@ class AnswerTest(unittest.TestCase):
 
     def test_one_address_is_answered_by_both_translations(self):
         """Asking each separately would let the two answers be about
-        different addresses, which is exactly what a comparison cannot
-        afford."""
+        different addresses."""
         answer = regimes.answer(
             self.captured, {"regime": "vm0.cpu", "address": f"{3 * self.MIB2:x}"}
         )
@@ -289,8 +286,7 @@ class AnswerTest(unittest.TestCase):
 
     def test_every_value_survives_json(self):
         """A descriptor is past 2^53, where a JSON number stops being
-        exact. Everything addressed travels as a string for that reason,
-        and a round trip is where a missed one shows."""
+        exact; a round trip is where a missed string shows."""
         answer = regimes.answer(self.captured, {"regime": "vm0.cpu", "address": "0x201000"})
         self.assertEqual(json.loads(json.dumps(answer)), answer)
 

@@ -109,9 +109,9 @@ inline constexpr std::uint64_t kTcrEl2 = (1ULL << 31) | (1ULL << 23) // RES1
                                          | 32ULL;                    // T0SZ
 static_assert(kTcrEl2 == NOVA_EL2_TCR);
 
-// Writable implies execute-never. Named rather than left as a bit
-// position in the sum below, because it is the whole of this regime's
-// W^X: a reader asking whether EL2 forbids W&X asks for this bit.
+// Writable implies execute-never: the whole of this regime's W^X.
+// Named rather than left a bit position in the sum below, because a
+// reader asking whether EL2 forbids W&X asks for this bit.
 inline constexpr std::uint64_t kSctlrWxn = 1ULL << 19;
 
 inline constexpr std::uint64_t kSctlrEl2 = 0x30C50830ULL  // RES1

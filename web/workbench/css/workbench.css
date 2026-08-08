@@ -702,11 +702,10 @@ b{font-weight:700}
 .pcell.on { background: var(--hyp); border-color: var(--hyp); }
 
 /* ---------------- memory map ----------------
-   The other occupant of the view slot. A tree of rows, one per run of
-   table slots, indented by how deep the walk was when it found them.
-   Monospace throughout and columns that do not move between rows: the
-   whole reading is addresses, and a column that shifts is a column that
-   cannot be compared down the page. */
+   The other occupant of the view slot: rows, one per run of table slots,
+   indented by how deep the walk was. Monospace with fixed column widths,
+   because the reading is addresses and a column that shifts cannot be
+   compared down the page. */
 .mmap{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
 .view.folded>.mmap{display:none}
 .mmap-h{
@@ -721,8 +720,8 @@ b{font-weight:700}
 .mmap-pick .chip[aria-pressed="true"]{
   color:var(--hyp);border-color:var(--hyp);background:var(--hyp-dim);font-weight:700
 }
-/* DMA is the same VM read by a different master, and telling the two
-   apart at a glance is the point of putting them side by side. */
+/* DMA is the same VM read by a different master; the two are put side
+   by side to be told apart. */
 .mmap-pick .chip[data-role="dma"]{border-style:dashed}
 .mmap-probe{display:flex;align-items:center;gap:6px}
 .mmap-probe input{
@@ -741,17 +740,15 @@ b{font-weight:700}
   margin-left:calc(var(--depth,0) * 18px);
   font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink2);white-space:nowrap
 }
-/* The path one probe took. Marked on the row rather than drawn beside
-   it: the row already says which slots it covers, and a probe lands
-   inside exactly one of them per level. */
+/* The path one probe took, marked on the row: a probe lands inside
+   exactly one row per level. */
 .mrow.on{background:var(--hyp-dim);color:var(--ink);box-shadow:inset 2px 0 0 var(--hyp)}
 .mslot{min-width:11ch;color:var(--ink3)}
 .mrange{min-width:24ch;color:var(--ink)}
 .marrow{color:var(--ink3)}
 .mout{min-width:13ch}
 .mperm{min-width:3ch;color:var(--ink)}
-/* Writable and executable at once. Nothing this hypervisor maps should
-   be both, and the view exists partly to make that checkable by eye. */
+/* Writable and executable at once, where the regime forbids it. */
 .mperm.wx{color:var(--crit);font-weight:700}
 .mkind{color:var(--ink3)}
 .mattr{color:var(--ink3)}
@@ -759,30 +756,28 @@ b{font-weight:700}
 .mempty{
   padding:8px 6px;font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink3)
 }
-/* The map answering the question its own control register asks. Stated
-   even when the answer is "none": a check nobody can see the result of
-   is indistinguishable from one that was never run. */
+/* The map against the question its own control register asks. Stated
+   even when the answer is none — an invisible result reads as a check
+   that never ran. */
 .mverdict{
   padding:5px 6px;margin-bottom:6px;border-left:2px solid var(--good);
   font-family:var(--mono);font-size:var(--fs-meta);color:var(--good)
 }
-/* A map that is short says so. Read as an ordinary map it would be a
-   machine with fewer mappings than it had. */
+/* A short map says so; read as an ordinary one it would be a machine
+   with fewer mappings than it had. */
 .mwarn{
   padding:6px;margin-top:6px;border:1px solid var(--warn);border-radius:5px;
   font-family:var(--mono);font-size:var(--fs-meta);color:var(--warn)
 }
 
 /* The same address in the VM's other translation, and the windows the
-   two do not share. Above the tree because they are the reading; the
-   tree below is where it came from. */
+   two do not share. Above the tree, which is where it came from. */
 .mbeside,.mside{
   display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding:3px 6px;
   font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink2)
 }
 .mbeside-h,.mside-h{min-width:11ch;color:var(--ink3)}
-/* A device able to reach what the guest itself cannot: the shape an
-   isolation defect takes here. */
+/* A device able to reach what the guest cannot: an isolation defect. */
 .mside.bad,.mbeside.bad{color:var(--crit)}
 .mside.bad .mside-h{color:var(--crit)}
 .mspan{padding:0 5px;border:1px solid var(--line);border-radius:4px}

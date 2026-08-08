@@ -6,9 +6,10 @@ travel. CI resolves every entry against the built debug ELF, so a
 renamed symbol or a reshaped struct fails the pipeline instead of
 silently blanking a panel.
 
-The page table arrays below are read once per run rather than polled and
-so feed no topic, but they are firmware globals named by hand like the
-rest — declared here, they are resolved and CI-checked by the same code.
+The page table arrays below feed no topic — they are read once per run
+rather than polled — but they are firmware globals named by hand like
+the rest, so declaring them here gets them the same resolution and CI
+check.
 """
 
 from __future__ import annotations
@@ -115,10 +116,10 @@ EL2_ROOT = "nova_el2_l1_root"
 EL2_POOL = "(anonymous)::g_pool"
 TABLES = (STAGE2_SETS, DMA_TABLES, EL2_ROOT, EL2_POOL)
 
-# Where each walk starts, as the machine holds it: the register value the
-# CPU is given, and the root the SMMU built its stream table from. Taken
-# from the run's configuration instead, these would describe a machine
-# that was intended rather than one that booted.
+# Where each walk starts, as the machine holds it: the register value
+# the CPU is given, and the root the SMMU built its stream table from.
+# Read from the run's configuration instead, these would describe a
+# machine that was intended rather than one that booted.
 VTTBR = "nova::(anonymous)::g_vttbr"
 DMA_CONTEXTS = "nova::smmu::(anonymous)::g_contexts"
 DMA_CONTEXT_COUNT = "nova::smmu::(anonymous)::g_context_count"
@@ -163,12 +164,11 @@ SLOT_NAMES = {
 def _slot_bases() -> dict[str, int]:
     """Where each soft_timer slot group starts, read from the header.
 
-    The bases are written there as sums over the ABI's own extents
-    (`kSlotWatchdog = kSlotCntvWake + kMaxVcpus`), which the header gets
-    from elsewhere and this supplies. Evaluating those sums reads the one
-    definition; restating them would be a second one, and a group
-    inserted between two others would silently shift every label after it
-    by a slot.
+    The bases are sums over the ABI's own extents
+    (`kSlotWatchdog = kSlotCntvWake + kMaxVcpus`), whose terms the header
+    gets from elsewhere and this supplies. Evaluating them reads the one
+    definition; restating them would let a group inserted between two
+    others shift every label after it by a slot.
     """
     known = abi.read_constexprs(SLOT_HEADER, {"kMaxVcpus": MAX_VCPUS, "kMaxGuests": MAX_GUESTS})
     missing = set(SLOT_NAMES) - set(known)

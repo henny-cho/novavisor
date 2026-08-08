@@ -107,8 +107,7 @@ def verify_manifest(elf: Path | None = None) -> int:
             )
 
         # The page tables the memory map walks. Renamed, they would
-        # leave the view empty with nothing to say why — the same
-        # silence this whole check exists to break.
+        # leave the view empty with nothing to say why.
         for symbol in WALK_SYMBOLS:
             try:
                 index.resolve(symbol)
