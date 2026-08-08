@@ -3,12 +3,12 @@
  * The T layer's wire format: per-CPU overwriting event rings in a
  * reserved physical region, written by EL2 and read by the host.
  *
- * Why a ring at all. The S layer samples state, so an event whose
- * residency in state space is a few dozen cycles is not merely hard to
- * catch — it is absent. Measured: the interrupt bind was never once
- * seen by polling, at 10 Hz or at 500 Hz. A ring records the event
- * instead of the state it briefly left behind, which turns the drain
- * interval from a limit on *coverage* into a budget for *latency*.
+ * Why a ring at all. The S layer samples state, so an event resident
+ * for a few dozen cycles is absent rather than merely hard to catch —
+ * the interrupt bind was never seen by polling, at 10 Hz or 500 Hz. A
+ * ring records the event instead of the state it briefly left behind,
+ * which turns the drain interval from a limit on *coverage* into a
+ * budget for *latency*.
  *
  * Why overwriting, and why the host owns no index. Observation must not
  * be able to stall what it observes. If the reader held a read cursor
@@ -20,11 +20,11 @@
  *   window = [max(cursor, head - capacity + 1), head)
  *   lost   = (head - cursor) - |window|
  *
- * The `+ 1` is the whole depth story. Head at H means the writer has
- * published H records and is inside the slot for index H — the same
- * slot index H - capacity occupies — so that record is already being
- * destroyed and the recoverable depth is capacity - 1. Keeping the
- * `capacity`th would hand out one record assembled from two events.
+ * The `+ 1`: head at H means the writer has published H records and is
+ * inside the slot for index H, which is the slot index H - capacity
+ * occupies. That record is already being destroyed, so the recoverable
+ * depth is capacity - 1; keeping the `capacity`th would hand out one
+ * record assembled from two events.
  *
  * A record body is written before `head` is published with a release
  * store, so a slot at or beyond `head` is never read. A reader re-reads
@@ -40,12 +40,10 @@
  * that finds the wrong magic or version fails loudly rather than
  * decoding a stale layout into plausible nonsense.
  *
- * It also carries the one loss the ring protocol above cannot express:
- * events emitted before the region was placed have no ring to land in,
- * and dropping them silently would make the header's own account of the
- * run incomplete at exactly the moment — early boot — a reader is most
- * likely to be looking for something. They are counted and published
- * beside the geometry.
+ * It also carries the one loss the ring protocol cannot express: events
+ * emitted before the region was placed have no ring to land in. They
+ * fall in early boot, where a reader is most likely to be looking, so
+ * they are counted and published beside the geometry.
  *
  * Plain #defines only: this header is the single source for the C++
  * writer and the Python reader alike.
@@ -94,32 +92,27 @@
 #define NOVA_TRACE_B_OFF    0x10 /* u64 */
 #define NOVA_TRACE_C_OFF    0x18 /* u64 */
 
-/* Capacity is deliberately not a constant. It falls out of the region a
- * board reserves divided by the rings that board fills, and the writer
- * publishes the result in the header the reader already parses — so the
- * whole sizing decision is one number per board and there is no second
- * number to keep in agreement with it. A two-core board gets twice the
- * depth of a four-core one out of the same reservation, because the
- * divisor is the real ring count rather than the ceiling.
+/* Capacity is deliberately not a constant. It is the region a board
+ * reserves divided by the rings that board fills, published by the
+ * writer in the header the reader already parses, so the sizing
+ * decision is one number per board with no second number to keep in
+ * agreement. A two-core board gets twice the depth of a four-core one
+ * from the same reservation, because the divisor is the real ring
+ * count rather than the ceiling.
  *
- * The two terms that decide whether a reservation is big enough: the
- * peak fill of one ring, and the host stall this design declares it
- * will survive. Both are measured and published every run by the
- * bridge's budget, so the next machine reports its own rather than
- * inheriting these — but a board is sized before it has ever run, and
- * these are the figures it is sized against. 133k/s/ring was measured
- * on a Linux guest boot. */
+ * These two terms decide whether a reservation is big enough: the peak
+ * fill of one ring, and the host stall this design declares it will
+ * survive. A board is sized before it has ever run, so these are the
+ * figures it is sized against; every run then measures and publishes
+ * its own through the bridge's budget. 133k/s/ring comes from a Linux
+ * guest boot. */
 #define NOVA_TRACE_PEAK_PER_SEC 133000
 #define NOVA_TRACE_HORIZON_MS   1000
 
-/* The smallest ring the rule above permits, in records.
- *
- * Derived from the terms rather than typed, because a floor that does
- * not say what it enforces drifts away from it. This one was 4096 — a
- * twentieth of the declared horizon — so a board reserving 640 KiB
- * would have built clean while violating the rule the design states.
- * The floor is what makes reserving too little a build failure instead
- * of a ring that laps inside one drain interval. */
+/* The smallest ring the rule above permits, in records. Derived from
+ * the two terms rather than typed, so it cannot drift away from the
+ * rule it enforces. This is what makes reserving too little a build
+ * failure instead of a ring that laps inside one drain interval. */
 #define NOVA_TRACE_MIN_CAPACITY (NOVA_TRACE_PEAK_PER_SEC * NOVA_TRACE_HORIZON_MS / 1000)
 
 /* The ABI ceiling on the header's `rings` field, and the number of
@@ -147,16 +140,14 @@
 #define NOVA_TRACE_EV_SMMU_FAULT   14
 
 /* Codes the host writes into the same stream, far above the firmware's
- * numbering and read as a separate family — so one can never arrive as
- * a hook nobody implemented.
+ * numbering and read as a separate family, so one can never be mistaken
+ * for an unimplemented hook.
  *
- * The ring protocol above can say how much a reader missed but not
- * where, and a count is the wrong shape for that knowledge: a drain
- * holds both ends of the hole and throws them away on the way out.
- * Written as a record instead, a hole sorts by timestamp, decodes,
- * lands in a lane and answers a window like anything else, so nothing
- * downstream needs a second path for the part of the run that is
- * missing. */
+ * The ring protocol says how much a reader missed but not where, and a
+ * drain holds both ends of the hole. Written as a record, a hole sorts
+ * by timestamp, decodes, lands in a lane and answers a window like
+ * anything else, so nothing downstream needs a second path for the
+ * missing part of the run. */
 #define NOVA_TRACE_HOST_CODE_BASE 0x8000
 
 /* A stretch nothing was watching: a ring lapped before a drain reached

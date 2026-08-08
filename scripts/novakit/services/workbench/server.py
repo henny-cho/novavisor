@@ -60,13 +60,10 @@ HALT_COMMANDS = ("stop", "cont", "step", "run", "abort")
 # covers a cold build ahead of the machine it is waiting for.
 LAUNCH_POLL_SECONDS = 0.005
 LAUNCH_ARM_TIMEOUT_SECONDS = 600.0
-# The trace loop's period. The rings are a latency budget rather than
-# memory, so this is the number that has to fit inside them — and it is
-# set by the peak, not the average. Measured on demo 17: the run
-# averages ~1500 events/s, but guest boot bursts to ~89k/s, which laps
-# a 4096-record ring in 46 ms. Ten times under that, and an idle look
-# costs two eight-byte reads because the drain is skipped outright when
-# nothing is waiting.
+# The trace loop's period: the interval that has to fit inside the ring
+# depth, set by the peak fill rather than the average, since a guest boot
+# bursts to tens of times the run's mean rate. An idle look costs two
+# eight-byte reads, because the drain is skipped when nothing is waiting.
 TRACE_DRAIN_SECONDS = 0.005
 # Columns a window request is answered in, when it does not say. A
 # resolution, not a cap on data: the density always covers the whole
@@ -100,10 +97,10 @@ class Bridge:
         trace_history: int = history.DEFAULT_CAPACITY,
         recorder: recording.Recorder | None = None,
     ):
-        # The tee sits on publish(), the one funnel every fact passes
-        # through, so a recording cannot be missing something a live
-        # viewer had — and sits ahead of the frame window, so it is not
-        # missing what a throttled tab lost either.
+        # The tee sits on publish(), the single funnel every downlink
+        # passes through, and ahead of the frame window — so the file
+        # holds everything the wire carried, including what a throttled
+        # client never received.
         self._recorder = recorder
         self.store = StateStore(
             Envelopes(Clock()), on_frame=None if recorder is None else recorder.frame
@@ -130,9 +127,8 @@ class Bridge:
         # must not take the event stream with it.
         self._tracer: trace.TraceReader | None = None
         self._tracer_run: int | None = None
-        # What the ring depth is worth on this host, measured rather
-        # than assumed. Built with the geometry, so it dies with the run
-        # whose rings it describes.
+        # What the ring depth is worth on this host. Built with the
+        # geometry, so it dies with the run whose rings it describes.
         self._budget: trace.Budget | None = None
         # What has been said about the T layer this run, so a state is
         # published on the transition rather than on every tick.
@@ -141,15 +137,15 @@ class Bridge:
         # The previous stop's reading, per topic. A stop publishes the
         # whole machine; this is what lets it also say what moved.
         self._stopped_at: dict[str, object] = {}
-        # The bridge's memory of the run. The firmware's rings are a
-        # handover buffer sized in milliseconds; this is where a reader
-        # who noticed something late can still find its cause.
+        # The bridge's memory of the run. The firmware's rings hold
+        # about a second, so this is where the cause of anything noticed
+        # late is still findable.
         self._history = history.History(trace_history)
         # Where images are parsed. Built on first use and kept, so a
         # restart's re-parse does not pay for a process as well.
         self._images: ProcessPoolExecutor | None = None
-        # Stamped into every connect topo: a changed token is the one
-        # reliable restart signal, whatever the seq counter says.
+        # Stamped into every connect topology: a changed token is the
+        # restart signal, whatever the sequence counter says.
         self._token = uuid.uuid4().hex[:8]
         # A run read back from disk, if this bridge is showing one.
         self._replay: recording.Recording | None = None
@@ -158,29 +154,24 @@ class Bridge:
     def load_replay(self, rec: recording.Recording) -> None:
         """Show a recorded run instead of a live machine.
 
-        Everything below feeds the structures the live bridge already
+        Everything below fills the structures the live bridge already
         answers from — the history the window protocol reads, the
-        topology the UI builds itself from — because a replay served by
-        its own code would be a second bridge, free to answer
-        differently about one run. The identity test is that contract.
+        topology the UI builds itself from — so one run has one answer.
+        A replay served by its own code would be a second bridge.
         """
         self._replay = rec
         self.session.phase = Phase.REPLAY
-        # A range of counter values is not a duration without this, and
-        # nothing in a replay will read a region header to learn it.
+        # Nothing in a replay reads a region header, so the clock the
+        # timestamps are in comes from the meta.
         self._history.freq_hz = int(rec.meta.get("freq_hz", 0))
         self._history.append(rec.records)
-        # The world the recording was made in — its catalogue, its board
-        # map, its request limits — rather than this process's guesses
-        # about a machine that is not here.
+        # The world the recording was made in — its catalogue, board map
+        # and request limits — rather than this process's guesses about a
+        # machine that is not here.
         #
-        # The last description, not the first. A run republishes its
-        # world when what it can witness changes: the trace rings are
-        # placed well after the topology first goes out, and an edge
-        # that was grey because nothing could watch it becomes direct
-        # the moment something can. Taking the first threw every such
-        # upgrade away and drew the board as it looked before the run
-        # proved anything.
+        # The last description, not the first: a run republishes its
+        # world when what it can witness changes, and the trace rings are
+        # placed well after the topology first goes out.
         for frame in reversed(rec.frames):
             if frame.get("topic") == Topic.TOPO.value:
                 # The world, without the session state the recorded run
@@ -196,9 +187,8 @@ class Bridge:
                 }
                 self.store.adopt_topology(world)
                 break
-        # Everything but the topology, which is published once above.
-        # Two topologies would put the recorded run's phase over the
-        # replay's, and the reader would be told the machine is running.
+        # Everything but the topology, adopted above. A second one would
+        # put the recorded run's phase over the replay's.
         self._replay_frames = [
             frame for frame in rec.frames if frame.get("topic") != Topic.TOPO.value
         ]
@@ -293,23 +283,16 @@ class Bridge:
 
         Live, that is the topology and a bounded backlog. In a replay it
         is the whole run: a window of the last few hundred frames would
-        hand back the tail of a recording made precisely so the earlier
-        ones survive.
+        hand back only the tail of a recording made so the earlier ones
+        survive.
 
-        Re-stamped with this connection's sequence and the recorded
-        moment. The seq belongs to the ordering of this socket; the
-        timestamp belongs to the run, and a replay wearing this
-        process's clock would put yesterday on screen as if it were now.
-
-        Stamped rather than published, because this payload is being
-        handed to one socket right here. Published, a recording's frames
-        went through the broadcast window on every connect — which shed
-        thousands, re-sent what it kept, and reported the shedding as the
-        bridge falling behind.
-
-        Kind and src travel verbatim for the same reason the timestamp
-        does: they are what the recorded run wrote, and a value this
-        build does not recognise must not be rewritten or refused.
+        Stamped rather than published, because the payload goes to one
+        socket right here; broadcasting it would push the whole run
+        through the frame window. Each frame keeps its recorded moment
+        and takes this socket's sequence: `ts` belongs to the run, `seq`
+        to the ordering of this connection. Kind and src travel verbatim
+        — they are what the recorded run wrote, and a value this build
+        does not recognise must not be rewritten or refused.
         """
         frames = self.store.connect_frames(self._live_state())
         if self._replay is None:
@@ -646,8 +629,7 @@ class Bridge:
         tracer, self._tracer = self._tracer, None
         self._tracer_run = None
         self._trace_state = ""
-        # Measured against a geometry that is about to go away, and
-        # about a machine that no longer exists.
+        # Measured against a geometry that is going away.
         self._budget = None
         # A new machine's timestamps are a new epoch, and merging them
         # with the last run's would put the two in one order. The same
@@ -667,24 +649,19 @@ class Bridge:
     def _image_pool(self):
         """Where an image gets parsed: another process, if there is one.
 
-        Reading the DWARF is 3.3 s of pure Python, and it runs while the
-        guest boots — exactly when the trace rings burst, at ~89k
-        events/s into a ring that laps in 46 ms. On a thread it holds
-        the GIL through that window; in its own process it competes for
-        one of eight cores and for nothing this interpreter needs. The
-        measurement that pointed here was blunt: with the S layer off
-        entirely, demo 13's loss fell from 24890 records to 250.
+        Reading the DWARF is seconds of pure Python and it runs while
+        the guest boots, which is when the trace rings burst. On a
+        thread it holds the GIL through that window and the drain falls
+        behind; in its own process it competes for a core and for
+        nothing this interpreter needs.
 
-        One worker, because there is one image at a time, and it is kept
-        once made: a restart re-parses, and paying to respawn for that
-        would put the cost back where it was taken from.
+        One worker, because there is one image at a time, and kept once
+        made so a restart's re-parse does not also pay to respawn.
 
-        A failure to start one is not remembered. It costs a constructor
-        call to try — the workers spawn lazily — and this is asked once
-        per run, so a latched "no pool" would trade nothing for turning
-        one bad moment (an exhausted fd table, a transient) into the
-        rest of the session on a thread. Falling back per attempt is the
-        same behaviour without the memory.
+        A failure to start one is not remembered: the constructor is
+        cheap, the workers spawn lazily, and this is asked once per run,
+        so latching "no pool" would turn one transient into the rest of
+        the session on a thread.
         """
         if self._images is None:
             try:
@@ -705,18 +682,15 @@ class Bridge:
     def _image_has_tracing(self) -> bool:
         """Does this build carry the ring writer?
 
-        Asked of the image, which knows, rather than inferred from how
-        many times the region has come back empty — that inference told
-        a slow machine its image had no tracing, and the tick after it
-        called drain() on the None it had just decided on.
+        Asked of the image rather than inferred from how many times the
+        region came back empty: that inference tells a slow machine its
+        image has no tracing.
 
-        Asked of the S layer's index, which is already parsed, rather
-        than by opening the ELF here: the answer costs a third of a
-        second to obtain and only ever changes the wording of a notice,
-        so paying for it on the attach path would delay the drain to
-        improve a log line. Until that index exists the answer is
-        unknown — which is not the same as no, so the probing carries
-        on either way.
+        Read from the S layer's already-parsed index rather than by
+        opening the ELF here, because the answer costs a third of a
+        second and only changes the wording of a notice. Until that
+        index exists the answer is unknown, which is not the same as no,
+        so the probing carries on either way.
         """
         symbols = snapshot.image_symbols(self._provider)
         return symbols is None or symbols.has(trace.WRITER_SYMBOL)
@@ -774,10 +748,9 @@ class Bridge:
             # clock is told here.
             self._recorder.note(freq_hz=self._tracer.geometry.freq_hz)
         # Constant for the run, so it rides the transition rather than
-        # every summary frame. The geometry travels with it: the depth
-        # is what the budget below is measured against, and a reader
-        # told a stall without it cannot tell a close call from a
-        # comfortable one.
+        # every summary frame. The geometry travels with it: a stall
+        # reported without the depth it ran against cannot be read as a
+        # close call or a comfortable one.
         self._set_trace_state(
             "active",
             early=self._tracer.geometry.early,
@@ -792,15 +765,13 @@ class Bridge:
     def _answer_cursor(self, data: dict) -> None:
         """Put the whole view at one point in the run.
 
-        The strip, the panels and the console were three views of one
-        run that could only ever agree about the present. This is what
-        makes them agree about a past: one timestamp moves all three,
-        because the reader's question — "what did the machine look like
-        *then*" — is one question.
+        One timestamp moves the strip, the panels and the console
+        together, because "what did the machine look like then" is one
+        question rather than three.
 
-        Only a replay can answer it. A live machine's now is the only
+        Only a replay can answer it: a live machine's now is the only
         point it has, and a panel returned to an earlier reading would
-        be showing a value nothing can be checked against.
+        show a value nothing can be checked against.
         """
         if self._replay is None:
             self._reject("cursor: only a replay can be moved in time")
@@ -812,10 +783,9 @@ class Bridge:
             return
         wire = self._replay.wire_ts(ts)
         state = self._replay.at(wire)
-        # As ordinary snapshot frames, in the shape the panels already
-        # apply: a seek that sent a special payload would teach the
-        # client a second way to take a value, and the two would come
-        # to disagree about which is a reading.
+        # Ordinary snapshot frames, in the shape the panels already
+        # apply: a seek-specific payload would teach the client a second
+        # way to take a value.
         for frame in state.values():
             self.store.publish(
                 frame["topic"],
@@ -825,11 +795,10 @@ class Bridge:
                 replay=False,
                 ts=frame.get("ts"),
             )
-        # Both clocks, because the client cuts its console by the wire's
-        # and draws its strip by the machine's. And the topics with no
-        # reading yet at this moment — said out loud, because silence
-        # about them leaves their later value on screen, which is a
-        # value the machine had not produced when the reader is looking.
+        # Both clocks: the client cuts its console by the wire's and
+        # draws its strip by the machine's. Topics with no reading yet at
+        # this moment are named, because silence about them would leave
+        # their later value on screen.
         self.store.publish(
             Topic.CURSOR,
             Kind.SNAPSHOT,
@@ -881,19 +850,16 @@ class Bridge:
                 "from": first,
                 "to": last,
                 "n": len(found),
-                # From the history that holds the records, not from the
-                # reader that filled it: the reader is gone in a replay,
-                # and one of the two would have had to be believed.
+                # From the history that holds the records, not the
+                # reader that filled it: a replay has no reader.
                 "freq_hz": self._history.freq_hz,
             },
             "span": span.as_dict(),
         }
-        # The records, or the density that stands in for them — never
-        # both. A density is what a window says when its records will
-        # not fit on the screen; once they do fit, they are sent, and
-        # any histogram of them is a loop the client already has the
-        # data for. Sending both put 1200 mostly-zero buckets beside
-        # four marks, on the request shape live following uses most.
+        # The records, or the density standing in for them — never both.
+        # A density is what a window says when its records will not fit
+        # on screen; once they fit they are sent, and a histogram of them
+        # is a loop the client can already run over the data it has.
         if len(found) <= buckets:
             payload["cols"] = trace.columns(found, first)
         else:
@@ -904,21 +870,20 @@ class Bridge:
         """Drain the firmware's rings and publish what fired.
 
         Counts per path, not the records: a few thousand events a second
-        is nothing to the bridge and a great deal to a browser, and a cap
-        with a silent drop would make "everything that happened" a lie.
-        The records stay here for `nova workbench trace` to ask for.
+        is nothing to the bridge and a great deal to a browser. The
+        records stay in the history for a window request to ask for.
 
         What the drain could not recover arrives as records too, so the
-        history holds the holes in the same order and the same shape as
+        history holds the holes in the same order and shape as
         everything else, and the summary's loss count is read back off
         them rather than tallied beside them.
         """
         if not self._attach_tracer():
             return
         # The cheap gate sits here rather than in the loop, so every
-        # tick with a reader attached is a look the budget can measure:
-        # the exposure a ring runs is the time between opportunities to
-        # empty it, and a tick that found it empty is still one.
+        # tick with a reader attached counts as a look: a ring's exposure
+        # is the time between opportunities to empty it, and a tick that
+        # found it empty is still one.
         records = self._tracer.drain() if self._tracer.pending() else []
         self._budget.looked(records, time.monotonic())
         if not records:
@@ -1035,16 +1000,14 @@ class Bridge:
     async def _trace_loop(self) -> None:
         """Drain the firmware's rings, on the T layer's own clock.
 
-        Separate from the S loop on purpose. The two have very different
-        costs — one DWARF walk is three seconds — and a shared loop puts
-        the T layer behind whatever the S layer is doing. They were
-        already independent in what they read; this makes them
-        independent in when they read it, at their own rates.
+        Separate from the S loop, which costs seconds per DWARF walk: a
+        shared loop would put the T layer behind whatever the S layer is
+        doing. The two were already independent in what they read; this
+        makes them independent in when they read it.
 
-        Draining happens right here rather than on a worker. Measured,
-        the hand-off is 122 us against a 6 us look, and it needs the GIL
-        twice more per tick at a period the interpreter hands the GIL
-        over at — so the worker cost more than the work. A full ring is
+        Draining happens here rather than on a worker. The hand-off
+        costs ~122 us against a ~6 us look and takes the GIL twice more
+        per tick, so the worker costs more than the work. A full ring is
         ~8 ms of loop time, which the 50 ms flush absorbs.
         """
         try:
@@ -1067,14 +1030,12 @@ class Bridge:
         while True:
             await asyncio.sleep(FLUSH_INTERVAL_SECONDS)
             if self._recorder is not None:
-                # Ahead of the connection check on purpose: a recording
-                # made with nobody watching is the ordinary case, and a
-                # writer that only ran while a browser was attached
-                # would record whoever happened to be looking.
+                # Ahead of the connection check: recording with nobody
+                # watching is the ordinary case.
                 #
-                # And here rather than at the tracer's attach, because a
-                # restart has to be noticed before the new machine's
-                # first frame is written into the old machine's file.
+                # And here rather than at the tracer's attach, so a
+                # restart is noticed before the new machine's first
+                # frame lands in the old machine's file.
                 self._recorder.for_run(self.session.run_id)
                 self._recorder.flush()
             if not self._connections:

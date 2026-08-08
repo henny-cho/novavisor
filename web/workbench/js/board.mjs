@@ -630,10 +630,9 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
 
   /* What the path is, how well it is seen, and what it last carried.
 
-     Never how often. The syndrome latches only the last trap and the
-     in-flight list is a sample, so a count here would be a number
-     nobody measured. A time is not a count: "last seen at" is exactly
-     as much as the evidence supports. */
+     Never how often: the syndrome latches only the last trap and the
+     in-flight list is a sample, so a count would be unmeasured. "Last
+     seen at" is exactly as much as the evidence supports. */
   function edgeTitle(edge) {
     const name = EDGE_TEXT[edge.id] || edge.id;
     const seen = edge.last ? ` · 마지막 ${stamp(edge.last.ts)} ${edge.last.message || ""}` : "";
@@ -1174,11 +1173,9 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
       );
       const fp = cpu && present(cpu.fp) ? `FP s${cpu.fp}` : "FP —";
       put(entry.detail, `${fp}${cpu?.fp_trap ? " · trap" : ""}`);
-      /* Two independent views of the same fact: the scheduler's own
-         current slot and the one the vGIC switched its state to. They
-         cannot legitimately differ, so a difference is the finding —
-         the reasserted-INTID loss behind demo 14's flakiness was
-         exactly this kind, and nothing on screen would have shown it. */
+      /* Two independent views of one fact: the scheduler's current
+         slot and the one the vGIC switched its state to. They cannot
+         legitimately differ, so a difference is the finding. */
       const claimed = (value("vgic.resident") || [])[index];
       const agree = (claimed ?? null) === current;
       entry.disagree.hidden = agree;
@@ -1530,10 +1527,9 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
       const data = frame.data && typeof frame.data === "object" ? frame.data : null;
       if (!data || data.values === undefined) return;
       latest.set(frame.topic, data.values);
-      /* A folded board costs nothing: no paint, no layout, no wires, and
-         no animation. Unfolding paints every section from `latest`, so
-         nothing is lost by not tracking sections while hidden — and a
-         pulse missed while hidden is a pulse nobody could have seen. */
+      /* A folded board costs nothing: no paint, layout, wires or
+         animation. Unfolding repaints every section from `latest`, so
+         skipping the section tracking while hidden loses nothing. */
       if (folded()) return;
       for (const section of TOPICS[frame.topic] || []) dirty.add(section);
       /* Arrival is the delta. The bridge's change gate only sends a

@@ -100,8 +100,8 @@ TEST(TraceRing, AnUnplacedRingCountsRatherThanFaults) {
   const std::uint32_t before = nova::trace::g_early.load(std::memory_order_relaxed);
   ring.emit(1, NOVA_TRACE_EV_TRAP, 0, 2, 3, 4); // must not crash
   EXPECT_EQ(ring.head(), 0U);
-  // The event is gone — there is nowhere for it to go — but it is not
-  // gone silently. A loss nobody counts reads as nothing happening.
+  // The event is gone — there is nowhere for it to go — but counted,
+  // because an uncounted loss reads as nothing having happened.
   EXPECT_EQ(nova::trace::g_early.load(std::memory_order_relaxed), before + 1);
 }
 

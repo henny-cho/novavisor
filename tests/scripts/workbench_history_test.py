@@ -1,10 +1,9 @@
 """The bridge's memory of a run.
 
-The firmware's rings are a handover buffer measured in milliseconds, so
-by the time a reader notices something its cause is already overwritten
-there. This is where the cause is still findable — under the same
-discipline one layer up, and with one deliberate difference: what a
-wrap *means* here is not what it means down there.
+The firmware's rings hold about a second, so by the time a reader
+notices something its cause is already overwritten there. This is where
+it is still findable: the same discipline one layer up, with one
+deliberate difference in what a wrap means.
 """
 
 from __future__ import annotations
@@ -96,8 +95,7 @@ class WrapTest(unittest.TestCase):
     def test_a_batch_that_starts_before_the_last_one_ended_is_put_in_order(self):
         """A batch is not the stream. The drain sorts what it hands
         over, but the boundary between two of them can go backwards by
-        however far the per-ring head reads were skewed — measured at
-        two to four records per thousand on a Linux run — and everything
+        however far the per-ring head reads were skewed, and everything
         that reads this searches it by bisection.
         """
         held = history.History(64)
@@ -127,11 +125,10 @@ class WrapTest(unittest.TestCase):
 
 class WindowTest(unittest.TestCase):
     """Finding a window is a bisection, so the buffer has to be in time
-    order — which append() enforces rather than inheriting.
+    order, which append() enforces rather than inherits.
 
-    This docstring used to say the drain guaranteed it, "because CNTPCT
-    is common to every PE". CNTPCT is; the concatenation of two sorted
-    batches is not, and that sentence is why nobody looked."""
+    CNTPCT being common to every PE makes each drained batch sorted; it
+    does not make the concatenation of two batches sorted."""
 
     def setUp(self):
         self.ring = history.History(capacity=64)

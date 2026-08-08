@@ -467,14 +467,10 @@ export function createPanels({ tabs, host }) {
     },
   ];
 
-  /* Whatever no panel above claims. A new row in the observation
-     manifest is then already on screen, and the default is that an
-     observation is visible rather than that it needs a panel written
-     for it — which is the same choice inverted, and the other way round
-     a value can be polled for months with nobody able to see it.
-
-     Anything worth a shape of its own graduates to a panel above and
-     leaves here on its own. */
+  /* Whatever no panel above claims, so a new row in the observation
+     manifest is on screen without a panel being written for it. The
+     default is visible rather than hidden; anything worth a shape of
+     its own graduates to a panel above and leaves here by itself. */
   const FALLBACK = {
     id: "other",
     title: "기타",

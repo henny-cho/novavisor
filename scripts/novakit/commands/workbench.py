@@ -110,9 +110,8 @@ def replay(
 ) -> None:
     """Serve a recorded session — no QEMU, no image, no toolchain.
 
-    The same UI answered by the same code: a replay served by a path of
-    its own would be a second bridge, free to answer differently about
-    one run, and then it would not be evidence.
+    The same UI answered by the same bridge code, so one run has one
+    answer; a separate replay path would be free to differ from it.
     """
     code = server.replay(host=host, port=port, directory=directory)
     if code:

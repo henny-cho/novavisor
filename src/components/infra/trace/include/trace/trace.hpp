@@ -38,11 +38,10 @@ static_assert(trace::records_per_ring(board::active::kTraceSize, cpu::kMaxCpus) 
               "this board reserves less trace region than the T layer is worth");
 
 // And the reservation has to be a reservation. The DTB generator checks
-// the same thing over a config's placements, but that runs when an
-// image is built for a guest set; this runs for every build, and the
-// thing on the other side is the pristine images the recovery path
-// re-loads from. A region that grew into them would be discovered as a
-// guest that restarts into rubble.
+// the same thing over a config's placements, but only when an image is
+// built for a guest set; this runs for every build. On the other side
+// are the pristine images the recovery path re-loads from, so a region
+// that grew into them would surface as a guest restarting into rubble.
 static_assert(board::active::kTracePa + board::active::kTraceSize <= board::active::kGuestPristinePa,
               "the trace region overruns the pristine guest images");
 
