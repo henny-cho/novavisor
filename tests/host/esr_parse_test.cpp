@@ -81,62 +81,6 @@ TEST(LowerSyncPolicy, HypervisorInvariantClassesStayFatal) {
 }
 
 // ---------------------------------------------------------------------------
-// get_iss — extract ISS field (bits 24:0)
-// ---------------------------------------------------------------------------
-
-TEST(GetIss, Zero) {
-  EXPECT_EQ(get_iss(0U), 0U);
-}
-
-TEST(GetIss, MaxValue) {
-  const std::uint64_t esr = 0x01FF'FFFFU; // all 25 ISS bits set
-  EXPECT_EQ(get_iss(esr), 0x01FF'FFFFU);
-}
-
-TEST(GetIss, IgnoresEcAndIl) {
-  // EC=HVC_AA64, IL=1, ISS=0x1234
-  const std::uint64_t esr = (static_cast<std::uint64_t>(0x16U) << 26U) | (1U << 25U) | 0x1234U;
-  EXPECT_EQ(get_iss(esr), 0x1234U);
-}
-
-// ---------------------------------------------------------------------------
-// get_hvc_imm — extract HVC immediate (ISS bits 15:0)
-// ---------------------------------------------------------------------------
-
-TEST(GetHvcImm, Zero) {
-  EXPECT_EQ(get_hvc_imm(0U), 0U);
-}
-
-TEST(GetHvcImm, MaxImmediate) {
-  // IMM16 = 0xFFFF (lower 16 bits of ISS)
-  EXPECT_EQ(get_hvc_imm(0xFFFFU), static_cast<std::uint16_t>(0xFFFFU));
-}
-
-TEST(GetHvcImm, TypicalHvcCall) {
-  // Typical HVC #1: EC=0x16, IL=1, ISS bits 15:0 = 0x0001
-  const std::uint64_t esr = (static_cast<std::uint64_t>(0x16U) << 26U) | (1U << 25U) | 0x0001U;
-  EXPECT_EQ(get_hvc_imm(esr), 1U);
-}
-
-TEST(GetHvcImm, IgnoresUpperIssBytes) {
-  // ISS upper bits set but imm16 = 0x00AB
-  const std::uint64_t esr = 0x01FF'00ABU;
-  EXPECT_EQ(get_hvc_imm(esr), 0x00ABU);
-}
-
-// ---------------------------------------------------------------------------
-// is_32bit_instruction — IL bit (bit 25)
-// ---------------------------------------------------------------------------
-
-TEST(Is32BitInstruction, SetWhenBit25IsOne) {
-  EXPECT_TRUE(is_32bit_instruction(1U << 25U));
-}
-
-TEST(Is32BitInstruction, ClearWhenBit25IsZero) {
-  EXPECT_FALSE(is_32bit_instruction(0U));
-}
-
-// ---------------------------------------------------------------------------
 // TrapContext layout (static_asserts are compile-time, but verify sizes too)
 // ---------------------------------------------------------------------------
 

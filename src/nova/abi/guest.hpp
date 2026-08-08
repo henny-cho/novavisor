@@ -126,6 +126,16 @@ static_assert(
     }(),
     "the guest window admits exactly the buffers that lie inside it");
 
+// A window ending at the last byte of the address space is ordinary:
+// the bound never computes an address past its own end.
+static_assert(
+    [] {
+      const GuestDescriptor top{.ipa_base = ~std::uint64_t{0} - 0xFFFU, .ipa_size = 0x1000};
+      return top.contains(~std::uint64_t{0} - 7U, 8) && top.contains(top.ipa_base, 0x1000) &&
+             !top.contains(top.ipa_base, 0x1001);
+    }(),
+    "a window at the top of memory needs no special case");
+
 // Total bytes the pristine snapshot area spans for `guests`, packed
 // with the same align_up_pa rule as the live windows. Consumers: the
 // core_mmu reservation check and the SMMU's DMA-protected range —

@@ -19,6 +19,12 @@ using nova::smmu::DrainStats;
 using nova::smmu::EventRecord;
 using nova::smmu::RuntimeLayout;
 
+// The device writes records, it does not build them: word 0 carries the
+// event type and the stream that raised it.
+constexpr auto event_record(nova::smmu::EventType type, std::uint32_t stream_id) noexcept -> EventRecord {
+  return {static_cast<std::uint64_t>(type) | (std::uint64_t{stream_id} << nova::smmu::kEventSidShift), 0, 0, 0};
+}
+
 // Poll budget that a register never satisfies, for the timeout paths.
 inline constexpr std::uint32_t kNever = 0xFFFF'FFFFU;
 
@@ -617,8 +623,7 @@ TEST_F(SmmuHwDriver, EnableFaultsReportsTranslationEnableFailure) {
 
 TEST_F(SmmuHwDriver, DrainEventsDeliversRecordsInOrderAndReleasesSlots) {
   for (std::size_t i = 0; i < event_memory.size(); ++i) {
-    event_memory[i] =
-        nova::smmu::make_event_header(nova::smmu::EventType::kTranslationFault, static_cast<std::uint32_t>(i) + 1U);
+    event_memory[i] = event_record(nova::smmu::EventType::kTranslationFault, static_cast<std::uint32_t>(i) + 1U);
   }
   FakeSmmu::storage[regs::kEvtqProd] = 3;
 

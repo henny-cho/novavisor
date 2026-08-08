@@ -66,17 +66,13 @@ enum class ExceptionClass : std::uint8_t {
   }
 }
 
-// Field positions and masks (see the layout table above). The three
-// that describe where EC, IL and ISS sit come from the plain header
-// alongside this one, so the workbench bridge — which decodes a
-// syndrome out of guest RAM and cannot read C++ — shares the definition
-// rather than repeating it.
-inline constexpr std::uint64_t kEcShift    = NOVA_ESR_EC_SHIFT;
-inline constexpr std::uint64_t kEcMask     = NOVA_ESR_EC_MASK;
-inline constexpr std::uint64_t kIlShift    = NOVA_ESR_IL_SHIFT;
-inline constexpr std::uint64_t kIssMask    = NOVA_ESR_ISS_MASK;
-inline constexpr std::uint64_t kHvcImmMask = 0xFFFFU;
-inline constexpr std::uint64_t kWfxTiWfe   = 1ULL << 0U; // WFx ISS.TI bit 0: 0 = WFI, 1 = WFE
+// Field positions and masks (see the layout table above). The pair that
+// says where EC sits comes from the plain header alongside this one, so
+// the workbench bridge — which decodes a syndrome out of guest RAM and
+// cannot read C++ — shares the definition rather than repeating it.
+inline constexpr std::uint64_t kEcShift  = NOVA_ESR_EC_SHIFT;
+inline constexpr std::uint64_t kEcMask   = NOVA_ESR_EC_MASK;
+inline constexpr std::uint64_t kWfxTiWfe = 1ULL << 0U; // WFx ISS.TI bit 0: 0 = WFI, 1 = WFE
 
 // The zero-register encoding shared by every trapped-transfer-register
 // field (data-abort SRT and MSR/MRS Rt alike): reads discard, writes
@@ -86,23 +82,6 @@ inline constexpr std::uint32_t kSrtZeroReg = 31U;
 // Extract the Exception Class from ESR_EL2.
 [[nodiscard]] inline auto get_ec(std::uint64_t esr) noexcept -> ExceptionClass {
   return static_cast<ExceptionClass>((esr >> kEcShift) & kEcMask);
-}
-
-// Extract the Instruction-Specific Syndrome (bits 24:0).
-[[nodiscard]] inline auto get_iss(std::uint64_t esr) noexcept -> std::uint32_t {
-  return static_cast<std::uint32_t>(esr & kIssMask);
-}
-
-// Extract the HVC/SVC immediate operand (ISS bits 15:0).
-// Valid only when EC == HVC_AA64 or SVC_AA64.
-[[nodiscard]] inline auto get_hvc_imm(std::uint64_t esr) noexcept -> std::uint16_t {
-  return static_cast<std::uint16_t>(esr & kHvcImmMask);
-}
-
-// Extract the Instruction Length bit (ISS bit 25).
-// Returns true for a 32-bit instruction, false for a 16-bit (Thumb) instruction.
-[[nodiscard]] inline auto is_32bit_instruction(std::uint64_t esr) noexcept -> bool {
-  return ((esr >> kIlShift) & 1U) != 0U;
 }
 
 } // namespace nova::esr

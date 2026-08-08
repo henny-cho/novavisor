@@ -123,29 +123,6 @@ struct PolicyCheck {
   [[nodiscard]] constexpr auto ok() const noexcept -> bool { return error == PolicyError::kNone; }
 };
 
-enum class AccessResult : std::uint8_t {
-  kAllow,
-  kUnassignedStream,
-  kOutsideGuestWindow,
-  kInvalidPolicy,
-};
-
-enum class FaultAction : std::uint8_t {
-  kNone,
-  kBlockAndAudit,
-  kQuarantineAndResetVm,
-  kHaltHypervisor,
-};
-
-struct AccessDecision {
-  AccessResult  result = AccessResult::kInvalidPolicy;
-  FaultAction   action = FaultAction::kHaltHypervisor;
-  std::size_t   vm     = kNoVm;
-  std::uint64_t pa     = 0;
-
-  [[nodiscard]] constexpr auto allowed() const noexcept -> bool { return result == AccessResult::kAllow; }
-};
-
 [[nodiscard]] constexpr auto owner_of(std::span<const Assignment> assignments, DeviceId device_id) noexcept
     -> std::size_t {
   std::size_t owner = kNoVm;
@@ -271,41 +248,6 @@ struct AccessDecision {
     -> PolicyCheck {
   const PolicyCheck ownership = validate_policy(assignments, guests, limits);
   return ownership.ok() ? validate_device_policy(assignments, devices, limits.sid_bits) : ownership;
-}
-
-[[nodiscard]] constexpr auto decide_access(std::span<const Assignment>      assignments,
-                                           std::span<const GuestDescriptor> guests, std::uint32_t stream_id,
-                                           std::uint64_t iova, std::uint64_t size) noexcept -> AccessDecision {
-  const Assignment* assignment = nullptr;
-  for (const Assignment& candidate : assignments) {
-    if (candidate.stream_id == stream_id) {
-      if (assignment != nullptr) {
-        return {};
-      }
-      assignment = &candidate;
-    }
-  }
-  if (assignment == nullptr) {
-    return {.result = AccessResult::kUnassignedStream, .action = FaultAction::kBlockAndAudit};
-  }
-  if (assignment->vm >= guests.size()) {
-    return {};
-  }
-
-  const GuestDescriptor& guest = guests[assignment->vm];
-  if (!guest_range_valid(guest.ipa_base, guest.ipa_size) || !guest_range_valid(guest.load_pa, guest.ipa_size)) {
-    return {};
-  }
-  if (size == 0 || !range_contains(guest.ipa_base, guest.ipa_size, iova, size)) {
-    return {.result = AccessResult::kOutsideGuestWindow,
-            .action = FaultAction::kQuarantineAndResetVm,
-            .vm     = assignment->vm};
-  }
-
-  return {.result = AccessResult::kAllow,
-          .action = FaultAction::kNone,
-          .vm     = assignment->vm,
-          .pa     = guest.load_pa + (iova - guest.ipa_base)};
 }
 
 } // namespace nova::dma

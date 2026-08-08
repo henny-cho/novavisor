@@ -1,12 +1,16 @@
 #pragma once
 
 #include "hal/board/active/board.hpp"
-#include "nova/mem_model.hpp"
 
 #include <cstddef>
 #include <cstdint>
 
 namespace nova::memory {
+
+struct RestoreStats {
+  std::size_t examined_bytes = 0;
+  std::size_t written_bytes  = 0;
+};
 
 // Reserved-region facts of the active board: the guest load window and
 // the EL2-private IVC page / pristine-snapshot area behind it.

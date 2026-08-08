@@ -283,12 +283,22 @@ void log_fault(const DecodedEvent& event) noexcept {
   fmt::HexBuf type_text{};
   fmt::DecBuf sid_text{};
   fmt::HexBuf address_text{};
+  fmt::HexBuf ipa_text{};
   const auto  type = fmt::to_hex64(static_cast<std::uint8_t>(event.type), type_text);
   const auto  sid  = fmt::to_dec64(event.stream_id, sid_text);
 
+  // Report the address the record carries, whichever one it is: the
+  // fault is only actionable if it says where.
   if (event.has_input_address) {
     const auto address = fmt::to_hex64(event.input_address, address_text);
-    console::write_parts(std::array{"[smmu] fault type=0x"sv, type, " sid="sv, sid, " iova=0x"sv, address, "\n"sv});
+    const auto ipa     = event.has_ipa ? fmt::to_hex64(event.ipa, ipa_text) : ""sv;
+    console::write_parts(std::array{"[smmu] fault type=0x"sv, type, " sid="sv, sid, " iova=0x"sv, address,
+                                    event.has_ipa ? " ipa=0x"sv : ""sv, ipa, "\n"sv});
+    return;
+  }
+  if (event.has_fetch_address) {
+    const auto address = fmt::to_hex64(event.fetch_address, address_text);
+    console::write_parts(std::array{"[smmu] fault type=0x"sv, type, " sid="sv, sid, " fetch=0x"sv, address, "\n"sv});
     return;
   }
   if (!event.known) {
