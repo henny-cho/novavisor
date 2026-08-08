@@ -10,6 +10,7 @@
 #include "nova/abi/guest.hpp"
 #include "nova/sync.hpp"
 #include "smmu/smmu.hpp"
+#include "trace/trace.hpp"
 
 #include <array>
 #include <cstddef>
@@ -485,9 +486,15 @@ auto start_dma(dma::DeviceId device_id, std::size_t vm, std::uint64_t generation
                std::uint64_t destination, std::uint64_t count, bool to_ram) noexcept -> bool {
   sync::Guard  guard{g_lock};
   const Entry* entry = g_registry.find(device_id);
-  return g_registry_valid && entry != nullptr && entry->owner_vm == vm && entry->state == State::kActive &&
-         generation != 0U && entry->generation == generation &&
-         backend_start(device_id, source, destination, count, to_ram);
+  const bool   ok = g_registry_valid && entry != nullptr && entry->owner_vm == vm && entry->state == State::kActive &&
+                  generation != 0U && entry->generation == generation &&
+                  backend_start(device_id, source, destination, count, to_ram);
+  // A transaction leaving the device for the SMMU. The address is the
+  // one the device is given, which is the IPA the translation is about.
+  if (ok) {
+    trace_emit(NOVA_TRACE_EV_DMA_START, static_cast<std::uint32_t>(vm), to_ram ? source : destination, count);
+  }
+  return ok;
 }
 
 } // namespace nova::dma_device

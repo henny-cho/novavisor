@@ -122,12 +122,24 @@ class CapabilityGradeTest(unittest.TestCase):
         self.assertIn(paths.EDGE_POST, witnessed)
         self.assertIn("phys", witnessed)
 
-    def test_a_fault_only_moment_upgrades_nothing(self):
-        """smmu.fault is catalogued and has no edge, so no amount of
-        capability may promote the path a working translation takes."""
+    def test_a_fault_names_no_path(self):
+        """smmu.fault is catalogued and deliberately has no edge: what a
+        failed translation proves is that one failed, never anything
+        about the path a working one takes."""
+        self.assertEqual(events.BY_ID["smmu.fault"].edge, "")
+
+    def test_the_device_lanes_are_watched_from_the_normal_path(self):
+        """Both were grey because nothing pointed at them. What points
+        now is a transaction leaving the device and a stream's route to
+        memory being established — moments that happen when nothing is
+        wrong, which is what an edge's grade is a claim about."""
+        by_edge = {}
+        for event in events.EVENTS:
+            by_edge.setdefault(event.edge, set()).add(event.id)
+        self.assertEqual(by_edge[paths.EDGE_DMA], {"dma.start"})
+        self.assertEqual(by_edge[paths.EDGE_WALK], {"smmu.attach"})
         witnessed = events.observable(None, tracing=True)
-        self.assertNotIn("walk", witnessed)
-        self.assertNotIn("dma", witnessed)
+        self.assertLessEqual({paths.EDGE_DMA, paths.EDGE_WALK}, witnessed)
 
     def test_losing_the_capability_demotes_the_path(self):
         watched = hardware.board_map(direct=events.observable(None, tracing=True))

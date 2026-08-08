@@ -144,6 +144,8 @@
 #define NOVA_TRACE_EV_PSCI         12
 #define NOVA_TRACE_EV_UART_LINE    13
 #define NOVA_TRACE_EV_SMMU_FAULT   14
+#define NOVA_TRACE_EV_SMMU_ATTACH  15
+#define NOVA_TRACE_EV_DMA_START    16
 
 /* Codes the host writes into the same stream, far above the firmware's
  * numbering and read as a separate family, so one can never be mistaken

@@ -138,6 +138,19 @@ EVENTS: tuple[Event, ...] = (
     Event("smmu.fault", "nova::smmu::(anonymous)::dispatch_faults", "", ("stream", "vm"),
           "SMMU 변환 폴트", code=_CODES["NOVA_TRACE_EV_SMMU_FAULT"],
           fields=("stream", "vm", "generation")),
+    # The two hops the board drew with nothing watching them. A device's
+    # transaction leaving for the SMMU is a moment the firmware has; the
+    # walk that follows it is the SMMU's own, in hardware, with no
+    # instruction to break on — so what is witnessed there is the route
+    # being established, which is what the edge is about.
+    Event("dma.start", "nova::dma_device::start_dma", paths.EDGE_DMA,
+          ("", "vm", "generation", "source"),
+          "장치가 전송을 시작", code=_CODES["NOVA_TRACE_EV_DMA_START"],
+          fields=("vm", "address", "bytes")),
+    Event("smmu.attach", "nova::smmu::(anonymous)::install_stream", paths.EDGE_WALK,
+          ("stream",),
+          "스트림을 VM의 Stage 2 테이블에 결속", code=_CODES["NOVA_TRACE_EV_SMMU_ATTACH"],
+          fields=("stream", "root", "vmid")),
     # Not a moment in the firmware but a statement about the stream:
     # written by the reader where the records it could not recover
     # would have been. No symbol, so it is never offered as a stop
