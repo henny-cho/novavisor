@@ -99,19 +99,20 @@ class Envelopes:
     def make(
         self,
         topic: Topic | str,
-        kind: Kind,
+        kind: Kind | str,
         data: dict,
         *,
         src: Src | str = Src.BRIDGE,
         ts: int | None = None,
     ) -> dict:
-        # S-layer topics come from the observation manifest as plain
-        # strings; the fixed enum covers only the structural topics. A
-        # `src` may arrive as a string for a different reason: a
-        # recording carries whatever the run that made it wrote, and
-        # coercing an unfamiliar one into this enum would either kill
-        # the replay or relabel where a value came from — and this
-        # layer's entire job is being right about that.
+        # Every field here takes a string as readily as its enum, and
+        # for two different reasons. S-layer topics come from the
+        # observation manifest, where the fixed enum covers only the
+        # structural ones. `kind` and `src` come, in a replay, from
+        # whatever the run that made the recording wrote — and coercing
+        # an unfamiliar one into this build's enum would raise, killing
+        # the connection over a field the reader never looked at. What a
+        # recording says about itself travels; nothing here rewrites it.
         #
         # `ts` is given only when the moment being published is not now:
         # a replayed frame happened when the recording says it did, and
@@ -124,7 +125,7 @@ class Envelopes:
             "v": PROTOCOL_VERSION,
             "seq": self._seq,
             "topic": topic.value if isinstance(topic, Topic) else topic,
-            "kind": kind.value,
+            "kind": kind.value if isinstance(kind, Kind) else kind,
             "ts": self._clock.now() if ts is None else ts,
             "src": src.value if isinstance(src, Src) else src,
             "data": data,

@@ -173,7 +173,15 @@ class Bridge:
         # The world the recording was made in — its catalogue, its board
         # map, its request limits — rather than this process's guesses
         # about a machine that is not here.
-        for frame in rec.frames:
+        #
+        # The last description, not the first. A run republishes its
+        # world when what it can witness changes: the trace rings are
+        # placed well after the topology first goes out, and an edge
+        # that was grey because nothing could watch it becomes direct
+        # the moment something can. Taking the first threw every such
+        # upgrade away and drew the board as it looked before the run
+        # proved anything.
+        for frame in reversed(rec.frames):
             if frame.get("topic") == Topic.TOPO.value:
                 # The world, without the session state the recorded run
                 # merged into it on the way out. Phase, pause and run
@@ -261,12 +269,12 @@ class Bridge:
         if self._recorder is not None:
             # After the session, so the last frames of a shutdown are in
             # the file the run is judged by.
-            meta = self._recorder.close()
-            sizes = self._recorder.sizes()
-            total = sum(sizes.values())
+            self._recorder.close()
+            written = self._recorder.written
+            total = sum(self._recorder.sizes().values())
             print(
-                f"[workbench] recorded {meta['frames']} frames and {meta['records']} records "
-                f"to {self._recorder.directory} ({total / 1e6:.1f} MB)"
+                f"[workbench] recorded {len(written)} run(s) to {self._recorder.root} "
+                f"({total / 1e6:.1f} MB): {', '.join(run.name for run in written)}"
             )
 
     def _live_state(self) -> dict:
@@ -292,20 +300,26 @@ class Bridge:
         moment. The seq belongs to the ordering of this socket; the
         timestamp belongs to the run, and a replay wearing this
         process's clock would put yesterday on screen as if it were now.
+
+        Stamped rather than published, because this payload is being
+        handed to one socket right here. Published, a recording's frames
+        went through the broadcast window on every connect — which shed
+        thousands, re-sent what it kept, and reported the shedding as the
+        bridge falling behind.
+
+        Kind and src travel verbatim for the same reason the timestamp
+        does: they are what the recorded run wrote, and a value this
+        build does not recognise must not be rewritten or refused.
         """
         frames = self.store.connect_frames(self._live_state())
         if self._replay is None:
             return frames
         return frames + [
-            self.store.publish(
+            self.store.stamp(
                 frame.get("topic", ""),
-                Kind(frame.get("kind", Kind.EVENT.value)),
+                frame.get("kind", Kind.EVENT.value),
                 frame.get("data") or {},
-                # Verbatim. Where a value came from is what this layer
-                # is for being right about, so an unfamiliar `src` from
-                # an older recording travels rather than being coerced.
                 src=frame.get("src", Src.BRIDGE.value),
-                replay=False,
                 ts=frame.get("ts"),
             )
             for frame in self._replay_frames
@@ -755,9 +769,10 @@ class Bridge:
             # A range of counter values is not a duration without this,
             # and a replay needs it before it can answer the first
             # window — so it goes in the meta, not in a frame.
-            self._recorder.note(
-                freq_hz=self._tracer.geometry.freq_hz, run_id=session.run_id
-            )
+            # The run identity is the recorder's own business — it opens
+            # a new recording when the machine restarts — so only the
+            # clock is told here.
+            self._recorder.note(freq_hz=self._tracer.geometry.freq_hz)
         # Constant for the run, so it rides the transition rather than
         # every summary frame. The geometry travels with it: the depth
         # is what the budget below is measured against, and a reader
@@ -1056,6 +1071,11 @@ class Bridge:
                 # made with nobody watching is the ordinary case, and a
                 # writer that only ran while a browser was attached
                 # would record whoever happened to be looking.
+                #
+                # And here rather than at the tracer's attach, because a
+                # restart has to be noticed before the new machine's
+                # first frame is written into the old machine's file.
+                self._recorder.for_run(self.session.run_id)
                 self._recorder.flush()
             if not self._connections:
                 # Leave frames in the window: the first joiner gets them
@@ -1097,14 +1117,19 @@ async def _serve_forever(
     surfaces = make_surfaces()
     recorder = None
     if record is not None:
-        recorder = recording.Recorder(
-            record,
-            {
-                "demo": target.demo if target else None,
-                "variant": target.variant if target else None,
-                "board": hardware.DEFAULT_BOARD,
-            },
-        )
+        try:
+            recorder = recording.Recorder(
+                record,
+                {
+                    "demo": target.demo if target else None,
+                    "variant": target.variant if target else None,
+                    "board": hardware.DEFAULT_BOARD,
+                },
+            )
+        except OSError as error:
+            # Including a directory that already holds one: somebody's
+            # evidence is not something to open with "w".
+            raise SystemExit(f"[workbench] {error}") from error
         print(f"[workbench] recording to {recorder.directory}")
     bridge = Bridge(
         ui_root=ui_root, surfaces=surfaces, trace_history=trace_history, recorder=recorder
@@ -1148,10 +1173,17 @@ async def _replay_forever(*, host: str, port: int, ui_root: Path, directory: Pat
         bridge.load_replay(loaded)
         await bridge.open(host, port)
         meta = loaded.meta
+        # Whether the run ended is a fact about the evidence, so it is
+        # said where the evidence is described: a truncated recording
+        # answers every question a whole one does, right up to the point
+        # it stops, and a reader who does not know that reads the end of
+        # the file as the end of the run.
+        ending = "" if meta.get("complete") else " — INCOMPLETE, the run was killed"
         print(
-            f"[workbench] replaying {directory} — {meta.get('demo') or 'unknown demo'}, "
+            f"[workbench] replaying {loaded.directory} — "
+            f"{meta.get('demo') or 'unknown demo'}, "
             f"{len(loaded.frames)} frames, {len(loaded.records)} records, "
-            f"recorded {meta.get('started', '?')}"
+            f"recorded {meta.get('started', '?')}{ending}"
         )
         print(f"[workbench] serving http://{host}:{bridge.port}/ (WebSocket on {WS_PATH})")
         await asyncio.Future()

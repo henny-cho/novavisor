@@ -95,50 +95,52 @@ class TraceRegionTest(unittest.TestCase):
                 self.assertGreaterEqual(start, after_ivc)
                 self.assertLessEqual(end, values["NOVA_BOARD_PRISTINE_PA"])
 
-    def test_every_board_reserves_enough_for_a_ring_worth_having(self):
-        """Capacity is not declared anywhere: it is the region divided
-        by the cores that write to it. So the reservation is the whole
-        sizing decision, and the way to get it wrong is to reserve too
-        little.
+    def test_every_board_fills_no_more_rings_than_the_writer_has(self):
+        """A core past the last ring would index the writer's inline
+        array out of bounds on every emit.
 
-        The per-board form of this is the static_assert in the trace
-        component, and it only fires for the board being built. Held
-        here for all three from one host lane, which is where a port
-        that never gets built on this machine is caught.
+        Whether a board reserves *enough* is deliberately not checked
+        here. That rule is peak fill times declared horizon, floored to
+        a power of two because indexing is a mask, and stating it in
+        Python meant a second implementation of the derivation — which
+        arrived weaker than the real one: it skipped the flooring, so it
+        passed reservations the build refuses. A fast check that accepts
+        what the slow check rejects is worse than no fast check, because
+        somebody trusts it. The rule lives in the static_assert in the
+        trace component, and CI builds every board.
         """
         from novakit.image import abi
 
-        limits = abi.read_defines(
-            abi.TRACE_RING,
-            [
-                "NOVA_TRACE_HEADER_SIZE",
-                "NOVA_TRACE_RECORDS_OFF",
-                "NOVA_TRACE_REC_SIZE",
-                "NOVA_TRACE_MIN_CAPACITY",
-                "NOVA_TRACE_MAX_RINGS",
-            ],
-        )
-        floor_stride = (
-            limits["NOVA_TRACE_RECORDS_OFF"]
-            + limits["NOVA_TRACE_REC_SIZE"] * limits["NOVA_TRACE_MIN_CAPACITY"]
-        )
+        rings = abi.read_define(abi.TRACE_RING, "NOVA_TRACE_MAX_RINGS")
         for board in self.BOARDS:
             with self.subTest(board=board):
-                values = self.layout(board)
-                cpus = values["NOVA_BOARD_SMP_CPUS"]
-                # A core past the last ring would index the writer's
-                # inline array out of bounds on every emit.
-                self.assertLessEqual(cpus, limits["NOVA_TRACE_MAX_RINGS"])
-                needed = limits["NOVA_TRACE_HEADER_SIZE"] + floor_stride * cpus
-                self.assertLessEqual(needed, values["NOVA_BOARD_TRACE_SIZE"])
+                self.assertLessEqual(self.layout(board)["NOVA_BOARD_SMP_CPUS"], rings)
 
-    def test_the_sizes_indexing_relies_on_are_powers_of_two(self):
-        """Indexing is a mask, and no record may straddle a cache line.
-        The floor is one too, so it names a depth a division can land
-        on exactly rather than one it can only overshoot."""
+    def test_a_record_is_a_power_of_two(self):
+        """Indexing is a mask, and no record may straddle a cache line."""
         from novakit.image import abi
 
-        for name in ("NOVA_TRACE_REC_SIZE", "NOVA_TRACE_MIN_CAPACITY"):
-            with self.subTest(define=name):
-                value = abi.read_define(abi.TRACE_RING, name)
-                self.assertEqual(value & (value - 1), 0)
+        size = abi.read_define(abi.TRACE_RING, "NOVA_TRACE_REC_SIZE")
+        self.assertEqual(size & (size - 1), 0)
+
+    def test_the_floor_is_the_rule_the_design_states(self):
+        """It was 4096 — a twentieth of the declared horizon — so a
+        board reserving 640 KiB built clean while violating the sizing
+        rule. Derived from the two terms it enforces, so changing the
+        horizon re-checks every board instead of leaving a number
+        behind."""
+        from novakit.image import abi
+
+        terms = abi.read_defines(
+            abi.TRACE_RING, ["NOVA_TRACE_PEAK_PER_SEC", "NOVA_TRACE_HORIZON_MS"]
+        )
+        self.assertGreater(terms["NOVA_TRACE_PEAK_PER_SEC"], 0)
+        self.assertGreater(terms["NOVA_TRACE_HORIZON_MS"], 0)
+        # Spelled as those terms and not as their product: a literal
+        # here would be the drift this replaces.
+        source = abi.TRACE_RING.read_text()
+        self.assertRegex(
+            source,
+            r"#define NOVA_TRACE_MIN_CAPACITY "
+            r"\(NOVA_TRACE_PEAK_PER_SEC \* NOVA_TRACE_HORIZON_MS / 1000\)",
+        )

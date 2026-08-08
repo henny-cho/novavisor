@@ -170,7 +170,13 @@ export function createPanels({ tabs, host }) {
      that hands back a bare value: one existed, every renderer used it,
      and the mask arrived at the panel with nowhere to be applied. */
   const at = (topic) =>
-    unread.has(topic) ? new Cursor(undefined, undefined) : new Cursor(latest.get(topic)?.value, moved.get(topic));
+    unread.has(topic)
+      ? /* The run had not read this yet at the point the reader is
+           looking at. `latest` still holds the later value, so moving
+           the cursor forward costs nothing — but that value must not be
+           what the panel draws here. */
+        new Cursor(undefined, undefined)
+      : new Cursor(latest.get(topic)?.value, moved.get(topic));
 
   const PANELS = [
     {
@@ -448,7 +454,13 @@ export function createPanels({ tabs, host }) {
         body.append(
           table(
             ["reg", ...cpus.map((_, index) => `cpu${index}`)],
-            registers.map((name) => [name, ...cpus.map((cpu) => cpu.get(name.shown))]),
+            /* The register's name is a label, not a reading: it lights
+               up only if the *list* changed, which is not a value the
+               machine moved. The readings are the columns beside it. */
+            registers.map((name) => [
+              plain(name.shown),
+              ...cpus.map((cpu) => cpu.get(name.shown)),
+            ]),
           ),
         );
       },

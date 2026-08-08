@@ -39,6 +39,12 @@ OPTIONAL_BOARD_DEFINES = ("NOVA_BOARD_PCIE_ECAM_BASE",)
 KIND_EL2 = "el2"
 KIND_GUEST = "guest"
 KIND_SHARED = "shared"
+# Its own kind, not `shared`: the IVC page is shared with a guest and
+# this is not — the ABI header is explicit that the trace region is
+# never in a guest's Stage 2. Drawing them alike on the one view whose
+# job is "what is at this address, and who can see it" would say the
+# opposite of what the isolation actually is.
+KIND_TRACE = "trace"
 KIND_PRISTINE = "pristine"
 KIND_HOLE = "hole"
 KIND_TRAP = "trap"
@@ -120,6 +126,14 @@ def _physical_regions(values: dict) -> list[dict]:
                 KIND_GUEST, "guest windows"),
         _region(values["NOVA_BOARD_IVC_SHM_PA"], values["NOVA_IVC_SHM_SIZE"],
                 KIND_SHARED, "IVC page"),
+        # Drawn because it is now big enough to matter. At 640 KiB it was
+        # invisible at this scale and its absence cost nothing; sized by
+        # the stall it has to survive it is 16 to 32 MiB, and a map that
+        # left that as "unused" was lying about the largest reservation
+        # on the board — on the one view a reader consults to find out
+        # what is at an address.
+        _region(values["NOVA_BOARD_TRACE_PA"], values["NOVA_BOARD_TRACE_SIZE"],
+                KIND_TRACE, "트레이스 링"),
         _region(values["NOVA_BOARD_PRISTINE_PA"], values["NOVA_BOARD_PRISTINE_SIZE"],
                 KIND_PRISTINE, "pristine copies"),
     ]
