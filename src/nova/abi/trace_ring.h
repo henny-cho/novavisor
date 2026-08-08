@@ -94,9 +94,7 @@
 #define NOVA_TRACE_B_OFF    0x10 /* u64 */
 #define NOVA_TRACE_C_OFF    0x18 /* u64 */
 
-/* The smallest ring worth placing, in records.
- *
- * Capacity is deliberately not a constant. It falls out of the region a
+/* Capacity is deliberately not a constant. It falls out of the region a
  * board reserves divided by the rings that board fills, and the writer
  * publishes the result in the header the reader already parses — so the
  * whole sizing decision is one number per board and there is no second
@@ -104,10 +102,25 @@
  * depth of a four-core one out of the same reservation, because the
  * divisor is the real ring count rather than the ceiling.
  *
- * What a floor buys is that a board reserving too little fails to build
- * rather than quietly handing the T layer a ring that laps inside one
- * drain interval. */
-#define NOVA_TRACE_MIN_CAPACITY 4096
+ * The two terms that decide whether a reservation is big enough: the
+ * peak fill of one ring, and the host stall this design declares it
+ * will survive. Both are measured and published every run by the
+ * bridge's budget, so the next machine reports its own rather than
+ * inheriting these — but a board is sized before it has ever run, and
+ * these are the figures it is sized against. 133k/s/ring was measured
+ * on a Linux guest boot. */
+#define NOVA_TRACE_PEAK_PER_SEC 133000
+#define NOVA_TRACE_HORIZON_MS   1000
+
+/* The smallest ring the rule above permits, in records.
+ *
+ * Derived from the terms rather than typed, because a floor that does
+ * not say what it enforces drifts away from it. This one was 4096 — a
+ * twentieth of the declared horizon — so a board reserving 640 KiB
+ * would have built clean while violating the rule the design states.
+ * The floor is what makes reserving too little a build failure instead
+ * of a ring that laps inside one drain interval. */
+#define NOVA_TRACE_MIN_CAPACITY (NOVA_TRACE_PEAK_PER_SEC * NOVA_TRACE_HORIZON_MS / 1000)
 
 /* The ABI ceiling on the header's `rings` field, and the number of
  * rings the writer keeps inline storage for. A reader sizes nothing

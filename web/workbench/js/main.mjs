@@ -688,7 +688,11 @@ function onFrame(frame) {
     case "cursor":
       consoleView.cutAt(data.wire ?? null);
       events.cutAt(data.wire ?? null);
+      /* Both, or the two views beside each other disagree about the
+         same moment: the panel saying a topic was not read yet and the
+         board still painting the value it later took. */
       panels.setUnread(data.unread);
+      boardView.setUnread(data.unread);
       break;
     /* One matched expectation of a --verify run; index is 1-based. */
     case "verify":

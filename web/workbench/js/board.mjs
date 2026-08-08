@@ -106,6 +106,7 @@ const KIND_TEXT = {
   el2: "EL2 이미지",
   guest: "게스트 창",
   shared: "공유 페이지",
+  trace: "트레이스 링",
   pristine: "pristine 사본",
   hole: "미사용",
   trap: "미매핑 → 트랩",
@@ -1577,6 +1578,21 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
       build();
       paintAll();
       fitHeight();
+    },
+    /* Topics the run had not read yet at the point the reader is looking
+       at. Removed rather than blanked: an absent topic is the state this
+       board starts every session in and already paints correctly, so
+       nothing new has to handle it — and leaving the later value would
+       put a reading on screen at a moment the machine had not produced
+       it, which the panels beside it are careful not to do.
+
+       The seek republishes every topic it *does* have a reading for, so
+       moving the cursor forward brings them straight back. */
+    setUnread(topics) {
+      for (const topic of topics || []) {
+        if (!latest.delete(topic)) continue;
+        for (const section of TOPICS[topic] || []) dirty.add(section);
+      }
     },
     clearAll() {
       latest.clear();

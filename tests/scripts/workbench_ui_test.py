@@ -316,6 +316,40 @@ class BoardAnchorTest(unittest.TestCase):
             with self.subTest(anchor=name):
                 self.assertIn(name, registered)
 
+    def test_every_region_kind_the_bridge_publishes_has_a_caption(self):
+        """Same shape as the edge captions below: one vocabulary, two
+        consumers. A kind added to the bridge and not here draws its
+        internal id on the address strip, which is the UI leaking a wire
+        format at the exact place a reader goes to read an address."""
+        from novakit.services.workbench import hardware
+
+        source = (UI / "js" / "board.mjs").read_text()
+        table = re.search(r"const KIND_TEXT = \{(.*?)\n\};", source, re.S)
+        self.assertIsNotNone(table, "region caption table not found")
+        captioned = set(re.findall(r"^  (\w+):", table.group(1), re.M))
+        published = {
+            value
+            for name, value in vars(hardware).items()
+            if name.startswith("KIND_") and isinstance(value, str)
+        }
+        self.assertTrue(published)
+        self.assertEqual(published - captioned, set())
+
+    def test_the_physical_map_draws_the_trace_reservation(self):
+        """It did not, and at 640 KiB that cost nothing. Sized by the
+        stall it has to survive, the region is 16 to 32 MiB — and a map
+        showing that as "unused" is wrong about the largest reservation
+        on the board."""
+        from novakit.services.workbench import hardware
+
+        regions = hardware.board_map()["regions"]["pa"]
+        traced = [region for region in regions if region["kind"] == hardware.KIND_TRACE]
+        self.assertEqual(len(traced), 1)
+        self.assertGreaterEqual(traced[0]["size"], 1 << 20)
+        # And not as a shared page: this one is never in a guest's
+        # Stage 2, which is the whole distinction the map has to keep.
+        self.assertNotEqual(hardware.KIND_TRACE, hardware.KIND_SHARED)
+
     def test_every_path_the_bridge_publishes_has_a_caption(self):
         # An uncaptioned edge still draws; its tooltip just reads as an
         # internal id, which is the UI leaking its wire format.
