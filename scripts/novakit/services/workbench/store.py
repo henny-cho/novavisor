@@ -156,9 +156,16 @@ class StateStore:
         paused, run identity) rides so a late joiner never has to
         reconstruct the world from evictable events. History is captured
         first, so the replay carries the fresh topo exactly once.
+
+        Out of the backlog, though. It describes the session as it stood
+        for the one client that caused it, and every connect after this
+        one gets its own — so keeping it only lets a stale phase and run
+        identity arrive *after* the fresh copy that replaced it, which
+        is the same order this store already fixed once at startup. Each
+        reconnect also cost the backlog a real frame of history.
         """
         history = list(self._backlog)
         topo = self.publish(
-            Topic.TOPO, Kind.SNAPSHOT, {**self._topology, **(live_state or {})}
+            Topic.TOPO, Kind.SNAPSHOT, {**self._topology, **(live_state or {})}, replay=False
         )
         return [topo, *history]

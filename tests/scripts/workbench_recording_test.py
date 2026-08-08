@@ -431,6 +431,44 @@ class IdentityTest(unittest.TestCase):
         self.assertEqual(len(odd), 1)
         self.assertEqual((odd[0]["kind"], odd[0]["src"]), ("gossip", "martian"))
 
+    def test_a_replay_shows_the_world_the_run_ended_up_describing(self):
+        """A run republishes its world when what it can witness changes:
+        EL2 places the trace rings well after the topology first goes
+        out, and an edge that was grey because nothing could watch it
+        becomes direct the moment something can. Taking the first
+        description threw every such upgrade away and drew the board as
+        it looked before the run had proved anything."""
+        from novakit.services.workbench.server import Bridge
+
+        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        for seq, grade in enumerate(("none", "direct"), start=1):
+            recorder.frame({"seq": seq, "topic": "topo", "kind": "snapshot", "ts": seq,
+                            "data": {"board": {"edges": [{"id": "post", "grade": grade}]}}})
+        recorder.close()
+
+        bridge = Bridge(ui_root=self.ui)
+        bridge.load_replay(recording.load(self.directory))
+        self.assertEqual(
+            bridge.store.topology["board"]["edges"], [{"id": "post", "grade": "direct"}]
+        )
+
+    def test_a_connect_topology_is_not_replayed_to_the_next_joiner(self):
+        """It describes the session as it stood for the one client that
+        caused it, and every connect after gets its own. Kept, a stale
+        phase and run identity arrive *after* the fresh copy that
+        replaced them — and each reconnect costs the backlog a real
+        frame of history."""
+        from novakit.services.workbench.server import Bridge
+
+        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        recorder.close()
+        bridge = Bridge(ui_root=self.ui)
+        bridge.load_replay(recording.load(self.directory))
+
+        for _ in range(3):
+            payload = bridge._connect_payload()
+        self.assertEqual([frame["topic"] for frame in payload].count("topo"), 1)
+
     def test_a_replay_says_it_is_one(self):
         from novakit.services.workbench.server import Bridge
         from novakit.services.workbench.session import Phase

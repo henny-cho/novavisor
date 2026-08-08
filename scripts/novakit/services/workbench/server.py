@@ -173,7 +173,15 @@ class Bridge:
         # The world the recording was made in — its catalogue, its board
         # map, its request limits — rather than this process's guesses
         # about a machine that is not here.
-        for frame in rec.frames:
+        #
+        # The last description, not the first. A run republishes its
+        # world when what it can witness changes: the trace rings are
+        # placed well after the topology first goes out, and an edge
+        # that was grey because nothing could watch it becomes direct
+        # the moment something can. Taking the first threw every such
+        # upgrade away and drew the board as it looked before the run
+        # proved anything.
+        for frame in reversed(rec.frames):
             if frame.get("topic") == Topic.TOPO.value:
                 # The world, without the session state the recorded run
                 # merged into it on the way out. Phase, pause and run
