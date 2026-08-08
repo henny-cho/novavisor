@@ -445,9 +445,21 @@ function budgetText(budget) {
     budget.peak_rate >= 1000
       ? `${Math.round(budget.peak_rate / 1000)}k/s`
       : `${budget.peak_rate}/s`;
-  return `링 ${(budget.horizon_ms / 1000).toFixed(1)}초 @ ${rate} · 최악 정체 ${Math.round(
-    budget.worst_gap_ms,
-  )}ms`;
+  return `링 ${(budget.horizon_ms / 1000).toFixed(1)}초 @ ${rate} · ${stallText(budget)}`;
+}
+
+/* The worst stall alone cannot say whether it happened once or happens
+   all the time, so it carries the looks that landed in its own band and
+   the total the bridge took. Which band that is comes from the bridge's
+   ordering rather than being recomputed here — the arithmetic that puts
+   an interval in a band belongs in one place. */
+function stallText(budget) {
+  const bands = budget.gaps || {};
+  const edges = Object.keys(bands).map(Number);
+  const worst = `최악 정체 ${Math.round(budget.worst_gap_ms)}ms`;
+  if (!edges.length) return worst;
+  const looks = edges.reduce((total, edge) => total + bands[edge], 0);
+  return `${worst} (${bands[Math.max(...edges)]}/${looks})`;
 }
 
 /* The `early` count is a different fact from a drain loss: those events
