@@ -5,6 +5,10 @@ topic its decoded value feeds, and (optionally) which struct fields
 travel. CI resolves every entry against the built debug ELF, so a
 renamed symbol or a reshaped struct fails the pipeline instead of
 silently blanking a panel.
+
+The page table arrays below are read once per run rather than polled and
+so feed no topic, but they are firmware globals named by hand like the
+rest — declared here, they are resolved and CI-checked by the same code.
 """
 
 from __future__ import annotations
@@ -101,6 +105,26 @@ OBSERVATIONS: tuple[Obs, ...] = (
     # IVC panel — the shared page is guest memory, not an EL2 global.
     Obs("ivc.page", "", pa=_BOARD["NOVA_BOARD_IVC_SHM_PA"], layout="ivc_ring_page", hex=True),
 )
+
+
+# Page table storage. Extents come from the DWARF, so a resized pool is
+# copied whole without this list changing.
+STAGE2_SETS = "nova::(anonymous)::g_stage2_sets"
+DMA_TABLES = "nova::smmu::(anonymous)::g_dma_tables"
+EL2_ROOT = "nova_el2_l1_root"
+EL2_POOL = "(anonymous)::g_pool"
+TABLES = (STAGE2_SETS, DMA_TABLES, EL2_ROOT, EL2_POOL)
+
+# Where each walk starts, as the machine holds it: the register value the
+# CPU is given, and the root the SMMU built its stream table from. Taken
+# from the run's configuration instead, these would describe a machine
+# that was intended rather than one that booted.
+VTTBR = "nova::(anonymous)::g_vttbr"
+DMA_CONTEXTS = "nova::smmu::(anonymous)::g_contexts"
+DMA_CONTEXT_COUNT = "nova::smmu::(anonymous)::g_context_count"
+ROOTS = (VTTBR, DMA_CONTEXTS, DMA_CONTEXT_COUNT)
+
+WALK_SYMBOLS = TABLES + ROOTS
 
 
 def observation_rates() -> dict[str, float]:

@@ -122,11 +122,11 @@ class GeometryTest(unittest.TestCase):
         believes the second. A build that changed one alone would walk
         tables built for the other — a fault with no message."""
         with self.assertRaises(SystemExit):
-            translation._geometry("bad", (30, 21, 12), 512, 39, 12, starts_at=2)
+            translation._geometry("bad", (30, 21, 12), 512, 39, starts_at=2)
 
     def test_an_address_wider_than_the_top_level_is_rejected(self):
         with self.assertRaises(SystemExit):
-            translation._geometry("bad", (30, 21, 12), 512, 48, 12)
+            translation._geometry("bad", (30, 21, 12), 512, 48)
 
 
 class DescriptorTest(unittest.TestCase):
@@ -306,7 +306,7 @@ class TreeTest(unittest.TestCase):
         memory = Memory()
         l2 = memory.table({index: block(0x8000_0000 + index * MIB2) for index in range(8)})
         l1 = memory.table({0: points_to(l2)})
-        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, limit=8)
         (top,) = found.nodes
         (run,) = top.children
         self.assertEqual((run.index, run.count, run.base), (0, 8, 0))
@@ -316,7 +316,7 @@ class TreeTest(unittest.TestCase):
         memory = Memory()
         l2 = memory.table({0: block(0x8000_0000), 1: block(0x9000_0000)})
         l1 = memory.table({0: points_to(l2)})
-        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, limit=8)
         self.assertEqual([node.count for node in found.nodes[0].children], [1, 1])
 
     def test_a_changed_attribute_breaks_the_run(self):
@@ -331,7 +331,7 @@ class TreeTest(unittest.TestCase):
             }
         )
         l1 = memory.table({0: points_to(l2)})
-        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, limit=8)
         first, second = found.nodes[0].children
         self.assertEqual((first.count, second.count), (1, 1))
         self.assertTrue(first.descriptor.executable)
@@ -348,13 +348,13 @@ class TreeTest(unittest.TestCase):
             }
         )
         l1 = memory.table({0: points_to(l2)})
-        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, limit=8)
         self.assertEqual([node.count for node in found.nodes[0].children], [1, 1])
 
     def test_empty_slots_are_absent_rather_than_listed(self):
         memory = Memory()
         l1 = memory.table({7: block(0x8000_0000)})
-        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, limit=8)
         (only,) = found.nodes
         self.assertEqual((only.index, only.base), (7, 7 * GIB))
 
@@ -364,9 +364,9 @@ class TreeTest(unittest.TestCase):
         memory = Memory()
         leaves = [memory.table({0: block(0x8000_0000)}) for _ in range(4)]
         l1 = memory.table({index: points_to(leaf) for index, leaf in enumerate(leaves)})
-        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=3)
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, limit=3)
         self.assertTrue(found.truncated)
-        self.assertEqual(found.tables, 3)
+        self.assertEqual(found.read, 3)
         # Two levels reached, the rest left empty rather than guessed at.
         self.assertEqual([len(node.children) for node in found.nodes], [1, 1, 0, 0])
 
@@ -375,7 +375,7 @@ class TreeTest(unittest.TestCase):
         with nothing to say it was short."""
         memory = Memory()
         l1 = memory.table({0: points_to(0xDEAD_0000)})
-        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, limit=8)
         self.assertEqual(found.unreadable, (0xDEAD_0000,))
         self.assertFalse(found.truncated)
         self.assertEqual(found.nodes[0].children, ())

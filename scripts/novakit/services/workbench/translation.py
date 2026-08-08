@@ -30,18 +30,25 @@ _CORE_MMU = (
 STAGE2_DESCRIPTOR = _CORE_MMU / "stage2_descriptor.hpp"
 STAGE2_BUILDER = _CORE_MMU / "stage2_builder.hpp"
 STAGE1_TABLES = config.REPO / "src" / "hal" / "arch" / "aarch64" / "vmsa" / "stage1_tables.hpp"
+STE_MODEL = (
+    config.REPO / "src" / "components" / "device" / "smmu" / "include" / "smmu" / "ste_model.hpp"
+)
 
 _S2 = abi.read_constexprs(STAGE2_DESCRIPTOR)
 _S2.update(abi.read_constexprs(STAGE2_BUILDER, _S2))
 _S1 = abi.read_constexprs(STAGE1_TABLES)
+# Which table set a device stream walks. Its geometry fields come from
+# the Stage 2 definition, so that dictionary seeds the read.
+STE = abi.read_constexprs(STE_MODEL, _S2)
 
 # A descriptor is one 64-bit word at every level of both regimes.
 DESCRIPTOR_BYTES = 8
-
+# The level whose entries are one granule; coarser levels count down.
+_GRANULE_LEVEL = 3
 # ARM ARM DDI0487 §D8.2.6: for a 4 KiB granule VTCR_EL2.SL0 names the
-# level a Stage 2 walk starts at. An architectural table, not a repo
-# fact — it is here to check the header's two declarations against each
-# other, since T0SZ and SL0 have to agree and nothing else says so.
+# level a Stage 2 walk starts at. Architectural, and here to hold the
+# header's two declarations of one geometry against each other — T0SZ
+# and SL0 have to agree and nothing else says so.
 _SL0_START_LEVEL = {0b00: 2, 0b01: 1, 0b10: 0, 0b11: 3}
 
 
@@ -84,24 +91,28 @@ def _geometry(
     shifts: tuple[int, ...],
     entries: int,
     address_bits: int,
-    granule_shift: int,
     starts_at: int | None = None,
 ) -> Geometry:
+    """Build one regime's geometry, checking its declarations agree.
+
+    The finest level indexes the granule, so its shift is the granule
+    and the coarser levels count down from there.
+    """
     index_bits = entries.bit_length() - 1
     if 1 << index_bits != entries:
         raise SystemExit(f"nova workbench: {name} has {entries} entries per table, not a power of two")
-    levels = tuple(3 - (shift - granule_shift) // index_bits for shift in shifts)
-    # The top level's index field has to reach the top of the input
-    # address and no further: one bit either way and the walk starts at a
-    # different level than the tables were built for.
+    levels = tuple(_GRANULE_LEVEL - (shift - shifts[-1]) // index_bits for shift in shifts)
+    # The top level's index has to reach the top of the input address and
+    # no further; one bit either way starts the walk at a different level
+    # than the tables were built for.
     if not shifts[0] < address_bits <= shifts[0] + index_bits:
         raise SystemExit(
             f"nova workbench: {name} indexes from bit {shifts[0]} but its input is {address_bits} bits"
         )
     if starts_at is not None and starts_at != levels[0]:
         raise SystemExit(
-            f"nova workbench: {name} declares a walk from L{starts_at}, "
-            f"its address width starts one at L{levels[0]}"
+            f"nova workbench: {name} is configured to walk from L{starts_at}, "
+            f"but a {address_bits}-bit input starts at L{levels[0]}"
         )
     return Geometry(name, shifts, levels, entries, address_bits)
 
@@ -111,7 +122,6 @@ STAGE2 = _geometry(
     (_S2["kL1Shift"], _S2["kL2Shift"], _S2["kL3Shift"]),
     _S2["kTableEntries"],
     64 - _S2["kStage2T0sz"],
-    _S2["kL3Shift"],
     starts_at=_SL0_START_LEVEL[_S2["kStage2Sl0"]],
 )
 
@@ -124,7 +134,6 @@ STAGE1 = _geometry(
     ),
     _S1["kEntries"],
     _S1["kVaLimit"].bit_length() - 1,
-    _S1["kPageSize"].bit_length() - 1,
 )
 
 
@@ -209,12 +218,14 @@ class Format:
     def decode(self, raw: int, depth: int) -> Descriptor:
         """Read one slot of the table at `depth`.
 
-        The depth is what separates a table descriptor from a page: both
-        are the same two bits, and only the level says which one the
-        hardware is looking at. The same rule makes a block descriptor at
-        the last level nothing at all — the architecture reserves that
-        encoding there, so it is reported as invalid rather than as a
-        mapping the hardware would never make.
+        The depth separates a table descriptor from a page: both are the
+        same two bits and only the level says which the hardware reads.
+        The same rule makes a block descriptor at the last level nothing
+        at all — the architecture reserves that encoding there.
+
+        A leaf's output is aligned to what it maps, because the bits
+        below that are ignored by the hardware. Aligning here means the
+        tree and a probe cannot report the address differently.
         """
         leaf = depth == self.geometry.depth - 1
         bits = raw & self.type_mask
@@ -229,26 +240,31 @@ class Format:
         output = raw & self.output_mask
         if kind == "table":
             return Descriptor(raw, kind, output)
-        return Descriptor(raw, kind, output, **self.attributes(raw))
+        return Descriptor(
+            raw, kind, output & ~(self.geometry.span(depth) - 1), **self.attributes(raw)
+        )
 
 
-STAGE2_FORMAT = Format(
-    geometry=STAGE2,
-    type_mask=_S2["kTypeMask"],
-    type_invalid=_S2["kTypeInvalid"],
-    type_block=_S2["kTypeBlock"],
-    output_mask=_S2["kOutputAddrMask"],
-    attributes=_stage2_attributes,
-)
+def _format(constants: dict[str, int], geometry: Geometry, attributes, wxn: bool = False) -> Format:
+    """One regime's Format, from the header dictionary it was read into.
 
-STAGE1_FORMAT = Format(
-    geometry=STAGE1,
-    type_mask=_S1["kTypeMask"],
-    type_invalid=_S1["kTypeInvalid"],
-    type_block=_S1["kTypeBlock"],
-    output_mask=_S1["kOutputAddrMask"],
-    attributes=_stage1_attributes,
-    wxn=bool(_S1["kSctlrEl2"] & _S1["kSctlrWxn"]),
+    Both headers name these fields the same way, so the two regimes are
+    the same construction over different dictionaries.
+    """
+    return Format(
+        geometry=geometry,
+        type_mask=constants["kTypeMask"],
+        type_invalid=constants["kTypeInvalid"],
+        type_block=constants["kTypeBlock"],
+        output_mask=constants["kOutputAddrMask"],
+        attributes=attributes,
+        wxn=wxn,
+    )
+
+
+STAGE2_FORMAT = _format(_S2, STAGE2, _stage2_attributes)
+STAGE1_FORMAT = _format(
+    _S1, STAGE1, _stage1_attributes, wxn=bool(_S1["kSctlrEl2"] & _S1["kSctlrWxn"])
 )
 
 
@@ -312,14 +328,14 @@ class Tree:
 
     Invalid slots are absent rather than listed: they are the large
     majority of every table here, and how many there were is the table's
-    size less what is present. `unreadable` names tables the walk could
-    not fetch — without it a short recording would come back as a smaller
-    map with nothing to say it was short.
+    size less what is present. `read` counts the tables the walk fetched,
+    and `unreadable` names those it could not — without which a short
+    recording would come back as a smaller map that says nothing.
     """
 
     root: int
     nodes: tuple[Node, ...]
-    tables: int
+    read: int
     unreadable: tuple[int, ...] = ()
     truncated: bool = False
 
@@ -327,15 +343,15 @@ class Tree:
 class _Walk:
     """One traversal, and the tables it is allowed to read.
 
-    The bound is the pool the firmware built these tables from, so a walk
+    The limit is the pool the firmware built these tables from, so a walk
     that wants more is following a word that is not a table pointer. Left
     unbounded, one such word costs the reader a gigabyte of reads.
     """
 
-    def __init__(self, reader, fmt: Format, tables: int):
+    def __init__(self, reader, fmt: Format, limit: int):
         self.reader = reader
         self.fmt = fmt
-        self.limit = tables
+        self.limit = limit
         self.read = 0
         self.unreadable: list[int] = []
         self.truncated = False
@@ -376,18 +392,19 @@ def probe(reader, fmt: Format, root: int, address: int) -> Probe:
         if descriptor.kind == "invalid":
             return Probe(address, tuple(steps), geometry.levels[depth], fault="translation")
         if descriptor.maps:
-            # Below the block size the output address field is ignored,
-            # and the offset into the block comes from the input.
-            span = geometry.span(depth)
-            output = (descriptor.output & ~(span - 1)) | (address & (span - 1))
-            return Probe(address, tuple(steps), geometry.levels[depth], output=output)
+            # The output is already aligned to what it maps; the offset
+            # into it comes from the address being translated.
+            offset = address & (geometry.span(depth) - 1)
+            return Probe(
+                address, tuple(steps), geometry.levels[depth], output=descriptor.output | offset
+            )
         table = descriptor.output
     return Probe(address, tuple(steps), geometry.levels[-1], fault="translation")
 
 
-def tree(reader, fmt: Format, root: int, tables: int) -> Tree:
+def tree(reader, fmt: Format, root: int, limit: int) -> Tree:
     """Everything one root maps, folded into runs."""
-    walk = _Walk(reader, fmt, tables)
+    walk = _Walk(reader, fmt, limit)
     nodes = _descend(walk, root, 0, 0)
     return Tree(root, nodes, walk.read, tuple(walk.unreadable), walk.truncated)
 

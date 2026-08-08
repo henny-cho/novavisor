@@ -209,7 +209,7 @@ export function createMemory({ pick, form, input, note, body, request }) {
       body.append(el("div", "mwarn", `읽지 못한 테이블 ${at}`));
     }
     if (tree.truncated) {
-      body.append(el("div", "mwarn", `테이블 ${tree.tables}개에서 중단 — 풀보다 깊다`));
+      body.append(el("div", "mwarn", `테이블 ${tree.read}개에서 중단 — 풀보다 깊다`));
     }
   }
 

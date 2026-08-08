@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import Protocol
 
 from ...image import abi
-from . import elfsym, regimes
-from .observations import OBSERVATIONS, Obs
+from . import elfsym
+from .observations import OBSERVATIONS, WALK_SYMBOLS, Obs
 
 _U32 = elfsym.TypeInfo("uint", 4)
 _U64 = elfsym.TypeInfo("uint", 8)
@@ -127,7 +127,7 @@ def resolve_image(elf_path: Path) -> ImageView:
         return ImageView(
             {obs.topic: index.resolve(obs.symbol) for obs in OBSERVATIONS if obs.pa is None},
             index.symbols,
-            {symbol: index.resolve(symbol) for symbol in regimes.SYMBOLS},
+            {symbol: index.resolve(symbol) for symbol in WALK_SYMBOLS},
         )
     finally:
         index.close()

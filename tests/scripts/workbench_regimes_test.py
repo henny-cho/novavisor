@@ -14,11 +14,11 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 from novakit.services.workbench import (  # noqa: E402
     hardware,
+    observations,  # noqa: E402
     regimes,
     snapshot,
     translation,
 )
-from novakit.services.workbench.observations import OBSERVATIONS  # noqa: E402
 
 ELF = REPO / "build" / "aarch64-debug" / "novavisor.elf"
 RAM_BASE = hardware.platform()["NOVA_BOARD_PHYS_RAM_BASE"]
@@ -29,7 +29,7 @@ def _ram_size() -> int:
     """As far above the base as any observation reaches."""
     return max(
         obs.pa + snapshot.PAGE_LAYOUTS[obs.layout].size
-        for obs in OBSERVATIONS
+        for obs in observations.OBSERVATIONS
         if obs.pa is not None
     ) - RAM_BASE
 
@@ -68,10 +68,10 @@ class CaptureTest(unittest.TestCase):
 
     def build_guest_tables(self) -> tuple[int, int]:
         """One guest window: an L1 table entry over four 2 MiB blocks."""
-        sets = self.symbols["nova::(anonymous)::g_stage2_sets"]
-        vttbr = self.symbols["nova::(anonymous)::g_vttbr"]
-        l1 = sets.address + self.field("nova::(anonymous)::g_stage2_sets", "l1")
-        l2 = sets.address + self.field("nova::(anonymous)::g_stage2_sets", "l2_pool")
+        sets = self.symbols[observations.STAGE2_SETS]
+        vttbr = self.symbols[observations.VTTBR]
+        l1 = sets.address + self.field(observations.STAGE2_SETS, "l1")
+        l2 = sets.address + self.field(observations.STAGE2_SETS, "l2_pool")
         self.poke(l1, l2 | S2.type_mask)
         for slot in range(4):
             self.poke(l2 + slot * 8, (0x8000_0000 + slot * translation.STAGE2.span(1)) | 0x7FC | 1)
@@ -97,20 +97,20 @@ class CaptureTest(unittest.TestCase):
         self.build_guest_tables()
         captured = regimes.capture(self.provider(), self.symbols)
         found = {entry["id"]: entry["tables"] for entry in captured["regimes"]}
-        sets = self.symbols["nova::(anonymous)::g_stage2_sets"].type.element
-        el2 = self.symbols["nova_el2_l1_root"].size + self.symbols["(anonymous)::g_pool"].size
+        sets = self.symbols[observations.STAGE2_SETS].type.element
+        el2 = self.symbols[observations.EL2_ROOT].size + self.symbols[observations.EL2_POOL].size
         self.assertEqual(found["vm0.cpu"], sets.size // translation.STAGE2.table_bytes)
-        self.assertEqual(found["el2"], el2 // translation.STAGE1.table_bytes)
+        self.assertEqual(found["el2.self"], el2 // translation.STAGE1.table_bytes)
 
     def test_dma_regimes_come_from_the_contexts_the_smmu_built(self):
         self.build_guest_tables()
-        contexts = self.symbols["nova::smmu::(anonymous)::g_contexts"]
-        tables = self.symbols["nova::smmu::(anonymous)::g_dma_tables"]
-        root = tables.address + self.field("nova::smmu::(anonymous)::g_dma_tables", "l1")
+        contexts = self.symbols[observations.DMA_CONTEXTS]
+        tables = self.symbols[observations.DMA_TABLES]
+        root = tables.address + self.field(observations.DMA_TABLES, "l1")
         entry = contexts.address
-        self.poke(entry + self.field("nova::smmu::(anonymous)::g_contexts", "owner_vm"), 0)
-        self.poke(entry + self.field("nova::smmu::(anonymous)::g_contexts", "root_pa"), root)
-        self.poke(self.symbols["nova::smmu::(anonymous)::g_context_count"].address, 1)
+        self.poke(entry + self.field(observations.DMA_CONTEXTS, "owner_vm"), 0)
+        self.poke(entry + self.field(observations.DMA_CONTEXTS, "root_pa"), root)
+        self.poke(self.symbols[observations.DMA_CONTEXT_COUNT].address, 1)
 
         captured = regimes.capture(self.provider(), self.symbols)
         dma = next(entry for entry in captured["regimes"] if entry["id"] == "vm0.dma")
@@ -134,8 +134,8 @@ class CaptureTest(unittest.TestCase):
         captured = regimes.capture(live, self.symbols)
         copy = regimes.Tables.of(captured)
 
-        from_ram = translation.tree(live, S2, l1, tables=6)
-        from_copy = translation.tree(copy, S2, l1, tables=6)
+        from_ram = translation.tree(live, S2, l1, limit=6)
+        from_copy = translation.tree(copy, S2, l1, limit=6)
         self.assertEqual(from_ram, from_copy)
         # And not vacuously: the guest window is in there.
         (top,) = from_ram.nodes

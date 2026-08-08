@@ -77,9 +77,8 @@ _CONSTEXPR = re.compile(
     re.MULTILINE,
 )
 _COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
-# C++ integer literals differ from Python's in exactly two ways here:
-# a width/sign suffix, and namespace qualification on the names around
-# them. Both are removed; the digit separator goes with the comments.
+# C++ integer literals carry a width/sign suffix Python has no
+# spelling for, and the names around them may be namespace-qualified.
 _LITERAL = re.compile(r"\b(0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*\b")
 _QUALIFIER = re.compile(r"\b\w+::")
 # What a constant expression in these headers is made of. Bitwise NOT is
@@ -122,12 +121,12 @@ def read_constexprs(path: Path, known: dict[str, int] | None = None) -> dict[str
     """
     values = dict(known or {})
     read: dict[str, int] = {}
-    text = _COMMENT.sub("", path.read_text()).replace("'", "")
+    text = _COMMENT.sub("", path.read_text())
     for name, expression in _CONSTEXPR.findall(text):
         # One line, unqualified, Python-spelled — a C++ expression is not
         # otherwise parseable, and folded across lines it would not be an
         # expression at all.
-        flat = _QUALIFIER.sub("", " ".join(expression.split()))
+        flat = _QUALIFIER.sub("", " ".join(expression.split())).replace("'", "")
         try:
             tree = ast.parse(_LITERAL.sub(lambda match: match.group(1), flat), mode="eval")
         except SyntaxError:

@@ -10,26 +10,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit.image import abi  # noqa: E402
-from novakit.services.workbench import derive, elfsym  # noqa: E402
+from novakit.services.workbench import derive, elfsym, translation  # noqa: E402
 from novakit.services.workbench.observations import OBSERVATIONS  # noqa: E402
 
-# The STE field positions, from the header the encoder compiles
-# against. Spelled out here they would be the copy the shape exists
-# to avoid, and this test would keep passing after the header moved.
-STE = abi.read_constexprs(
-    REPO / "src" / "components" / "device" / "smmu" / "include" / "smmu" / "ste_model.hpp",
-    abi.read_constexprs(
-        REPO
-        / "src"
-        / "components"
-        / "core"
-        / "core_mmu"
-        / "include"
-        / "core_mmu"
-        / "stage2_descriptor.hpp"
-    ),
-)
+# The STE field positions, from the header the encoder compiles against.
+# Spelled out here they would be the copy the shape exists to avoid.
+STE = translation.STE
 
 U8 = elfsym.TypeInfo("uint", 1)
 U64 = elfsym.TypeInfo("uint", 8)
