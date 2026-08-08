@@ -151,6 +151,13 @@ EVENTS: tuple[Event, ...] = (
           ("stream",),
           "스트림을 VM의 Stage 2 테이블에 결속", code=_CODES["NOVA_TRACE_EV_SMMU_ATTACH"],
           fields=("stream", "root", "vmid")),
+    # The one entry that answers rather than reports. EL2 acknowledges a
+    # command by emitting this and nothing else, which is what puts an
+    # instruction and its consequences on one axis in one clock — and
+    # what makes a refusal as visible as an acceptance.
+    Event("command", "nova::command::execute", "", (),
+          "호스트 명령을 EL2가 실행", code=_CODES["NOVA_TRACE_EV_COMMAND"],
+          fields=("op|result", "a", "b")),
     # Not a moment in the firmware but a statement about the stream:
     # written by the reader where the records it could not recover
     # would have been. No symbol, so it is never offered as a stop

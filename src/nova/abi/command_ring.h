@@ -48,11 +48,18 @@
 
 /* Header (one cache line), then the two indices on lines of their own:
  * they are the only fields both sides touch, and they are touched from
- * opposite directions. */
+ * opposite directions.
+ *
+ * The period is in the header because EL2 is the side that decides it:
+ * it drains on a timer of its own, so how long a command may wait is a
+ * number the firmware declares rather than a property of how busy the
+ * machine is. A host that read the bound from anywhere else would keep
+ * a copy a changed period silently invalidates. */
 #define NOVA_CMD_MAGIC_OFF   0x00
 #define NOVA_CMD_VERSION_OFF 0x08
 #define NOVA_CMD_RECSIZE_OFF 0x0C
 #define NOVA_CMD_SLOTS_OFF   0x10
+#define NOVA_CMD_PERIOD_OFF  0x14 /* u32 microseconds between drains */
 #define NOVA_CMD_WIDX_OFF    0x40 /* u64, producer-owned: commands written */
 #define NOVA_CMD_RIDX_OFF    0x80 /* u64, consumer-owned: commands taken */
 #define NOVA_CMD_RECORDS_OFF 0xC0
@@ -63,11 +70,16 @@
  * `c`, so a command and the record that answers it hold their arguments
  * in the same order at the same width and neither side repacks. A
  * uniform width rather than a tighter mix because the whole point of
- * this page is that one description of it is enough. */
-#define NOVA_CMD_REC_SIZE 24
-#define NOVA_CMD_OP_OFF   0x00 /* u64 NOVA_CMD_OP_* */
-#define NOVA_CMD_A_OFF    0x08 /* u64 */
-#define NOVA_CMD_B_OFF    0x10 /* u64 */
+ * this page is that one description of it is enough.
+ *
+ * The field offsets carry REC_ rather than sitting directly under
+ * NOVA_CMD_: the opcodes below are read as a name family by prefix, and
+ * an offset called NOVA_CMD_OP_OFF would join them as an opcode named
+ * "off" with the value zero. */
+#define NOVA_CMD_REC_SIZE   24
+#define NOVA_CMD_REC_OP_OFF 0x00 /* u64 NOVA_CMD_OP_* */
+#define NOVA_CMD_REC_A_OFF  0x08 /* u64 */
+#define NOVA_CMD_REC_B_OFF  0x10 /* u64 */
 
 /* The page this all lives in, and the depth that fills it.
  *

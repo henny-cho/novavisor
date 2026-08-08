@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ...image import abi
-from . import events
+from . import commands, events
 
 _LAYOUT = abi.read_defines(
     abi.TRACE_RING,
@@ -740,6 +740,16 @@ def decode(record: Record) -> dict:
         out |= {"stream": record.a, "root": f"{record.b:#x}", "vmid": record.c}
     elif entry.id == "dma.start":
         out |= {"vm": record.a, "address": f"{record.b:#x}", "bytes": record.c}
+    elif entry.id == "command":
+        # EL2 packs the opcode and the verdict into one word, both being
+        # small. Named here from the ABI header both sides read, so a
+        # refusal says what kind it was rather than which number it was.
+        out |= {
+            "op": commands.op_name(record.a & 0xFFFF),
+            "result": commands.result_name(record.a >> 16),
+            "a": record.b,
+            "b": record.c,
+        }
     elif entry.id == "trace.gap":
         # The width, not the far end: `b` is a raw counter value, which
         # is the one thing no reader can use. Zero when the hole opened

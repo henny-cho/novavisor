@@ -46,6 +46,20 @@ class TimerSlotTest(unittest.TestCase):
                 word = observations.SLOT_NAMES[name].split(" ")[0]
                 self.assertTrue(labels[base].startswith(word), f"{labels[base]} at {base}")
 
+    def test_a_group_the_table_does_not_name_is_refused(self):
+        # The quiet direction. A missing base fails loudly on the next
+        # lookup; a base with no name is absorbed into the width of the
+        # group before it, and every slot of the new group goes out
+        # carrying its predecessor's label.
+        named = [name for name in observations.SLOT_NAMES if name != "kSlotCount"]
+        with mock.patch.object(observations, "SLOT_HEADER") as header:
+            header.read_text.return_value = "\n".join(
+                f"inline constexpr std::size_t {name} = {index};"
+                for index, name in enumerate([*named, "kSlotNewcomer", "kSlotCount"])
+            )
+            with self.assertRaises(SystemExit):
+                observations._slot_bases()
+
     def test_a_base_the_reader_cannot_evaluate_is_refused(self):
         # Silence here would mean labels quietly shifted, so an
         # expression outside the plain-sum form has to stop the bridge.

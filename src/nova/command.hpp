@@ -44,21 +44,23 @@ struct Record {
 };
 
 static_assert(sizeof(Record) == NOVA_CMD_REC_SIZE);
-static_assert(offsetof(Record, op) == NOVA_CMD_OP_OFF);
-static_assert(offsetof(Record, a) == NOVA_CMD_A_OFF);
-static_assert(offsetof(Record, b) == NOVA_CMD_B_OFF);
+static_assert(offsetof(Record, op) == NOVA_CMD_REC_OP_OFF);
+static_assert(offsetof(Record, a) == NOVA_CMD_REC_A_OFF);
+static_assert(offsetof(Record, b) == NOVA_CMD_REC_B_OFF);
 
 struct Header {
   std::uint64_t magic       = 0;
   std::uint32_t version     = 0;
   std::uint32_t record_size = 0;
   std::uint32_t slots       = 0;
+  std::uint32_t period_us   = 0;
 };
 
 static_assert(offsetof(Header, magic) == NOVA_CMD_MAGIC_OFF);
 static_assert(offsetof(Header, version) == NOVA_CMD_VERSION_OFF);
 static_assert(offsetof(Header, record_size) == NOVA_CMD_RECSIZE_OFF);
 static_assert(offsetof(Header, slots) == NOVA_CMD_SLOTS_OFF);
+static_assert(offsetof(Header, period_us) == NOVA_CMD_PERIOD_OFF);
 static_assert(sizeof(Header) <= NOVA_CMD_WIDX_OFF);
 
 // The depth is a mask, and it is the deepest the page allows: doubling
@@ -151,11 +153,12 @@ private:
 // leaves it to publish(): that flag means "everything beside me is now
 // true", and a producer that sampled it early would write into a ring
 // whose indices are about to be cleared.
-inline void format(void* base) noexcept {
+inline void format(void* base, std::uint32_t period_us) noexcept {
   auto* header        = reinterpret_cast<Header*>(base);
   header->version     = NOVA_CMD_VERSION;
   header->record_size = NOVA_CMD_REC_SIZE;
   header->slots       = NOVA_CMD_SLOTS;
+  header->period_us   = period_us;
   for (std::size_t offset : {std::size_t{NOVA_CMD_WIDX_OFF}, std::size_t{NOVA_CMD_RIDX_OFF}}) {
     auto* index = reinterpret_cast<std::uint64_t*>(static_cast<char*>(base) + offset);
     std::atomic_ref{*index}.store(0, std::memory_order_relaxed);
@@ -179,9 +182,11 @@ inline Page g_page{};
 inline Ring g_ring{};
 
 // Bind the ring to the page and open it to the host. Runs once, from
-// the component's init, before the slot that drains it is armed.
-inline void place() noexcept {
-  format(g_page.byte.data());
+// the component's init, before the slot that drains it is armed —
+// `period_us` is that slot's period, which is the wait this ring is
+// promising and therefore the caller's to state.
+inline void place(std::uint32_t period_us) noexcept {
+  format(g_page.byte.data(), period_us);
   g_ring = Ring{g_page.byte.data()};
   publish(g_page.byte.data());
 }

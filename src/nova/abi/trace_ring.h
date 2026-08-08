@@ -147,6 +147,12 @@
 #define NOVA_TRACE_EV_SMMU_ATTACH  15
 #define NOVA_TRACE_EV_DMA_START    16
 
+/* A command the host asked for, and what became of it. The only event
+ * here that answers something rather than reporting it: EL2 emits no
+ * acknowledgement of its own, so this record is the answer — which puts
+ * a command and the effects it caused on one axis in one clock. */
+#define NOVA_TRACE_EV_COMMAND 17
+
 /* Codes the host writes into the same stream, far above the firmware's
  * numbering and read as a separate family, so one can never be mistaken
  * for an unimplemented hook.

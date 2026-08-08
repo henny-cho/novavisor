@@ -24,6 +24,10 @@ using nova::command::Page;
 using nova::command::Record;
 using nova::command::Ring;
 
+// The drain period a placed page would carry. Any value: these tests
+// are about the protocol, and the number only has to survive format().
+constexpr std::uint32_t kPeriodUs = 10'000;
+
 // One page, formatted and published, with the two indices reachable —
 // the tests that break the protocol need to write `widx` the way a
 // broken producer would, which is by address and not through push().
@@ -31,7 +35,7 @@ struct Fixture {
   Page page{};
 
   Fixture() {
-    nova::command::format(base());
+    nova::command::format(base(), kPeriodUs);
     nova::command::publish(base());
   }
 
@@ -58,12 +62,14 @@ auto command(std::uint64_t op, std::uint64_t a = 0, std::uint64_t b = 0) -> Reco
 
 TEST(CommandRingFormat, GeometryIsPublishedAndTheMagicComesLast) {
   Page page{};
-  nova::command::format(page.byte.data());
+  nova::command::format(page.byte.data(), kPeriodUs);
 
   auto* header = reinterpret_cast<Header*>(page.byte.data());
   EXPECT_EQ(header->version, NOVA_CMD_VERSION);
   EXPECT_EQ(header->record_size, NOVA_CMD_REC_SIZE);
   EXPECT_EQ(header->slots, NOVA_CMD_SLOTS);
+  // The wait EL2 promises, read by the host rather than assumed.
+  EXPECT_EQ(header->period_us, kPeriodUs);
   // A page caught between the two reads as absent, so nothing can write
   // a command into indices that are about to be cleared.
   EXPECT_EQ(header->magic, 0U);

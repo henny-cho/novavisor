@@ -157,6 +157,7 @@ SLOT_NAMES = {
     "kSlotWatchdog": "watchdog vm{}",
     "kSlotLifecycle": "lifecycle vm{}",
     "kSlotDmaDrain": "dma_drain vm{}",
+    "kSlotCommand": "command",
     "kSlotCount": "",  # the end marker, not a group
 }
 
@@ -169,11 +170,20 @@ def _slot_bases() -> dict[str, int]:
     gets from elsewhere and this supplies. Evaluating them reads the one
     definition; restating them would let a group inserted between two
     others shift every label after it by a slot.
+
+    Both directions are checked. A name here with no base is an obvious
+    failure, but a base with no name is the quiet one: a group added to
+    the header and not named would be absorbed into the width of the one
+    before it, and every slot of the new group would go out labelled as
+    its predecessor.
     """
     known = abi.read_constexprs(SLOT_HEADER, {"kMaxVcpus": MAX_VCPUS, "kMaxGuests": MAX_GUESTS})
-    missing = set(SLOT_NAMES) - set(known)
-    if missing:
-        raise SystemExit(f"nova workbench: no slot base for {sorted(missing)}")
+    groups = {name for name in known if name.startswith("kSlot")}
+    if groups != set(SLOT_NAMES):
+        raise SystemExit(
+            f"nova workbench: soft_timer slot groups and their names disagree: "
+            f"{sorted(groups ^ set(SLOT_NAMES))}"
+        )
     return {name: known[name] for name in SLOT_NAMES}
 
 
