@@ -815,22 +815,30 @@ class Bridge:
             return
         self.store.publish(Topic.PROBE, Kind.SNAPSHOT, answer, src=Src.SNAP, replay=False)
 
+    @staticmethod
+    def _word(value) -> int:
+        """One command argument, as the ring carries it.
+
+        A whole number or nothing. `int()` would take a float and
+        truncate it, which is the same quiet reinterpretation EL2
+        refuses on its own side rather than narrow.
+        """
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"a command argument must be a whole number, not {value!r}")
+        return value
+
     def _issue_command(self, data: dict) -> None:
         """Put one command in this run's ring.
 
-        Nothing is published on success. EL2 answers by emitting a trace
+        Nothing is published on success: EL2 answers with a trace
         record, so the acknowledgement arrives on the same axis as the
-        effects it caused rather than on a channel of its own — and a
-        reader who wants to know whether it worked looks where the
-        consequences already are.
-
-        A refusal is published, because nothing else will say it: the
-        ring never reached EL2, so no record can describe it.
+        effects it caused. A refusal is published, because nothing else
+        will say it — the command never reached EL2, so no record can
+        describe it.
         """
         if self._replay is not None:
-            # Same rule target and halt already follow. A recording is
-            # an observation, not a machine, and a control that silently
-            # does nothing is worse than one that says why it cannot.
+            # The rule target and halt already follow: a recording is an
+            # observation, not a machine.
             self._reject("cmd: this is a replay; there is no machine to drive")
             return
         name = str(data.get("op", ""))
@@ -838,9 +846,9 @@ class Bridge:
             self._reject(f"cmd: unknown op {name!r}")
             return
         try:
-            a, b = int(data.get("a", 0)), int(data.get("b", 0))
-        except (TypeError, ValueError):
-            self._reject("cmd: a and b must be integers")
+            a, b = self._word(data.get("a", 0)), self._word(data.get("b", 0))
+        except ValueError as error:
+            self._reject(f"cmd: {error}")
             return
         writer = self._ensure_writer()
         if writer is None:
@@ -855,17 +863,17 @@ class Bridge:
         """This run's write window, opened once the page exists.
 
         Attempted every poll until it lands, like the page tables: EL2
-        places the ring in its last init action, so a window opened when
-        the provider was built would find nothing there. What is placed
-        is published, so a reader arriving at any point knows whether
-        this run can be driven rather than finding out by trying.
+        places the ring in its last init action, so a window opened with
+        the provider would find nothing there. What is placed is
+        published, so a reader knows whether this run can be driven
+        rather than finding out by trying.
         """
         if self._writer_run == self.session.run_id:
             return self._writer
         symbols = snapshot.image_symbols(self._provider)
         if symbols is None or self.session.surfaces is None:
-            # No image behind this provider, so no way to find the page
-            # — and nothing this bridge could be driving either.
+            # No image behind this provider, so no page to find — and no
+            # machine this bridge could be driving either.
             return None
         try:
             page, size = symbols.extent_of(observations.COMMAND_PAGE)

@@ -155,6 +155,12 @@ void end_lifecycle_transition() noexcept;
 // redistributor writes. A newly deliverable interrupt wakes kBlocked.
 void reevaluate_virq(std::size_t slot) noexcept;
 
+// Move the preemption quantum, machine-wide. False outside a decade
+// either side of the boot value: shorter and it approaches the cost of
+// the switch it schedules, longer and a guest waiting its turn can miss
+// the window a VM reset gives it to quiesce.
+[[nodiscard]] auto set_slice_us(std::uint64_t microseconds) noexcept -> bool;
+
 // Seed all VCPUs from guest_table() (RuntimeStart).
 void init() noexcept;
 

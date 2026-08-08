@@ -46,7 +46,7 @@ extern "C" [[noreturn]] void nova_vcpu_enter(std::uint64_t entry_pc, std::uint64
 namespace vcpu {
 
 std::array<Vcpu, kMaxVcpus>         g_vcpus;
-std::uint64_t                       g_slice_ticks = 0;
+std::atomic<std::uint64_t>          g_slice_ticks{0};
 std::array<CpuSched, cpu::kMaxCpus> g_sched;
 
 bool g_scheduler_started = false;
@@ -197,10 +197,30 @@ void schedule_out(TrapContext* live) noexcept {
 void reschedule_slice() noexcept {
   const auto s = states();
   if (me().current != kNoVcpu && sched::slice_needed(std::span{s.data(), g_count})) {
-    soft_timer::arm(soft_timer::kSlotSlice, hyp_timer::now() + g_slice_ticks, &on_slice, 0);
+    const std::uint64_t ticks = g_slice_ticks.load(std::memory_order_relaxed);
+    soft_timer::arm(soft_timer::kSlotSlice, hyp_timer::now() + ticks, &on_slice, 0);
   } else {
     soft_timer::cancel(soft_timer::kSlotSlice);
   }
+}
+
+// Move the preemption quantum, machine-wide.
+//
+// Takes effect where the quantum is armed: this core re-arms now, and a
+// peer picks the new value up at its next ready-set change — the same
+// moment it would have read the old one. Nothing already armed is
+// shortened, so a guest mid-slice keeps the turn it was given.
+auto set_slice_us(std::uint64_t microseconds) noexcept -> bool {
+  if (microseconds < kSliceMinUs || microseconds > kSliceMaxUs) {
+    return false;
+  }
+  const auto plan = arch::us_to_ticks(hyp_timer::freq(), microseconds);
+  if (!plan.accepted) {
+    return false;
+  }
+  g_slice_ticks.store(plan.ticks, std::memory_order_relaxed);
+  reschedule_slice();
+  return true;
 }
 
 auto current() noexcept -> Vcpu& {

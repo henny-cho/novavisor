@@ -1,34 +1,26 @@
 /* nova/abi/command_ring.h
  *
- * The host's way in: a single-slot-per-command ring the workbench
- * writes and EL2 consumes, laid over one page of hypervisor RAM.
+ * The host's way in: a ring the workbench writes and EL2 consumes, laid
+ * over one page of hypervisor RAM.
  *
- * The mirror image of the trace ring, and deliberately the opposite
- * policy. Observation must not be able to stall what it observes, so
- * that ring overwrites and the reader computes what it missed. Control
- * must not be able to vanish, so this one *refuses* when full and the
- * producer learns immediately. A command silently overwritten is a
- * button that did nothing, which is worse than a button that said no.
+ * The trace ring's policy, reversed. Observation must not stall what it
+ * observes, so that ring overwrites; control must not vanish, so this
+ * one *refuses* when full and the producer learns immediately. A
+ * command silently overwritten is a button that did nothing.
  *
- * Direction is the only thing reversed; the protocol is the same SPSC
- * shape as the IVC rings. The producer owns `widx`, the consumer owns
- * `ridx`, neither side does a read-modify-write, and a record body is
- * published by the release store on `widx`.
+ * The protocol is the IVC rings' SPSC shape: the producer owns `widx`,
+ * the consumer owns `ridx`, neither side does a read-modify-write, and
+ * a record body is published by the release store on `widx`. Both
+ * indices live in the page, so a bridge that reconnects mid-run picks
+ * the sequence up where the last one left it.
  *
- * Both indices live in the shared page rather than in either side's
- * private memory. A bridge that reconnects mid-run picks the sequence
- * up where the last one left it, so a command's position in the stream
- * is a property of the ring and not of whoever is currently attached.
- *
- * The consumer trusts none of it. `ridx % NOVA_CMD_SLOTS` cannot leave
- * the page whatever the producer writes, every field is range-checked
- * on the EL2 side, and a drain stops at the `widx` it read on entry —
- * so a hostile producer can lengthen no callback and reach nothing but
- * its own refusals.
+ * The consumer trusts none of it: `ridx % NOVA_CMD_SLOTS` cannot leave
+ * the page, every field is range-checked in EL2, and a drain stops at
+ * the `widx` it read on entry.
  *
  * There is no acknowledgement channel. EL2 answers by emitting a trace
  * record, which puts a command and the effects it caused on one axis in
- * one clock, and gives the answer the timeline, the recording and the
+ * one clock and gives the answer the timeline, the recording and the
  * replay for free.
  *
  * Plain #defines only: this header is the single source for the C++
@@ -47,14 +39,13 @@
 #define NOVA_CMD_VERSION 1
 
 /* Header (one cache line), then the two indices on lines of their own:
- * they are the only fields both sides touch, and they are touched from
- * opposite directions.
+ * they are the only fields both sides touch, and from opposite
+ * directions.
  *
- * The period is in the header because EL2 is the side that decides it:
- * it drains on a timer of its own, so how long a command may wait is a
- * number the firmware declares rather than a property of how busy the
- * machine is. A host that read the bound from anywhere else would keep
- * a copy a changed period silently invalidates. */
+ * The period is here because EL2 decides it — it drains on a timer of
+ * its own, so how long a command may wait is a number the firmware
+ * declares rather than a property of how busy the machine is. Read from
+ * anywhere else it would be a copy a changed period invalidates. */
 #define NOVA_CMD_MAGIC_OFF   0x00
 #define NOVA_CMD_VERSION_OFF 0x08
 #define NOVA_CMD_RECSIZE_OFF 0x0C
@@ -66,48 +57,54 @@
 
 /* One command: an opcode and two argument words, all at one width.
  *
- * The two words are the same pair a trace record carries in `b` and
- * `c`, so a command and the record that answers it hold their arguments
- * in the same order at the same width and neither side repacks. A
- * uniform width rather than a tighter mix because the whole point of
- * this page is that one description of it is enough.
+ * The two words are the pair a trace record carries in `b` and `c`, so
+ * a command and the record answering it hold their arguments in the
+ * same order at the same width and neither side repacks.
  *
- * The field offsets carry REC_ rather than sitting directly under
- * NOVA_CMD_: the opcodes below are read as a name family by prefix, and
- * an offset called NOVA_CMD_OP_OFF would join them as an opcode named
- * "off" with the value zero. */
+ * The offsets carry REC_ rather than sitting directly under NOVA_CMD_:
+ * the opcodes below are read as a name family by prefix, and an offset
+ * called NOVA_CMD_OP_OFF would join them as an opcode "off" worth 0. */
 #define NOVA_CMD_REC_SIZE   24
 #define NOVA_CMD_REC_OP_OFF 0x00 /* u64 NOVA_CMD_OP_* */
 #define NOVA_CMD_REC_A_OFF  0x08 /* u64 */
 #define NOVA_CMD_REC_B_OFF  0x10 /* u64 */
 
-/* The page this all lives in, and the depth that fills it.
+/* The page this lives in, and the depth that fills it: a power of two
+ * so the slot index is a mask, and the largest one the page holds.
  *
- * A power of two so the slot index is a mask, and the largest one the
- * page holds — the next size up needs 6 KiB. Unlike the trace ring's
- * depth this is a constant rather than a division, because the region
- * is a page by choice rather than a board's reservation: the host maps
+ * A constant rather than the trace ring's division, because the region
+ * is a page by choice rather than a board's reservation — the host maps
  * exactly this much read-write and nothing else, so the size *is* the
- * boundary and there is nothing left for a board to decide. */
+ * boundary and no board has a say in it. */
 #define NOVA_CMD_PAGE  4096
 #define NOVA_CMD_SLOTS 128
 
 /* What the host may ask for. Every opcode runs code in EL2 even when
- * the effect is a single store: one entry point means one place that
+ * the effect is a single store: one entry point is one place that
  * validates, and the write window stays the only way in. */
 #define NOVA_CMD_OP_MARK  1 /* a, b: free tags — records the moment and nothing else */
 #define NOVA_CMD_OP_SPI   2 /* a: VM index, b: virtual INTID */
 #define NOVA_CMD_OP_SLICE 3 /* a: scheduler slice, in microseconds */
 
+/* How the answering trace record carries both: the opcode in the low
+ * half of its first word, the result in the high half, both being
+ * small. Declared here so the writer and the reader cannot invent
+ * different halves — and named ANSWER rather than OP or RESULT, whose
+ * prefixes are read as name families.
+ *
+ * No opcode is zero, so zero is what an opcode too wide for the field
+ * is reported as: unnameable rather than reported as some other op. */
+#define NOVA_CMD_ANSWER_SHIFT 16
+#define NOVA_CMD_ANSWER_MASK  0xFFFF
+
 /* What became of it. Carried in the answering trace record beside the
- * opcode, so a refusal is as visible as an acceptance and says which
- * kind it was.
+ * opcode, so a refusal is as visible as an acceptance.
  *
  * FULL is the exception: the ring had no slot, so EL2 never saw the
- * command and writes no record for it. The producer knows at once and
- * says so itself. It is named here anyway because the reason a command
- * did not happen is one vocabulary — a reader decoding refusals should
- * not need a second table for the one nobody in EL2 can express. */
+ * command and writes no record for it — the producer knows at once and
+ * says so itself. Named here anyway, because why a command did not
+ * happen is one vocabulary and a reader decoding refusals should not
+ * need a second table for the one EL2 cannot express. */
 #define NOVA_CMD_RESULT_OK      0
 #define NOVA_CMD_RESULT_UNKNOWN 1 /* an opcode this build does not implement */
 #define NOVA_CMD_RESULT_RANGE   2 /* an argument outside what EL2 accepts */

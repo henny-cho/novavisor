@@ -790,3 +790,31 @@ b{font-weight:700}
 .mstream.on{border-color:var(--hyp);color:var(--hyp)}
 /* Valid and translating nothing: every transaction refused. */
 .mstream.off{border-color:var(--warn);color:var(--warn)}
+
+/* --- Drive ----------------------------------------------------------
+   The only controls that act on the machine. Sized down from the top
+   bar's: these sit in a side pane and are pressed while reading the
+   timeline beside them, not while setting a run up. */
+.drive{padding:6px var(--wb-pad) 8px}
+.drive[hidden]{display:none}
+.drow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:3px 0}
+.dlabel{
+  min-width:7ch;font-family:var(--mono);font-size:var(--fs-meta);
+  letter-spacing:.04em;color:var(--ink3)
+}
+.btn.sm{padding:3px 9px;font-size:var(--fs-meta)}
+.pick.sm{min-width:0;max-width:16ch;padding:3px 7px;font-size:var(--fs-meta)}
+.dnum{
+  width:7ch;padding:3px 7px;border:1px solid var(--line);border-radius:6px;
+  background:var(--sunken);color:var(--ink);font-family:var(--mono);font-size:var(--fs-meta)
+}
+/* What the machine said back, in the header where the wait it promised
+   was stated — one place for both halves of the same contract. */
+.dnote{
+  margin-left:auto;font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink2);
+  /* The pane heading is upper-cased; this carries values, and a
+     millisecond is not "MS". */
+  text-transform:none;letter-spacing:normal;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+}
+.dnote.bad{color:var(--crit)}

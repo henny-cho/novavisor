@@ -5,16 +5,11 @@
 // The consumer of the host's command ring, over the layout in
 // nova/abi/command_ring.h — and the producer beside it, so the protocol
 // can be proven under real host-thread concurrency before EL2 acts on
-// anything it delivers.
+// anything it delivers. The Python producer mirrors this one.
 //
-// Pure and host-testable. Nothing here knows what an opcode means; the
-// component wires this to the machine, and this file only guarantees
-// that what EL2 reads is what the host wrote, once, in order.
-//
-// The refusal is the design. A trace record is dropped when the host
-// stops reading because observation must not stall the machine; a
-// command is refused when EL2 stops reading because control must not
-// disappear. Everything below follows from that one inversion.
+// Pure and host-testable. Nothing here knows what an opcode means; this
+// file only guarantees that what EL2 reads is what the host wrote,
+// once, in order.
 //
 // The consumer treats the producer as untrusted. The slot index is
 // taken modulo a compile-time power of two, so it cannot leave the
@@ -63,18 +58,21 @@ static_assert(offsetof(Header, slots) == NOVA_CMD_SLOTS_OFF);
 static_assert(offsetof(Header, period_us) == NOVA_CMD_PERIOD_OFF);
 static_assert(sizeof(Header) <= NOVA_CMD_WIDX_OFF);
 
-// The depth is a mask, and it is the deepest the page allows: doubling
-// it would not fit. Written as a build check rather than a comment, so
-// the constant carries its own justification.
+// The depth is a mask, and the deepest the page allows: doubling it
+// would not fit. Checked rather than asserted in prose, so the constant
+// carries its own justification.
 static_assert((NOVA_CMD_SLOTS & (NOVA_CMD_SLOTS - 1)) == 0);
 static_assert(NOVA_CMD_RECORDS_OFF + NOVA_CMD_SLOTS * NOVA_CMD_REC_SIZE <= NOVA_CMD_PAGE);
 static_assert(NOVA_CMD_RECORDS_OFF + 2 * NOVA_CMD_SLOTS * NOVA_CMD_REC_SIZE > NOVA_CMD_PAGE,
               "the page holds more commands than this ring offers");
 
-// The page itself. One object rather than a reserved physical range:
-// the host maps exactly this much read-write, so its size is the
-// boundary on what a bridge can reach, and `alignas` is what keeps
-// anything else out of that mapping.
+// The answering record's two halves, tied so they cannot overlap: the
+// mask is exactly what fits below the shift.
+static_assert(NOVA_CMD_ANSWER_MASK == (1U << NOVA_CMD_ANSWER_SHIFT) - 1);
+
+// One object rather than a reserved physical range: the host maps
+// exactly this much read-write, so its size bounds what a bridge can
+// reach and `alignas` keeps anything else out of that mapping.
 struct alignas(NOVA_CMD_PAGE) Page {
   std::array<unsigned char, NOVA_CMD_PAGE> byte{};
 };
@@ -93,8 +91,7 @@ public:
 
   [[nodiscard]] auto placed() const noexcept -> bool { return widx_ != nullptr; }
 
-  // Producer side. False when the ring is full — the whole point of
-  // this direction, and the caller's cue to say so rather than retry.
+  // Producer side. False when full: the caller's cue to say so.
   [[nodiscard]] auto push(const Record& command) noexcept -> bool {
     if (!placed()) {
       return false;
@@ -148,21 +145,19 @@ private:
 };
 
 // Lay out the page: geometry fields and both indices back to zero.
-//
-// Deliberately not the magic, for the same reason the trace region
-// leaves it to publish(): that flag means "everything beside me is now
-// true", and a producer that sampled it early would write into a ring
-// whose indices are about to be cleared.
+// Deliberately not the magic — that flag means "everything beside me is
+// now true", and a producer sampling it early would write into indices
+// about to be cleared.
 inline void format(void* base, std::uint32_t period_us) noexcept {
   auto* header        = reinterpret_cast<Header*>(base);
   header->version     = NOVA_CMD_VERSION;
   header->record_size = NOVA_CMD_REC_SIZE;
   header->slots       = NOVA_CMD_SLOTS;
   header->period_us   = period_us;
-  for (std::size_t offset : {std::size_t{NOVA_CMD_WIDX_OFF}, std::size_t{NOVA_CMD_RIDX_OFF}}) {
-    auto* index = reinterpret_cast<std::uint64_t*>(static_cast<char*>(base) + offset);
-    std::atomic_ref{*index}.store(0, std::memory_order_relaxed);
-  }
+  auto* write         = reinterpret_cast<std::uint64_t*>(static_cast<char*>(base) + NOVA_CMD_WIDX_OFF);
+  auto* read          = reinterpret_cast<std::uint64_t*>(static_cast<char*>(base) + NOVA_CMD_RIDX_OFF);
+  std::atomic_ref{*write}.store(0, std::memory_order_relaxed);
+  std::atomic_ref{*read}.store(0, std::memory_order_relaxed);
 }
 
 // Make a formatted page findable. Last, so a page caught mid-format
@@ -174,17 +169,15 @@ inline void publish(void* base) noexcept {
   std::atomic_ref{header->magic}.store(NOVA_CMD_MAGIC, std::memory_order_release);
 }
 
-// The page and the ring EL2 actually uses. Storage lives beside the
-// model, like the trace rings, so the symbol a bridge resolves is a
-// property of this layout rather than of whichever component happens to
-// place it.
+// The page and the ring EL2 uses. Storage lives beside the model, like
+// the trace rings, so the symbol a bridge resolves is a property of
+// this layout rather than of whichever component places it.
 inline Page g_page{};
 inline Ring g_ring{};
 
-// Bind the ring to the page and open it to the host. Runs once, from
-// the component's init, before the slot that drains it is armed —
-// `period_us` is that slot's period, which is the wait this ring is
-// promising and therefore the caller's to state.
+// Bind the ring to the page and open it to the host. Runs once from the
+// component's init, before the slot that drains it is armed;
+// `period_us` is that slot's period, which is the wait being promised.
 inline void place(std::uint32_t period_us) noexcept {
   format(g_page.byte.data(), period_us);
   g_ring = Ring{g_page.byte.data()};

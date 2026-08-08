@@ -164,7 +164,7 @@ void init() noexcept {
   publish_power(slot_of(0), PowerState::kOn);
   publish_cntvoff(0, hyp_timer::now());
   g_alive.store(1, std::memory_order_relaxed); // the boot guest's vcpu 0
-  g_slice_ticks = hyp_timer::ms_to_ticks(kSliceMs);
+  g_slice_ticks.store(hyp_timer::ms_to_ticks(kSliceMs), std::memory_order_relaxed);
   console_mux::set_liveness_probe(&vcpu_on); // focus cycling skips off VMs
   seed_fp_trap(true);                        // no owner yet — first FP use claims the file
 }

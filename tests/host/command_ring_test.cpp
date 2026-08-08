@@ -1,13 +1,12 @@
 // Host-side tests for nova/command.hpp — the refusing ring, under real
 // thread concurrency.
 //
-// The contract is the trace ring's turned around. There the writer must
-// never be stopped by the reader and loss is the price; here a command
-// that was accepted must arrive exactly once and in order, and a
-// command that cannot be accepted must be told so rather than dropped.
-// So the cases below are about what the ring refuses as much as about
-// what it carries — and about what a consumer does when the producer on
-// the other side of the page is not following the protocol at all.
+// The trace ring's contract turned around: there the writer must never
+// be stopped by the reader and loss is the price, here a command that
+// was accepted must arrive exactly once and in order and one that
+// cannot be accepted must be told so. So these cases are about what the
+// ring refuses as much as what it carries — and about what a consumer
+// does when the producer is not following the protocol at all.
 
 #include "nova/command.hpp"
 
@@ -19,7 +18,6 @@
 
 namespace {
 
-using nova::command::Header;
 using nova::command::Page;
 using nova::command::Record;
 using nova::command::Ring;
@@ -41,7 +39,6 @@ struct Fixture {
 
   auto base() noexcept -> void* { return page.byte.data(); }
   auto ring() noexcept -> Ring { return Ring{base()}; }
-  auto header() noexcept -> Header* { return reinterpret_cast<Header*>(base()); }
   auto at(std::size_t offset) noexcept -> std::uint64_t& {
     return *reinterpret_cast<std::uint64_t*>(page.byte.data() + offset);
   }
@@ -64,7 +61,7 @@ TEST(CommandRingFormat, GeometryIsPublishedAndTheMagicComesLast) {
   Page page{};
   nova::command::format(page.byte.data(), kPeriodUs);
 
-  auto* header = reinterpret_cast<Header*>(page.byte.data());
+  auto* header = reinterpret_cast<nova::command::Header*>(page.byte.data());
   EXPECT_EQ(header->version, NOVA_CMD_VERSION);
   EXPECT_EQ(header->record_size, NOVA_CMD_REC_SIZE);
   EXPECT_EQ(header->slots, NOVA_CMD_SLOTS);

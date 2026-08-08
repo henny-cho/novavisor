@@ -93,7 +93,15 @@ _OPERATORS = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
     ast.Mult: operator.mul,
+    # Division is the same on non-negative operands and only there: C++
+    # truncates toward zero where Python floors. _fold() refuses the
+    # operands on which the two part rather than leaving them out.
+    ast.Div: operator.floordiv,
 }
+
+
+class _Unfoldable(ValueError):
+    """An expression this reader cannot turn into a number."""
 
 
 def _fold(node: ast.expr, known: dict[str, int], where: str) -> int:
@@ -101,16 +109,30 @@ def _fold(node: ast.expr, known: dict[str, int], where: str) -> int:
         return node.value
     if isinstance(node, ast.Name):
         if node.id not in known:
-            raise SystemExit(f"{where}: {node.id} is not defined above it")
+            raise _Unfoldable(f"{where}: {node.id} is not defined above it")
         return known[node.id]
     if isinstance(node, ast.BinOp) and type(node.op) in _OPERATORS:
-        return _OPERATORS[type(node.op)](
-            _fold(node.left, known, where), _fold(node.right, known, where)
-        )
-    raise SystemExit(f"{where}: {ast.unparse(node)} is not an expression this evaluates")
+        left, right = _fold(node.left, known, where), _fold(node.right, known, where)
+        if type(node.op) is ast.Div and (left < 0 or right <= 0):
+            raise _Unfoldable(f"{where}: {left} / {right} does not divide as C++ would")
+        return _OPERATORS[type(node.op)](left, right)
+    raise _Unfoldable(f"{where}: {ast.unparse(node)} is not an expression this evaluates")
 
 
-def read_constexprs(path: Path, known: dict[str, int] | None = None) -> dict[str, int]:
+def _evaluate(expression: str, known: dict[str, int], where: str) -> int:
+    # One line, unqualified, Python-spelled: a C++ expression does not
+    # otherwise parse, and across lines it is not an expression.
+    flat = _QUALIFIER.sub("", " ".join(expression.split())).replace("'", "")
+    try:
+        tree = ast.parse(_LITERAL.sub(lambda match: match.group(1), flat), mode="eval")
+    except SyntaxError:
+        raise _Unfoldable(f"{where}: {flat} does not parse") from None
+    return _fold(tree.body, known, where)
+
+
+def read_constexprs(
+    path: Path, known: dict[str, int] | None = None, wanted: set[str] | None = None
+) -> dict[str, int]:
     """Every integer `inline constexpr` in a C++ header, in file order.
 
     Each expression is folded against the constants declared before it,
@@ -118,19 +140,28 @@ def read_constexprs(path: Path, known: dict[str, int] | None = None) -> dict[str
     elsewhere. One this cannot fold — an unknown name, a call, an
     operator outside the table — stops the tool, since the alternative
     is a plausible number the firmware never had.
+
+    `wanted` narrows that to a few names, for a header that also holds
+    expressions with no Python spelling (a fixed-width complement is the
+    standing example — `~` means something else here). What is asked for
+    still has to fold, and a name that never appears is an error rather
+    than a missing key later.
     """
     values = dict(known or {})
     read: dict[str, int] = {}
-    text = _COMMENT.sub("", path.read_text())
-    for name, expression in _CONSTEXPR.findall(text):
-        # One line, unqualified, Python-spelled: a C++ expression does
-        # not otherwise parse, and across lines it is not an expression.
-        flat = _QUALIFIER.sub("", " ".join(expression.split())).replace("'", "")
+    for name, expression in _CONSTEXPR.findall(_COMMENT.sub("", path.read_text())):
+        asked = wanted is None or name in wanted
         try:
-            tree = ast.parse(_LITERAL.sub(lambda match: match.group(1), flat), mode="eval")
-        except SyntaxError:
-            raise SystemExit(f"{path.name}: {name} = {flat} does not parse") from None
-        values[name] = read[name] = _fold(tree.body, values, f"{path.name}: {name}")
+            values[name] = _evaluate(expression, values, f"{path.name}: {name}")
+        except _Unfoldable as error:
+            if asked:
+                raise SystemExit(str(error)) from None
+            continue
+        if asked:
+            read[name] = values[name]
+    missing = set(wanted or ()) - set(read)
+    if missing:
+        raise SystemExit(f"{path.name}: no constexpr named {sorted(missing)}")
     return read
 
 

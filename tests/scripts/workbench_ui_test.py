@@ -850,6 +850,64 @@ class PanelStripTest(unittest.TestCase):
         self.assertNotIn("aria-selected", panels)
 
 
+class DriveViewTest(unittest.TestCase):
+    """The one panel that acts on the machine offers only what the run
+    says it accepts."""
+
+    def test_the_panel_names_no_op_the_firmware_does_not_have(self):
+        # The names come from the ABI header through the topology. One
+        # spelled here that the firmware dropped would draw a control
+        # whose every press is refused.
+        from novakit.services.workbench.commands import OPS
+
+        source = (UI / "js" / "drive.mjs").read_text()
+        named = set(re.findall(r'issue\("(\w+)"', source))
+        self.assertTrue(named)
+        self.assertLessEqual(named, set(OPS))
+
+    def test_the_panel_states_no_bound_of_its_own(self):
+        # A quantum or an INTID typed into this module would be a second
+        # copy of a range EL2 decides, right until the firmware moved
+        # it. Both arrive with the run; nothing here is a number.
+        source = (UI / "js" / "drive.mjs").read_text()
+        offered = re.search(r"function renderSlice[\s\S]*?\n  \}", source)
+        self.assertIsNotNone(offered, "slice control not found")
+        self.assertFalse(re.findall(r"\b\d{3,}\b", offered.group(0)))
+        bounds = re.search(r"function renderSpi[\s\S]*?\n  \}", source)
+        self.assertIsNotNone(bounds, "spi control not found")
+        self.assertRegex(bounds.group(0), r"intid\.min = String\(low\)")
+
+    def test_a_run_that_cannot_be_driven_says_so(self):
+        # Hidden controls with no explanation read as a bridge that
+        # failed to draw them.
+        source = (UI / "js" / "drive.mjs").read_text()
+        self.assertRegex(source, r"root\.hidden = !world")
+        self.assertRegex(source, r"note\.textContent = contract \|\|")
+
+    def test_the_panel_is_rebuilt_only_when_the_run_changes_what_it_accepts(self):
+        # The topology is republished whenever anything on it moves —
+        # the page tables landing, an edge regraded — and a rebuild on
+        # each would clear the INTID a reader had just typed.
+        source = (UI / "js" / "drive.mjs").read_text()
+        self.assertRegex(source, r"JSON\.stringify\(next\) === JSON\.stringify\(world\)")
+
+    def test_the_wait_stays_visible_beside_the_verdict(self):
+        # Two halves of one contract: how long the machine promised to
+        # take, and what it did. The first vanishing at the first
+        # command would leave the bound unreadable for the rest of a run.
+        source = (UI / "js" / "drive.mjs").read_text()
+        self.assertRegex(source, r"note\.textContent =\s*\n?\s*`\$\{contract\} ·")
+
+    def test_the_verdict_comes_back_from_the_machine(self):
+        # Nothing here reports success on its own: EL2 answers with a
+        # trace record, and a panel that said "sent" would be stating
+        # something it does not know.
+        source = (UI / "js" / "drive.mjs").read_text()
+        self.assertRegex(source, r"answered\(record\)")
+        self.assertRegex((UI / "js" / "main.mjs").read_text(), r"drive\.answered\(data\.command\)")
+        self.assertRegex((UI / "css" / "workbench.css").read_text(), r"\.dnote\.bad")
+
+
 class TokenParityTest(unittest.TestCase):
     """tokens.css is authoritative; the frozen sim must agree with it."""
 

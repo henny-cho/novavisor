@@ -7,6 +7,7 @@ import { connect, send } from "./net.mjs";
 import { createBoard } from "./board.mjs";
 import { createCards } from "./cards.mjs";
 import { createConsole } from "./console.mjs";
+import { createDrive } from "./drive.mjs";
 import { createEvents } from "./events.mjs";
 import { createMemory } from "./memory.mjs";
 import { createPanels } from "./panels.mjs";
@@ -100,6 +101,12 @@ const memory = createMemory({
   /* Same topic out as in: the kind already says which direction a
      frame went. */
   request: (data) => send("probe", data),
+});
+
+const drive = createDrive({
+  root: ref("drive"),
+  note: ref("drive-note"),
+  send: (data) => send("cmd", data),
 });
 
 /* What the view slot can hold, named here so the tab buttons carry no
@@ -440,6 +447,7 @@ function onTopo(data) {
   panels.setTopology(topo);
   boardView.setTopology(topo);
   memory.setWorld(topo.memory);
+  drive.setWorld(topo);
   catalogue = Array.isArray(topo.stops) ? topo.stops : [];
   setStops(topo.stops);
   timeline.setCatalogue(topo.stops);
@@ -709,6 +717,9 @@ function onFrame(frame) {
       }
       boardView.traced(frame.ts, data);
       timeline.note(data);
+      /* The one record that answers rather than reports: it goes back
+         to the control that asked for it. */
+      drive.answered(data.command);
       if (data.span) {
         const held = data.span.full
           ? `${data.span.n} 레코드 · 지평선 도달`

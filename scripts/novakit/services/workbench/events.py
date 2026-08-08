@@ -66,6 +66,11 @@ class Event:
     # exception, and drawn as a tick it would claim the axis around it
     # was watched.
     span: bool = False
+    # Whether the record answers something the host asked for, rather
+    # than reporting something the machine did. The control that issued
+    # it needs it back, and knowing which entry that is belongs here
+    # with every other per-event fact.
+    reply: bool = False
 
     @property
     def stop(self) -> bool:
@@ -151,13 +156,12 @@ EVENTS: tuple[Event, ...] = (
           ("stream",),
           "스트림을 VM의 Stage 2 테이블에 결속", code=_CODES["NOVA_TRACE_EV_SMMU_ATTACH"],
           fields=("stream", "root", "vmid")),
-    # The one entry that answers rather than reports. EL2 acknowledges a
-    # command by emitting this and nothing else, which is what puts an
-    # instruction and its consequences on one axis in one clock — and
-    # what makes a refusal as visible as an acceptance.
+    # EL2 acknowledges a command by emitting this and nothing else,
+    # which puts an instruction and its consequences on one axis in one
+    # clock and makes a refusal as visible as an acceptance.
     Event("command", "nova::command::execute", "", (),
           "호스트 명령을 EL2가 실행", code=_CODES["NOVA_TRACE_EV_COMMAND"],
-          fields=("op|result", "a", "b")),
+          fields=("op|result", "a", "b"), reply=True),
     # Not a moment in the firmware but a statement about the stream:
     # written by the reader where the records it could not recover
     # would have been. No symbol, so it is never offered as a stop

@@ -81,6 +81,12 @@ _HEADER = struct.Struct("<QIIIIIII")
 _RECORD = struct.Struct("<QHBBIQQ")
 _TS = struct.Struct("<Q")
 _TS_OFF = _LAYOUT["NOVA_TRACE_TS_OFF"]
+# The spelling above and the size the ABI declares are two statements of
+# one layout, and untied they part silently — a field added to the
+# record would leave this reading each slot at the wrong stride and
+# decoding neighbours as events.
+if _RECORD.size != REC_SIZE:
+    raise SystemExit(f"trace record is {REC_SIZE} bytes; this reads {_RECORD.size}")
 
 
 class NotFormatted(RuntimeError):
@@ -631,16 +637,27 @@ def summarise(records: list[Record]) -> dict:
     silent drop would make "everything that happened" a lie. The board
     needs which paths fired and how often; a reader who wants the events
     asks for them.
+
+    A record the catalogue marks as a reply travels beside them, off the
+    edge index: it sits on no path, and the control that asked for it
+    needs it back. A batch without one leaves the field absent and the
+    last verdict standing.
     """
     edges: dict[str, int] = {}
     last: dict[str, dict] = {}
+    answered: dict | None = None
     for record in records:
         entry = events.BY_CODE.get(record.code)
-        if entry is None or not entry.edge:
+        if entry is None:
+            continue
+        if entry.reply:
+            answered = decode(record)
+        if not entry.edge:
             continue
         edges[entry.edge] = edges.get(entry.edge, 0) + 1
         last[entry.edge] = decode(record)
-    return {"edges": edges, "last": last, "dropped": dropped_in(records)}
+    summary = {"edges": edges, "last": last, "dropped": dropped_in(records)}
+    return summary if answered is None else summary | {"command": answered}
 
 
 def histogram(records: list[Record], first: int, last: int, buckets: int) -> dict[str, list[int]]:
@@ -741,12 +758,12 @@ def decode(record: Record) -> dict:
     elif entry.id == "dma.start":
         out |= {"vm": record.a, "address": f"{record.b:#x}", "bytes": record.c}
     elif entry.id == "command":
-        # EL2 packs the opcode and the verdict into one word, both being
-        # small. Named here from the ABI header both sides read, so a
-        # refusal says what kind it was rather than which number it was.
+        # EL2 packs the opcode and the verdict into one word; the halves
+        # and their names both come from the ABI header, so a refusal
+        # says what kind it was rather than which number it was.
         out |= {
-            "op": commands.op_name(record.a & 0xFFFF),
-            "result": commands.result_name(record.a >> 16),
+            "op": commands.op_name(record.a & commands.ANSWER_MASK),
+            "result": commands.result_name(record.a >> commands.ANSWER_SHIFT),
             "a": record.b,
             "b": record.c,
         }

@@ -177,6 +177,16 @@
         <div class="pane-h">패널<div class="tabs wrap" id="panel-tabs" role="group" aria-label="실측 패널"></div></div>
         <div class="panels" id="panels"></div>
       </section>
+      <!-- The only controls in this workbench that act on the machine
+           rather than observe it. Hidden until a run says it accepts
+           them: a firmware without the ring cannot be driven, and a
+           button that quietly does nothing is what this replaces. -->
+      <section class="pane">
+        <div class="pane-h">조작<span class="spacer"></span>
+          <span class="dnote" id="drive-note" aria-live="polite"></span>
+        </div>
+        <div class="drive" id="drive" hidden></div>
+      </section>
       <section class="pane">
         <div class="pane-h">이벤트 로그<span class="spacer"></span>
           <button class="mini" id="ev-all" type="button" title="모든 배지 다시 표시">전체</button>

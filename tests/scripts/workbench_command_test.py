@@ -49,6 +49,49 @@ class VocabularyTest(unittest.TestCase):
             with self.subTest(result=name):
                 self.assertEqual(commands.result_name(commands.RESULTS[name]), name)
 
+    def test_what_a_control_may_offer_comes_from_the_firmware(self):
+        # A panel offering values EL2 refuses teaches a reader what gets
+        # refused. Both bands come from the headers that decide them —
+        # the quantum's from the same names set_slice_us() compares
+        # against, so the two cannot arrive at different ends.
+        band = abi.read_constexprs(
+            commands._SLICE_HEADER, wanted={"kSliceMinUs", "kSliceUs", "kSliceMaxUs"}
+        )
+        self.assertEqual(
+            commands.SLICE_CHOICES_US,
+            (band["kSliceMinUs"], band["kSliceUs"], band["kSliceMaxUs"]),
+        )
+        source = (REPO / "src" / "components" / "core" / "core_vcpu" / "src" / "sched.cpp").read_text()
+        self.assertIn("microseconds < kSliceMinUs || microseconds > kSliceMaxUs", source)
+        vgic = abi.read_constexprs(commands._VGIC_HEADER, wanted={"kNumPrivate", "kMaxIntid"})
+        self.assertEqual(commands.SPI_INTIDS, (vgic["kNumPrivate"], vgic["kMaxIntid"] - 1))
+
+    def test_a_header_the_reader_cannot_fully_fold_still_answers(self):
+        # vcpu_internal.hpp holds a fixed-width complement, which has no
+        # Python spelling — asking for two plain constants out of it must
+        # not be stopped by an expression nobody asked about.
+        self.assertIn("~", commands._SLICE_HEADER.read_text())
+        with self.assertRaises(SystemExit):
+            abi.read_constexprs(commands._SLICE_HEADER)
+
+    def test_a_name_that_is_not_there_is_an_error_not_a_gap(self):
+        with self.assertRaises(SystemExit):
+            abi.read_constexprs(commands._SLICE_HEADER, wanted={"kSliceMs", "kNoSuchThing"})
+
+    def test_a_division_the_two_languages_disagree_about_is_refused(self):
+        # C++ truncates toward zero where Python floors, so they part on
+        # a negative operand. Folding it anyway would be a plausible
+        # number the firmware never had.
+        with tempfile.TemporaryDirectory() as directory:
+            header = Path(directory) / "band.hpp"
+            header.write_text(
+                "inline constexpr int kLow = 0 - 7;\n"
+                "inline constexpr int kBand = kLow / 2;\n"
+            )
+            self.assertEqual(abi.read_constexprs(header, wanted={"kLow"}), {"kLow": -7})
+            with self.assertRaises(SystemExit):
+                abi.read_constexprs(header, wanted={"kBand"})
+
     def test_an_opcode_this_build_does_not_know_still_reads(self):
         # EL2 refuses what it cannot carry out and says so in the same
         # record. A reader that stopped on the unknown number would drop
@@ -61,9 +104,23 @@ class RecordTest(unittest.TestCase):
     """EL2 answers a command with a trace record and nothing else."""
 
     def _record(self, op: int, result: int, a: int = 0, b: int = 0) -> trace.Record:
-        return trace.Record(
-            ts=1, code=events.BY_ID["command"].code, cpu=0, a=op | (result << 16), b=a, c=b
-        )
+        word = op | (result << commands.ANSWER_SHIFT)
+        return trace.Record(ts=1, code=events.BY_ID["command"].code, cpu=0, a=word, b=a, c=b)
+
+    def test_the_halves_of_the_answer_come_from_the_abi(self):
+        # Spelled on both sides, a moved boundary leaves the reader
+        # decoding an opcode out of the verdict's bits.
+        source = (
+            REPO / "src" / "components" / "service" / "command" / "src" / "command.cpp"
+        ).read_text()
+        self.assertIn("result << NOVA_CMD_ANSWER_SHIFT", source)
+        self.assertIn("command.op <= NOVA_CMD_ANSWER_MASK", source)
+
+    def test_an_opcode_too_wide_for_its_half_is_reported_as_none(self):
+        # Truncated it would name some other op against this one's
+        # verdict; zero is no opcode, so it reads as unnameable.
+        decoded = trace.decode(self._record(0, commands.RESULTS["unknown"]))
+        self.assertEqual((decoded["op"], decoded["result"]), ("0", "unknown"))
 
     def test_the_verdict_and_the_opcode_share_one_word(self):
         decoded = trace.decode(self._record(commands.OPS["mark"], commands.RESULTS["ok"], 7, 9))
@@ -168,8 +225,11 @@ class WriterTest(unittest.TestCase):
             writer = Machine(directory).writer()
             self.addCleanup(writer.close)
             self.assertEqual(writer.geometry.period_us, PERIOD_US)
-            self.assertEqual(writer.as_dict()["period_us"], PERIOD_US)
-            self.assertEqual(writer.as_dict()["ops"], sorted(commands.OPS))
+            facts = writer.as_dict()
+            self.assertEqual(facts["period_us"], PERIOD_US)
+            self.assertEqual(facts["ops"], sorted(commands.OPS))
+            self.assertEqual(facts["slice_us"], list(commands.SLICE_CHOICES_US))
+            self.assertEqual(facts["spi_intids"], list(commands.SPI_INTIDS))
 
     def test_a_command_lands_in_its_slot_before_the_index_moves(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -180,6 +240,26 @@ class WriterTest(unittest.TestCase):
             self.assertEqual(machine.slot(0), (commands.OPS["spi"], 1, 42))
             self.assertEqual(machine.widx, 1)
 
+    def test_a_word_too_wide_for_the_record_is_refused_not_raised_at_the_socket(self):
+        # struct's own failure is neither Full nor ValueError, so it
+        # would escape the uplink handler and drop the connection — a
+        # command taking down the session that issued it.
+        with tempfile.TemporaryDirectory() as directory:
+            machine = Machine(directory)
+            writer = machine.writer()
+            self.addCleanup(writer.close)
+            for bad in (1 << 64, -1):
+                with self.subTest(word=bad), self.assertRaises(ValueError):
+                    writer.issue(commands.OPS["mark"], bad)
+            self.assertEqual(machine.widx, 0)
+
+    def test_the_python_record_and_the_abi_agree_on_size(self):
+        # Untied, the two part silently: a record grown to four words
+        # would still be packed as three, leaving the rest of each slot
+        # holding the last command that used it.
+        self.assertEqual(commands._RECORD.size, commands.REC_SIZE)
+        self.assertEqual(trace._RECORD.size, trace.REC_SIZE)
+
     def test_a_full_ring_refuses_and_writes_nothing(self):
         # The whole point of this direction. A command that vanished is
         # a control that did nothing.
@@ -189,10 +269,12 @@ class WriterTest(unittest.TestCase):
             self.addCleanup(writer.close)
             for _ in range(commands.SLOTS):
                 writer.issue(commands.OPS["mark"])
-            with self.assertRaises(commands.Full):
+            with self.assertRaises(commands.Full) as refused:
                 writer.issue(commands.OPS["mark"], 0xDEAD)
+            # Named from the vocabulary EL2 shares: this is the one
+            # reason no answering record can carry.
+            self.assertIn("full", str(refused.exception))
             self.assertEqual(machine.widx, commands.SLOTS)
-            self.assertEqual(writer.pending(), commands.SLOTS)
 
             # Depth, not exhaustion: what EL2 takes, the host may fill.
             machine.take(commands.SLOTS)
@@ -231,9 +313,13 @@ class UplinkTest(unittest.TestCase):
         said = self._reasons(self._bridge(), {"op": "detonate"})
         self.assertTrue(any("unknown op 'detonate'" in text for text in said), said)
 
-    def test_arguments_that_are_not_numbers_are_refused(self):
-        said = self._reasons(self._bridge(), {"op": "mark", "a": "soon"})
-        self.assertTrue(any("must be integers" in text for text in said), said)
+    def test_an_argument_that_is_not_a_whole_number_is_refused(self):
+        # A float would be truncated by int(), which is the same quiet
+        # reinterpretation EL2 refuses rather than narrow.
+        for value in ("soon", 1.5, None, True):
+            with self.subTest(a=value):
+                said = self._reasons(self._bridge(), {"op": "mark", "a": value})
+                self.assertTrue(any("whole number" in text for text in said), said)
 
     def test_a_run_with_no_ring_says_so_rather_than_failing_silently(self):
         # An idle bridge has no machine, so there is no page to write.

@@ -59,16 +59,15 @@ DOWNLINK = frozenset(
         Topic.PROBE,
     }
 )
-# `trace` and `probe` travel both ways. A second topic for "asking about
-# traces" would double this set, the validation and the documentation to
-# say the same word twice; the Kind already distinguishes a request from
-# what the bridge sends unasked.
+# One list, meaning "the bridge answers this". A second naming what was
+# merely recognised used to sit beside it, and two lists to keep in step
+# is how a topic ends up recognised and silently ignored; unlisted here,
+# one is refused by name in parse_uplink with a reason the reader sees.
 #
-# One list, and it means "the bridge answers this". A topic the protocol
-# named but nobody implemented used to sit here and be refused further
-# down; two lists to keep in step is how a new topic ends up recognised
-# and silently ignored. Unlisted here, it is refused by name in
-# parse_uplink with a reason the reader can see.
+# `trace` and `probe` travel both ways: a separate topic for "asking
+# about traces" would say the same word twice in this set, the
+# validation and the documentation, and the Kind already distinguishes a
+# request from what the bridge sends unasked.
 UPLINK = frozenset(
     {Topic.UART, Topic.TARGET, Topic.HALT, Topic.CMD, Topic.PROBE, Topic.TRACE, Topic.CURSOR}
 )

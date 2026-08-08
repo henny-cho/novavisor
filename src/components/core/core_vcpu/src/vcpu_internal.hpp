@@ -34,6 +34,23 @@ inline constexpr std::uint64_t kSpsrEl1h = 0x3C5ULL;
 // (single-source trigger discipline).
 inline constexpr std::uint64_t kSliceMs = 10;
 
+// How far the quantum may be moved at runtime, and the ends that fall
+// out of it. A decade either side of the boot value: nearer the bottom
+// it approaches the cost of the switch it schedules and the machine
+// spends its time changing guests, nearer the top the other budgets
+// this firmware counts in milliseconds start to be decided by the
+// scheduler rather than by their own timers. An experiment moves the
+// quantum; it does not redesign the scheduler.
+//
+// The band is spelled here rather than at set_slice_us(), because the
+// control that offers choices reads these names too — derived twice it
+// would be the firmware and the panel disagreeing about what is
+// acceptable.
+inline constexpr std::uint64_t kSliceSpan  = 10;
+inline constexpr std::uint64_t kSliceUs    = kSliceMs * 1000;
+inline constexpr std::uint64_t kSliceMinUs = kSliceUs / kSliceSpan;
+inline constexpr std::uint64_t kSliceMaxUs = kSliceUs * kSliceSpan;
+
 // "No VCPU resident on this core" — before the first guest entry and
 // after every local guest retired.
 inline constexpr std::size_t kNoVcpu = ~std::size_t{0};
@@ -48,9 +65,13 @@ struct CpuSched {
   bool          idling  = false; // inside schedule_out's wfi+drain loop (see schedule_after_retire)
 };
 
-extern std::array<Vcpu, kMaxVcpus>          g_vcpus;
-extern std::size_t                          g_count;       // vCPU slots; boot-immutable after init()
-extern std::uint64_t                        g_slice_ticks; // boot-immutable after init()
+extern std::array<Vcpu, kMaxVcpus> g_vcpus;
+extern std::size_t                 g_count; // vCPU slots; boot-immutable after init()
+// Set at init and movable from there by set_slice_us(). Atomic because
+// a peer core reads it while arming its own quantum; relaxed on both
+// sides, since the only ordering that matters is that a core sees one
+// value or the other.
+extern std::atomic<std::uint64_t>           g_slice_ticks;
 extern std::array<CpuSched, cpu::kMaxCpus>  g_sched;
 extern lifecycle::RestartBudget<kMaxGuests> g_budget; // per-VM — micro-reboot is a VM-level policy
 
