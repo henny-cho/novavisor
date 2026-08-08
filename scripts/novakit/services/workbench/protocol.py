@@ -60,16 +60,17 @@ DOWNLINK = frozenset(
     }
 )
 # `trace` and `probe` travel both ways. A second topic for "asking about
-# traces" would double SUPPORTED_UPLINK, the validation and the
-# documentation to say the same word twice; the Kind already
-# distinguishes a request from what the bridge sends unasked.
+# traces" would double this set, the validation and the documentation to
+# say the same word twice; the Kind already distinguishes a request from
+# what the bridge sends unasked.
+#
+# One list, and it means "the bridge answers this". A topic the protocol
+# named but nobody implemented used to sit here and be refused further
+# down; two lists to keep in step is how a new topic ends up recognised
+# and silently ignored. Unlisted here, it is refused by name in
+# parse_uplink with a reason the reader can see.
 UPLINK = frozenset(
     {Topic.UART, Topic.TARGET, Topic.HALT, Topic.CMD, Topic.PROBE, Topic.TRACE, Topic.CURSOR}
-)
-# Recognised-but-deferred uplink topics are answered explicitly instead
-# of being dropped, so the UI degrades visibly.
-SUPPORTED_UPLINK = frozenset(
-    {Topic.UART, Topic.TARGET, Topic.HALT, Topic.TRACE, Topic.CURSOR, Topic.PROBE}
 )
 
 

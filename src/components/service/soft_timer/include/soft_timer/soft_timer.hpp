@@ -10,6 +10,7 @@
 //   kSlotWatchdog+i   heartbeat deadline for VM i (watchdog)
 //   kSlotLifecycle+i  quiesce ACK deadline for VM i (smp boot owner)
 //   kSlotDmaDrain+i   non-blocking DMA drain polling for VM i
+//   kSlotCommand      host command ring drain, primary core (command)
 //
 // Expiry runs inside IRQ dispatch: callbacks receive the live trap
 // frame and may swap it (preemption). The hardware timer is
@@ -33,7 +34,8 @@ inline constexpr std::size_t kSlotCntvWake    = 2;                           // 
 inline constexpr std::size_t kSlotWatchdog    = kSlotCntvWake + kMaxVcpus;   // + VM index, kMaxGuests wide
 inline constexpr std::size_t kSlotLifecycle   = kSlotWatchdog + kMaxGuests;  // + VM index, kMaxGuests wide
 inline constexpr std::size_t kSlotDmaDrain    = kSlotLifecycle + kMaxGuests; // + VM index, kMaxGuests wide
-inline constexpr std::size_t kSlotCount       = kSlotDmaDrain + kMaxGuests;
+inline constexpr std::size_t kSlotCommand     = kSlotDmaDrain + kMaxGuests;
+inline constexpr std::size_t kSlotCount       = kSlotCommand + 1;
 
 // Enable the CNTHP PPI at the GIC (RuntimeStart).
 void init() noexcept;

@@ -28,4 +28,5 @@ set(NOVA_COMPONENTS
     dma_probe
     smp
     vuart
+    command
 )

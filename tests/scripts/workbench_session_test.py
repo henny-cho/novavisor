@@ -934,8 +934,14 @@ class ServerSmokeTest(unittest.IsolatedAsyncioTestCase):
 
                     # The connect topo was published, so a later flush
                     # re-broadcasts it; answers are found, not indexed.
-                    await connection.send('{"topic":"cmd","data":{}}')
-                    await self.until(connection, {"phase": "unsupported", "topic": "cmd"})
+                    await connection.send('{"topic":"nonesuch","data":{}}')
+                    await self.until(
+                        connection,
+                        {
+                            "phase": "uplink-rejected",
+                            "reason": "unknown uplink topic: 'nonesuch'",
+                        },
+                    )
 
                     await connection.send('{"topic":"halt","data":{"cmd":"stop"}}')
                     await self.until(

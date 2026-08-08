@@ -343,6 +343,16 @@ class Session:
             return
         self._store.set_topology(topology | {"board": board | {"edges": regraded}})
 
+    def adopt_command_ring(self, facts: dict) -> None:
+        """Publish what this run will accept being told.
+
+        On the topology for the same reason the page tables are: a
+        reader arriving late still has to know the machine can be driven
+        and how long it takes to answer. Absent when the firmware placed
+        no ring, which is the honest way to say a run cannot be driven.
+        """
+        self._store.set_topology(self._store.topology | {"command": facts})
+
     def adopt_memory_map(self, captured: dict) -> None:
         """Publish this run's page tables, once they exist.
 
