@@ -152,6 +152,20 @@ class TeeTest(unittest.TestCase):
         store.publish(Topic.LIFE, Kind.EVENT, {"phase": "x"})
         self.assertEqual(len(store.drain()), 1)
 
+    def test_stamping_a_frame_tells_nobody(self):
+        """Publishing means "tell every client"; stamping means "give me
+        one frame with the next sequence", for a caller handing it to one
+        socket itself. They were the same function, and the replay path
+        wanted the second."""
+        store = StateStore(Envelopes(Clock()))
+        first = store.stamp(Topic.CONSOLE, Kind.EVENT, {"line": "a"})
+        second = store.stamp(Topic.CONSOLE, Kind.EVENT, {"line": "b"})
+        self.assertEqual(store.drain(), [])
+        self.assertEqual(store.window.dropped, 0)
+        # Still this connection's ordering, which is the whole point of
+        # minting rather than reusing what the recording carried.
+        self.assertLess(first["seq"], second["seq"])
+
 
 class IdentityTest(unittest.TestCase):
     """A replay is answered by the live code, or it is not evidence.
@@ -204,6 +218,48 @@ class IdentityTest(unittest.TestCase):
         request = {"op": "window", "from": 1_000, "to": 1_600, "buckets": 8192,
                    "events": ["trap"]}
         self.assertEqual(self.answer(live, request), self.answer(replayed, request))
+
+    def test_opening_a_replay_does_not_report_the_bridge_falling_behind(self):
+        """It did. Handing a client the whole run went through the
+        broadcast window, which sheds frames when a batch overruns: 4905
+        of 9000 shed, 4097 re-sent on the next flush, and the shedding
+        published as `frames-dropped` — so the badge that means "the
+        bridge could not keep up" lit on merely opening a recording.
+        """
+        from novakit.services.workbench.server import Bridge
+
+        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        for index in range(9_000):
+            recorder.frame({"seq": index, "topic": "console", "kind": "event",
+                            "ts": index, "src": "serial", "data": {"line": index}})
+        recorder.close()
+
+        bridge = Bridge(ui_root=self.ui)
+        bridge.load_replay(recording.load(self.directory))
+        payload = bridge._connect_payload()
+
+        self.assertEqual(len(payload), 9_001)  # the run, plus this connect's topo
+        self.assertEqual(bridge.store.window.dropped, 0)
+        again = bridge.store.drain()
+        self.assertEqual([f["topic"] for f in again], ["topo"])
+        self.assertEqual([f for f in again if f["data"].get("phase") == "frames-dropped"], [])
+
+    def test_a_kind_or_src_this_build_never_heard_of_survives(self):
+        """A recording carries what the run that made it wrote. Coercing
+        an unfamiliar field into this build's enum raised, which killed
+        the connection over a value the reader never looked at."""
+        from novakit.services.workbench.server import Bridge
+
+        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        recorder.frame({"seq": 1, "topic": "console", "kind": "gossip", "ts": 3,
+                        "src": "martian", "data": {"line": "from a later build"}})
+        recorder.close()
+
+        bridge = Bridge(ui_root=self.ui)
+        bridge.load_replay(recording.load(self.directory))
+        odd = [f for f in bridge._connect_payload() if f["topic"] == "console"]
+        self.assertEqual(len(odd), 1)
+        self.assertEqual((odd[0]["kind"], odd[0]["src"]), ("gossip", "martian"))
 
     def test_a_replay_says_it_is_one(self):
         from novakit.services.workbench.server import Bridge
@@ -299,40 +355,57 @@ class SeekTest(unittest.TestCase):
         return frames
 
     def test_the_state_at_a_moment_is_the_stream_folded_to_it(self):
-        frames = self.stream(900)
-        rec = recording.Recording(directory=Path("."), meta={}, frames=frames,
-                                  marks=recording.fold(frames))
+        rec = recording.Recording(directory=Path("."), meta={}, frames=self.stream(900))
         self.assertEqual(rec.at(0)["sched.cpu"]["data"]["values"], [{"current": 0}])
         self.assertEqual(rec.at(5_000)["sched.cpu"]["data"]["values"], [{"current": 500}])
         self.assertEqual(rec.at(1 << 40)["sched.cpu"]["data"]["values"], [{"current": 899}])
 
-    def test_the_index_only_makes_the_same_answer_cheaper(self):
-        """A checkpoint that changed an answer would be a cache, which
-        is the thing this is not."""
+    def test_the_checkpoint_interval_cannot_change_an_answer(self):
+        """The index is an accelerator or it is a cache, and a cache is
+        the thing this design refuses. Held to it at every interval
+        including the degenerate one — a single checkpoint at the start,
+        which is the same as having none.
+        """
         frames = self.stream(900)
-        indexed = recording.Recording(directory=Path("."), meta={}, frames=frames,
-                                      marks=recording.fold(frames))
-        bare = recording.Recording(directory=Path("."), meta={}, frames=frames, marks=[])
+        at_every = {
+            every: recording.Recording(
+                directory=Path("."), meta={}, frames=frames,
+                marks=recording.fold(frames, every=every),
+            )
+            for every in (1, 7, 256, len(frames) + 1)
+        }
+        self.assertGreater(len(at_every[7].marks), len(at_every[256].marks))
+        self.assertEqual(len(at_every[len(frames) + 1].marks), 1)
         for ts in (0, 137, 4_321, 8_990, 1 << 40):
+            answers = [rec.at(ts) for rec in at_every.values()]
             with self.subTest(ts=ts):
-                self.assertEqual(indexed.at(ts), bare.at(ts))
-        self.assertGreater(len(indexed.marks), 1)
+                self.assertTrue(all(answer == answers[0] for answer in answers))
+
+    def test_an_index_cannot_be_held_without_being_derived(self):
+        """The same argument as not writing keyframes into the file, one
+        level in: a Recording that had to be handed its index would have
+        a caller who could forget, and a stale index is invisible
+        because it is what gets read."""
+        rec = recording.Recording(directory=Path("."), meta={}, frames=self.stream(900))
+        self.assertEqual(rec.marks, recording.fold(rec.frames))
+        self.assertEqual(rec.topics, ("sched.cpu",))
+        self.assertEqual(len(rec.drains), 900)
 
     def test_the_topology_is_not_folded_into_the_state(self):
         """It is the world, published once and answered from the store;
         replaying it as a panel value would put a phase in a table."""
         frames = [{"seq": 1, "topic": "topo", "kind": "snapshot", "ts": 0,
                    "src": "bridge", "data": {"stops": []}}]
-        rec = recording.Recording(directory=Path("."), meta={}, frames=frames,
-                                  marks=recording.fold(frames))
+        rec = recording.Recording(directory=Path("."), meta={}, frames=frames)
         self.assertNotIn("topo", rec.at(1 << 40))
+        self.assertEqual(rec.topics, ())
 
     def test_a_record_is_placed_at_the_drain_that_took_it_in(self):
         """Two clocks. Records carry the machine's, frames the bridge's,
         and every drain summary carries both — so the pairs are already
         in the stream and nothing has to be interpolated."""
         frames = self.stream(10)
-        rec = recording.Recording(directory=Path("."), meta={}, frames=frames, marks=[])
+        rec = recording.Recording(directory=Path("."), meta={}, frames=frames)
         # Stamped 3500: the first drain whose span reached it is the one
         # at 4000, published at ts 41.
         self.assertEqual(rec.wire_ts(3_500), 41)
@@ -475,13 +548,15 @@ class FixtureTest(unittest.TestCase):
         self.assertTrue(all(span.first <= r.ts <= middle for r in inside))
 
     def test_the_fold_is_a_function_of_the_stream(self):
-        bare = recording.Recording(
-            directory=FIXTURE, meta=self.recorded.meta, frames=self.recorded.frames
+        """On a real run, not a constructed one: the same answer at
+        every checkpoint however finely the stream was folded."""
+        coarse = recording.Recording(
+            directory=FIXTURE, meta=self.recorded.meta, frames=self.recorded.frames,
+            marks=recording.fold(self.recorded.frames, every=len(self.recorded.frames) + 1),
         )
-        marks = self.recorded.marks or [recording.Checkpoint(0, 0, {})]
-        for mark in marks:
+        for mark in self.recorded.marks:
             with self.subTest(at=mark.at):
-                self.assertEqual(self.recorded.at(mark.ts), bare.at(mark.ts))
+                self.assertEqual(self.recorded.at(mark.ts), coarse.at(mark.ts))
 
     def test_a_cursor_late_in_the_run_reads_more_than_one_early(self):
         first, last = self.recorded.frames[0]["ts"], self.recorded.frames[-1]["ts"]

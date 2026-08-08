@@ -341,42 +341,68 @@ class SelectionTest(unittest.TestCase):
         self.source = (UI / "js" / "timeline.mjs").read_text()
         self.main = (UI / "js" / "main.mjs").read_text()
 
-    def test_the_selection_is_an_index_not_an_event(self):
-        """"The next one" is the question a tour asks, and a record
-        cannot answer it."""
-        self.assertRegex(self.source, r"function select\(index")
-        self.assertRegex(self.source, r"function step\(by\)")
+    def body(self, signature: str) -> str:
+        found = re.search(rf"{signature} \{{(.*?)\n  \}}", self.source, re.S)
+        self.assertIsNotNone(found, f"{signature} not found")
+        return found.group(1)
+
+    def test_the_cursor_is_a_record_and_its_position_is_derived(self):
+        """The list a selection came from is rebuilt from the window on
+        demand — a resize, a drag or an arriving batch changes it. An
+        index kept across that names a different record than the caption
+        said, and the paint, which reads the cursor without rebuilding
+        anything, would draw the line where nobody pointed.
+
+        "The next one" is still answerable: find the record in the
+        rebuilt list and move. The position was only ever stored by
+        accident.
+        """
+        self.assertRegex(self.source, r"let picked = null;")
+        self.assertRegex(self.source, r"const positionOf = \(rows\) =>")
+        # Nothing keeps a position across calls.
+        self.assertNotIn("chosenAt", self.source)
+        # And the paint draws from the record, not from an index.
+        self.assertIn("if (!picked) return;", self.body(r"function cursorLine\(window_, at, colours\)"))
+
+    def test_one_rule_says_whether_two_records_are_the_same(self):
+        """Two yields of visible() are different objects for one record,
+        so identity cannot answer it — and a second comparison that
+        forgot the ring would confuse two cores sharing a timestamp."""
+        self.assertRegex(self.source, r"const same = \(a, b\) =>[\s\S]{0,160}a\.cpu === b\.cpu")
+        click = re.search(r'addEventListener\("pointerup".*?\n  \}\);', self.source, re.S)
+        self.assertIn("same(row, hit)", click.group(0))
 
     def test_playback_moves_the_same_cursor_a_click_moves(self):
         # The tick calls step(), which calls select() — the one place a
         # selection is announced.
-        play = re.search(r"function play\(speed = 1\) \{(.*?)\n  \}", self.source, re.S)
-        self.assertIsNotNone(play, "playback not found")
-        self.assertIn("step(+1)", play.group(1))
-        self.assertNotIn("onSelect(", play.group(1))
+        play = self.body(r"function play\(speed = 1\)")
+        self.assertIn("step(+1)", play)
+        self.assertNotIn("onSelect(", play)
         click = re.search(r'addEventListener\("pointerup".*?\n  \}\);', self.source, re.S)
         self.assertIsNotNone(click)
-        self.assertIn("select(index)", click.group(0))
-        self.assertNotIn("onSelect({ kind: \"mark\"", click.group(0))
+        self.assertRegex(click.group(0), r"select\(index, rows\)")
+        self.assertNotIn('onSelect({ kind: "mark"', click.group(0))
 
     def test_playback_compresses_idle_time_and_never_the_order(self):
         """Real time is either a blur or a wait; even spacing lies about
         the timing. Between the bounds the delay tracks the real gap,
         and the printed delta is always the real one."""
-        self.assertRegex(self.source, r"STEP_MIN_MS")
-        self.assertRegex(self.source, r"STEP_MAX_MS")
-        self.assertRegex(self.source, r"Math\.min\(STEP_MAX_MS, Math\.max\(STEP_MIN_MS")
-        # The caption's delta comes from the record timestamps, not from
-        # the delay the player happened to use.
-        self.assertRegex(self.source, r"dt: chosenAt > 0 \? micros\(")
+        play = self.body(r"function play\(speed = 1\)")
+        self.assertIn("Math.min(STEP_MAX_MS, Math.max(STEP_MIN_MS", play)
+        # The delay the player chose never becomes the delta a reader
+        # reads: playback computes no `dt` at all.
+        self.assertNotIn("dt", play)
+        # That comes from the record timestamps, where the selection is
+        # announced, and reaches the caption unchanged.
+        self.assertRegex(self.body(r"function select\(index, rows = laid\(\)\)"),
+                         r"dt: at > 0 \? micros\(record\.ts - rows\[at - 1\]\.ts\)")
         self.assertIn("Δt ${choice.dt}us", self.main)
 
     def test_a_new_set_of_records_drops_the_selection(self):
-        """An index into records that no longer exist points at whatever
-        lands in that slot next."""
+        """A record that no longer exists is not a cursor, and keeping
+        it would draw a line at a time nothing is on."""
         self.assertRegex(self.source, r"function dropSelection\(\)")
-        reset = re.search(r"function reset\(\) \{(.*?)\n  \}", self.source, re.S)
-        self.assertIn("dropSelection()", reset.group(1))
+        self.assertIn("dropSelection()", self.body(r"function reset\(\)"))
 
 
 class PathTourTest(unittest.TestCase):

@@ -475,14 +475,13 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     cursorLine(window_, at, colours);
   }
 
-  /* Where the selection is. Drawn from the record rather than from
-     wherever the pointer was, so a cursor moved by a key and one moved
-     by a click land in the same place. */
+  /* Where the selection is. From the record itself, so a paint that
+     nobody asked for — a resize, a theme change, an arriving batch —
+     cannot draw the line at whatever now happens to sit at some index. */
   function cursorLine(window_, at, colours) {
-    const record = chosenAt >= 0 ? ordered[chosenAt] : null;
-    if (!record) return;
+    if (!picked) return;
     const width = Math.max(1, window_.to - window_.from);
-    const x = at.gutter + ((record.ts - window_.from) / width) * at.plot;
+    const x = at.gutter + ((picked.ts - window_.from) / width) * at.plot;
     if (x < at.gutter || x > at.gutter + at.plot) return;
     context.fillStyle = colours.ink;
     context.fillRect(Math.round(x), 0, Math.max(1, at.scale), at.height);
@@ -595,17 +594,41 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
      alternative is a second path into the board — and then the caption,
      the focus and the grade badge exist twice and drift once.
 
-     An index rather than a record: "the next one" is the question a
-     tour asks, and a record cannot answer it. */
-  let ordered = []; /* the visible records in time order, rebuilt lazily */
-  let chosenAt = -1; /* index into `ordered`, -1 for nothing chosen */
+     The cursor is the *record*, not an index into the list it came
+     from. That list is derived from the window and rebuilt on demand:
+     a resize, a drag or an arriving batch changes it, and an index kept
+     across that names a different record than the caption said — while
+     the paint, which reads the cursor without rebuilding anything,
+     draws the line somewhere the reader never pointed.
+
+     "The next one" is still answerable: rebuild the list, find where
+     this record sits in it, and move. The position is derived, which is
+     what it always was — it was only ever *stored* by accident. */
+  let picked = null; /* the record the cursor is on */
   let playing = null; /* the playback timer */
 
+  /* The records the cursor can be on: exactly the ones on screen.
+     Filtered to what the catalogue names, because that is what `bin()`
+     draws and `nearest()` clicks — an unnamed record left in here would
+     be a mark a reader cannot see, that a step can land on and that
+     playback stops dead at, since there is nothing to caption it with.
+     One firmware hook ahead of this UI was enough to do that. */
   function laid() {
     const window_ = bounds();
-    ordered = window_ ? [...visible(window_)].sort((a, b) => a.ts - b.ts) : [];
-    return ordered;
+    if (!window_) return [];
+    const rows = [];
+    for (const record of visible(window_)) {
+      if (byCode.has(record.code)) rows.push(record);
+    }
+    return rows.sort((a, b) => a.ts - b.ts);
   }
+
+  /* Two yields of visible() are different objects for the same record,
+     so identity cannot answer this. A record is its timestamp, its kind
+     and the ring it came from. */
+  const same = (a, b) =>
+    Boolean(a) && Boolean(b) && a.ts === b.ts && a.code === b.code && a.cpu === b.cpu;
+  const positionOf = (rows) => rows.findIndex((row) => same(row, picked));
 
   function named(record) {
     const entry = record && byCode.get(record.code);
@@ -620,30 +643,37 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
      second copy of the order somewhere. */
   function select(index, rows = laid()) {
     if (!rows.length) return false;
-    chosenAt = Math.min(rows.length - 1, Math.max(0, index));
-    const record = named(rows[chosenAt]);
+    const at = Math.min(rows.length - 1, Math.max(0, index));
+    const record = named(rows[at]);
     if (!record) return false;
+    picked = rows[at];
     marked = record;
     onSelect({
       kind: "mark",
       record,
-      index: chosenAt,
+      /* True of the list this was chosen from, which is what a reader
+         is looking at. Not stored: the next move recomputes it. */
+      index: at,
       total: rows.length,
-      prev: named(rows[chosenAt - 1]),
-      next: named(rows[chosenAt + 1]),
+      prev: named(rows[at - 1]),
+      next: named(rows[at + 1]),
       /* The gap from the previous mark, in real microseconds, whatever
          speed the cursor is being moved at. */
-      dt: chosenAt > 0 ? micros(record.ts - rows[chosenAt - 1].ts) : null,
+      dt: at > 0 ? micros(record.ts - rows[at - 1].ts) : null,
       micros: micros(record.ts - (bounds()?.from ?? record.ts)),
     });
     draw();
     return true;
   }
 
+  /* Returns where it landed, so playback does not rebuild the list to
+     ask. Null when there was nowhere to go. */
   function step(by) {
     const rows = laid();
-    if (!rows.length) return false;
-    return select(chosenAt < 0 ? (by > 0 ? 0 : rows.length - 1) : chosenAt + by, rows);
+    if (!rows.length) return null;
+    const from = positionOf(rows);
+    const at = from < 0 ? (by > 0 ? 0 : rows.length - 1) : from + by;
+    return select(at, rows) ? { rows, at: Math.min(rows.length - 1, Math.max(0, at)) } : null;
   }
 
   /* Auto-advance. Not a second renderer: it pushes the same cursor the
@@ -651,12 +681,16 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
      free and cannot disagree with the manual case. */
   function play(speed = 1) {
     stop();
-    laid();
-    if (chosenAt < 0 || chosenAt >= ordered.length - 1) select(0);
+    const rows = laid();
+    if (positionOf(rows) < 0) select(0, rows);
     const tick = () => {
-      if (!step(+1)) return stop();
-      if (chosenAt >= ordered.length - 1) return stop();
-      const gap = ordered[chosenAt + 1].ts - ordered[chosenAt].ts;
+      /* The step reports where it landed and in what list, so the pause
+         is measured against the records that are actually there — a
+         following strip grows underneath playback — without building
+         that list a second time to ask. */
+      const landed = step(+1);
+      if (!landed || landed.at >= landed.rows.length - 1) return stop();
+      const gap = landed.rows[landed.at + 1].ts - landed.rows[landed.at].ts;
       const real = freq ? (gap * 1000) / freq : STEP_MIN_MS;
       playing = setTimeout(tick, Math.min(STEP_MAX_MS, Math.max(STEP_MIN_MS, real / speed)));
     };
@@ -701,8 +735,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
 
   function dropSelection() {
     stop();
-    chosenAt = -1;
-    ordered = [];
+    picked = null;
     marked = null;
   }
 
@@ -743,8 +776,11 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
        ways to move the same selection. */
     stop();
     const rows = laid();
-    const index = rows.findIndex((row) => row.ts === hit.ts && row.code === hit.code);
-    if (index >= 0) select(index);
+    /* The same rule the cursor uses to find itself, rather than a
+       second comparison here that forgot which ring the record came
+       from — two records can share a timestamp across cores. */
+    const index = rows.findIndex((row) => same(row, hit));
+    if (index >= 0) select(index, rows);
   });
 
   /* Arrow keys walk the selection, Space plays it, Home and End are the

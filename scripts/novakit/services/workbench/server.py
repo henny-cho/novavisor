@@ -292,20 +292,26 @@ class Bridge:
         moment. The seq belongs to the ordering of this socket; the
         timestamp belongs to the run, and a replay wearing this
         process's clock would put yesterday on screen as if it were now.
+
+        Stamped rather than published, because this payload is being
+        handed to one socket right here. Published, a recording's frames
+        went through the broadcast window on every connect — which shed
+        thousands, re-sent what it kept, and reported the shedding as the
+        bridge falling behind.
+
+        Kind and src travel verbatim for the same reason the timestamp
+        does: they are what the recorded run wrote, and a value this
+        build does not recognise must not be rewritten or refused.
         """
         frames = self.store.connect_frames(self._live_state())
         if self._replay is None:
             return frames
         return frames + [
-            self.store.publish(
+            self.store.stamp(
                 frame.get("topic", ""),
-                Kind(frame.get("kind", Kind.EVENT.value)),
+                frame.get("kind", Kind.EVENT.value),
                 frame.get("data") or {},
-                # Verbatim. Where a value came from is what this layer
-                # is for being right about, so an unfamiliar `src` from
-                # an older recording travels rather than being coerced.
                 src=frame.get("src", Src.BRIDGE.value),
-                replay=False,
                 ts=frame.get("ts"),
             )
             for frame in self._replay_frames

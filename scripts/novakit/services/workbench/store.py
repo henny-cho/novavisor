@@ -68,7 +68,7 @@ class StateStore:
         kind: Kind,
         data: dict,
         *,
-        src: Src = Src.BRIDGE,
+        src: Src | str = Src.BRIDGE,
         replay: bool = True,
         ts: int | None = None,
     ) -> dict:
@@ -77,7 +77,7 @@ class StateStore:
 
         `ts` names the moment when it is not now — a recorded frame
         happened when the recording says it did."""
-        frame = self._envelopes.make(topic, kind, data, src=src, ts=ts)
+        frame = self.stamp(topic, kind, data, src=src, ts=ts)
         # Before the window, which drops console frames on overrun: an
         # observer of everything must not be given a client's view.
         if self._on_frame is not None:
@@ -86,6 +86,29 @@ class StateStore:
         if replay:
             self._backlog.append(frame)
         return frame
+
+    def stamp(
+        self,
+        topic: Topic | str,
+        kind: Kind | str,
+        data: dict,
+        *,
+        src: Src | str = Src.BRIDGE,
+        ts: int | None = None,
+    ) -> dict:
+        """An envelope, minted and handed straight back — not announced.
+
+        Publishing means "tell every client". This means "give me one
+        frame carrying the next sequence", for a caller that is handing
+        it to one socket itself.
+
+        They were the same function, and the replay path wanted the
+        second and got the first: it pushed a whole recording through the
+        broadcast window, which shed thousands of frames, re-sent what it
+        kept on the next flush, and reported the shedding as the bridge
+        having fallen behind. Opening a replay lit the loss badge.
+        """
+        return self._envelopes.make(topic, kind, data, src=src, ts=ts)
 
     @property
     def topology(self) -> dict:
