@@ -182,6 +182,7 @@ else()
     nova_add_host_test(timebase_test)         # CNTFRQ contract + overflow-safe ms conversion
     nova_add_host_test(cpu_features_test)     # speculation-barrier ID fields → SMCCC verdict
     nova_add_host_test(trace_ring_test)       # overwriting trace ring: loss is counted, never torn
+    nova_add_host_test(command_ring_test)     # refusing command ring: accepted means delivered once
 
     # Component tests (src/components/<group>/<name>/test/).
     nova_add_component_test(core_mmu stage2_descriptor_test) # Stage 2 descriptor encoding
