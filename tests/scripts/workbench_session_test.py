@@ -535,6 +535,8 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
         class GoodProvider:
             def __init__(self):
                 self.closed = False
+                # No image behind it, so no page tables to publish.
+                self.regimes: dict = {}
 
             def read(self, _obs):
                 return {"n": 1}
@@ -585,6 +587,8 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
         class Provider:
             def __init__(self):
                 self.closed = False
+                # No image behind it, so no page tables to publish.
+                self.regimes: dict = {}
 
             def read(self, _obs):
                 return {"n": 1}
@@ -882,6 +886,27 @@ class ServerSmokeTest(unittest.IsolatedAsyncioTestCase):
                 chunks.append(chunk)
         return b"".join(chunks)
 
+    async def until(self, connection, expected: dict, timeout: float = 2.0) -> None:
+        """Read batches until one carries `expected`.
+
+        Which batch an answer lands in is the flush loop's business: a
+        flush falling between the send and the reply puts them in
+        different ones. Reading exactly one batch asserts a schedule
+        rather than a behaviour.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        seen: list[dict] = []
+        while expected not in seen:
+            left = deadline - loop.time()
+            if left <= 0:
+                self.fail(f"{expected} never arrived; saw {seen}")
+            try:
+                batch = json.loads(await asyncio.wait_for(connection.recv(), left))
+            except TimeoutError:
+                self.fail(f"{expected} never arrived; saw {seen}")
+            seen += [frame["data"] for frame in batch]
+
     async def test_static_page_and_ws_frames_share_one_port(self):
         from novakit.services.workbench.server import Bridge
         from websockets.asyncio.client import connect
@@ -907,20 +932,15 @@ class ServerSmokeTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(state["run_id"], 0)
                     self.assertTrue(state["session"])
 
-                    # The connect topo was published, so the next flush
+                    # The connect topo was published, so a later flush
                     # re-broadcasts it; answers are found, not indexed.
                     await connection.send('{"topic":"cmd","data":{}}')
-                    frames = json.loads(await asyncio.wait_for(connection.recv(), 2))
-                    self.assertIn(
-                        {"phase": "unsupported", "topic": "cmd"},
-                        [frame["data"] for frame in frames],
-                    )
+                    await self.until(connection, {"phase": "unsupported", "topic": "cmd"})
 
                     await connection.send('{"topic":"halt","data":{"cmd":"stop"}}')
-                    frames = json.loads(await asyncio.wait_for(connection.recv(), 2))
-                    self.assertIn(
+                    await self.until(
+                        connection,
                         {"phase": "uplink-rejected", "reason": "halt: session is idle"},
-                        [frame["data"] for frame in frames],
                     )
             finally:
                 await bridge.close()

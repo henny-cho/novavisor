@@ -11,12 +11,12 @@ from __future__ import annotations
 import mmap
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
 from ...image import abi
-from . import elfsym
+from . import elfsym, regimes
 from .observations import OBSERVATIONS, Obs
 
 _U32 = elfsym.TypeInfo("uint", 4)
@@ -80,6 +80,20 @@ class SnapshotProvider(Protocol):
     def close(self) -> None: ...
 
 
+class MemoryReader(Protocol):
+    """Bytes at a physical address, wherever they come from.
+
+    Kept apart from `SnapshotProvider` because the questions are shaped
+    differently: a snapshot is one named symbol decoded through the
+    layout its type declares, where a page table walk follows addresses
+    it only learns as it reads them. Apart, a replay can serve the walk
+    from a recorded copy of the tables without having to pretend it can
+    also serve a live symbol read.
+    """
+
+    def read_bytes(self, pa: int, size: int) -> bytes: ...
+
+
 @dataclass(frozen=True)
 class ImageView:
     """Everything the S layer needs from an image, holding nothing open.
@@ -90,10 +104,15 @@ class ImageView:
     pure Python that lands during guest boot, which is the busiest the
     trace rings ever get: work this shape can be sent somewhere it
     cannot compete with the drain.
+
+    `regimes` is keyed by symbol rather than by topic: the page tables
+    feed no observation, and what the map wants from them is where they
+    are and how big, not a decoded reading.
     """
 
     resolved: dict[str, elfsym.ResolvedSymbol]
     symbols: elfsym.SymbolTable
+    regimes: dict[str, elfsym.ResolvedSymbol] = field(default_factory=dict)
 
 
 def resolve_image(elf_path: Path) -> ImageView:
@@ -108,6 +127,7 @@ def resolve_image(elf_path: Path) -> ImageView:
         return ImageView(
             {obs.topic: index.resolve(obs.symbol) for obs in OBSERVATIONS if obs.pa is None},
             index.symbols,
+            {symbol: index.resolve(symbol) for symbol in regimes.SYMBOLS},
         )
     finally:
         index.close()
@@ -129,9 +149,13 @@ class ElfRamProvider:
         image = resolve_image(elf_path) if view is None else view
         self._resolved = image.resolved
         self._symbols = image.symbols
+        self.regimes = image.regimes
         with ram_path.open("rb") as backing:
             self._ram = mmap.mmap(backing.fileno(), 0, prot=mmap.PROT_READ)
-        highest = max(entry.address + entry.size for entry in self._resolved.values())
+        highest = max(
+            entry.address + entry.size
+            for entry in (*self._resolved.values(), *self.regimes.values())
+        )
         # PA-declared pages sit far above the image (IVC at +512 MiB);
         # a short backend must fail here, not decode as silent zeros.
         for obs in OBSERVATIONS:
@@ -158,6 +182,20 @@ class ElfRamProvider:
         if obs.shape is not None:
             value = obs.shape(value, info)
         return _hexify(value) if obs.hex else value
+
+    def read_bytes(self, pa: int, size: int) -> bytes:
+        """Raw memory, for readers that learn their addresses as they go.
+
+        Slicing an mmap past its end returns what there is instead of
+        failing, so a read running off the backend has to be caught
+        here — a table half read decodes as invalid entries, and the
+        walk would then report an address as unmapped when it is only
+        unreadable.
+        """
+        offset = pa - self._base
+        if offset < 0 or size < 0 or offset + size > len(self._ram):
+            raise ValueError(f"{pa:#x}+{size:#x} is outside the mapped RAM")
+        return self._ram[offset : offset + size]
 
     @property
     def symbols(self) -> elfsym.SymbolTable:

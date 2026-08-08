@@ -9,7 +9,6 @@ silently blanking a panel.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from ...core import config
@@ -119,7 +118,6 @@ SLOT_HEADER = (
     / "soft_timer"
     / "soft_timer.hpp"
 )
-SLOT_BASE = re.compile(r"^inline constexpr std::size_t\s+(kSlot\w+)\s*=\s*([^;]+);", re.M)
 # What each group's entries are called. Only the words are here: where a
 # group starts and how wide it is both come from the header.
 SLOT_NAMES = {
@@ -137,23 +135,13 @@ def _slot_bases() -> dict[str, int]:
     """Where each soft_timer slot group starts, read from the header.
 
     The bases are written there as sums over the ABI's own extents
-    (`kSlotWatchdog = kSlotCntvWake + kMaxVcpus`). Evaluating those sums
-    here reads the one definition; restating them would be a second one,
-    and a group inserted between two others would silently shift every
-    label after it by a slot.
+    (`kSlotWatchdog = kSlotCntvWake + kMaxVcpus`), which the header gets
+    from elsewhere and this supplies. Evaluating those sums reads the one
+    definition; restating them would be a second one, and a group
+    inserted between two others would silently shift every label after it
+    by a slot.
     """
-    known = {"kMaxVcpus": MAX_VCPUS, "kMaxGuests": MAX_GUESTS}
-    for name, expression in SLOT_BASE.findall(SLOT_HEADER.read_text()):
-        total = 0
-        for term in expression.split("+"):
-            term = term.strip()
-            if term.isdigit():
-                total += int(term)
-            elif term in known:
-                total += known[term]
-            else:
-                raise SystemExit(f"nova workbench: {name} = {expression!r} is not a plain sum")
-        known[name] = total
+    known = abi.read_constexprs(SLOT_HEADER, {"kMaxVcpus": MAX_VCPUS, "kMaxGuests": MAX_GUESTS})
     missing = set(SLOT_NAMES) - set(known)
     if missing:
         raise SystemExit(f"nova workbench: no slot base for {sorted(missing)}")
