@@ -296,7 +296,7 @@ struct AccessDecision {
   if (!guest_range_valid(guest.ipa_base, guest.ipa_size) || !guest_range_valid(guest.load_pa, guest.ipa_size)) {
     return {};
   }
-  if (size == 0 || size > guest.ipa_size || iova < guest.ipa_base || iova - guest.ipa_base > guest.ipa_size - size) {
+  if (size == 0 || !range_contains(guest.ipa_base, guest.ipa_size, iova, size)) {
     return {.result = AccessResult::kOutsideGuestWindow,
             .action = FaultAction::kQuarantineAndResetVm,
             .vm     = assignment->vm};

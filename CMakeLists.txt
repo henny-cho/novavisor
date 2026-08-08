@@ -175,7 +175,6 @@ else()
     nova_add_host_test(gic_sgi_test)       # affinity-aware SGI encoding
     nova_add_host_test(pci_test)           # requester IDs and ECAM layout
     nova_add_host_test(payload_test)       # embedded image metadata and checksum
-    nova_add_host_test(guest_descriptor_test) # guest window bounds check (HVC_PUTS guard)
     nova_add_host_test(el2_stage1_test)       # EL2 Stage-1 identity map + W^X
     nova_add_host_test(cpu_contract_test)     # boot-time ID-register contract gate
     nova_add_host_test(gicv3_vtr_test)        # ICH_VTR-derived ICC_CTLR view + VMCR reset

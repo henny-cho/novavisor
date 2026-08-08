@@ -12,6 +12,7 @@
 // (projects/*/guest_config.cpp).
 
 #include "nova/abi/guest_layout.h"
+#include "nova/range.hpp"
 
 #include <array>
 #include <cstddef>
@@ -86,10 +87,12 @@ struct GuestDescriptor {
   std::uint64_t       payload_size     = 0;
   std::uint32_t       payload_checksum = 0;
 
-  // True when [ipa, ipa + len) lies fully inside the guest window.
-  // len must not exceed ipa_size (callers clamp first).
+  // True when [ipa, ipa + len) lies fully inside the guest window. Any
+  // len answers: one past the window is out of bounds however large the
+  // request, so a guest cannot aim a buffer at hypervisor memory by
+  // asking for more than the window holds.
   [[nodiscard]] constexpr auto contains(std::uint64_t ipa, std::uint64_t len) const noexcept -> bool {
-    return ipa >= ipa_base && ipa <= ipa_base + ipa_size - len;
+    return range_contains(ipa_base, ipa_size, ipa, len);
   }
 
   // Translate a window IPA to the backing PA (EL2 runs with a flat view
@@ -98,6 +101,30 @@ struct GuestDescriptor {
     return ipa - ipa_base + load_pa;
   }
 };
+
+// The window bound, in every shape a caller reaches it by. This is the
+// check that stops a guest from pointing an HVC_PUTS buffer at
+// hypervisor memory and reading EL2 out through the UART.
+static_assert(
+    [] {
+      const GuestDescriptor window{.ipa_base = 0x4000'0000, .ipa_size = 0x0010'0000};
+      const std::uint64_t   base = window.ipa_base;
+      const std::uint64_t   size = window.ipa_size;
+      return window.contains(base, 16) && window.contains(base + size - 16, 16) &&
+             window.contains(base + size - 1, 1) &&    // the exact last byte
+             window.contains(base, size) &&            // the whole window, only from its base
+             !window.contains(base + 1, size) &&       //
+             !window.contains(base + size - 8, 16) &&  // straddling either end
+             !window.contains(base - 8, 16) &&         //
+             !window.contains(0, 16) &&                // the hypervisor's own low memory
+             !window.contains(~std::uint64_t{0}, 1) && // no wrap into the window
+             window.contains(base, 0) &&               // a zero-length buffer dereferences nothing, so
+             window.contains(base + size, 0) &&        // it is in bounds up to one past the end
+             !window.contains(base - 1, 0) &&          //
+             !window.contains(base, size + 1) &&       // longer than the window: no address satisfies it
+             !window.contains(base + 0x1000, size + 1);
+    }(),
+    "the guest window admits exactly the buffers that lie inside it");
 
 // Total bytes the pristine snapshot area spans for `guests`, packed
 // with the same align_up_pa rule as the live windows. Consumers: the

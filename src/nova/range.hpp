@@ -21,4 +21,14 @@ namespace nova {
   return lhs_base <= rhs_base ? rhs_base - lhs_base < lhs_size : lhs_base - rhs_base < rhs_size;
 }
 
+// True when [sub, sub + len) lies fully inside [base, base + size).
+// Total in len: a request longer than the range has no address that
+// satisfies it, so an overlong length is refused instead of wrapping the
+// end-of-range bound below base. Callers therefore need no length clamp
+// to ask the question safely.
+[[nodiscard]] constexpr auto range_contains(std::uint64_t base, std::uint64_t size, std::uint64_t sub,
+                                            std::uint64_t len) noexcept -> bool {
+  return len <= size && sub >= base && sub - base <= size - len;
+}
+
 } // namespace nova

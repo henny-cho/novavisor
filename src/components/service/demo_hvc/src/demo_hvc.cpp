@@ -46,8 +46,7 @@ void handle_puts(TrapContext* ctx) noexcept {
 
   // Reject buffers that are not fully inside the guest IPA window —
   // otherwise a guest could point x1 at hypervisor memory and leak EL2
-  // contents through the UART. (len <= kMaxPutsLen <= window size, so
-  // the end-of-window subtraction in contains() cannot underflow.)
+  // contents through the UART.
   const GuestDescriptor& guest = *vcpu::current().guest;
   if (!guest.contains(ipa, len)) {
     console::write("[demo_hvc] PUTS rejected: buffer outside guest window\n");
