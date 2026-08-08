@@ -169,6 +169,40 @@ class ElfRamProviderTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE)
 
+    def test_raw_memory_comes_back_at_the_address_asked_for(self):
+        """What a page table walk needs: bytes at an address it learned
+        by reading, with no symbol and no declared layout in sight."""
+        marker = b"\xde\xad\xbe\xef" * 4
+        at = RAM_BASE + 0x10_0000
+        with tempfile.TemporaryDirectory() as directory:
+            ram_path = Path(directory) / "guest-ram"
+            with ram_path.open("wb") as ram:
+                ram.truncate(_observed_top() - RAM_BASE)
+                ram.seek(at - RAM_BASE)
+                ram.write(marker)
+
+            provider = snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE)
+            self.addCleanup(provider.close)
+            self.assertEqual(provider.read_bytes(at, len(marker)), marker)
+            self.assertEqual(provider.read_bytes(at + 4, 4), marker[4:8])
+
+    def test_a_read_running_off_the_backend_fails_instead_of_shortening(self):
+        """An mmap slice past the end returns what there is. A table read
+        that way decodes as invalid entries, and the walk would then call
+        an address unmapped when it is only unreadable."""
+        with tempfile.TemporaryDirectory() as directory:
+            ram_path = Path(directory) / "guest-ram"
+            with ram_path.open("wb") as ram:
+                ram.truncate(_observed_top() - RAM_BASE)
+
+            provider = snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE)
+            self.addCleanup(provider.close)
+            top = RAM_BASE + (_observed_top() - RAM_BASE)
+            with self.assertRaises(ValueError):
+                provider.read_bytes(top - 8, 4096)
+            with self.assertRaises(ValueError):
+                provider.read_bytes(RAM_BASE - 4096, 4096)
+
 
 class ChangedMaskTest(unittest.TestCase):
     """What a stop is for is seeing what moved.

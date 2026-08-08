@@ -80,6 +80,20 @@ class SnapshotProvider(Protocol):
     def close(self) -> None: ...
 
 
+class MemoryReader(Protocol):
+    """Bytes at a physical address, wherever they come from.
+
+    Kept apart from `SnapshotProvider` because the questions are shaped
+    differently: a snapshot is one named symbol decoded through the
+    layout its type declares, where a page table walk follows addresses
+    it only learns as it reads them. Apart, a replay can serve the walk
+    from a recorded copy of the tables without having to pretend it can
+    also serve a live symbol read.
+    """
+
+    def read_bytes(self, pa: int, size: int) -> bytes: ...
+
+
 @dataclass(frozen=True)
 class ImageView:
     """Everything the S layer needs from an image, holding nothing open.
@@ -158,6 +172,20 @@ class ElfRamProvider:
         if obs.shape is not None:
             value = obs.shape(value, info)
         return _hexify(value) if obs.hex else value
+
+    def read_bytes(self, pa: int, size: int) -> bytes:
+        """Raw memory, for readers that learn their addresses as they go.
+
+        Slicing an mmap past its end returns what there is instead of
+        failing, so a read running off the backend has to be caught
+        here — a table half read decodes as invalid entries, and the
+        walk would then report an address as unmapped when it is only
+        unreadable.
+        """
+        offset = pa - self._base
+        if offset < 0 or size < 0 or offset + size > len(self._ram):
+            raise ValueError(f"{pa:#x}+{size:#x} is outside the mapped RAM")
+        return self._ram[offset : offset + size]
 
     @property
     def symbols(self) -> elfsym.SymbolTable:

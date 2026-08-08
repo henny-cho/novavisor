@@ -1,4 +1,4 @@
-"""Guest ABI limits, read from the headers that define them.
+"""Firmware constants, read from the headers that define them.
 
 The platform headers keep their constants as plain #defines so the
 assembler, the linker script, the C/C++ compilers and this reader all see
@@ -6,10 +6,17 @@ one definition. Everything that accepts a guest specification — the demo
 manifest loader and the DTB generator — validates through here, so a
 configuration the hypervisor cannot honour is rejected the same way
 whichever entry point reads it first.
+
+Headers no assembler includes spell the same kind of constant as C++
+`inline constexpr`, often as expressions over the constants above them;
+`read_constexprs` reads those. Either way the header is the definition
+and this file is a reader, never a second copy.
 """
 
 from __future__ import annotations
 
+import ast
+import operator
 import re
 import sys
 from pathlib import Path
@@ -58,6 +65,75 @@ def read_define_family(path: Path, prefix: str) -> dict[str, int]:
             re.MULTILINE,
         )
     }
+
+
+# An integer `inline constexpr` at file scope. The type spellings are a
+# whitelist so that a constexpr of some other kind is passed over rather
+# than folded into a number it never was; a name that matters and gets
+# skipped surfaces as a missing key at the caller.
+_CONSTEXPR = re.compile(
+    r"^inline constexpr\s+(?:std::)?(?:u?int(?:8|16|32|64)_t|size_t|unsigned|int)\s+"
+    r"(\w+)\s*=\s*([^;]+);",
+    re.MULTILINE,
+)
+_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
+# C++ integer literals differ from Python's in exactly two ways here:
+# a width/sign suffix, and namespace qualification on the names around
+# them. Both are removed; the digit separator goes with the comments.
+_LITERAL = re.compile(r"\b(0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*\b")
+_QUALIFIER = re.compile(r"\b\w+::")
+# What a constant expression in these headers is made of. Bitwise NOT is
+# absent deliberately: C++ complements a fixed width where Python's `~`
+# goes negative, so the two would quietly disagree.
+_OPERATORS = {
+    ast.LShift: operator.lshift,
+    ast.RShift: operator.rshift,
+    ast.BitOr: operator.or_,
+    ast.BitAnd: operator.and_,
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+}
+
+
+def _fold(node: ast.expr, known: dict[str, int], where: str) -> int:
+    if isinstance(node, ast.Constant) and type(node.value) is int:
+        return node.value
+    if isinstance(node, ast.Name):
+        if node.id not in known:
+            raise SystemExit(f"{where}: {node.id} is not defined above it")
+        return known[node.id]
+    if isinstance(node, ast.BinOp) and type(node.op) in _OPERATORS:
+        return _OPERATORS[type(node.op)](
+            _fold(node.left, known, where), _fold(node.right, known, where)
+        )
+    raise SystemExit(f"{where}: {ast.unparse(node)} is not an expression this evaluates")
+
+
+def read_constexprs(path: Path, known: dict[str, int] | None = None) -> dict[str, int]:
+    """Every integer `inline constexpr` in a C++ header, in file order.
+
+    Each expression is folded against the constants declared before it,
+    so a header is its own dictionary; `known` seeds names it gets from
+    elsewhere. An expression this cannot fold — an unknown name, a call,
+    an operator not in the table — stops the tool, because the
+    alternative is a plausible number that no longer matches the
+    firmware compiled from the same line.
+    """
+    values = dict(known or {})
+    read: dict[str, int] = {}
+    text = _COMMENT.sub("", path.read_text()).replace("'", "")
+    for name, expression in _CONSTEXPR.findall(text):
+        # One line, unqualified, Python-spelled — a C++ expression is not
+        # otherwise parseable, and folded across lines it would not be an
+        # expression at all.
+        flat = _QUALIFIER.sub("", " ".join(expression.split()))
+        try:
+            tree = ast.parse(_LITERAL.sub(lambda match: match.group(1), flat), mode="eval")
+        except SyntaxError:
+            raise SystemExit(f"{path.name}: {name} = {flat} does not parse") from None
+        values[name] = read[name] = _fold(tree.body, values, f"{path.name}: {name}")
+    return read
 
 
 def read_string_define(path: Path, name: str) -> str:
