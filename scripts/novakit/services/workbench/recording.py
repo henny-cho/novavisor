@@ -55,19 +55,41 @@ class Unreadable(RuntimeError):
 
 
 class Recorder:
-    """A run, being written down.
+    """A run, being written down. One run per directory.
 
     `publish()` is synchronous and sits on the bridge's only thread, so
     nothing here touches the disk: frames go into a list and records
     into a buffer, and the flush loop that was already waking every 50
     ms writes them. The recording is behind the live view by at most one
     batch, which is the same amount the browser is behind it.
+
+    Restarting the machine starts a new one. Everything downstream — the
+    history's bisection, the window protocol, the seek index, the
+    mapping between the machine's clock and the bridge's — reads a
+    recording as a single monotonic stream, and a restart begins the
+    machine's clock again. Concatenated, two runs make a file whose span
+    reads 1000 -> 59, whose windows answer with the wrong records, and
+    which says nothing about any of that until somebody replays it. So
+    runs go in `run-1`, `run-2`, ... under the directory asked for, and
+    each is a recording in its own right.
     """
 
-    def __init__(self, directory: Path, meta: dict | None = None):
-        self.directory = Path(directory)
-        self.directory.mkdir(parents=True, exist_ok=True)
+    def __init__(self, root: Path, meta: dict | None = None):
+        self.root = Path(root)
+        if any(self.root.glob(f"**/{META}")):
+            # Never silently: a directory holding a recording is
+            # somebody's evidence, and "w" would have taken it.
+            raise FileExistsError(f"{self.root} already holds a recording")
         self._meta = dict(meta or {})
+        self._run = 0  # the machine being recorded; 0 is "none yet"
+        self._index = 0
+        self.written: list[Path] = []
+        self._open()
+
+    def _open(self) -> None:
+        self._index += 1
+        self.directory = self.root / f"run-{self._index}"
+        self.directory.mkdir(parents=True, exist_ok=True)
         self._wire = (self.directory / WIRE).open("w", encoding="utf-8")
         self._records = (self.directory / RECORDS).open("wb")
         self._pending: list[str] = []
@@ -75,6 +97,22 @@ class Recorder:
         self.frames = 0
         self.records = 0
         self._started = datetime.now(UTC).isoformat(timespec="seconds")
+
+    def for_run(self, run_id: int) -> None:
+        """Follow the machine, opening a new recording when it restarts.
+
+        The first launch does not roll: the frames before it — the
+        topology, the build, the launch itself — are that run's opening,
+        not a recording of their own. A machine *replacing* a machine
+        does roll, because that is where the clock starts over.
+        """
+        if run_id == self._run:
+            return
+        if self._run:
+            self.close()
+            self._open()
+        self._run = run_id
+        self.note(run_id=run_id)
 
     def note(self, **fields) -> None:
         """Facts about the run that are not known when it starts.
@@ -126,13 +164,16 @@ class Recorder:
             **self._meta,
         }
         (self.directory / META).write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
+        self.written.append(self.directory)
         return meta
 
     def sizes(self) -> dict[str, int]:
+        """Bytes on disk, across every run this recorder has written."""
         return {
-            name: (self.directory / name).stat().st_size
+            str(directory / name): (directory / name).stat().st_size
+            for directory in self.written
             for name in (META, WIRE, RECORDS)
-            if (self.directory / name).exists()
+            if (directory / name).exists()
         }
 
 
@@ -290,6 +331,16 @@ def load(directory: Path) -> Recording:
     directory = Path(directory)
     meta_path = directory / META
     if not meta_path.is_file():
+        # A `--record` directory holds one subdirectory per run, so the
+        # thing a reader has in hand is as often the root as a run. The
+        # newest is what somebody who just reproduced something wants,
+        # and the caller is told which was taken.
+        runs = sorted(
+            (child for child in directory.glob("run-*") if (child / META).is_file()),
+            key=lambda child: (child / META).stat().st_mtime,
+        )
+        if runs:
+            return load(runs[-1])
         raise Unreadable(f"{directory} holds no {META}")
     try:
         meta = json.loads(meta_path.read_text())

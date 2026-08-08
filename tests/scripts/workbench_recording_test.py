@@ -9,6 +9,7 @@ frames when a batch overruns.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -39,9 +40,7 @@ class RoundTripTest(unittest.TestCase):
         self.directory = Path(tempfile.mkdtemp(prefix="nova-rec-"))
 
     def tearDown(self):
-        for child in self.directory.iterdir():
-            child.unlink()
-        self.directory.rmdir()
+        shutil.rmtree(self.directory, ignore_errors=True)
 
     def test_the_envelopes_come_back_exactly_as_they_went_out(self):
         """Not "equivalent": identical. A replay that reconstructed
@@ -77,9 +76,10 @@ class RoundTripTest(unittest.TestCase):
         was already waking every 50 ms."""
         recorder = recording.Recorder(self.directory, {})
         recorder.frame({"seq": 1, "topic": "life", "kind": "event", "ts": 0, "data": {}})
-        self.assertEqual((self.directory / recording.WIRE).read_text(), "")
+        wire = recorder.directory / recording.WIRE
+        self.assertEqual(wire.read_text(), "")
         recorder.flush()
-        self.assertEqual(len((self.directory / recording.WIRE).read_text().splitlines()), 1)
+        self.assertEqual(len(wire.read_text().splitlines()), 1)
         recorder.close()
 
     def test_a_run_killed_mid_line_still_loads(self):
@@ -89,7 +89,7 @@ class RoundTripTest(unittest.TestCase):
         recorder = recording.Recorder(self.directory, {})
         recorder.frame({"seq": 1, "topic": "life", "kind": "event", "ts": 0, "data": {}})
         recorder.close()
-        wire = self.directory / recording.WIRE
+        wire = recorder.directory / recording.WIRE
         wire.write_text(wire.read_text() + '{"seq": 2, "topic": "li')
 
         back = recording.load(self.directory)
@@ -100,7 +100,7 @@ class RoundTripTest(unittest.TestCase):
         for index in range(3):
             recorder.frame({"seq": index, "topic": "life", "kind": "event", "ts": 0, "data": {}})
         recorder.close()
-        wire = self.directory / recording.WIRE
+        wire = recorder.directory / recording.WIRE
         lines = wire.read_text().splitlines()
         lines[0] = '{"seq": 0, "top'
         wire.write_text("\n".join(lines) + "\n")
@@ -111,7 +111,7 @@ class RoundTripTest(unittest.TestCase):
     def test_a_future_version_is_refused_rather_than_decoded(self):
         recorder = recording.Recorder(self.directory, {})
         recorder.close()
-        meta = self.directory / recording.META
+        meta = recorder.directory / recording.META
         meta.write_text(json.dumps({"v": recording.VERSION + 1}))
         with self.assertRaises(recording.Unreadable):
             recording.load(self.directory)
@@ -119,6 +119,58 @@ class RoundTripTest(unittest.TestCase):
     def test_a_directory_that_is_not_a_recording_says_so(self):
         with self.assertRaises(recording.Unreadable):
             recording.load(self.directory)
+
+    def test_a_restart_starts_a_new_recording(self):
+        """Everything downstream reads a recording as one monotonic
+        stream, and a restart begins the machine's clock again.
+        Concatenated, two runs make a file whose span reads 1000 -> 59
+        and whose windows answer with the wrong records — and which says
+        nothing about it until somebody replays it.
+        """
+        recorder = recording.Recorder(self.directory, {})
+        recorder.for_run(1)
+        recorder.drained(records(10, first=1_000))
+        recorder.for_run(2)  # the machine restarted
+        recorder.drained(records(10, first=10))
+        recorder.close()
+
+        runs = sorted(child.name for child in self.directory.iterdir())
+        self.assertEqual(runs, ["run-1", "run-2"])
+        first = recording.load(self.directory / "run-1")
+        second = recording.load(self.directory / "run-2")
+        self.assertEqual(first.meta["run_id"], 1)
+        self.assertEqual(second.meta["run_id"], 2)
+        # Each is monotonic on its own, which is the property the
+        # history's bisection needs and the concatenation destroyed.
+        for run in (first, second):
+            stamps = [record.ts for record in run.records]
+            self.assertEqual(stamps, sorted(stamps))
+
+    def test_the_first_launch_does_not_start_a_second_recording(self):
+        """The frames before it — the topology, the build, the launch —
+        are that run's opening, not a recording of their own."""
+        recorder = recording.Recorder(self.directory, {})
+        recorder.frame({"seq": 1, "topic": "topo", "kind": "snapshot", "ts": 0, "data": {}})
+        recorder.for_run(1)
+        recorder.for_run(1)  # every flush tick asks; only a change rolls
+        recorder.close()
+        self.assertEqual([child.name for child in self.directory.iterdir()], ["run-1"])
+        self.assertEqual(recording.load(self.directory).meta["frames"], 1)
+
+    def test_the_newest_run_is_what_a_root_loads(self):
+        """`--record DIR` leaves a directory of runs, so the thing a
+        reader has in hand is as often the root as a run."""
+        recorder = recording.Recorder(self.directory, {})
+        recorder.for_run(1)
+        recorder.for_run(2)
+        recorder.close()
+        self.assertEqual(recording.load(self.directory).meta["run_id"], 2)
+
+    def test_a_directory_holding_a_recording_is_not_opened_for_writing(self):
+        """It is somebody's evidence, and "w" would have taken it."""
+        recording.Recorder(self.directory, {}).close()
+        with self.assertRaises(FileExistsError):
+            recording.Recorder(self.directory, {})
 
 
 class TeeTest(unittest.TestCase):
@@ -128,9 +180,7 @@ class TeeTest(unittest.TestCase):
         self.directory = Path(tempfile.mkdtemp(prefix="nova-tee-"))
 
     def tearDown(self):
-        for child in self.directory.iterdir():
-            child.unlink()
-        self.directory.rmdir()
+        shutil.rmtree(self.directory, ignore_errors=True)
 
     def test_the_recording_holds_what_the_frame_window_dropped(self):
         """The window sheds console frames when a batch overruns, and a
@@ -181,9 +231,7 @@ class IdentityTest(unittest.TestCase):
 
     def tearDown(self):
         for root in (self.directory, self.ui):
-            for child in root.iterdir():
-                child.unlink()
-            root.rmdir()
+            shutil.rmtree(root, ignore_errors=True)
 
     def answer(self, bridge, request):
         bridge.store.drain()  # discard whatever setup published
@@ -423,9 +471,7 @@ class CursorTest(unittest.TestCase):
 
     def tearDown(self):
         for root in (self.ui, self.directory):
-            for child in root.iterdir():
-                child.unlink()
-            root.rmdir()
+            shutil.rmtree(root, ignore_errors=True)
 
     def recorded(self):
         recorder = recording.Recorder(self.directory, {"freq_hz": 1_000_000})

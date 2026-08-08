@@ -261,12 +261,12 @@ class Bridge:
         if self._recorder is not None:
             # After the session, so the last frames of a shutdown are in
             # the file the run is judged by.
-            meta = self._recorder.close()
-            sizes = self._recorder.sizes()
-            total = sum(sizes.values())
+            self._recorder.close()
+            written = self._recorder.written
+            total = sum(self._recorder.sizes().values())
             print(
-                f"[workbench] recorded {meta['frames']} frames and {meta['records']} records "
-                f"to {self._recorder.directory} ({total / 1e6:.1f} MB)"
+                f"[workbench] recorded {len(written)} run(s) to {self._recorder.root} "
+                f"({total / 1e6:.1f} MB): {', '.join(run.name for run in written)}"
             )
 
     def _live_state(self) -> dict:
@@ -761,9 +761,10 @@ class Bridge:
             # A range of counter values is not a duration without this,
             # and a replay needs it before it can answer the first
             # window — so it goes in the meta, not in a frame.
-            self._recorder.note(
-                freq_hz=self._tracer.geometry.freq_hz, run_id=session.run_id
-            )
+            # The run identity is the recorder's own business — it opens
+            # a new recording when the machine restarts — so only the
+            # clock is told here.
+            self._recorder.note(freq_hz=self._tracer.geometry.freq_hz)
         # Constant for the run, so it rides the transition rather than
         # every summary frame. The geometry travels with it: the depth
         # is what the budget below is measured against, and a reader
@@ -1062,6 +1063,11 @@ class Bridge:
                 # made with nobody watching is the ordinary case, and a
                 # writer that only ran while a browser was attached
                 # would record whoever happened to be looking.
+                #
+                # And here rather than at the tracer's attach, because a
+                # restart has to be noticed before the new machine's
+                # first frame is written into the old machine's file.
+                self._recorder.for_run(self.session.run_id)
                 self._recorder.flush()
             if not self._connections:
                 # Leave frames in the window: the first joiner gets them
@@ -1103,14 +1109,19 @@ async def _serve_forever(
     surfaces = make_surfaces()
     recorder = None
     if record is not None:
-        recorder = recording.Recorder(
-            record,
-            {
-                "demo": target.demo if target else None,
-                "variant": target.variant if target else None,
-                "board": hardware.DEFAULT_BOARD,
-            },
-        )
+        try:
+            recorder = recording.Recorder(
+                record,
+                {
+                    "demo": target.demo if target else None,
+                    "variant": target.variant if target else None,
+                    "board": hardware.DEFAULT_BOARD,
+                },
+            )
+        except OSError as error:
+            # Including a directory that already holds one: somebody's
+            # evidence is not something to open with "w".
+            raise SystemExit(f"[workbench] {error}") from error
         print(f"[workbench] recording to {recorder.directory}")
     bridge = Bridge(
         ui_root=ui_root, surfaces=surfaces, trace_history=trace_history, recorder=recorder

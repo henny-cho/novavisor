@@ -66,14 +66,15 @@ class Span:
 
 
 class History:
-    """Drained records, oldest evicted first, in one fixed allocation.
+    """Drained records, in time order, in one fixed allocation.
 
-    Timestamps are non-decreasing across appends because drain() merges
-    the per-CPU rings by CNTPCT before handing them over, and CNTPCT is
-    common to every PE. That is what lets a window be found by bisection
-    rather than by scanning, and it is a property of the drain — this
-    class asserts nothing about records appended out of order beyond
-    keeping them in arrival order.
+    Time order is what lets a window be found by bisection rather than
+    by scanning, and this class holds it rather than hoping for it. The
+    drain sorts each batch it hands over, but the stream is those
+    batches concatenated, and a boundary between two of them can go
+    backwards — see append(). It used to say the drain guaranteed this;
+    it did not, and a window whose edge landed inside such a step
+    silently answered with the wrong records.
     """
 
     def __init__(self, capacity: int = DEFAULT_CAPACITY):
@@ -99,9 +100,43 @@ class History:
         return self._head > self.capacity
 
     def append(self, records: list[trace.Record]) -> None:
+        """Add a drained batch, keeping the buffer in time order.
+
+        The drain sorts each batch, but a batch is not the stream: the
+        boundary between two of them can still go backwards by however
+        far the per-ring head reads were skewed, and a replayed
+        recording is a file of those batches concatenated. Everything
+        that reads this searches it by bisection, so the order is
+        enforced here rather than assumed.
+
+        In practice this is a comparison and nothing else — the drain
+        reads every head before copying anything, so an out-of-order
+        record is rare and lands one or two slots back when it happens.
+        """
         for record in records:
-            trace.pack_into(self._bytes, (self._head % self.capacity) * trace.REC_SIZE, record)
-            self._head += 1
+            self._insert(record)
+
+    def _push(self, record: trace.Record) -> None:
+        trace.pack_into(self._bytes, (self._head % self.capacity) * trace.REC_SIZE, record)
+        self._head += 1
+
+    def _insert(self, record: trace.Record) -> None:
+        held = len(self)
+        if not held or record.ts >= self._at(held - 1):
+            self._push(record)
+            return
+        # Lift the few records that are newer, lay this one under them,
+        # and put them back. A record older than everything still held
+        # lifts the whole buffer and is then evicted by its own
+        # reinstatement — which is the right answer: it belongs to a
+        # horizon this history has already let go of.
+        later = []
+        while len(self) and self._at(len(self) - 1) > record.ts:
+            later.append(self._record(len(self) - 1))
+            self._head -= 1
+        self._push(record)
+        for held_back in reversed(later):
+            self._push(held_back)
 
     def span(self) -> Span:
         held = len(self)

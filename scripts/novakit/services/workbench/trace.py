@@ -335,10 +335,22 @@ class TraceReader:
         lost *there*. Two marks with eight thousand records missing
         between them are drawn as neighbours, and the causal chain a
         reader takes from that is fiction.
+
+        Every head is read before any ring is copied. Reading one ring's
+        head and copying it before looking at the next skews the batch
+        boundary by however long that copy took: a record written to an
+        already-read ring in that window waits for the next drain and
+        arrives stamped *earlier* than one this drain is about to hand
+        over from a later ring. Measured that way, a Linux run produced
+        two to four records that went backwards per thousand — in a
+        stream everything downstream searches by bisection. Snapshotting
+        the heads together shrinks that window from the length of a copy
+        to the length of a few eight-byte reads.
         """
+        heads = [self._head(ring) for ring in range(self.geometry.rings)]
         found: list[Record] = []
-        for ring in range(self.geometry.rings):
-            found += self._drain_one(ring)
+        for ring, head in enumerate(heads):
+            found += self._drain_one(ring, head)
         found.sort(key=lambda record: record.ts)
         return self._with_early(found)
 
@@ -375,11 +387,10 @@ class TraceReader:
         capacity = self.geometry.capacity
         return head - capacity + 1 if head >= capacity else 0
 
-    def _drain_one(self, ring: int) -> list[Record]:
+    def _drain_one(self, ring: int, head: int) -> list[Record]:
         capacity = self.geometry.capacity
         base = self._offset + _HEADER_SIZE + ring * self.geometry.stride + _RECORDS_OFF
         cursor = self._cursor[ring]
-        head = self._head(ring)
         if head < cursor:
             # The region was re-formatted under us (a restart that kept
             # the same backing file). Start again rather than report a

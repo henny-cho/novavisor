@@ -23,6 +23,16 @@ def records(stamps, code: int = 1) -> list[trace.Record]:
     return [trace.Record(ts=ts, code=code, cpu=ts & 1, a=ts, b=ts * 2, c=ts * 3) for ts in stamps]
 
 
+def stamps(held) -> list[int]:
+    """What the buffer holds, oldest first, read back out of it.
+
+    Through the window rather than the internals: the order this checks
+    is the order a reader gets, which is the only one that matters.
+    """
+    span = held.span()
+    return [record.ts for record in held.window(span.first, span.last)]
+
+
 class AppendTest(unittest.TestCase):
     def test_records_survive_the_round_trip_as_written(self):
         """Stored as the firmware's own 32 bytes: as Record objects the
@@ -83,15 +93,45 @@ class WrapTest(unittest.TestCase):
         self.assertEqual([r.ts for r in ring.window(0, 100)], [8])
         self.assertTrue(ring.span().full)
 
+    def test_a_batch_that_starts_before_the_last_one_ended_is_put_in_order(self):
+        """A batch is not the stream. The drain sorts what it hands
+        over, but the boundary between two of them can go backwards by
+        however far the per-ring head reads were skewed — measured at
+        two to four records per thousand on a Linux run — and everything
+        that reads this searches it by bisection.
+        """
+        held = history.History(64)
+        held.append(records([10, 20, 30, 40]))
+        held.append(records([25, 35, 50]))  # the boundary steps back
+        self.assertEqual(stamps(held), [10, 20, 25, 30, 35, 40, 50])
+
+    def test_a_record_older_than_the_horizon_falls_out_rather_than_lands_wrong(self):
+        """It belongs to a stretch this history has already let go of,
+        and putting it at either end would be a claim about order that
+        is not true."""
+        held = history.History(4)
+        held.append(records([10, 20, 30, 40, 50]))  # 10 is already gone
+        held.append(records([15]))
+        self.assertEqual(stamps(held), [20, 30, 40, 50])
+
+    def test_the_order_holds_across_the_wrap(self):
+        held = history.History(4)
+        held.append(records([10, 20, 30, 40, 60, 70]))
+        held.append(records([65]))
+        self.assertEqual(stamps(held), [40, 60, 65, 70])
+
     def test_a_capacity_of_zero_is_refused(self):
         with self.assertRaises(ValueError):
             history.History(capacity=0)
 
 
 class WindowTest(unittest.TestCase):
-    """Finding a window is a bisection because drain() merges the
-    per-CPU rings by CNTPCT, which is common to every PE — so arrival
-    order is the machine's real order."""
+    """Finding a window is a bisection, so the buffer has to be in time
+    order — which append() enforces rather than inheriting.
+
+    This docstring used to say the drain guaranteed it, "because CNTPCT
+    is common to every PE". CNTPCT is; the concatenation of two sorted
+    batches is not, and that sentence is why nobody looked."""
 
     def setUp(self):
         self.ring = history.History(capacity=64)
