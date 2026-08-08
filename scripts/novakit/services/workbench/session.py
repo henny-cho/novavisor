@@ -343,6 +343,17 @@ class Session:
             return
         self._store.set_topology(topology | {"board": board | {"edges": regraded}})
 
+    def adopt_memory_map(self, captured: dict) -> None:
+        """Publish this run's page tables, once they exist.
+
+        Held on the topology rather than sent as a frame: the frame
+        window has a capacity and sheds under load, where a late joiner
+        still has to be able to walk. The same placement is what carries
+        it into a recording and back out of one, since a replay adopts
+        the world the recorded run last published.
+        """
+        self._store.set_topology(self._store.topology | {"memory": captured})
+
     def _set_phase(self, phase: Phase, **data) -> None:
         self.phase = phase
         self._store.publish(Topic.LIFE, Kind.EVENT, {"phase": phase.value, **data})

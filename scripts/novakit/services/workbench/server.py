@@ -18,7 +18,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from ...core import config
-from . import halt, hardware, history, recording, snapshot, static, trace
+from . import halt, hardware, history, recording, regimes, snapshot, static, trace
 from .protocol import (
     MAX_BUCKETS,
     SUPPORTED_UPLINK,
@@ -134,6 +134,9 @@ class Bridge:
         self._poller: snapshot.SnapshotPoller | None = None
         self._provider: snapshot.SnapshotProvider | None = None
         self._provider_run: int | None = None
+        # Which run's tables have been published. They are built once and
+        # never rewritten, so one capture per run is the whole of them.
+        self._mapped_run: int | None = None
         # The T layer reads the same file but needs no image, so it is
         # built and torn down on its own: a failure to resolve symbols
         # must not take the event stream with it.
@@ -957,8 +960,26 @@ class Bridge:
         provider, self._provider = self._provider, None
         self._poller = None
         self._provider_run = None
+        self._mapped_run = None
         if provider is not None:
             provider.close()
+
+    def _capture_memory_map(self) -> None:
+        """Copy this run's page tables, once EL2 has built them.
+
+        Once is the whole of it: these tables are written during EL2 init
+        and never again, which is what lets a guest switch retarget VTTBR
+        without invalidating a TLB. Attempted every poll until it lands,
+        because the RAM backend exists from the moment QEMU starts and a
+        read before the build would copy a page of zeros.
+        """
+        if self._mapped_run == self.session.run_id or self._provider is None:
+            return
+        captured = regimes.capture(self._provider, self._provider.regimes)
+        if captured is None:
+            return
+        self._mapped_run = self.session.run_id
+        self.session.adopt_memory_map(captured)
 
     async def _ensure_poller(self) -> snapshot.SnapshotPoller | None:
         """The S reader for this run, built once and shared.
@@ -1019,6 +1040,7 @@ class Bridge:
                     poller = await self._ensure_poller()
                     if poller is None:
                         continue
+                    self._capture_memory_map()
                     if self.session.paused:
                         # Nothing can change while the machine is
                         # stopped, and the stop already published a full

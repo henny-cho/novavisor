@@ -11,12 +11,12 @@ from __future__ import annotations
 import mmap
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
 from ...image import abi
-from . import elfsym
+from . import elfsym, regimes
 from .observations import OBSERVATIONS, Obs
 
 _U32 = elfsym.TypeInfo("uint", 4)
@@ -104,10 +104,15 @@ class ImageView:
     pure Python that lands during guest boot, which is the busiest the
     trace rings ever get: work this shape can be sent somewhere it
     cannot compete with the drain.
+
+    `regimes` is keyed by symbol rather than by topic: the page tables
+    feed no observation, and what the map wants from them is where they
+    are and how big, not a decoded reading.
     """
 
     resolved: dict[str, elfsym.ResolvedSymbol]
     symbols: elfsym.SymbolTable
+    regimes: dict[str, elfsym.ResolvedSymbol] = field(default_factory=dict)
 
 
 def resolve_image(elf_path: Path) -> ImageView:
@@ -122,6 +127,7 @@ def resolve_image(elf_path: Path) -> ImageView:
         return ImageView(
             {obs.topic: index.resolve(obs.symbol) for obs in OBSERVATIONS if obs.pa is None},
             index.symbols,
+            {symbol: index.resolve(symbol) for symbol in regimes.SYMBOLS},
         )
     finally:
         index.close()
@@ -143,9 +149,13 @@ class ElfRamProvider:
         image = resolve_image(elf_path) if view is None else view
         self._resolved = image.resolved
         self._symbols = image.symbols
+        self.regimes = image.regimes
         with ram_path.open("rb") as backing:
             self._ram = mmap.mmap(backing.fileno(), 0, prot=mmap.PROT_READ)
-        highest = max(entry.address + entry.size for entry in self._resolved.values())
+        highest = max(
+            entry.address + entry.size
+            for entry in (*self._resolved.values(), *self.regimes.values())
+        )
         # PA-declared pages sit far above the image (IVC at +512 MiB);
         # a short backend must fail here, not decode as silent zeros.
         for obs in OBSERVATIONS:

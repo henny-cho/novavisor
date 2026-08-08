@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from ...core import config
-from . import elfsym, snapshot
+from . import elfsym, regimes, snapshot
 from .events import EVENTS, STOPS
 from .observations import MAX_CPUS, OBSERVATIONS, timer_slot_labels
 from .paths import EDGES
@@ -106,6 +106,16 @@ def verify_manifest(elf: Path | None = None) -> int:
                 file=sys.stderr,
             )
 
+        # The page tables the memory map walks. Renamed, they would
+        # leave the view empty with nothing to say why — the same
+        # silence this whole check exists to break.
+        for symbol in regimes.SYMBOLS:
+            try:
+                index.resolve(symbol)
+            except KeyError as error:
+                failures += 1
+                print(f"[workbench] stale table symbol: {error}", file=sys.stderr)
+
         # Every stop point must still be a function in this image. An
         # inlined or renamed one would otherwise leave the UI offering a
         # breakpoint that can never be hit.
@@ -127,7 +137,7 @@ def verify_manifest(elf: Path | None = None) -> int:
         index.close()
     if failures == 0:
         print(
-            f"[workbench] manifest check: {len(OBSERVATIONS)} observations "
-            f"and {len(STOPS)} stop points resolve"
+            f"[workbench] manifest check: {len(OBSERVATIONS)} observations, "
+            f"{len(regimes.SYMBOLS)} table symbols and {len(STOPS)} stop points resolve"
         )
     return 1 if failures else 0
