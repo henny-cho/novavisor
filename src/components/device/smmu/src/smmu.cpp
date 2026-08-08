@@ -217,8 +217,8 @@ CommandRing<HalHw> g_commands{
     return false;
   }
   // The route from this stream to memory, as it is established. The
-  // walk itself is the SMMU's, in hardware, with no instruction to
-  // record — this is the moment the tables it walks become these.
+  // walk itself is the SMMU's, in hardware with no instruction to
+  // record; this is the moment its tables become these.
   trace_emit(NOVA_TRACE_EV_SMMU_ATTACH, stream_id, context.root_pa, context.vmid);
 
   g_stream_table[stream_id][0] = 0; // V=0

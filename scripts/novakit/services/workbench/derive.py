@@ -18,7 +18,7 @@ from pathlib import Path
 
 from ...core import config
 from ...image import abi
-from . import elfsym
+from . import elfsym, translation
 
 Shape = Callable[[object, elfsym.TypeInfo], object]
 
@@ -238,64 +238,38 @@ def timer_armed(value: object, info: elfsym.TypeInfo) -> object:
     ]
 
 
-# Stream table entry fields, from the header the SMMU's encoder compiles
-# against; its walk geometry constants come from the Stage 2 definition,
-# so that is what seeds the read.
-_STE = abi.read_constexprs(
-    config.REPO
-    / "src"
-    / "components"
-    / "device"
-    / "smmu"
-    / "include"
-    / "smmu"
-    / "ste_model.hpp",
-    abi.read_constexprs(
-        config.REPO
-        / "src"
-        / "components"
-        / "core"
-        / "core_mmu"
-        / "include"
-        / "core_mmu"
-        / "stage2_descriptor.hpp"
-    ),
-)
-
-
 def smmu_streams(value: object, info: elfsym.TypeInfo) -> object:
     """Stream table entries as what each one lets a device do.
 
-    Three states, and the difference between them is the whole of DMA
-    isolation: a stream translating through a VM's own Stage 2 tables,
-    one aborted so every transaction it makes is refused, and one never
-    configured. The root is carried rather than resolved to a VM here,
-    because which VM owns which root is published beside this and a
-    second answer to that would be a second place to be wrong.
+    Three states: translating through a VM's own Stage 2 tables, aborted
+    so every transaction is refused, or never configured. The root
+    travels rather than the VM that owns it, because which VM owns which
+    root is published beside this.
 
-    Only configured streams travel: a board declares far more stream IDs
+    Only configured streams travel — a board declares far more stream IDs
     than a run assigns, and the rest are an all-zero entry.
     """
     del info
+    ste = translation.STE
     streams = []
     for stream_id, words in enumerate(value):
-        if not words[0] & _STE["kValid"]:
+        if not words[0] & ste["kValid"]:
             continue
-        config_field = (words[0] & _STE["kConfigMask"]) >> _STE["kConfigShift"]
+        config = (words[0] & ste["kConfigMask"]) >> ste["kConfigShift"]
         entry = {"stream": stream_id}
-        if config_field == _STE["kStage2Only"]:
+        if config == ste["kStage2Only"]:
+            # Hex: a root is an address, and past 2^53 a JSON number is
+            # no longer the one that was sent.
             entry |= {
                 "state": "translate",
-                "vmid": words[2] & _STE["kVmidMask"],
-                # Hex: a root is an address, and past 2^53 a JSON number
-                # is no longer the one that was sent.
-                "root": f"{words[3] & _STE['kS2ttbMask']:#x}",
+                "vmid": words[2] & ste["kVmidMask"],
+                "root": f"{words[3] & ste['kS2ttbMask']:#x}",
             }
-        elif config_field == 0:
+        elif config == 0:
             # Valid and translating nothing: every transaction refused.
             # What a quarantine after a fault leaves behind.
             entry["state"] = "abort"
         else:
-            entry["state"] = f"config:{config_field:#05b}"
+            entry["state"] = f"config:{config:#05b}"
         streams.append(entry)
     return streams

@@ -1,23 +1,21 @@
 /* Memory Map view: what an address means on this machine, read off the
-   page tables the run actually built.
+   page tables the run built.
 
-   Nothing here decodes a descriptor or knows where a level's index field
-   sits. Rows arrive carrying the span they cover and the permissions
-   they grant, because that encoding has one source — the headers the
-   hypervisor compiles — and a second reading of it in this file would
-   drift the first time a field moved.
+   Nothing here decodes a descriptor or knows where a level's index sits.
+   Rows arrive carrying the span they cover and the permissions they
+   grant, because that encoding has one source — the headers the
+   hypervisor compiles.
 
-   A row is a run of slots, not a slot: mapping a region leaves hundreds
-   of entries differing only in output address, and the bridge folds them
-   before they travel. What is on screen is what the builder wrote. */
+   A row is a run of slots: mapping a region leaves hundreds of entries
+   differing only in output address, and the bridge folds them before
+   they travel. */
 
 import { clear, el } from "./format.mjs";
 
 /* S-layer topics this view reads, declared as the board declares its
-   own: a topic the manifest stopped publishing fails a test instead of
-   quietly drawing nothing. The stream table is polled rather than read
-   with the tables it points at, because a fault quarantines a stream
-   and this is the entry that changes. */
+   own so a topic the manifest dropped fails a test. The stream table is
+   polled rather than read with the tables it points at, because a fault
+   quarantines a stream and this is the entry that changes. */
 const TOPICS = new Set(["smmu.stream"]);
 
 /* A probe lands on exactly one row per level. */
@@ -29,10 +27,9 @@ const onPath = (row, steps) =>
 
 const range = (row) => `${row.base} +${row.size}`;
 
-/* Permissions as the three letters a reader already knows. Read is not
-   among them: Stage 2 can withhold it, but nothing this hypervisor maps
-   does, and a column that is always the same letter is not information.
-   Write and execute are the two that differ, and the two W^X is about. */
+/* Write and execute, the two that differ across this machine's maps and
+   the two W^X is about. Read is left out: Stage 2 can withhold it and
+   nothing here does, so the column would be one letter throughout. */
 const rights = (row) => `${row.w ? "w" : "-"}${row.x ? "x" : "-"}`;
 
 function slot(row) {
@@ -73,8 +70,8 @@ export function createMemory({ pick, form, input, note, body, request }) {
   }
 
   /* One row and everything under it. Depth is the nesting the walk
-     produced, not a level number: a walk that started lower would still
-     indent from where it started. */
+     produced, not a level number: a walk starting lower still indents
+     from where it started. */
   function renderRow(row, depth, steps, into, wxn) {
     const line = el("div", "mrow");
     line.style.setProperty("--depth", String(depth));
@@ -89,10 +86,9 @@ export function createMemory({ pick, form, input, note, body, request }) {
     } else {
       const perm = el("span", "mperm", rights(row));
       /* Writable and executable at once, where the regime's control
-         register forbids exactly that. Marked on the row rather than
-         only counted, because the row that breaks it is the one a
-         reader needs to be looking at — and left unmarked elsewhere,
-         since a guest's Stage 2 grants both on purpose. */
+         register forbids that. Marked on the row because that row is
+         what a reader needs to see, and left unmarked elsewhere since a
+         guest's Stage 2 grants both on purpose. */
       if (wxn && row.w && row.x) perm.classList.add("wx");
       line.append(perm);
       line.append(el("span", "mkind", row.kind));
@@ -103,9 +99,9 @@ export function createMemory({ pick, form, input, note, body, request }) {
     for (const child of row.children || []) renderRow(child, depth + 1, steps, into, wxn);
   }
 
-  /* The first address this regime actually maps, for the probe box to
-     suggest. Typed into the page instead, it would be a guess about a
-     machine the page has not looked at. */
+  /* The first address this regime maps, for the probe box to suggest.
+     Typed into the page it would be a guess about a machine the page
+     has not looked at. */
   function firstMapped(rows) {
     for (const row of rows) {
       if (row.kind !== "table") return row.base;
@@ -115,10 +111,9 @@ export function createMemory({ pick, form, input, note, body, request }) {
     return "";
   }
 
-  /* Which streams a device master can drive into the chosen regime, and
-     which are shut. The join is on the root each side already carries:
-     resolving a stream to a VM in the bridge as well would be a second
-     answer to one question. */
+  /* Which streams reach the chosen regime, and which are shut. Joined
+     on the root each side already carries, so which VM owns which
+     tables has one answer. */
   function renderStreams(regime, into) {
     const root = regime?.root;
     const mine = streams.filter((entry) => entry.root === root);
@@ -129,18 +124,16 @@ export function createMemory({ pick, form, input, note, body, request }) {
     for (const entry of mine) {
       strip.append(el("span", "mstream on", `S${entry.stream} · vmid ${entry.vmid}`));
     }
-    /* An aborted stream refuses every transaction it makes, which is
-       what a quarantine after a fault leaves behind — it belongs beside
-       the windows rather than in a panel elsewhere. */
+    /* An aborted stream refuses every transaction it makes — what a
+       quarantine after a fault leaves behind. */
     for (const entry of shut) strip.append(el("span", "mstream off", `S${entry.stream} 차단`));
     into.append(strip);
   }
 
-  /* One VM has two Stage 2 translations, and they are separate table
-     sets rather than one with an overlay. So the reading is their
-     difference: a window only the CPU reaches is memory no device can
-     touch, and one only DMA reaches is a device able to write where the
-     guest cannot look. */
+  /* A VM's two Stage 2 translations are separate table sets, so the
+     reading is their difference: a window only the CPU reaches is memory
+     no device can touch, one only DMA reaches is a device able to write
+     where the guest cannot look. */
   function renderIsolation(isolation, into) {
     if (!isolation) return;
     const rows = [
@@ -191,9 +184,9 @@ export function createMemory({ pick, form, input, note, body, request }) {
     if (!rows.length) {
       body.append(el("div", "mempty", "매핑된 구간이 없다"));
     }
-    /* The whole map's answer to the one question this regime's control
-       register asks. A count that is not zero where the register says it
-       must be is a map disagreeing with the register it runs under. */
+    /* The whole map against the one question this regime's control
+       register asks. A count above zero here is a map disagreeing with
+       the register it runs under. */
     if (tree.wxn) {
       const verdict = el("div", tree.wx ? "mwarn" : "mverdict");
       verdict.textContent = tree.wx
@@ -202,14 +195,13 @@ export function createMemory({ pick, form, input, note, body, request }) {
       body.append(verdict);
     }
     for (const row of rows) renderRow(row, 0, steps, body, tree.wxn);
-    /* A short walk is a fact about the answer, not a detail: a map
-       missing tables is a smaller map, and it must not read as one the
-       machine had. */
+    /* A map missing tables is a smaller map and must not read as one
+       the machine had. */
     for (const at of tree.unreadable || []) {
       body.append(el("div", "mwarn", `읽지 못한 테이블 ${at}`));
     }
     if (tree.truncated) {
-      body.append(el("div", "mwarn", `테이블 ${tree.tables}개에서 중단 — 풀보다 깊다`));
+      body.append(el("div", "mwarn", `테이블 ${tree.read}개에서 중단 — 풀보다 깊다`));
     }
   }
 
@@ -234,7 +226,7 @@ export function createMemory({ pick, form, input, note, body, request }) {
   });
 
   return {
-    /* The regimes a run has, from the topology. A run that has published
+    /* The regimes a run has, from the topology. A run that published
        none leaves the view saying so rather than empty. */
     setWorld(memory) {
       const listed = Array.isArray(memory?.regimes) ? memory.regimes : [];
@@ -261,8 +253,7 @@ export function createMemory({ pick, form, input, note, body, request }) {
     accepts: (topic) => TOPICS.has(topic),
 
     /* An S-layer reading, in the shape every panel takes one. The map
-       itself never changes under a run; what a stream is allowed to do
-       does, and only that is polled. */
+       does not change under a run; what a stream may do does. */
     apply(frame) {
       if (frame.kind !== "snapshot") return;
       const values = frame.data?.values;
@@ -271,7 +262,7 @@ export function createMemory({ pick, form, input, note, body, request }) {
       if (shown) renderAnswer();
     },
 
-    /* Asked again when the view is opened: a run that started after the
+    /* Asked again when the view opens: a run that started since the
        last look has different tables. */
     refresh() {
       if (chosen) ask(input.value.trim() || null);

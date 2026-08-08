@@ -103,17 +103,15 @@
         <div class="board" id="board">
           <div class="bands" id="bands"><svg class="wires" id="wires" aria-hidden="true"></svg></div>
         </div>
-        <!-- The other half of the same slot. The board draws what the
-             machine is; this draws what an address means on it. One at
-             a time, because both want the whole width, and the time axis
-             below stays put across the switch. -->
+        <!-- The other half of the same slot: the board draws what the
+             machine is, this draws what an address means on it. One at a
+             time, since both want the whole width. -->
         <div class="mmap" id="mmap" hidden>
           <div class="mmap-h">
             <div class="mmap-pick" id="mmap-pick" role="group" aria-label="번역 체계"></div>
             <form class="mmap-probe" id="mmap-probe" autocomplete="off">
-              <!-- The placeholder is filled from this run's own map: an
-                   address typed here would be a guess about a machine
-                   the page has not looked at yet. -->
+              <!-- The placeholder comes from this run's own map: an
+                   address typed here would be a guess. -->
               <input id="mmap-at" type="text" spellcheck="false" aria-label="따라갈 주소">
               <button class="btn" type="submit"
                       title="이 주소를 테이블을 따라 번역한다">따라가기</button>

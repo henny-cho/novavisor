@@ -7,10 +7,10 @@ manifest loader and the DTB generator — validates through here, so a
 configuration the hypervisor cannot honour is rejected the same way
 whichever entry point reads it first.
 
-Headers no assembler includes spell the same kind of constant as C++
-`inline constexpr`, often as expressions over the constants above them;
+Headers no assembler includes spell the same constants as C++ `inline
+constexpr`, often as expressions over the ones above them;
 `read_constexprs` reads those. Either way the header is the definition
-and this file is a reader, never a second copy.
+and this file is a reader.
 """
 
 from __future__ import annotations
@@ -68,22 +68,21 @@ def read_define_family(path: Path, prefix: str) -> dict[str, int]:
 
 
 # An integer `inline constexpr` at file scope. The type spellings are a
-# whitelist so that a constexpr of some other kind is passed over rather
-# than folded into a number it never was; a name that matters and gets
-# skipped surfaces as a missing key at the caller.
+# whitelist, so a constexpr of another kind is skipped rather than
+# folded into a number it never was; a skipped name that mattered
+# surfaces as a missing key at the caller.
 _CONSTEXPR = re.compile(
     r"^inline constexpr\s+(?:std::)?(?:u?int(?:8|16|32|64)_t|size_t|unsigned|int)\s+"
     r"(\w+)\s*=\s*([^;]+);",
     re.MULTILINE,
 )
 _COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
-# C++ integer literals differ from Python's in exactly two ways here:
-# a width/sign suffix, and namespace qualification on the names around
-# them. Both are removed; the digit separator goes with the comments.
+# C++ integer literals carry a width/sign suffix Python has no
+# spelling for, and the names around them may be namespace-qualified.
 _LITERAL = re.compile(r"\b(0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*\b")
 _QUALIFIER = re.compile(r"\b\w+::")
 # What a constant expression in these headers is made of. Bitwise NOT is
-# absent deliberately: C++ complements a fixed width where Python's `~`
+# absent on purpose: C++ complements a fixed width where Python's `~`
 # goes negative, so the two would quietly disagree.
 _OPERATORS = {
     ast.LShift: operator.lshift,
@@ -114,20 +113,18 @@ def read_constexprs(path: Path, known: dict[str, int] | None = None) -> dict[str
     """Every integer `inline constexpr` in a C++ header, in file order.
 
     Each expression is folded against the constants declared before it,
-    so a header is its own dictionary; `known` seeds names it gets from
-    elsewhere. An expression this cannot fold — an unknown name, a call,
-    an operator not in the table — stops the tool, because the
-    alternative is a plausible number that no longer matches the
-    firmware compiled from the same line.
+    so a header is its own dictionary; `known` seeds names from
+    elsewhere. One this cannot fold — an unknown name, a call, an
+    operator outside the table — stops the tool, since the alternative
+    is a plausible number the firmware never had.
     """
     values = dict(known or {})
     read: dict[str, int] = {}
-    text = _COMMENT.sub("", path.read_text()).replace("'", "")
+    text = _COMMENT.sub("", path.read_text())
     for name, expression in _CONSTEXPR.findall(text):
-        # One line, unqualified, Python-spelled — a C++ expression is not
-        # otherwise parseable, and folded across lines it would not be an
-        # expression at all.
-        flat = _QUALIFIER.sub("", " ".join(expression.split()))
+        # One line, unqualified, Python-spelled: a C++ expression does
+        # not otherwise parse, and across lines it is not an expression.
+        flat = _QUALIFIER.sub("", " ".join(expression.split())).replace("'", "")
         try:
             tree = ast.parse(_LITERAL.sub(lambda match: match.group(1), flat), mode="eval")
         except SyntaxError:

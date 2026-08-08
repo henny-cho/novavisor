@@ -1519,9 +1519,9 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
       setFocus(edge ? edge.from : null);
       return Boolean(edge);
     },
-    /* Shown again after the view slot held something else. Everything
-       was measured at zero while the body had no size, which is the
-       same state unfolding leaves it in. */
+    /* Shown again after the view slot held something else: the body
+       had no size, so everything measured at zero — the same state
+       unfolding leaves behind. */
     reveal() {
       invalidate();
       paintAll();

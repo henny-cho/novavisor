@@ -32,12 +32,10 @@ class ConstexprReaderTest(unittest.TestCase):
         return path
 
     def test_it_folds_what_the_compiler_static_asserts(self):
-        """The strongest check available, and it costs nothing.
-
-        `stage1_tables.hpp` builds three register values out of its own
-        named fields and asserts each against the #define the assembler
-        uses. The compiler has already proved those pairs equal, so a
-        reader landing on the same numbers is folding shifts, masks and
+        """`stage1_tables.hpp` builds three register values out of its
+        own named fields and asserts each against the #define the
+        assembler uses. The compiler has proved those pairs equal, so a
+        reader landing on the same numbers folds shifts, masks and
         cross-references the way the compiler does.
         """
         folded = abi.read_constexprs(translation.STAGE1_TABLES)
@@ -70,8 +68,8 @@ class ConstexprReaderTest(unittest.TestCase):
             abi.read_constexprs(self.header("inline constexpr int kX = kNeverDeclared;\n"))
 
     def test_an_expression_it_cannot_fold_stops_the_tool(self):
-        """A guessed number is worse than none: it becomes a second copy
-        of the encoding, right until the day the header moves."""
+        """A guessed number becomes a second copy of the encoding, right
+        until the day the header moves."""
         for expression in ("width(3)", "~kMask", "kA ? kB : kC", "1 +"):
             with self.assertRaises(SystemExit, msg=expression):
                 abi.read_constexprs(self.header(f"inline constexpr int kX = {expression};\n"))
@@ -122,11 +120,11 @@ class GeometryTest(unittest.TestCase):
         believes the second. A build that changed one alone would walk
         tables built for the other — a fault with no message."""
         with self.assertRaises(SystemExit):
-            translation._geometry("bad", (30, 21, 12), 512, 39, 12, starts_at=2)
+            translation._geometry("bad", (30, 21, 12), 512, 39, starts_at=2)
 
     def test_an_address_wider_than_the_top_level_is_rejected(self):
         with self.assertRaises(SystemExit):
-            translation._geometry("bad", (30, 21, 12), 512, 48, 12)
+            translation._geometry("bad", (30, 21, 12), 512, 48)
 
 
 class DescriptorTest(unittest.TestCase):
@@ -160,7 +158,7 @@ class DescriptorTest(unittest.TestCase):
         self.assertEqual(translation.STAGE2_FORMAT.decode(raw, 2).kind, "page")
 
     def test_a_block_encoding_at_the_last_level_maps_nothing(self):
-        """The block encoding is reserved at L3. Read as a mapping it
+        """The block encoding is reserved at L3; read as a mapping it
         would be a window the hardware never opened."""
         raw = FRAME | S2["kAttrNormalRwx"] | S2["kTypeBlock"]
         decoded = translation.STAGE2_FORMAT.decode(raw, 2)
@@ -171,8 +169,8 @@ class DescriptorTest(unittest.TestCase):
         self.assertEqual(translation.STAGE2_FORMAT.decode(0, 0).kind, "invalid")
 
     def test_el2_text_and_data_are_each_missing_what_the_other_has(self):
-        """W^X, as the two presets encode it. The view exists to show
-        this, and the decode is where it is either seen or lost."""
+        """W^X as the two presets encode it — the decode is where it is
+        either seen or lost."""
         text = translation.STAGE1_FORMAT.decode(FRAME | S1["kAttrNormalRx"] | S1["kTypeBlock"], 1)
         data = translation.STAGE1_FORMAT.decode(FRAME | S1["kAttrNormalRw"] | S1["kTypeBlock"], 1)
         self.assertEqual((text.writable, text.executable), (False, True))
@@ -306,7 +304,7 @@ class TreeTest(unittest.TestCase):
         memory = Memory()
         l2 = memory.table({index: block(0x8000_0000 + index * MIB2) for index in range(8)})
         l1 = memory.table({0: points_to(l2)})
-        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, limit=8)
         (top,) = found.nodes
         (run,) = top.children
         self.assertEqual((run.index, run.count, run.base), (0, 8, 0))
@@ -316,7 +314,7 @@ class TreeTest(unittest.TestCase):
         memory = Memory()
         l2 = memory.table({0: block(0x8000_0000), 1: block(0x9000_0000)})
         l1 = memory.table({0: points_to(l2)})
-        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, limit=8)
         self.assertEqual([node.count for node in found.nodes[0].children], [1, 1])
 
     def test_a_changed_attribute_breaks_the_run(self):
@@ -331,7 +329,7 @@ class TreeTest(unittest.TestCase):
             }
         )
         l1 = memory.table({0: points_to(l2)})
-        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, limit=8)
         first, second = found.nodes[0].children
         self.assertEqual((first.count, second.count), (1, 1))
         self.assertTrue(first.descriptor.executable)
@@ -348,13 +346,13 @@ class TreeTest(unittest.TestCase):
             }
         )
         l1 = memory.table({0: points_to(l2)})
-        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, limit=8)
         self.assertEqual([node.count for node in found.nodes[0].children], [1, 1])
 
     def test_empty_slots_are_absent_rather_than_listed(self):
         memory = Memory()
         l1 = memory.table({7: block(0x8000_0000)})
-        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, limit=8)
         (only,) = found.nodes
         self.assertEqual((only.index, only.base), (7, 7 * GIB))
 
@@ -364,9 +362,9 @@ class TreeTest(unittest.TestCase):
         memory = Memory()
         leaves = [memory.table({0: block(0x8000_0000)}) for _ in range(4)]
         l1 = memory.table({index: points_to(leaf) for index, leaf in enumerate(leaves)})
-        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=3)
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, limit=3)
         self.assertTrue(found.truncated)
-        self.assertEqual(found.tables, 3)
+        self.assertEqual(found.read, 3)
         # Two levels reached, the rest left empty rather than guessed at.
         self.assertEqual([len(node.children) for node in found.nodes], [1, 1, 0, 0])
 
@@ -375,7 +373,7 @@ class TreeTest(unittest.TestCase):
         with nothing to say it was short."""
         memory = Memory()
         l1 = memory.table({0: points_to(0xDEAD_0000)})
-        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, tables=8)
+        found = translation.tree(memory, translation.STAGE2_FORMAT, l1, limit=8)
         self.assertEqual(found.unreadable, (0xDEAD_0000,))
         self.assertFalse(found.truncated)
         self.assertEqual(found.nodes[0].children, ())
