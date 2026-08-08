@@ -49,6 +49,8 @@ EDGE_TRAP = "trap"
 EDGE_POST = "post"
 EDGE_INJECT = "inject"
 EDGE_MMIO = "mmio"
+EDGE_DMA = "dma"
+EDGE_WALK = "walk"
 
 # Expansion groups. A path between two instances of the same thing names
 # the group, because how many there are is the machine's answer.
@@ -74,8 +76,8 @@ EDGES: tuple[Edge, ...] = (
     Edge(EDGE_POST, "gicd", "vgic", GRADE_POLL, "vgic.token"),
     Edge(EDGE_INJECT, "vgic", BAND_EL1, GRADE_POLL, "vgic.lr"),
     Edge(EDGE_MMIO, BAND_EL1, "vgic", GRADE_CONSOLE, badges=(Badge.VGIC,)),
-    Edge("dma", BAND_DEV, "smmu", GRADE_POLL, "dev.dma", (Badge.DMA,)),
-    Edge("walk", "smmu", "mem", GRADE_CONSOLE, badges=(Badge.SMMU,)),
+    Edge(EDGE_DMA, BAND_DEV, "smmu", GRADE_POLL, "dev.dma", (Badge.DMA,)),
+    Edge(EDGE_WALK, "smmu", "mem", GRADE_CONSOLE, badges=(Badge.SMMU,)),
     Edge("cross", "", "", GRADE_POLL, "smp.mail", (Badge.SMP,), pair=PAIR_CORES),
     Edge("ivc", "ivc", "pa:shared", GRADE_POLL, "ivc.page"),
     Edge("psci", "sched", BAND_PE, GRADE_CONSOLE, badges=(Badge.PSCI,)),

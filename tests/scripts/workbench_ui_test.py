@@ -116,6 +116,84 @@ PAINTS = re.compile(r'"([\w.]+)":\s*\[([^\]]*)\]')
 RATE_LITERAL = re.compile(r"\d+\s*Hz")
 
 
+class MemoryViewTest(unittest.TestCase):
+    """The map draws a walk it is given, and decodes nothing itself."""
+
+    def test_the_view_states_no_address_of_its_own(self):
+        # Addresses reach this view in the answer it asked for. One typed
+        # into the module or the shell would be a claim about a machine
+        # the page has not looked at.
+        for path in (UI / "js" / "memory.mjs", UI / "index.html"):
+            with self.subTest(file=path.name):
+                self.assertFalse(HARD_ADDRESS.findall(path.read_text()))
+
+    def test_the_view_decodes_no_descriptor(self):
+        # A descriptor's bit layout has one source: the headers the
+        # hypervisor compiles. A shift or a mask here would be a second
+        # reading of it, drifting the first time a field moved.
+        source = (UI / "js" / "memory.mjs").read_text()
+        self.assertFalse(re.findall(r"[<>]{2}=?|&\s*0x|\bBigInt\b", source))
+
+    def test_every_view_a_tab_names_is_built(self):
+        # A tab pointing at nothing hides the current view and shows no
+        # other; the switch is the one place both names have to agree.
+        named = set(re.findall(r'data-view="(\w+)"', (UI / "index.html").read_text()))
+        table = re.search(r"const VIEWS = \{(.*?)\n\};", (UI / "js" / "main.mjs").read_text(), re.S)
+        self.assertIsNotNone(table, "view table not found")
+        self.assertEqual(named, set(re.findall(r"^  (\w+):", table.group(1), re.M)))
+
+    def test_a_board_that_was_hidden_measures_itself_again(self):
+        # It draws wires from a measured box; measured at zero they land
+        # on the origin. Folding already says so, and the view switch
+        # leaves it in exactly the same state.
+        self.assertRegex((UI / "js" / "board.mjs").read_text(), r"reveal\(\) \{\s+invalidate\(\)")
+        self.assertRegex((UI / "js" / "main.mjs").read_text(), r"boardView\.reveal\(\)")
+        css = (UI / "css" / "workbench.css").read_text()
+        self.assertRegex(css, r"\.view\.folded\s*>\s*\.mmap\s*\{[^}]*display:\s*none")
+
+    def test_the_map_marks_w_and_x_only_where_the_regime_forbids_it(self):
+        # A guest's Stage 2 grants both on purpose — the guest's own
+        # Stage 1 does the splitting — so marking every such row would
+        # cry wolf on every run. The regime says which it is.
+        source = (UI / "js" / "memory.mjs").read_text()
+        self.assertRegex(source, r"wxn && row\.w && row\.x")
+        self.assertRegex((UI / "css" / "workbench.css").read_text(), r"\.mperm\.wx")
+
+    def test_the_map_states_the_wxn_result_even_when_it_is_none(self):
+        # A check whose result nobody can see is indistinguishable from
+        # one that never ran.
+        self.assertRegex((UI / "js" / "memory.mjs").read_text(), r"if \(tree\.wxn\)")
+        self.assertRegex((UI / "css" / "workbench.css").read_text(), r"\.mverdict")
+
+    def test_the_map_reads_only_published_topics(self):
+        # The map is static under a run; what a stream is allowed to do
+        # is not, and only that is polled. A topic the manifest stopped
+        # publishing would leave the stream strip silently empty.
+        from novakit.services.workbench.observations import OBSERVATIONS
+
+        source = (UI / "js" / "memory.mjs").read_text()
+        table = re.search(r"const TOPICS = new Set\(\[(.*?)\]\);", source, re.S)
+        self.assertIsNotNone(table, "memory topic table not found")
+        wanted = set(re.findall(r'"([\w.]+)"', table.group(1)))
+        self.assertTrue(wanted)
+        self.assertLessEqual(wanted, {obs.topic for obs in OBSERVATIONS})
+
+    def test_a_stream_is_joined_to_a_regime_by_the_root_both_carry(self):
+        # Resolving a stream to a VM on the bridge as well would be a
+        # second answer to one question, and the two would agree only
+        # until somebody changed one.
+        source = (UI / "js" / "memory.mjs").read_text()
+        self.assertRegex(source, r"entry\.root === root")
+        self.assertNotIn('"vm"', (UI / "js" / "memory.mjs").read_text())
+
+    def test_a_short_map_says_so(self):
+        # A walk that could not read a table returns fewer mappings.
+        # Drawn plainly it reads as a machine that had fewer.
+        source = (UI / "js" / "memory.mjs").read_text()
+        self.assertIn("tree.unreadable", source)
+        self.assertIn("tree.truncated", source)
+
+
 class BoardViewTest(unittest.TestCase):
     """The board draws structure it is given, and stays reachable."""
 

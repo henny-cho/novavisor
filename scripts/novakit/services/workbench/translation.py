@@ -189,7 +189,14 @@ def _stage1_attributes(raw: int) -> dict[str, object]:
 
 @dataclass(frozen=True)
 class Format:
-    """One regime's descriptor encoding, and its walk geometry."""
+    """One regime's descriptor encoding, and its walk geometry.
+
+    `wxn` is whether the regime's control register forbids writable and
+    executable together. Read from the firmware rather than decided here:
+    EL2 sets SCTLR_EL2.WXN, so a descriptor granting both would mean the
+    map and the register disagree, where a guest's Stage 2 grants both on
+    purpose and the guest's own Stage 1 does the splitting.
+    """
 
     geometry: Geometry
     type_mask: int
@@ -197,6 +204,7 @@ class Format:
     type_block: int
     output_mask: int
     attributes: Callable[[int], dict[str, object]]
+    wxn: bool = False
 
     def decode(self, raw: int, depth: int) -> Descriptor:
         """Read one slot of the table at `depth`.
@@ -240,6 +248,7 @@ STAGE1_FORMAT = Format(
     type_block=_S1["kTypeBlock"],
     output_mask=_S1["kOutputAddrMask"],
     attributes=_stage1_attributes,
+    wxn=bool(_S1["kSctlrEl2"] & _S1["kSctlrWxn"]),
 )
 
 

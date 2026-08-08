@@ -736,6 +736,10 @@ def decode(record: Record) -> dict:
         out |= {"slot": record.a, "bytes": record.b}
     elif entry.id == "smmu.fault":
         out |= {"stream": record.a, "vm": record.b, "generation": record.c}
+    elif entry.id == "smmu.attach":
+        out |= {"stream": record.a, "root": f"{record.b:#x}", "vmid": record.c}
+    elif entry.id == "dma.start":
+        out |= {"vm": record.a, "address": f"{record.b:#x}", "bytes": record.c}
     elif entry.id == "trace.gap":
         # The width, not the far end: `b` is a raw counter value, which
         # is the one thing no reader can use. Zero when the hole opened

@@ -75,13 +75,15 @@
            the same time. -->
       <div class="view" id="view">
         <div class="view-h">
-          <div class="view-title"><span>System map</span><strong>실행 보드</strong></div>
+          <div class="view-title"><span>System map</span><strong id="view-name">실행 보드</strong></div>
           <div class="vtabs" role="tablist" aria-label="뷰 전환">
-            <button class="vtab" role="tab" aria-selected="true" type="button">보드</button>
+            <button class="vtab" id="vtab-board" role="tab" aria-selected="true" type="button"
+                    data-view="board">보드</button>
             <button class="vtab" role="tab" aria-selected="false" type="button" disabled
                     title="인터럽트 경로 뷰는 아직 없습니다">인터럽트</button>
-            <button class="vtab" role="tab" aria-selected="false" type="button" disabled
-                    title="메모리 맵 뷰는 아직 없습니다">메모리</button>
+            <button class="vtab" id="vtab-memory" role="tab" aria-selected="false" type="button"
+                    data-view="memory"
+                    title="주소 번역 — 실제 페이지 테이블을 걸어서">메모리</button>
           </div>
           <!-- Always visible: the board is sparser than a simulator on
                purpose, and this says why. -->
@@ -100,6 +102,25 @@
         </div>
         <div class="board" id="board">
           <div class="bands" id="bands"><svg class="wires" id="wires" aria-hidden="true"></svg></div>
+        </div>
+        <!-- The other half of the same slot. The board draws what the
+             machine is; this draws what an address means on it. One at
+             a time, because both want the whole width, and the time axis
+             below stays put across the switch. -->
+        <div class="mmap" id="mmap" hidden>
+          <div class="mmap-h">
+            <div class="mmap-pick" id="mmap-pick" role="group" aria-label="번역 체계"></div>
+            <form class="mmap-probe" id="mmap-probe" autocomplete="off">
+              <!-- The placeholder is filled from this run's own map: an
+                   address typed here would be a guess about a machine
+                   the page has not looked at yet. -->
+              <input id="mmap-at" type="text" spellcheck="false" aria-label="따라갈 주소">
+              <button class="btn" type="submit"
+                      title="이 주소를 테이블을 따라 번역한다">따라가기</button>
+            </form>
+            <span class="mmap-note" id="mmap-note" aria-live="polite"></span>
+          </div>
+          <div class="mmap-body" id="mmap-body"></div>
         </div>
         <!-- Inside the view, so its height comes out of the board's
              share: the console already negotiates for the rest of the

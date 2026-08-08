@@ -92,6 +92,11 @@ OBSERVATIONS: tuple[Obs, ...] = (
     Obs("dev.uart", "nova::vuart::(anonymous)::g_uart", fields=("head", "count", "imsc"), rate_hz=5),
     Obs("dev.dma", "nova::dma_device::(anonymous)::g_registry", rate_hz=5,
         shape=derive.none_if_unset),
+    # What each device stream is allowed to do. Polled rather than read
+    # once with the tables it points at: a fault quarantines a stream,
+    # and the entry that changes is this one.
+    Obs("smmu.stream", "nova::smmu::(anonymous)::g_stream_table", rate_hz=5,
+        shape=derive.smmu_streams),
     Obs("dev.watchdog", "nova::(anonymous)::g_update_sequence", rate_hz=2),
     # IVC panel — the shared page is guest memory, not an EL2 global.
     Obs("ivc.page", "", pa=_BOARD["NOVA_BOARD_IVC_SHM_PA"], layout="ivc_ring_page", hex=True),

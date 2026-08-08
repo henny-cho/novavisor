@@ -109,12 +109,17 @@ inline constexpr std::uint64_t kTcrEl2 = (1ULL << 31) | (1ULL << 23) // RES1
                                          | 32ULL;                    // T0SZ
 static_assert(kTcrEl2 == NOVA_EL2_TCR);
 
-inline constexpr std::uint64_t kSctlrEl2 = 0x30C50830ULL   // RES1
-                                           | (1ULL << 0)   // M: Stage-1 MMU
-                                           | (1ULL << 2)   // C: data cache
-                                           | (1ULL << 3)   // SA: SP alignment check
-                                           | (1ULL << 12)  // I: instruction cache
-                                           | (1ULL << 19); // WXN: writable implies XN
+// Writable implies execute-never. Named rather than left as a bit
+// position in the sum below, because it is the whole of this regime's
+// W^X: a reader asking whether EL2 forbids W&X asks for this bit.
+inline constexpr std::uint64_t kSctlrWxn = 1ULL << 19;
+
+inline constexpr std::uint64_t kSctlrEl2 = 0x30C50830ULL  // RES1
+                                           | (1ULL << 0)  // M: Stage-1 MMU
+                                           | (1ULL << 2)  // C: data cache
+                                           | (1ULL << 3)  // SA: SP alignment check
+                                           | (1ULL << 12) // I: instruction cache
+                                           | kSctlrWxn;
 static_assert(kSctlrEl2 == NOVA_EL2_SCTLR);
 
 // --- Identity map builder ------------------------------------------------------

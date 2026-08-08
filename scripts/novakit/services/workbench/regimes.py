@@ -204,3 +204,221 @@ class Tables:
             if word is not None:
                 out[offset : offset + stride] = word.to_bytes(stride, "little")
         return bytes(out)
+
+
+# --- Answering a client -----------------------------------------------------
+
+FORMATS = {"stage2": translation.STAGE2_FORMAT, "stage1": translation.STAGE1_FORMAT}
+
+
+def _address(value) -> int:
+    """A probe target, from whatever the client typed.
+
+    Hex because these are addresses and a reader has them in hex; the
+    prefix is optional because a reader pasting one from a fault message
+    has it either way.
+    """
+    try:
+        # Always hex, prefix or not. Reading a bare string as decimal
+        # would answer a different question than the one asked, and the
+        # answer would look perfectly ordinary.
+        return int(str(value).strip().replace("_", ""), 16)
+    except ValueError:
+        raise ValueError(f"{value!r} is not an address") from None
+
+
+def _walk(reader, regime: dict) -> tuple[translation.Tree, translation.Format]:
+    fmt = FORMATS[regime["kind"]]
+    return translation.tree(reader, fmt, int(regime["root"], 16), regime["tables"]), fmt
+
+
+def _windows(nodes: tuple[translation.Node, ...], geometry: translation.Geometry) -> list[tuple[int, int]]:
+    """Every input range a walk ends in, merged and in order.
+
+    Where a run of slots is one range, adjacent runs that happen to abut
+    become one too: what matters here is which addresses are reachable,
+    and a boundary between two identically-reachable regions is an
+    artefact of how the builder laid them down.
+    """
+    spans: list[tuple[int, int]] = []
+    for node in nodes:
+        if node.children:
+            spans += _windows(node.children, geometry)
+        elif node.descriptor.maps:
+            spans.append((node.base, node.base + node.count * geometry.span(node.depth)))
+    spans.sort()
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _minus(spans, other) -> list[list[str]]:
+    """What the first side reaches and the second does not."""
+    out = []
+    for start, end in spans:
+        at = start
+        for cut_start, cut_end in other:
+            if cut_end <= at or cut_start >= end:
+                continue
+            if cut_start > at:
+                out.append([f"{at:#x}", f"{cut_start - at:#x}"])
+            at = max(at, cut_end)
+        if at < end:
+            out.append([f"{at:#x}", f"{end - at:#x}"])
+    return out
+
+
+def _isolation(reader, captured: dict, vm) -> dict | None:
+    """One VM's two Stage 2 translations, by their difference.
+
+    A VM has two, and they are separate table sets rather than one with
+    an overlay — so what is worth looking at is not where they agree but
+    where they do not. A window only the CPU reaches is memory the guest
+    uses and no device can touch. A window only DMA reaches is a device
+    able to write where the guest itself cannot look.
+    """
+    if vm is None:
+        return None
+    sides = {
+        entry["role"]: entry
+        for entry in captured["regimes"]
+        if entry["vm"] == vm and entry["role"] in ("cpu", "dma")
+    }
+    if len(sides) < 2:
+        return None
+    cpu_tree, cpu_fmt = _walk(reader, sides["cpu"])
+    dma_tree, dma_fmt = _walk(reader, sides["dma"])
+    cpu = _windows(cpu_tree.nodes, cpu_fmt.geometry)
+    dma = _windows(dma_tree.nodes, dma_fmt.geometry)
+    return {
+        "cpu": sides["cpu"]["id"],
+        "dma": sides["dma"]["id"],
+        "cpu_only": _minus(cpu, dma),
+        "dma_only": _minus(dma, cpu),
+    }
+
+
+def answer(captured: dict, request: dict) -> dict:
+    """Walk one regime for a client.
+
+    Live and in replay this reads the same captured tables, so the two
+    cannot answer differently — the walk is not reimplemented on either
+    side of a recording.
+    """
+    wanted = str(request.get("regime", ""))
+    regime = next((entry for entry in captured["regimes"] if entry["id"] == wanted), None)
+    if regime is None:
+        raise KeyError(f"no regime {wanted!r}")
+    reader = Tables.of(captured)
+    found, fmt = _walk(reader, regime)
+    data = {"regime": regime["id"], "tree": _tree_wire(found, fmt)}
+    isolation = _isolation(reader, captured, regime.get("vm"))
+    if isolation is not None:
+        data["isolation"] = isolation
+    if request.get("address") in (None, ""):
+        return data
+    at = _address(request["address"])
+    data["probe"] = _probe_wire(translation.probe(reader, fmt, int(regime["root"], 16), at), fmt)
+    # The same address in this VM's other translation. One number, two
+    # answers: that is the comparison, and asking for it separately
+    # would let the two be about different addresses.
+    data["beside"] = [
+        {
+            "regime": other["id"],
+            "label": other["label"],
+            "probe": _probe_wire(
+                translation.probe(reader, FORMATS[other["kind"]], int(other["root"], 16), at),
+                FORMATS[other["kind"]],
+            ),
+        }
+        for other in captured["regimes"]
+        if other["vm"] == regime.get("vm") and other["id"] != regime["id"] and other["vm"] is not None
+    ]
+    return data
+
+
+def _wx_slots(nodes: tuple[translation.Node, ...]) -> int:
+    """Slots this map makes both writable and executable.
+
+    A count rather than a verdict. Whether it is a defect depends on the
+    regime, and the regime says so: EL2's control register forbids the
+    combination where a guest's Stage 2 grants it deliberately.
+    """
+    total = 0
+    for node in nodes:
+        if node.descriptor.writable and node.descriptor.executable:
+            total += node.count
+        total += _wx_slots(node.children)
+    return total
+
+
+def _tree_wire(found: translation.Tree, fmt: translation.Format) -> dict:
+    return {
+        "root": f"{found.root:#x}",
+        "tables": found.tables,
+        "truncated": found.truncated,
+        "unreadable": [f"{pa:#x}" for pa in found.unreadable],
+        "wx": _wx_slots(found.nodes),
+        "wxn": fmt.wxn,
+        "nodes": [_node_wire(node, fmt) for node in found.nodes],
+    }
+
+
+def _node_wire(node: translation.Node, fmt: translation.Format) -> dict:
+    """One row of the map.
+
+    Carries the span it covers rather than the level's shift: a client
+    computing that would be holding a second copy of the geometry, and
+    the whole point of reading it from the headers is that there is one.
+    """
+    descriptor = node.descriptor
+    wire = {
+        "level": fmt.geometry.levels[node.depth],
+        "index": node.index,
+        "count": node.count,
+        "base": f"{node.base:#x}",
+        "size": f"{node.count * fmt.geometry.span(node.depth):#x}",
+        "kind": descriptor.kind,
+        "output": f"{descriptor.output:#x}",
+    }
+    if descriptor.maps:
+        # Only where a walk ends. A table descriptor given permissions
+        # would be showing bits the hardware does not consult.
+        wire |= {
+            "w": descriptor.writable,
+            "x": descriptor.executable,
+            "af": descriptor.accessed,
+            "memory": descriptor.memory,
+        }
+    if node.children:
+        wire["children"] = [_node_wire(child, fmt) for child in node.children]
+    return wire
+
+
+def _probe_wire(found: translation.Probe, fmt: translation.Format) -> dict:
+    # Where it landed and what may be done there: half of what an address
+    # means is the permission the walk ended on, so the answer carries it
+    # rather than sending the reader back into the tree to look.
+    leaf = found.steps[-1].descriptor if found.steps else None
+    wire = {
+        "address": f"{found.address:#x}",
+        "level": found.level,
+        "fault": found.fault,
+        "output": None if found.output is None else f"{found.output:#x}",
+        "steps": [
+            {
+                "level": fmt.geometry.levels[step.depth],
+                "index": step.index,
+                "table": f"{step.table:#x}",
+                "kind": step.descriptor.kind,
+            }
+            for step in found.steps
+        ],
+    }
+    if found.output is not None and leaf is not None:
+        wire |= {"w": leaf.writable, "x": leaf.executable, "memory": leaf.memory}
+    return wire
