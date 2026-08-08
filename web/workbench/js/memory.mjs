@@ -13,6 +13,13 @@
 
 import { clear, el } from "./format.mjs";
 
+/* S-layer topics this view reads, declared as the board declares its
+   own: a topic the manifest stopped publishing fails a test instead of
+   quietly drawing nothing. The stream table is polled rather than read
+   with the tables it points at, because a fault quarantines a stream
+   and this is the entry that changes. */
+const TOPICS = new Set(["smmu.stream"]);
+
 /* A probe lands on exactly one row per level. */
 const onPath = (row, steps) =>
   steps.some(
@@ -37,6 +44,7 @@ export function createMemory({ pick, form, input, note, body, request }) {
   let regimes = [];
   let chosen = null;
   let shown = null; /* the last answer, for the regime it was asked about */
+  let streams = []; /* the stream table as last polled */
 
   function ask(address) {
     if (!chosen) return;
@@ -107,13 +115,79 @@ export function createMemory({ pick, form, input, note, body, request }) {
     return "";
   }
 
+  /* Which streams a device master can drive into the chosen regime, and
+     which are shut. The join is on the root each side already carries:
+     resolving a stream to a VM in the bridge as well would be a second
+     answer to one question. */
+  function renderStreams(regime, into) {
+    const root = regime?.root;
+    const mine = streams.filter((entry) => entry.root === root);
+    const shut = streams.filter((entry) => entry.state === "abort");
+    if (!mine.length && !shut.length) return;
+    const strip = el("div", "mstreams");
+    strip.append(el("span", "mstreams-h", "스트림"));
+    for (const entry of mine) {
+      strip.append(el("span", "mstream on", `S${entry.stream} · vmid ${entry.vmid}`));
+    }
+    /* An aborted stream refuses every transaction it makes, which is
+       what a quarantine after a fault leaves behind — it belongs beside
+       the windows rather than in a panel elsewhere. */
+    for (const entry of shut) strip.append(el("span", "mstream off", `S${entry.stream} 차단`));
+    into.append(strip);
+  }
+
+  /* One VM has two Stage 2 translations, and they are separate table
+     sets rather than one with an overlay. So the reading is their
+     difference: a window only the CPU reaches is memory no device can
+     touch, and one only DMA reaches is a device able to write where the
+     guest cannot look. */
+  function renderIsolation(isolation, into) {
+    if (!isolation) return;
+    const rows = [
+      ["cpu_only", "CPU만", "mside"],
+      ["dma_only", "DMA만", "mside bad"],
+    ];
+    for (const [key, caption, className] of rows) {
+      const spans = isolation[key] || [];
+      if (!spans.length) continue;
+      const line = el("div", className);
+      line.append(el("span", "mside-h", caption));
+      for (const [base, size] of spans) line.append(el("span", "mspan", `${base} +${size}`));
+      into.append(line);
+    }
+  }
+
+  /* The same address in this VM's other translation. One number, two
+     answers — which is the comparison. */
+  function renderBeside(beside, into) {
+    for (const other of beside || []) {
+      const probe = other.probe || {};
+      const line = el("div", probe.fault ? "mbeside bad" : "mbeside");
+      line.append(el("span", "mbeside-h", other.label));
+      line.append(
+        el(
+          "span",
+          "",
+          probe.fault
+            ? `✕ L${probe.level} ${probe.fault}`
+            : `→ ${probe.output} ${rights(probe)} ${probe.memory || ""}`,
+        ),
+      );
+      into.append(line);
+    }
+  }
+
   function renderAnswer() {
     clear(body);
     if (!shown) return;
     const tree = shown.tree || {};
     const steps = shown.probe?.steps || [];
     const rows = tree.nodes || [];
+    const regime = regimes.find((entry) => entry.id === chosen);
     input.placeholder = firstMapped(rows);
+    renderBeside(shown.beside, body);
+    renderIsolation(shown.isolation, body);
+    renderStreams(regime, body);
     if (!rows.length) {
       body.append(el("div", "mempty", "매핑된 구간이 없다"));
     }
@@ -177,11 +251,24 @@ export function createMemory({ pick, form, input, note, body, request }) {
       if (listed.length) choose(listed[0].id);
     },
 
-    apply(data) {
+    answer(data) {
       if (!chosen || data.regime !== chosen) return;
       shown = data;
       renderAnswer();
       noteProbe(data.probe || null);
+    },
+
+    accepts: (topic) => TOPICS.has(topic),
+
+    /* An S-layer reading, in the shape every panel takes one. The map
+       itself never changes under a run; what a stream is allowed to do
+       does, and only that is polled. */
+    apply(frame) {
+      if (frame.kind !== "snapshot") return;
+      const values = frame.data?.values;
+      if (!Array.isArray(values)) return;
+      streams = values;
+      if (shown) renderAnswer();
     },
 
     /* Asked again when the view is opened: a run that started after the

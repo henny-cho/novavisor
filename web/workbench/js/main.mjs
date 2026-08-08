@@ -726,7 +726,7 @@ function onFrame(frame) {
     /* An answer to a question this client asked: one regime's tables,
        walked. Every reader asks its own, so nothing here is replayed. */
     case "probe":
-      memory.apply(data);
+      memory.answer(data);
       break;
     case "life":
       onLife(frame.ts, data);
@@ -757,6 +757,7 @@ function onFrame(frame) {
          plain strings; the panels declare which ones they consume. */
       if (panels.accepts(frame.topic)) panels.apply(frame);
       if (boardView.accepts(frame.topic)) boardView.apply(frame);
+      if (memory.accepts(frame.topic)) memory.apply(frame);
       break;
   }
 }

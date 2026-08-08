@@ -772,3 +772,26 @@ b{font-weight:700}
   padding:6px;margin-top:6px;border:1px solid var(--warn);border-radius:5px;
   font-family:var(--mono);font-size:var(--fs-meta);color:var(--warn)
 }
+
+/* The same address in the VM's other translation, and the windows the
+   two do not share. Above the tree because they are the reading; the
+   tree below is where it came from. */
+.mbeside,.mside{
+  display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding:3px 6px;
+  font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink2)
+}
+.mbeside-h,.mside-h{min-width:11ch;color:var(--ink3)}
+/* A device able to reach what the guest itself cannot: the shape an
+   isolation defect takes here. */
+.mside.bad,.mbeside.bad{color:var(--crit)}
+.mside.bad .mside-h{color:var(--crit)}
+.mspan{padding:0 5px;border:1px solid var(--line);border-radius:4px}
+.mstreams{
+  display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;padding:4px 6px;margin-bottom:4px;
+  border-bottom:1px solid var(--line);font-family:var(--mono);font-size:var(--fs-meta)
+}
+.mstreams-h{min-width:11ch;color:var(--ink3)}
+.mstream{padding:1px 6px;border:1px solid var(--line);border-radius:4px;color:var(--ink2)}
+.mstream.on{border-color:var(--hyp);color:var(--hyp)}
+/* Valid and translating nothing: every transaction refused. */
+.mstream.off{border-color:var(--warn);color:var(--warn)}

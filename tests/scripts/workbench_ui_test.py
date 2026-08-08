@@ -165,6 +165,27 @@ class MemoryViewTest(unittest.TestCase):
         self.assertRegex((UI / "js" / "memory.mjs").read_text(), r"if \(tree\.wxn\)")
         self.assertRegex((UI / "css" / "workbench.css").read_text(), r"\.mverdict")
 
+    def test_the_map_reads_only_published_topics(self):
+        # The map is static under a run; what a stream is allowed to do
+        # is not, and only that is polled. A topic the manifest stopped
+        # publishing would leave the stream strip silently empty.
+        from novakit.services.workbench.observations import OBSERVATIONS
+
+        source = (UI / "js" / "memory.mjs").read_text()
+        table = re.search(r"const TOPICS = new Set\(\[(.*?)\]\);", source, re.S)
+        self.assertIsNotNone(table, "memory topic table not found")
+        wanted = set(re.findall(r'"([\w.]+)"', table.group(1)))
+        self.assertTrue(wanted)
+        self.assertLessEqual(wanted, {obs.topic for obs in OBSERVATIONS})
+
+    def test_a_stream_is_joined_to_a_regime_by_the_root_both_carry(self):
+        # Resolving a stream to a VM on the bridge as well would be a
+        # second answer to one question, and the two would agree only
+        # until somebody changed one.
+        source = (UI / "js" / "memory.mjs").read_text()
+        self.assertRegex(source, r"entry\.root === root")
+        self.assertNotIn('"vm"', (UI / "js" / "memory.mjs").read_text())
+
     def test_a_short_map_says_so(self):
         # A walk that could not read a table returns fewer mappings.
         # Drawn plainly it reads as a machine that had fewer.

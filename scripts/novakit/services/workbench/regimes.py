@@ -227,6 +227,81 @@ def _address(value) -> int:
         raise ValueError(f"{value!r} is not an address") from None
 
 
+def _walk(reader, regime: dict) -> tuple[translation.Tree, translation.Format]:
+    fmt = FORMATS[regime["kind"]]
+    return translation.tree(reader, fmt, int(regime["root"], 16), regime["tables"]), fmt
+
+
+def _windows(nodes: tuple[translation.Node, ...], geometry: translation.Geometry) -> list[tuple[int, int]]:
+    """Every input range a walk ends in, merged and in order.
+
+    Where a run of slots is one range, adjacent runs that happen to abut
+    become one too: what matters here is which addresses are reachable,
+    and a boundary between two identically-reachable regions is an
+    artefact of how the builder laid them down.
+    """
+    spans: list[tuple[int, int]] = []
+    for node in nodes:
+        if node.children:
+            spans += _windows(node.children, geometry)
+        elif node.descriptor.maps:
+            spans.append((node.base, node.base + node.count * geometry.span(node.depth)))
+    spans.sort()
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _minus(spans, other) -> list[list[str]]:
+    """What the first side reaches and the second does not."""
+    out = []
+    for start, end in spans:
+        at = start
+        for cut_start, cut_end in other:
+            if cut_end <= at or cut_start >= end:
+                continue
+            if cut_start > at:
+                out.append([f"{at:#x}", f"{cut_start - at:#x}"])
+            at = max(at, cut_end)
+        if at < end:
+            out.append([f"{at:#x}", f"{end - at:#x}"])
+    return out
+
+
+def _isolation(reader, captured: dict, vm) -> dict | None:
+    """One VM's two Stage 2 translations, by their difference.
+
+    A VM has two, and they are separate table sets rather than one with
+    an overlay — so what is worth looking at is not where they agree but
+    where they do not. A window only the CPU reaches is memory the guest
+    uses and no device can touch. A window only DMA reaches is a device
+    able to write where the guest itself cannot look.
+    """
+    if vm is None:
+        return None
+    sides = {
+        entry["role"]: entry
+        for entry in captured["regimes"]
+        if entry["vm"] == vm and entry["role"] in ("cpu", "dma")
+    }
+    if len(sides) < 2:
+        return None
+    cpu_tree, cpu_fmt = _walk(reader, sides["cpu"])
+    dma_tree, dma_fmt = _walk(reader, sides["dma"])
+    cpu = _windows(cpu_tree.nodes, cpu_fmt.geometry)
+    dma = _windows(dma_tree.nodes, dma_fmt.geometry)
+    return {
+        "cpu": sides["cpu"]["id"],
+        "dma": sides["dma"]["id"],
+        "cpu_only": _minus(cpu, dma),
+        "dma_only": _minus(dma, cpu),
+    }
+
+
 def answer(captured: dict, request: dict) -> dict:
     """Walk one regime for a client.
 
@@ -238,16 +313,31 @@ def answer(captured: dict, request: dict) -> dict:
     regime = next((entry for entry in captured["regimes"] if entry["id"] == wanted), None)
     if regime is None:
         raise KeyError(f"no regime {wanted!r}")
-    fmt = FORMATS[regime["kind"]]
     reader = Tables.of(captured)
-    root = int(regime["root"], 16)
-    data = {
-        "regime": regime["id"],
-        "tree": _tree_wire(translation.tree(reader, fmt, root, regime["tables"]), fmt),
-    }
-    if request.get("address") not in (None, ""):
-        found = translation.probe(reader, fmt, root, _address(request["address"]))
-        data["probe"] = _probe_wire(found, fmt)
+    found, fmt = _walk(reader, regime)
+    data = {"regime": regime["id"], "tree": _tree_wire(found, fmt)}
+    isolation = _isolation(reader, captured, regime.get("vm"))
+    if isolation is not None:
+        data["isolation"] = isolation
+    if request.get("address") in (None, ""):
+        return data
+    at = _address(request["address"])
+    data["probe"] = _probe_wire(translation.probe(reader, fmt, int(regime["root"], 16), at), fmt)
+    # The same address in this VM's other translation. One number, two
+    # answers: that is the comparison, and asking for it separately
+    # would let the two be about different addresses.
+    data["beside"] = [
+        {
+            "regime": other["id"],
+            "label": other["label"],
+            "probe": _probe_wire(
+                translation.probe(reader, FORMATS[other["kind"]], int(other["root"], 16), at),
+                FORMATS[other["kind"]],
+            ),
+        }
+        for other in captured["regimes"]
+        if other["vm"] == regime.get("vm") and other["id"] != regime["id"] and other["vm"] is not None
+    ]
     return data
 
 

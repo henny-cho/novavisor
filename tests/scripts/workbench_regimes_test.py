@@ -168,25 +168,36 @@ class AnswerTest(unittest.TestCase):
     MIB2 = translation.STAGE2.span(1)
     ROOT = 0x4000_0000
     LEAF = 0x4000_1000
+    DMA_ROOT = 0x4000_2000
+    DMA_LEAF = 0x4000_3000
+
+    def _regime(self, role: str, root: int) -> dict:
+        return {
+            "id": f"vm0.{role}",
+            "label": f"VM 0 · {role.upper()}",
+            "role": role,
+            "vm": 0,
+            "kind": "stage2",
+            "root": f"{root:#x}",
+            "tables": 6,
+        }
 
     def setUp(self):
+        # Two Stage 2 table sets for one VM, overlapping but not equal:
+        # the CPU reaches four 2 MiB blocks from zero, the device reaches
+        # the first two and one block the CPU has no mapping for.
         block = 0x8000_0000 | 0x7FC | 0b01  # desc::kAttrNormalRwx, a block
-        words = {f"{self.ROOT:#x}": f"{self.LEAF | 0b11:#x}"}
+        words = {
+            f"{self.ROOT:#x}": f"{self.LEAF | 0b11:#x}",
+            f"{self.DMA_ROOT:#x}": f"{self.DMA_LEAF | 0b11:#x}",
+        }
         for slot in range(4):
             words[f"{self.LEAF + slot * 8:#x}"] = f"{block + slot * self.MIB2:#x}"
+        for slot in (0, 1, 8):
+            words[f"{self.DMA_LEAF + slot * 8:#x}"] = f"{block + slot * self.MIB2:#x}"
         self.captured = {
-            "regimes": [
-                {
-                    "id": "vm0.cpu",
-                    "label": "VM 0 · CPU",
-                    "role": "cpu",
-                    "vm": 0,
-                    "kind": "stage2",
-                    "root": f"{self.ROOT:#x}",
-                    "tables": 6,
-                }
-            ],
-            "extents": [[f"{self.ROOT:#x}", 8192]],
+            "regimes": [self._regime("cpu", self.ROOT), self._regime("dma", self.DMA_ROOT)],
+            "extents": [[f"{self.ROOT:#x}", 16384]],
             "words": words,
         }
 
@@ -241,6 +252,40 @@ class AnswerTest(unittest.TestCase):
             regimes.answer(self.captured, {"regime": "nope"})
         with self.assertRaises(ValueError):
             regimes.answer(self.captured, {"regime": "vm0.cpu", "address": "zzz"})
+
+    def test_the_two_translations_of_one_vm_are_read_by_their_difference(self):
+        """They are separate table sets, not one with an overlay, so what
+        is worth looking at is where they disagree: a window only the CPU
+        reaches is memory no device can touch, and one only DMA reaches is
+        a device able to write where the guest cannot look."""
+        isolation = regimes.answer(self.captured, {"regime": "vm0.cpu"})["isolation"]
+        self.assertEqual((isolation["cpu"], isolation["dma"]), ("vm0.cpu", "vm0.dma"))
+        self.assertEqual(isolation["cpu_only"], [[f"{2 * self.MIB2:#x}", f"{2 * self.MIB2:#x}"]])
+        self.assertEqual(isolation["dma_only"], [[f"{8 * self.MIB2:#x}", f"{self.MIB2:#x}"]])
+
+    def test_the_difference_reads_the_same_from_either_side(self):
+        # It is one fact about the VM, not a property of which chip was
+        # picked; naming the sides by role is what makes that true.
+        from_cpu = regimes.answer(self.captured, {"regime": "vm0.cpu"})["isolation"]
+        from_dma = regimes.answer(self.captured, {"regime": "vm0.dma"})["isolation"]
+        self.assertEqual(from_cpu, from_dma)
+
+    def test_a_regime_with_no_counterpart_is_not_compared(self):
+        alone = dict(self.captured, regimes=[self._regime("cpu", self.ROOT)])
+        self.assertNotIn("isolation", regimes.answer(alone, {"regime": "vm0.cpu"}))
+
+    def test_one_address_is_answered_by_both_translations(self):
+        """Asking each separately would let the two answers be about
+        different addresses, which is exactly what a comparison cannot
+        afford."""
+        answer = regimes.answer(
+            self.captured, {"regime": "vm0.cpu", "address": f"{3 * self.MIB2:x}"}
+        )
+        self.assertEqual(answer["probe"]["fault"], "")
+        (beside,) = answer["beside"]
+        self.assertEqual(beside["regime"], "vm0.dma")
+        self.assertEqual(beside["probe"]["address"], answer["probe"]["address"])
+        self.assertEqual(beside["probe"]["fault"], "translation")
 
     def test_every_value_survives_json(self):
         """A descriptor is past 2^53, where a JSON number stops being

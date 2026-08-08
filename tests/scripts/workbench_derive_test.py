@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -9,8 +10,26 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
+from novakit.image import abi  # noqa: E402
 from novakit.services.workbench import derive, elfsym  # noqa: E402
 from novakit.services.workbench.observations import OBSERVATIONS  # noqa: E402
+
+# The STE field positions, from the header the encoder compiles
+# against. Spelled out here they would be the copy the shape exists
+# to avoid, and this test would keep passing after the header moved.
+STE = abi.read_constexprs(
+    REPO / "src" / "components" / "device" / "smmu" / "include" / "smmu" / "ste_model.hpp",
+    abi.read_constexprs(
+        REPO
+        / "src"
+        / "components"
+        / "core"
+        / "core_mmu"
+        / "include"
+        / "core_mmu"
+        / "stage2_descriptor.hpp"
+    ),
+)
 
 U8 = elfsym.TypeInfo("uint", 1)
 U64 = elfsym.TypeInfo("uint", 8)
@@ -226,6 +245,56 @@ class VgicPostedTest(unittest.TestCase):
         vm0 = self.bank(s31={"virtual_intid": 63, "physical_intid": 200, "generation": 9})
         (posted, *_) = derive.vgic_posted([vm0], self.SPIS)
         self.assertEqual(posted[0]["spi"], 31)
+
+
+class SmmuStreamTest(unittest.TestCase):
+    """A stream table entry as what it lets a device do.
+
+    The three states are the whole of DMA isolation: translating through
+    a VM's own tables, aborted so every transaction is refused, or never
+    configured at all.
+    """
+
+    ROOT = 0x4000_2000
+
+    @staticmethod
+    def entries(**configured):
+        return [configured.get(f"s{stream}", [0] * 8) for stream in range(8)]
+
+    def translating(self, vmid=3):
+        words = [0] * 8
+        words[0] = STE["kValid"] | (STE["kStage2Only"] << STE["kConfigShift"])
+        words[2] = vmid
+        words[3] = self.ROOT
+        return words
+
+    def aborted(self):
+        words = [0] * 8
+        words[0] = STE["kValid"]
+        return words
+
+    def test_a_translating_stream_names_the_tables_it_walks(self):
+        (stream,) = derive.smmu_streams(self.entries(s2=self.translating()), None)
+        self.assertEqual(stream["stream"], 2)
+        self.assertEqual(stream["state"], "translate")
+        self.assertEqual((stream["vmid"], int(stream["root"], 16)), (3, self.ROOT))
+
+    def test_an_aborted_stream_translates_nothing(self):
+        # Valid and configured to nothing: every transaction refused.
+        # What a quarantine after a fault leaves behind.
+        (stream,) = derive.smmu_streams(self.entries(s5=self.aborted()), None)
+        self.assertEqual((stream["stream"], stream["state"]), (5, "abort"))
+        self.assertNotIn("root", stream)
+
+    def test_a_stream_that_was_never_configured_does_not_travel(self):
+        # A board declares far more stream IDs than a run assigns.
+        self.assertEqual(derive.smmu_streams(self.entries(), None), [])
+
+    def test_the_root_survives_json(self):
+        # Past 2^53 a JSON number is not the one that was sent, which is
+        # every root on a machine with memory above 8 PiB of address.
+        streams = derive.smmu_streams(self.entries(s0=self.translating()), None)
+        self.assertEqual(json.loads(json.dumps(streams)), streams)
 
 
 if __name__ == "__main__":
