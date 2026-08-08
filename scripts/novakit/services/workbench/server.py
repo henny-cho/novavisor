@@ -65,6 +65,18 @@ LAUNCH_ARM_TIMEOUT_SECONDS = 600.0
 # bursts to tens of times the run's mean rate. An idle look costs two
 # eight-byte reads, because the drain is skipped when nothing is waiting.
 TRACE_DRAIN_SECONDS = 0.005
+# What one drain may cost the loop it runs on. Stated as a duration
+# because that is the thing at stake: a record count would encode how
+# fast this machine decodes one, and the ring depth such a count would
+# have been chosen against has already moved by sixty-four times once.
+# Eight milliseconds is the cost the design accepted for a full ring
+# when a full ring was 4096 records; it is now enforced rather than
+# assumed, and the allowance in records is found by measurement.
+TRACE_TURN_SECONDS = 0.008
+# Where the allowance starts and how low it may fall. A floor can only
+# make a turn shorter than the budget, never longer, so it cannot bring
+# back the stall it is here to prevent.
+TRACE_DRAIN_FLOOR = 64
 # Columns a window request is answered in, when it does not say. A
 # resolution, not a cap on data: the density always covers the whole
 # window and only the individual marks are gated on it, because more
@@ -130,6 +142,9 @@ class Bridge:
         # What the ring depth is worth on this host. Built with the
         # geometry, so it dies with the run whose rings it describes.
         self._budget: trace.Budget | None = None
+        # How many records one drain may take. Paced against the turn
+        # budget as the run reveals what a record costs here.
+        self._drain_limit = TRACE_DRAIN_FLOOR
         # What has been said about the T layer this run, so a state is
         # published on the transition rather than on every tick.
         self._trace_state = ""
@@ -738,7 +753,12 @@ class Bridge:
         # region has been read, and needed by everything that turns a
         # range of them back into a duration.
         self._history.freq_hz = self._tracer.geometry.freq_hz
-        self._budget = trace.Budget(self._tracer.geometry.capacity)
+        self._budget = trace.Budget(
+            self._tracer.geometry.capacity, self._tracer.geometry.freq_hz
+        )
+        # A new machine may decode at a different cost, and the pace
+        # this run reached says nothing about the next one.
+        self._drain_limit = TRACE_DRAIN_FLOOR
         if self._recorder is not None:
             # A range of counter values is not a duration without this,
             # and a replay needs it before it can answer the first
@@ -866,8 +886,11 @@ class Bridge:
             payload["hist"] = trace.histogram(found, first, last, buckets)
         self.store.publish(Topic.TRACE, Kind.SNAPSHOT, payload, src=Src.TRACE, replay=False)
 
-    def _pump_trace(self) -> None:
+    def _pump_trace(self) -> bool:
         """Drain the firmware's rings and publish what fired.
+
+        Returns whether records are still waiting, which is the caller's
+        cue to come straight back rather than hold to its tick.
 
         Counts per path, not the records: a few thousand events a second
         is nothing to the bridge and a great deal to a browser. The
@@ -879,15 +902,23 @@ class Bridge:
         them rather than tallied beside them.
         """
         if not self._attach_tracer():
-            return
+            return False
         # The cheap gate sits here rather than in the loop, so every
         # tick with a reader attached counts as a look: a ring's exposure
         # is the time between opportunities to empty it, and a tick that
         # found it empty is still one.
-        records = self._tracer.drain() if self._tracer.pending() else []
-        self._budget.looked(records, time.monotonic())
+        #
+        # The look is stamped on arrival. Exposure is the stretch a ring
+        # went unwatched, which ends when the reader gets there, not
+        # when it finishes with what it found — stamping at the end put
+        # this turn's own work inside the number that decides whether
+        # the ring was deep enough for it.
+        arrived = time.monotonic()
+        waiting = self._tracer.pending()
+        records = self._tracer.drain(limit=self._drain_limit) if waiting else []
+        self._budget.looked(records, arrived)
         if not records:
-            return
+            return False
         self._history.append(records)
         if self._recorder is not None:
             # The records themselves, because the wire carries only the
@@ -905,6 +936,22 @@ class Bridge:
             },
             src=Src.TRACE,
         )
+        self._pace_drain(time.monotonic() - arrived, capped=waiting > self._drain_limit)
+        return bool(self._tracer.pending())
+
+    def _pace_drain(self, took: float, capped: bool) -> None:
+        """Move the allowance so a turn keeps landing inside its budget.
+
+        What a record costs is a property of this machine and this code,
+        so it is found rather than declared. A turn that ran over halves
+        the allowance; one that came in well under doubles it — but only
+        when the allowance was the reason it stopped, or a quiet ring
+        would raise it on evidence it never produced.
+        """
+        if took > TRACE_TURN_SECONDS:
+            self._drain_limit = max(TRACE_DRAIN_FLOOR, self._drain_limit // 2)
+        elif capped and took < TRACE_TURN_SECONDS / 2:
+            self._drain_limit = min(self._tracer.geometry.capacity, self._drain_limit * 2)
 
     def _drop_provider(self) -> None:
         provider, self._provider = self._provider, None
@@ -1007,21 +1054,38 @@ class Bridge:
 
         Draining happens here rather than on a worker. The hand-off
         costs ~122 us against a ~6 us look and takes the GIL twice more
-        per tick, so the worker costs more than the work. A full ring is
-        ~8 ms of loop time, which the 50 ms flush absorbs.
+        per tick, so the worker costs more than the work — which holds
+        only because a drain is bounded by TRACE_TURN_SECONDS. Reading a
+        whole ring in one turn would put the cost of the backlog on this
+        loop, and the backlog is how long the last turn took.
+
+        Behind, the loop yields instead of waiting: the tick paces looks
+        at a ring that has caught up, and holding to it while records
+        are already waiting would only make the next batch bigger.
         """
         try:
+            behind = False
             while True:
                 # Nothing to hurry for once the image itself says there
                 # is no ring to attach to, or that its layout disagrees.
                 hurry = self._tracer is not None or self._trace_state in ("", "waiting")
-                await asyncio.sleep(TRACE_DRAIN_SECONDS if hurry else POLL_INTERVAL_SECONDS)
+                if behind:
+                    await asyncio.sleep(0)
+                else:
+                    await asyncio.sleep(
+                        TRACE_DRAIN_SECONDS if hurry else POLL_INTERVAL_SECONDS
+                    )
                 if self.session.phase is not Phase.RUNNING:
+                    # Yielding is only owed to a backlog this loop is
+                    # working through; carrying the debt past the run it
+                    # belongs to would spin on a machine that has none.
+                    behind = False
                     continue
                 try:
-                    self._pump_trace()
+                    behind = self._pump_trace()
                 except (FileNotFoundError, ValueError):
                     # The backing file went out from under the run.
+                    behind = False
                     self._drop_tracer()
         finally:
             self._drop_tracer()

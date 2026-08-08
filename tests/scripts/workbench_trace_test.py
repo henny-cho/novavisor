@@ -389,54 +389,150 @@ class GapTest(unittest.TestCase):
         self.assertEqual(decoded["ticks"], 500)
 
 
+class BoundedDrainTest(unittest.TestCase):
+    """A drain may cost only so much of the caller's turn. What it costs
+    is the backlog, and the backlog is how long the last turn took, so
+    without a cap the two feed each other."""
+
+    def interleaved(self, per_ring: int = 24):
+        """Two rings whose records alternate in time, so a batch that
+        respected only per-ring counts would hand them over jumbled."""
+        region = Region(rings=2, capacity=64)
+        self.addCleanup(region.cleanup)
+        for index in range(per_ring):
+            region.emit(0, ts=2 * index, code=TRAP, cpu=0)
+            region.emit(1, ts=2 * index + 1, code=TRAP, cpu=1)
+        return region
+
+    def test_a_bounded_drain_hands_over_no_more_than_it_was_allowed(self):
+        region = self.interleaved()
+        reader = region.reader()
+        self.addCleanup(reader.close)
+        self.assertLessEqual(len(reader.drain(limit=10)), 10)
+
+    def test_chunked_drains_give_what_one_drain_would_have(self):
+        """The cap changes when records arrive, never which ones or in
+        what order."""
+        whole = self.interleaved()
+        reader = whole.reader()
+        self.addCleanup(reader.close)
+        expected = [(record.ts, record.cpu) for record in reader.drain()]
+        reader.close()
+
+        region = self.interleaved()
+        chunked = region.reader()
+        self.addCleanup(chunked.close)
+        got = []
+        while len(got) < len(expected):
+            batch = chunked.drain(limit=7)
+            self.assertTrue(batch, "a bounded drain must always advance")
+            got += [(record.ts, record.cpu) for record in batch]
+        self.assertEqual(got, expected)
+
+    def test_no_record_left_behind_is_older_than_one_handed_over(self):
+        """The batch ends at a moment, not at a count. A ring stopped
+        short would otherwise leave records the next batch has to insert
+        underneath ones already held."""
+        region = self.interleaved()
+        reader = region.reader()
+        self.addCleanup(reader.close)
+        newest = max(record.ts for record in reader.drain(limit=9))
+        oldest_left = min(record.ts for record in reader.drain())
+        self.assertGreaterEqual(oldest_left, newest)
+
+    def test_an_allowance_a_quiet_ring_did_not_want_goes_to_a_busy_one(self):
+        region = Region(rings=2, capacity=64)
+        self.addCleanup(region.cleanup)
+        region.emit(1, ts=0, code=TRAP, cpu=1)
+        for index in range(40):
+            region.emit(0, ts=index + 1, code=TRAP, cpu=0)
+        reader = region.reader()
+        self.addCleanup(reader.close)
+        # Ring 1 wants one of the twenty; the split must not strand the
+        # other nine on a ring with nothing to give.
+        self.assertEqual(len(reader.drain(limit=20)), 20)
+
+
 class BudgetTest(unittest.TestCase):
     """The ring depth is a latency budget, so both of its terms — the
     peak fill and the stall between looks — are measured per run."""
 
-    def records(self, count: int, cpu: int = 0):
-        return [trace.Record(ts=index, code=TRAP, cpu=cpu, a=0, b=0, c=0)
+    # A round counter so a rate reads straight off the spacing: one tick
+    # per microsecond, so records `FREQ // rate` apart arrive at `rate`.
+    FREQ = 1_000_000
+
+    def budget(self, capacity: int = 1000):
+        return trace.Budget(capacity, self.FREQ)
+
+    def records(self, count: int, cpu: int = 0, rate: int = 200):
+        """A ring's worth of records produced at `rate` per second."""
+        step = self.FREQ // rate
+        return [trace.Record(ts=index * step, code=TRAP, cpu=cpu, a=0, b=0, c=0)
                 for index in range(count)]
 
     def test_the_horizon_falls_out_of_the_fastest_fill_seen(self):
-        budget = trace.Budget(capacity=1000)
+        budget = self.budget()
         budget.looked([], 0.0)
-        budget.looked(self.records(100), 0.5)  # 200/s
+        budget.looked(self.records(200, rate=200), 0.5)  # one window's worth
         self.assertEqual(budget.as_dict()["peak_rate"], 200)
         self.assertAlmostEqual(budget.horizon_seconds, 5.0)
+
+    def test_the_fill_is_read_off_the_stamps_not_off_the_turn(self):
+        """A bounded drain working through a backlog hands over a second
+        of records inside a few milliseconds. Dividing by the turn would
+        call that a fill rate the firmware never reached, and shrink the
+        horizon on evidence about the reader."""
+        budget = self.budget()
+        budget.looked([], 0.0)
+        # One second of production at 200/s, collected in four ms.
+        budget.looked(self.records(200, rate=200), 0.004)
+        self.assertEqual(budget.as_dict()["peak_rate"], 200)
+
+    def test_a_burst_shorter_than_the_window_is_not_a_rate(self):
+        """The declaration a board is sized against is per second, so
+        the measurement is too. The densest microsecond of a boot runs
+        at hundreds of times the busiest second, and sizing a ring
+        against it would reserve for a burst no depth has to survive."""
+        budget = self.budget()
+        budget.looked([], 0.0)
+        budget.looked(self.records(50, rate=100_000), 0.001)  # half a millisecond
+        self.assertEqual(budget.as_dict()["peak_rate"], 0)
 
     def test_the_rate_is_per_ring_not_across_them(self):
         """The depth is per ring, so a total across four of them would
         claim a horizon four times shorter than the real one."""
-        budget = trace.Budget(capacity=1000)
+        budget = self.budget()
         budget.looked([], 0.0)
-        budget.looked(self.records(100, cpu=0) + self.records(100, cpu=1), 1.0)
+        both = self.records(100, cpu=0, rate=100) + self.records(100, cpu=1, rate=100)
+        budget.looked(both, 1.0)
         self.assertEqual(budget.as_dict()["peak_rate"], 100)
 
     def test_a_gap_record_is_not_a_fill(self):
-        """It stands for records that never reached the reader; counting
-        it as arrival would inflate the rate exactly when the ring was
-        already losing."""
-        budget = trace.Budget(capacity=1000)
+        """It stands for records that never reached the reader, on a
+        stamp the reader chose; counting it would inflate the rate
+        exactly when the ring was already losing."""
+        budget = self.budget()
         budget.looked([], 0.0)
-        budget.looked(
-            [trace.Record(ts=1, code=trace.GAP_CODE, cpu=0, a=99999, b=0, c=0)], 1.0
-        )
-        self.assertEqual(budget.as_dict()["peak_rate"], 0)
+        made = self.records(200, rate=200)
+        loss = trace.Record(ts=made[-1].ts, code=trace.GAP_CODE,
+                            cpu=0, a=99999, b=0, c=0)
+        budget.looked([*made, loss], 1.0)
+        self.assertEqual(budget.as_dict()["peak_rate"], 200)
 
     def test_the_stall_is_measured_between_looks_not_between_finds(self):
         """A ring that was empty was never at risk. Counting an idle
         stretch as a stall makes the worst case a measure of how quiet
         the run was."""
-        budget = trace.Budget(capacity=1000)
+        budget = self.budget()
         budget.looked(self.records(1), 0.0)
         budget.looked([], 2.0)  # a long look that found nothing
         budget.looked(self.records(1), 2.1)
         self.assertAlmostEqual(budget.as_dict()["worst_gap_ms"], 2000.0)
 
     def test_the_crossing_is_reported_rather_than_left_to_be_noticed(self):
-        budget = trace.Budget(capacity=100)
+        budget = self.budget(capacity=100)
         budget.looked([], 0.0)
-        budget.looked(self.records(100), 0.1)  # 1000/s -> horizon 100 ms
+        budget.looked(self.records(1000, rate=1000), 0.1)  # horizon 100 ms
         self.assertAlmostEqual(budget.as_dict()["horizon_ms"], 100.0)
         self.assertFalse(budget.overrun)
 
@@ -445,12 +541,90 @@ class BudgetTest(unittest.TestCase):
         self.assertTrue(budget.as_dict()["overrun"])
 
     def test_an_unmeasured_budget_is_zero_and_not_unlimited(self):
-        budget = trace.Budget(capacity=1000)
+        budget = self.budget()
         budget.looked([], 0.0)
         budget.looked([], 1.0)
         self.assertEqual(budget.horizon_seconds, 0.0)
         # Nothing has been seen, so nothing has been broken either.
         self.assertFalse(budget.overrun)
+
+    def attributed(self, capacity=1000):
+        """A budget whose two attribution clocks are driven by hand."""
+        clocks = {"cpu": 0.0, "gc": 0.0}
+        budget = trace.Budget(
+            capacity, self.FREQ,
+            cpu_clock=lambda: clocks["cpu"], gc_clock=lambda: clocks["gc"],
+        )
+        return budget, clocks
+
+    def test_the_stall_is_split_into_what_the_process_spent_and_did_not(self):
+        """"QEMU contention or Python GC" is answered by subtraction, not
+        by guessing: a stall the process was running through is its own,
+        and one it was absent for was taken from it."""
+        budget, clocks = self.attributed()
+        budget.looked([], 0.0)
+        clocks["cpu"] += 0.004  # 4 ms of CPU inside a 500 ms wall stall
+        budget.looked([], 0.5)
+        state = budget.as_dict()
+        self.assertAlmostEqual(state["worst_gap_ms"], 500.0)
+        self.assertAlmostEqual(state["worst_cpu_ms"], 4.0)
+        self.assertAlmostEqual(state["worst_gc_ms"], 0.0)
+
+    def test_a_collection_inside_the_stall_is_named_as_one(self):
+        budget, clocks = self.attributed()
+        budget.looked([], 0.0)
+        clocks["cpu"] += 0.180
+        clocks["gc"] += 0.175  # nearly all of the CPU was collecting
+        budget.looked([], 0.2)
+        state = budget.as_dict()
+        self.assertAlmostEqual(state["worst_cpu_ms"], 180.0)
+        self.assertAlmostEqual(state["worst_gc_ms"], 175.0)
+
+    def test_the_composition_belongs_to_the_stall_it_explains(self):
+        """A later, smaller interval must not overwrite the breakdown of
+        the worst one — the two would then describe different moments."""
+        budget, clocks = self.attributed()
+        budget.looked([], 0.0)
+        clocks["cpu"] += 0.004
+        budget.looked([], 0.5)  # the worst
+        clocks["cpu"] += 0.300
+        budget.looked([], 0.6)  # busier, but shorter
+        state = budget.as_dict()
+        self.assertAlmostEqual(state["worst_gap_ms"], 500.0)
+        self.assertAlmostEqual(state["worst_cpu_ms"], 4.0)
+
+    def test_a_band_appears_only_where_there_is_data(self):
+        """No table of edges travels with the histogram, so nothing has
+        to be revised when the loop's cadence or the depth changes."""
+        budget = self.budget()
+        for at in (0.0, 0.005, 0.010, 0.674):  # 5 ms, 5 ms, then 664 ms
+            budget.looked([], at)
+        self.assertEqual(budget.as_dict()["gaps"], {"4": 2, "512": 1})
+
+    def test_the_band_is_the_power_of_two_below_the_interval(self):
+        budget = self.budget()
+        at = 0.0
+        budget.looked([], at)  # the first look is the baseline, not an interval
+        for ms in (1.0, 1.9, 2.0, 3.9, 4.0):
+            at += ms / 1000
+            budget.looked([], at)
+        self.assertEqual(budget.as_dict()["gaps"], {"1": 2, "2": 2, "4": 1})
+
+    def test_every_look_is_counted_so_an_outlier_has_a_denominator(self):
+        """The worst gap alone cannot say whether it happened once or
+        happens all the time; the band the loop's own tick lands in is
+        what the outlier is read against."""
+        budget = self.budget()
+        at = 0.0
+        budget.looked([], at)
+        for _ in range(100):
+            at += 0.0002  # 200 us — under a millisecond, band zero
+            budget.looked([], at)
+        at += 0.664
+        budget.looked([], at)
+        gaps = budget.as_dict()["gaps"]
+        self.assertEqual(gaps, {"0": 100, "512": 1})
+        self.assertEqual(sum(gaps.values()), 101)
 
 
 class SummaryTest(unittest.TestCase):

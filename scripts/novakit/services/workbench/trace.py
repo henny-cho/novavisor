@@ -20,9 +20,12 @@ The recoverable depth is capacity - 1, not capacity; see
 
 from __future__ import annotations
 
+import gc
 import mmap
 import struct
 import sys
+import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,6 +43,7 @@ _LAYOUT = abi.read_defines(
         "NOVA_TRACE_REC_SIZE",
         "NOVA_TRACE_TS_OFF",
         "NOVA_TRACE_MAX_RINGS",
+        "NOVA_TRACE_HORIZON_MS",
     ],
 )
 MAGIC = _LAYOUT["NOVA_TRACE_MAGIC"]
@@ -56,6 +60,17 @@ _RECORDS_OFF = _LAYOUT["NOVA_TRACE_RECORDS_OFF"]
 # the catalogue rather than the ABI header a second time: one entry names
 # the moment, its number, and what its words mean.
 GAP_CODE = events.BY_ID["trace.gap"].code
+
+# The window a fill rate is measured over, taken from the same header
+# that declares the rate a board is sized against. A rate has no meaning
+# without one, and measuring over a different span than the declaration
+# makes the two incomparable — the densest microsecond of a boot is
+# hundreds of times the busiest second, and sizing a ring against it
+# would reserve for a burst no depth ever has to survive.
+HORIZON_SECONDS = _LAYOUT["NOVA_TRACE_HORIZON_MS"] / 1000
+# How finely the window slides. Ten puts a burst's boundary within a
+# tenth of the window instead of splitting it across two of them.
+_RATE_SLICES = 10
 # `a` is a u32 on the wire, so a loss past four billion events saturates
 # rather than wraps.
 _MAX_COUNT = 0xFFFF_FFFF
@@ -153,6 +168,57 @@ class Geometry:
     early: int = 0
 
 
+class _GcClock:
+    """How long this process has spent inside garbage collection.
+
+    CPython reports collections, not their cost, so the pause is timed
+    from the interpreter's own start/stop callbacks. The callback list
+    is process-wide, so one instance is installed for the process and
+    never removed — a bridge that stopped counting halfway would make
+    the attribution of a later stall depend on when it was asked.
+    """
+
+    def __init__(self) -> None:
+        self.total = 0.0
+        self._entered: float | None = None
+
+    def __call__(self, phase: str, _info: dict) -> None:
+        if phase == "start":
+            self._entered = time.perf_counter()
+        elif self._entered is not None:
+            self.total += time.perf_counter() - self._entered
+            self._entered = None
+
+
+def _gc_clock() -> float:
+    global _GC
+    if _GC is None:
+        _GC = _GcClock()
+        gc.callbacks.append(_GC)
+    return _GC.total
+
+
+_GC: _GcClock | None = None
+
+
+def _gap_bucket(interval: float) -> int:
+    """Which power-of-two millisecond band an interval falls in.
+
+    Buckets appear where there is data instead of being declared, so no
+    table of edges travels with the histogram and none has to be revised
+    when the loop's cadence or the ring's depth changes. Band 0 holds
+    everything under a millisecond — the loop's own tick lives there and
+    is the denominator the outliers are read against.
+
+    The bands are plain durations on purpose. Judging them against the
+    horizon needs the horizon, which is published beside them and moves
+    as the peak fill grows: binning by that ratio here would freeze each
+    look against whatever the peak happened to be at the time.
+    """
+    ms = interval * 1000
+    return 1 << int(ms).bit_length() - 1 if ms >= 1 else 0
+
+
 class Budget:
     """What the ring's depth is worth on this host, measured.
 
@@ -163,11 +229,26 @@ class Budget:
     rather than inheriting the figures a board was sized against.
     """
 
-    def __init__(self, capacity: int):
+    def __init__(
+        self, capacity: int, freq_hz: int, cpu_clock=time.process_time, gc_clock=_gc_clock
+    ):
         self.capacity = capacity
+        self._freq = freq_hz
+        self._window = int(freq_hz * HORIZON_SECONDS)
+        self._slice = max(1, self._window // _RATE_SLICES)
+        self._slices: dict[int, deque[int]] = {}  # ring -> counts, newest last
+        self._opened: dict[int, int] = {}  # ring -> stamp the last slice began at
         self._at: float | None = None
         self._peak = 0.0  # records per second into one ring
         self._worst = 0.0  # seconds between looks
+        self._gaps: dict[int, int] = {}  # lower edge in ms -> looks
+        # The two clocks that split a stall into what this process spent
+        # and what it was not running for. Injected rather than read at
+        # the call site: the caller's `at` times its own loop, while
+        # these exist only to attribute what that timing found.
+        self._cpu_now, self._gc_now = cpu_clock, gc_clock
+        self._cpu = self._gc = 0.0
+        self._worst_cpu = self._worst_gc = 0.0
 
     def looked(self, records: list[Record], at: float) -> None:
         """Record one opportunity to drain, and what it found.
@@ -177,21 +258,63 @@ class Budget:
         idle stretches would turn the worst case into a measure of how
         quiet the run was.
 
-        The rate is per ring, because the depth is per ring. `cpu` names
-        the ring that wrote the record, and a total across four of them
-        would claim a horizon four times shorter than the real one.
+        The rate is per ring, because the depth is per ring. A record's
+        `cpu` names the ring that wrote it, and a total across four of
+        them would claim a horizon four times shorter than the real one.
+
+        How fast a ring filled is read off the records' own timestamps,
+        not off the interval that collected them. The two agree only
+        while the reader keeps up: a bounded drain working through a
+        backlog hands over records made across a second inside a turn of
+        a few milliseconds, and dividing by the turn would call that a
+        fill rate the firmware never reached — shrinking the horizon on
+        evidence that the reader, not the machine, was busy.
         """
+        spent, paused = self._cpu_now(), self._gc_now()
         if self._at is not None:
             interval = at - self._at
-            self._worst = max(self._worst, interval)
-            if interval > 0 and records:
-                per_ring: dict[int, int] = {}
-                for record in records:
-                    if record.code != GAP_CODE:
-                        per_ring[record.cpu] = per_ring.get(record.cpu, 0) + 1
-                if per_ring:
-                    self._peak = max(self._peak, max(per_ring.values()) / interval)
-        self._at = at
+            edge = _gap_bucket(interval)
+            self._gaps[edge] = self._gaps.get(edge, 0) + 1
+            if interval > self._worst:
+                # The composition is taken where the stall is, so the two
+                # can never describe different intervals.
+                self._worst = interval
+                self._worst_cpu = spent - self._cpu
+                self._worst_gc = paused - self._gc
+        self._at, self._cpu, self._gc = at, spent, paused
+        self._fill(records)
+
+    def _fill(self, records: list[Record]) -> None:
+        """Fastest per-ring production, counted over the declared window.
+
+        A gap record stands for what never arrived and carries a stamp
+        the reader chose, so counting it would inflate the rate exactly
+        where the ring was already losing.
+        """
+        if not self._freq:
+            return
+        for record in records:
+            if record.code != GAP_CODE:
+                self._count(record.cpu, record.ts)
+
+    def _count(self, ring: int, ts: int) -> None:
+        counts = self._slices.setdefault(ring, deque([0], maxlen=_RATE_SLICES))
+        start = self._opened.setdefault(ring, ts)
+        if ts - start >= self._window:
+            # Nothing was written for a whole window; what is held says
+            # nothing about the rate around this record.
+            counts.clear()
+            counts.append(0)
+            start = ts
+        while ts - start >= self._slice:
+            counts.append(0)
+            start += self._slice
+        self._opened[ring] = start
+        counts[-1] += 1
+        # A partial window would divide a fraction of the records by the
+        # whole span and report a rate the ring never ran at.
+        if len(counts) == _RATE_SLICES:
+            self._peak = max(self._peak, sum(counts) / HORIZON_SECONDS)
 
     @property
     def horizon_seconds(self) -> float:
@@ -213,8 +336,14 @@ class Budget:
             "capacity": self.capacity,
             "peak_rate": round(self._peak),
             "worst_gap_ms": round(self._worst * 1000, 1),
+            # What the worst stall was made of. The rest of it — the gap
+            # less these two — is time the process was not running: the
+            # loop's own wait, and beyond that, contention for the host.
+            "worst_cpu_ms": round(self._worst_cpu * 1000, 1),
+            "worst_gc_ms": round(self._worst_gc * 1000, 1),
             "horizon_ms": round(self.horizon_seconds * 1000, 1),
             "overrun": self.overrun,
+            "gaps": {str(edge): self._gaps[edge] for edge in sorted(self._gaps)},
         }
 
 
@@ -301,9 +430,14 @@ class TraceReader:
             for ring in range(self.geometry.rings)
         )
 
-    def drain(self) -> list[Record]:
+    def drain(self, limit: int | None = None) -> list[Record]:
         """Everything written since the last call, oldest first, plus a
         record for everything that was not.
+
+        `limit` caps how many records this call may decode, so one drain
+        costs a bounded amount of the caller's time no matter how far
+        behind it is. Without it the cost is the backlog, the backlog is
+        the last call's duration, and the two feed each other.
 
         Ordered across rings by timestamp. CNTPCT is common to every PE,
         so that ordering is the machine's real one — the thing a sampled
@@ -324,11 +458,82 @@ class TraceReader:
         the heads shrinks the window to a few eight-byte reads.
         """
         heads = [self._head(ring) for ring in range(self.geometry.rings)]
+        if limit is not None:
+            heads = self._bounded(heads, limit)
         found: list[Record] = []
         for ring, head in enumerate(heads):
             found += self._drain_one(ring, head)
         found.sort(key=lambda record: record.ts)
         return self._with_early(found)
+
+    def _slot(self, ring: int, index: int) -> int:
+        return (
+            self._offset
+            + _HEADER_SIZE
+            + ring * self.geometry.stride
+            + _RECORDS_OFF
+            + (index % self.geometry.capacity) * REC_SIZE
+        )
+
+    def _bounded(self, heads: list[int], limit: int) -> list[int]:
+        """Heads moved back so the batch is both small and whole.
+
+        Small alone is not enough. A ring stopped short leaves records
+        older than ones another ring just handed over, and the next
+        batch would then carry records the last one had already passed —
+        the buffer holding them in time order pays for that by lifting
+        everything newer, one record at a time, which is the stall this
+        cap exists to prevent moved somewhere else.
+
+        So the batch ends at a moment rather than at a count: the oldest
+        record being left behind sets the cutoff, and every ring stops at
+        or below it. The ring that sets the cutoff hands over its whole
+        share, so a bounded drain always advances.
+        """
+        starts = [
+            max(self._cursor[ring], self._oldest_intact(head))
+            for ring, head in enumerate(heads)
+        ]
+        stops = self._share(starts, heads, limit)
+        behind = [ring for ring, stop in enumerate(stops) if stop < heads[ring]]
+        if not behind:
+            return stops
+        cutoff = min(self._record(self._slot(ring, stops[ring])).ts for ring in behind)
+        return [
+            self._up_to(ring, starts[ring], stops[ring], cutoff)
+            for ring in range(self.geometry.rings)
+        ]
+
+    def _share(self, starts: list[int], heads: list[int], limit: int) -> list[int]:
+        """Split the allowance across rings, then hand what a quiet ring
+        did not want to the ones that did."""
+        rings = self.geometry.rings
+        want = [head - start for start, head in zip(starts, heads)]
+        take = [min(pending, max(1, limit // rings)) for pending in want]
+        spare = limit - sum(take)
+        for ring in range(rings):
+            if spare <= 0:
+                break
+            more = min(spare, want[ring] - take[ring])
+            take[ring] += more
+            spare -= more
+        return [start + taken for start, taken in zip(starts, take)]
+
+    def _up_to(self, ring: int, start: int, stop: int, cutoff: int) -> int:
+        """The first index in this ring at or after `stop` whose record
+        is newer than the cutoff.
+
+        A ring is written by one PE in order, so its slots are sorted by
+        timestamp and the boundary is found without decoding the span.
+        """
+        low, high = start, stop
+        while low < high:
+            middle = (low + high) // 2
+            if self._record(self._slot(ring, middle)).ts <= cutoff:
+                low = middle + 1
+            else:
+                high = middle
+        return low
 
     def _with_early(self, records: list[Record]) -> list[Record]:
         """Fold the pre-placement drops in, once, at the front.

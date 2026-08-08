@@ -104,8 +104,14 @@
  * fill of one ring, and the host stall this design declares it will
  * survive. A board is sized before it has ever run, so these are the
  * figures it is sized against; every run then measures and publishes
- * its own through the bridge's budget. 133k/s/ring comes from a Linux
- * guest boot. */
+ * its own through the bridge's budget.
+ *
+ * Both terms are per second, and the measurement is taken over that
+ * same second — a rate has no meaning without the window it is counted
+ * in, and the densest microsecond of a guest boot runs hundreds of
+ * times faster than its busiest second. Measured that way, a Linux boot
+ * peaks at ~42k/s/ring and mixed recovery at ~35k, so the figure below
+ * is a ceiling above them rather than one of them. */
 #define NOVA_TRACE_PEAK_PER_SEC 133000
 #define NOVA_TRACE_HORIZON_MS   1000
 
