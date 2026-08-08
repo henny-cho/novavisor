@@ -759,6 +759,13 @@ b{font-weight:700}
 .mempty{
   padding:8px 6px;font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink3)
 }
+/* The map answering the question its own control register asks. Stated
+   even when the answer is "none": a check nobody can see the result of
+   is indistinguishable from one that was never run. */
+.mverdict{
+  padding:5px 6px;margin-bottom:6px;border-left:2px solid var(--good);
+  font-family:var(--mono);font-size:var(--fs-meta);color:var(--good)
+}
 /* A map that is short says so. Read as an ordinary map it would be a
    machine with fewer mappings than it had. */
 .mwarn{

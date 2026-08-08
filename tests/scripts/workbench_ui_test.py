@@ -151,11 +151,19 @@ class MemoryViewTest(unittest.TestCase):
         css = (UI / "css" / "workbench.css").read_text()
         self.assertRegex(css, r"\.view\.folded\s*>\s*\.mmap\s*\{[^}]*display:\s*none")
 
-    def test_the_map_marks_what_w_xor_x_forbids(self):
-        # A region both writable and executable is the thing the EL2 map
-        # is supposed to have none of. Visible only if it is marked.
-        self.assertRegex((UI / "js" / "memory.mjs").read_text(), r"row\.w && row\.x")
+    def test_the_map_marks_w_and_x_only_where_the_regime_forbids_it(self):
+        # A guest's Stage 2 grants both on purpose — the guest's own
+        # Stage 1 does the splitting — so marking every such row would
+        # cry wolf on every run. The regime says which it is.
+        source = (UI / "js" / "memory.mjs").read_text()
+        self.assertRegex(source, r"wxn && row\.w && row\.x")
         self.assertRegex((UI / "css" / "workbench.css").read_text(), r"\.mperm\.wx")
+
+    def test_the_map_states_the_wxn_result_even_when_it_is_none(self):
+        # A check whose result nobody can see is indistinguishable from
+        # one that never ran.
+        self.assertRegex((UI / "js" / "memory.mjs").read_text(), r"if \(tree\.wxn\)")
+        self.assertRegex((UI / "css" / "workbench.css").read_text(), r"\.mverdict")
 
     def test_a_short_map_says_so(self):
         # A walk that could not read a table returns fewer mappings.

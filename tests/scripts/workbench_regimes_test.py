@@ -201,6 +201,14 @@ class AnswerTest(unittest.TestCase):
         self.assertEqual((run["count"], int(run["size"], 16)), (4, 4 * self.MIB2))
         self.assertEqual((run["level"], run["kind"]), (2, "block"))
 
+    def test_a_guest_window_is_writable_and_executable_without_complaint(self):
+        """Counted, never judged here. Stage 2 grants both on purpose and
+        the guest's own Stage 1 splits them; the regime's own control
+        register is what says whether the pair is a defect."""
+        tree = regimes.answer(self.captured, {"regime": "vm0.cpu"})["tree"]
+        self.assertEqual(tree["wx"], 4)
+        self.assertFalse(tree["wxn"])
+
     def test_a_table_row_carries_no_permission(self):
         answer = regimes.answer(self.captured, {"regime": "vm0.cpu"})
         (top,) = answer["tree"]["nodes"]

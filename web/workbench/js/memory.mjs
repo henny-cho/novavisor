@@ -67,7 +67,7 @@ export function createMemory({ pick, form, input, note, body, request }) {
   /* One row and everything under it. Depth is the nesting the walk
      produced, not a level number: a walk that started lower would still
      indent from where it started. */
-  function renderRow(row, depth, steps, into) {
+  function renderRow(row, depth, steps, into, wxn) {
     const line = el("div", "mrow");
     line.style.setProperty("--depth", String(depth));
     if (onPath(row, steps)) line.classList.add("on");
@@ -80,17 +80,19 @@ export function createMemory({ pick, form, input, note, body, request }) {
       line.append(el("span", "mkind", "table"));
     } else {
       const perm = el("span", "mperm", rights(row));
-      /* Writable and executable at once is what W^X forbids. Marked
-         here rather than counted elsewhere: the row that breaks it is
-         the row a reader needs to be looking at. */
-      if (row.w && row.x) perm.classList.add("wx");
+      /* Writable and executable at once, where the regime's control
+         register forbids exactly that. Marked on the row rather than
+         only counted, because the row that breaks it is the one a
+         reader needs to be looking at — and left unmarked elsewhere,
+         since a guest's Stage 2 grants both on purpose. */
+      if (wxn && row.w && row.x) perm.classList.add("wx");
       line.append(perm);
       line.append(el("span", "mkind", row.kind));
       line.append(el("span", "mattr", row.memory || ""));
       if (row.af === false) line.append(el("span", "mflag", "AF=0"));
     }
     into.append(line);
-    for (const child of row.children || []) renderRow(child, depth + 1, steps, into);
+    for (const child of row.children || []) renderRow(child, depth + 1, steps, into, wxn);
   }
 
   /* The first address this regime actually maps, for the probe box to
@@ -115,7 +117,17 @@ export function createMemory({ pick, form, input, note, body, request }) {
     if (!rows.length) {
       body.append(el("div", "mempty", "매핑된 구간이 없다"));
     }
-    for (const row of rows) renderRow(row, 0, steps, body);
+    /* The whole map's answer to the one question this regime's control
+       register asks. A count that is not zero where the register says it
+       must be is a map disagreeing with the register it runs under. */
+    if (tree.wxn) {
+      const verdict = el("div", tree.wx ? "mwarn" : "mverdict");
+      verdict.textContent = tree.wx
+        ? `SCTLR_EL2.WXN — 그런데 쓰기+실행 구간 ${tree.wx}개`
+        : "SCTLR_EL2.WXN — 쓰기와 실행이 겹치는 구간 없음";
+      body.append(verdict);
+    }
+    for (const row of rows) renderRow(row, 0, steps, body, tree.wxn);
     /* A short walk is a fact about the answer, not a detail: a map
        missing tables is a smaller map, and it must not read as one the
        machine had. */

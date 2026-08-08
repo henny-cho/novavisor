@@ -182,6 +182,14 @@ class DescriptorTest(unittest.TestCase):
         raw = FRAME | S1["kAttrDevice"] | S1["kTypeBlock"]
         self.assertEqual(translation.STAGE1_FORMAT.decode(raw, 1).memory, "device-nGnRE")
 
+    def test_only_el2_forbids_writable_and_executable(self):
+        """Which regime forbids the pair is the firmware's answer, not a
+        judgement made here: EL2 sets SCTLR_EL2.WXN, and a guest's Stage 2
+        grants both on purpose so its own Stage 1 can do the splitting."""
+        self.assertTrue(translation.STAGE1_FORMAT.wxn)
+        self.assertFalse(translation.STAGE2_FORMAT.wxn)
+        self.assertTrue(S1["kSctlrEl2"] & S1["kSctlrWxn"])
+
 
 GIB = translation.STAGE2.span(0)
 MIB2 = translation.STAGE2.span(1)

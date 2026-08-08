@@ -251,12 +251,29 @@ def answer(captured: dict, request: dict) -> dict:
     return data
 
 
+def _wx_slots(nodes: tuple[translation.Node, ...]) -> int:
+    """Slots this map makes both writable and executable.
+
+    A count rather than a verdict. Whether it is a defect depends on the
+    regime, and the regime says so: EL2's control register forbids the
+    combination where a guest's Stage 2 grants it deliberately.
+    """
+    total = 0
+    for node in nodes:
+        if node.descriptor.writable and node.descriptor.executable:
+            total += node.count
+        total += _wx_slots(node.children)
+    return total
+
+
 def _tree_wire(found: translation.Tree, fmt: translation.Format) -> dict:
     return {
         "root": f"{found.root:#x}",
         "tables": found.tables,
         "truncated": found.truncated,
         "unreadable": [f"{pa:#x}" for pa in found.unreadable],
+        "wx": _wx_slots(found.nodes),
+        "wxn": fmt.wxn,
         "nodes": [_node_wire(node, fmt) for node in found.nodes],
     }
 
