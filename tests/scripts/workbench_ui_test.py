@@ -260,8 +260,8 @@ class BoardDrawPathTest(unittest.TestCase):
     The board separates measuring from writing: geometry is read in
     measure() and cached, and everything a topic can reach only writes
     text. One getBoundingClientRect on that path costs a forced layout
-    per changed value — fourteen a batch, measured, before it was
-    separated — and nothing about the screen looks wrong when it does.
+    per changed value — fourteen a batch before the split — and nothing
+    on screen looks wrong when it happens.
     """
 
     def test_no_function_a_snapshot_reaches_reads_layout(self):

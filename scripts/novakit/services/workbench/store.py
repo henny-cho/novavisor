@@ -57,9 +57,9 @@ class StateStore:
         # Recent history replayed to late joiners, console included so a
         # fresh browser is not blank until the next event.
         self._backlog: deque[dict] = deque(maxlen=backlog_limit)
-        # Someone who wants every frame, ahead of the window that may
-        # drop them. A callable rather than a recorder, so this file
-        # stays as free of the recording layer as it is of the socket.
+        # An observer wanting every frame, called ahead of the window
+        # that may drop them. A callable rather than a recorder, so this
+        # file stays as free of the recording layer as it is of sockets.
         self._on_frame = on_frame
 
     def publish(
@@ -72,13 +72,16 @@ class StateStore:
         replay: bool = True,
         ts: int | None = None,
     ) -> dict:
-        """`replay=False` keeps a frame out of the connect backlog — for
+        """Mint an envelope and broadcast it to every client.
+
+        `replay=False` keeps it out of the connect backlog — for
         per-request noise (rejections) that must not evict history.
 
-        `ts` names the moment when it is not now — a recorded frame
-        happened when the recording says it did."""
+        `ts` names the moment when it is not now: a recorded frame
+        happened when the recording says it did.
+        """
         frame = self.stamp(topic, kind, data, src=src, ts=ts)
-        # Before the window, which drops console frames on overrun: an
+        # Ahead of the window, which sheds console frames on overrun: an
         # observer of everything must not be given a client's view.
         if self._on_frame is not None:
             self._on_frame(frame)
@@ -96,17 +99,12 @@ class StateStore:
         src: Src | str = Src.BRIDGE,
         ts: int | None = None,
     ) -> dict:
-        """An envelope, minted and handed straight back — not announced.
+        """Mint an envelope and hand it straight back, announcing nothing.
 
-        Publishing means "tell every client". This means "give me one
-        frame carrying the next sequence", for a caller that is handing
-        it to one socket itself.
-
-        They were the same function, and the replay path wanted the
-        second and got the first: it pushed a whole recording through the
-        broadcast window, which shed thousands of frames, re-sent what it
-        kept on the next flush, and reported the shedding as the bridge
-        having fallen behind. Opening a replay lit the loss badge.
+        For a caller delivering to one socket itself. Publishing a whole
+        recording instead pushed it through the broadcast window, which
+        shed thousands of frames, re-sent what it kept on the next flush,
+        and reported the shedding as the bridge having fallen behind.
         """
         return self._envelopes.make(topic, kind, data, src=src, ts=ts)
 
@@ -117,14 +115,14 @@ class StateStore:
         return self._topology
 
     def adopt_topology(self, data: dict) -> None:
-        """The world, without announcing it.
+        """Set the world without announcing it.
 
         For startup, before the socket is open: there is nobody to
         announce it to, and the frame would sit in the backlog to be
-        replayed *after* every future connect's fresh topo — an older
-        description of the world arriving second. Live that is merely
-        redundant. In a replay the stale copy carries no phase, so it
-        re-enables the controls the fresh one had just disabled.
+        replayed after every future connect's fresh topology — an older
+        description of the world arriving second. In a replay the stale
+        copy carries no phase, so it re-enables the controls the fresh
+        one had just disabled.
         """
         self._topology = data
 
@@ -150,19 +148,15 @@ class StateStore:
     def connect_frames(self, live_state: dict | None = None) -> list[dict]:
         """Replay for a new connection: fresh topology, then history.
 
-        The topo frame is *published*, not privately minted: a private
-        frame would consume a seq every other client observes only as a
-        hole, and it is also where connect-time session state (phase,
-        paused, run identity) rides so a late joiner never has to
-        reconstruct the world from evictable events. History is captured
-        first, so the replay carries the fresh topo exactly once.
+        Published rather than privately minted, so the sequence number it
+        consumes is one every other client also receives. It carries the
+        connect-time session state (phase, pause, run identity) that a
+        late joiner cannot recover from evictable life events. The
+        backlog is captured first, so the fresh topology appears once.
 
-        Out of the backlog, though. It describes the session as it stood
-        for the one client that caused it, and every connect after this
-        one gets its own — so keeping it only lets a stale phase and run
-        identity arrive *after* the fresh copy that replaced it, which
-        is the same order this store already fixed once at startup. Each
-        reconnect also cost the backlog a real frame of history.
+        Kept out of the backlog: it describes the session for the one
+        client that asked, every later connect gets its own, and stored
+        it would arrive after the fresh copy that replaced it.
         """
         history = list(self._backlog)
         topo = self.publish(

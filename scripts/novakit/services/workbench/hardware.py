@@ -39,11 +39,10 @@ OPTIONAL_BOARD_DEFINES = ("NOVA_BOARD_PCIE_ECAM_BASE",)
 KIND_EL2 = "el2"
 KIND_GUEST = "guest"
 KIND_SHARED = "shared"
-# Its own kind, not `shared`: the IVC page is shared with a guest and
-# this is not — the ABI header is explicit that the trace region is
-# never in a guest's Stage 2. Drawing them alike on the one view whose
-# job is "what is at this address, and who can see it" would say the
-# opposite of what the isolation actually is.
+# Its own kind, not `shared`: `shared` means guest-visible, and the
+# trace region is never in a guest's Stage 2. On the one view whose job
+# is "what is at this address, and who can see it", drawing them alike
+# would state the opposite of the isolation.
 KIND_TRACE = "trace"
 KIND_PRISTINE = "pristine"
 KIND_HOLE = "hole"

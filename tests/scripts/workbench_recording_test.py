@@ -161,9 +161,9 @@ class RoundTripTest(unittest.TestCase):
         """A run's own description is published while the previous run is
         still the current one: a select builds and publishes the new
         topology, and only the launch that follows bumps the id this
-        rolls on. Measured on a real two-demo session, the second demo's
-        world landed in the first demo's file and run-2 held no topology
-        at all — replayed, an empty pickable world with no guests.
+        rolls on. On a two-demo session the second demo's world lands in
+        the first demo's file and run-2 holds no topology at all, which
+        replays as the empty pickable world with no guests.
         """
         recorder = recording.Recorder(self.directory, {"demo": "01_hello"})
         recorder.frame({"seq": 1, "topic": "topo", "kind": "snapshot", "ts": 0,
@@ -334,17 +334,17 @@ class TeeTest(unittest.TestCase):
         second = store.stamp(Topic.CONSOLE, Kind.EVENT, {"line": "b"})
         self.assertEqual(store.drain(), [])
         self.assertEqual(store.window.dropped, 0)
-        # Still this connection's ordering, which is the whole point of
-        # minting rather than reusing what the recording carried.
+        # Still this connection's ordering, which is why the sequence
+        # is minted rather than reused from the recording.
         self.assertLess(first["seq"], second["seq"])
 
 
 class IdentityTest(unittest.TestCase):
-    """A replay is answered by the live code, or it is not evidence.
+    """A replay is answered by the live code.
 
-    This is the whole constraint of the replay design. A path of its own
-    would be a second bridge, and from the first divergence the two are
-    two accounts of one run with nothing to say which is right.
+    A separate path would be a second bridge, and from its first
+    divergence there are two accounts of one run with nothing to settle
+    which is right.
     """
 
     def setUp(self):
@@ -569,10 +569,9 @@ class SeekTest(unittest.TestCase):
         self.assertEqual(rec.at(1 << 40)["sched.cpu"]["data"]["values"], [{"current": 899}])
 
     def test_the_checkpoint_interval_cannot_change_an_answer(self):
-        """The index is an accelerator or it is a cache, and a cache is
-        the thing this design refuses. Held to it at every interval
-        including the degenerate one — a single checkpoint at the start,
-        which is the same as having none.
+        """The index accelerates the fold; it never replaces it. Checked
+        at every interval including the degenerate one — a single
+        checkpoint at the start, equivalent to having none.
         """
         frames = self.stream(900)
         at_every = {
@@ -717,11 +716,9 @@ FIXTURE = Path(__file__).resolve().parent / "fixtures" / "workbench-run"
 class FixtureTest(unittest.TestCase):
     """The bridge, against a real run that cannot change.
 
-    Everything below this line was previously reachable only by
-    launching QEMU, and so was checked by hand or not at all. A recorded
-    run is a deterministic input to the layer that used to have none:
-    the window protocol, the gap placement, the fold, the seek. What
-    stays outside is the browser, which needs one.
+    A recorded run is a deterministic input to the layers that otherwise
+    need QEMU to exercise: the window protocol, gap placement, the fold
+    and the seek. Only the browser stays outside.
 
     Recorded from demo 10 (two guests, console multiplexing) because it
     exercises more of the wire than a single-guest run: two console

@@ -2,14 +2,12 @@
 stop means.
 
 The S layer samples state, so a transition shorter than its interval is
-not slow — it is absent. Measured: the interrupt bind this catalogue's
-first entry names was never once caught by polling, not at 10 Hz and not
-at 500 Hz, because its residency in state space is a few dozen cycles
-inside one lock.
+absent rather than merely late: the interrupt bind this catalogue's
+first entry names lives a few dozen cycles inside one lock and was never
+caught by polling, at 10 Hz or at 500 Hz.
 
-A breakpoint does not have that problem. It arrives *at* the event, and
-the machine then holds still for as long as the reader wants — so the
-whole machine, not a 24-byte record, is what a stop yields.
+A breakpoint arrives *at* the event and the machine then holds still, so
+a stop yields the whole machine rather than a 32-byte record.
 
 One catalogue, two consumers. A stop point and a trace hook are the same
 fact about the firmware: "here is a moment worth naming". The trace ring

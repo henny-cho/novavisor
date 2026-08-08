@@ -1,29 +1,26 @@
 """The bridge's memory of a run: an overwriting ring of drained records.
 
 The firmware's rings are sized for one second at the peak fill a board
-declares, and a great deal less than that through a burst above it. That
-is the right size for what they are — a handover buffer, whose capacity
-is a *latency* budget and not a memory — but it means that by the time a
-reader has noticed something, its cause is already overwritten. Memory
-belongs in the layer that has memory.
+declares. That is the right size for a handover buffer, whose capacity
+is a latency budget rather than a memory, but it means the cause of
+anything a reader notices late is already overwritten down there.
 
-So the same discipline moves up one level: fixed budget, overwrite
-rather than block, and a reader that works out what it can no longer
-see. Copying the discipline is not the same as copying the numbers, and
-in one place they must differ. Two things here look like "the writer
-lapped the reader" and mean opposite things:
+The same discipline moves up one level — fixed budget, overwrite rather
+than block, reader works out what it can no longer see — with one
+deliberate difference in what a wrap means. Two events look alike and
+are opposites:
 
     the firmware ring wrapped before a drain   the bridge was late
     this history wrapped onto its own oldest   the horizon, working
 
-Reporting the second as `dropped` would make the one actionable number
-in the T layer permanently non-zero on any session older than a few
-minutes, which is a diagnostic dying quietly. This publishes a `span`
-instead: what it still holds, and whether it has been round once.
+Reporting the second as `dropped` would leave the T layer's one
+actionable number permanently non-zero on any session more than a few
+minutes old. This publishes a `span` instead: what it still holds, and
+whether it has been round once.
 
-Records are kept as the 32 raw bytes the firmware wrote. Held as Record
-objects the same count costs several times the memory, and the decode
-is only ever wanted for the window somebody actually asked about.
+Records are kept as the 32 raw bytes the firmware wrote. As Record
+objects the same count costs several times the memory, and the decode is
+only ever wanted for the window somebody asked about.
 """
 
 from __future__ import annotations
@@ -32,12 +29,11 @@ from dataclasses import dataclass
 
 from . import trace
 
-# Records the history holds: 2^19 * 32 B = 16 MiB of the bridge's own
-# memory. Stated in records because that is what it costs, and not in
-# seconds because the same budget is twenty quiet minutes or a Linux
-# boot's twenty seconds — a run's rate is a thing to measure, not to
-# assume. That is why the span goes on the wire rather than being left
-# for a reader to discover by hitting it.
+# Records the history holds: 2^19 * 32 B = 16 MiB of the bridge's memory.
+# Stated in records because that is the cost, and not in seconds because
+# the same budget is twenty quiet minutes or one Linux boot — which is
+# why the span goes on the wire rather than being left for a reader to
+# discover by hitting it.
 DEFAULT_CAPACITY = 1 << 19
 
 
@@ -49,10 +45,9 @@ class Span:
     last: int  # newest timestamp retained, 0 when empty
     count: int  # records retained
     full: bool  # has wrapped: nothing before `first` exists any more
-    # Ticks per second, so the two ends above are a duration and not
-    # two opaque counters. A consumer told a range without its clock
-    # cannot ask for "the last five seconds" of it — both of ours tried
-    # to, and both silently computed with a frequency of zero.
+    # Ticks per second, so the two ends above form a duration rather than
+    # two opaque counters. Both consumers ask for "the last N seconds",
+    # and without this both computed with a frequency of zero.
     freq_hz: int = 0
 
     def as_dict(self) -> dict:
@@ -68,13 +63,10 @@ class Span:
 class History:
     """Drained records, in time order, in one fixed allocation.
 
-    Time order is what lets a window be found by bisection rather than
-    by scanning, and this class holds it rather than hoping for it. The
-    drain sorts each batch it hands over, but the stream is those
-    batches concatenated, and a boundary between two of them can go
-    backwards — see append(). It used to say the drain guaranteed this;
-    it did not, and a window whose edge landed inside such a step
-    silently answered with the wrong records.
+    Time order is what lets a window be found by bisection rather than by
+    scanning, and append() enforces it rather than assuming it: the drain
+    sorts each batch, but the stream is those batches concatenated and a
+    boundary between two of them can step backwards.
     """
 
     def __init__(self, capacity: int = DEFAULT_CAPACITY):
@@ -82,13 +74,11 @@ class History:
             raise ValueError("history capacity must be at least one record")
         self.capacity = capacity
         self._bytes = bytearray(capacity * trace.REC_SIZE)
-        # The clock its timestamps are in, learned when a reader
-        # attaches and the region says so. Published with the span,
-        # because a range of counter values is not a duration without
-        # it.
+        # The clock the timestamps are in, learned when a reader attaches
+        # and reads the region header. Published with the span.
         self.freq_hz = 0
         # Total ever appended. The live window is the last `capacity` of
-        # them, so "how much was forgotten" is arithmetic and not a
+        # them, so "how much was forgotten" is arithmetic rather than a
         # counter that could drift from the buffer it describes.
         self._head = 0
 
@@ -102,16 +92,9 @@ class History:
     def append(self, records: list[trace.Record]) -> None:
         """Add a drained batch, keeping the buffer in time order.
 
-        The drain sorts each batch, but a batch is not the stream: the
-        boundary between two of them can still go backwards by however
-        far the per-ring head reads were skewed, and a replayed
-        recording is a file of those batches concatenated. Everything
-        that reads this searches it by bisection, so the order is
-        enforced here rather than assumed.
-
-        In practice this is a comparison and nothing else — the drain
-        reads every head before copying anything, so an out-of-order
-        record is rare and lands one or two slots back when it happens.
+        In practice a comparison and nothing else: the drain reads every
+        ring head before copying anything, so an out-of-order record is
+        rare and lands one or two slots back when it happens.
         """
         for record in records:
             self._insert(record)
@@ -125,11 +108,10 @@ class History:
         if not held or record.ts >= self._at(held - 1):
             self._push(record)
             return
-        # Lift the few records that are newer, lay this one under them,
-        # and put them back. A record older than everything still held
-        # lifts the whole buffer and is then evicted by its own
-        # reinstatement — which is the right answer: it belongs to a
-        # horizon this history has already let go of.
+        # Lift the few newer records, lay this one under them, put them
+        # back. A record older than everything held lifts the whole
+        # buffer and is evicted by its own reinstatement, which is the
+        # right answer: it belongs to a horizon already let go of.
         later = []
         while len(self) and self._at(len(self) - 1) > record.ts:
             later.append(self._record(len(self) - 1))
@@ -152,10 +134,9 @@ class History:
         """Timestamp of the index'th oldest retained record.
 
         Read back out of the buffer rather than mirrored into an array
-        beside it. A mirror is one more thing append() has to keep true,
-        and the first edit that forgets gives a bisection searching the
-        wrong order over records that are all still there — silently.
-        Eight bytes at a known offset is what the layout is for.
+        beside it: a mirror is a second thing append() has to keep true,
+        and the first edit that forgets leaves the bisection searching
+        the wrong order over records that are all still there.
         """
         return trace.timestamp_at(self._bytes, self._slot(index) * trace.REC_SIZE)
 

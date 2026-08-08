@@ -18,10 +18,9 @@
  * drawn from them.
  */
 
-/* Records held for redrawing, at 32 bytes each across the columns:
-   about two megabytes, and at the measured rate roughly half a minute
-   of a busy run. Beyond it the oldest go, the same way they go
-   everywhere else in this layer. */
+/* Records held for redrawing, at 32 bytes each across the columns —
+   about two megabytes. Beyond it the oldest go, as everywhere else in
+   this layer. */
 const HOLD = 1 << 16;
 /* How often following asks for what has arrived since last time. */
 const FOLLOW_MS = 250;
@@ -475,9 +474,9 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     cursorLine(window_, at, colours);
   }
 
-  /* Where the selection is. From the record itself, so a paint that
-     nobody asked for — a resize, a theme change, an arriving batch —
-     cannot draw the line at whatever now happens to sit at some index. */
+  /* Where the selection is, taken from the record itself: an unasked-for
+     paint (a resize, a theme change, an arriving batch) must not draw
+     the line at whatever now sits at some index. */
   function cursorLine(window_, at, colours) {
     if (!picked) return;
     const width = Math.max(1, window_.to - window_.from);
@@ -589,30 +588,25 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
 
   /* ---------------- selection ---------------- */
 
-  /* One cursor over the records on screen, and three ways to move it:
-     a click, an arrow key, and playback. They share this because the
-     alternative is a second path into the board — and then the caption,
-     the focus and the grade badge exist twice and drift once.
+  /* One cursor over the records on screen, moved three ways: a click,
+     an arrow key, and playback. Sharing it keeps the caption, the focus
+     and the grade badge to one path.
 
-     The cursor is the *record*, not an index into the list it came
-     from. That list is derived from the window and rebuilt on demand:
-     a resize, a drag or an arriving batch changes it, and an index kept
-     across that names a different record than the caption said — while
-     the paint, which reads the cursor without rebuilding anything,
-     draws the line somewhere the reader never pointed.
+     The cursor holds the *record*, not an index into the list it came
+     from. That list is derived from the window and rebuilt on demand, so
+     a resize, a drag or an arriving batch changes it and a stored index
+     would then name a different record than the caption did.
 
-     "The next one" is still answerable: rebuild the list, find where
-     this record sits in it, and move. The position is derived, which is
-     what it always was — it was only ever *stored* by accident. */
+     "The next one" stays answerable: rebuild the list, find where this
+     record sits in it, and move. */
   let picked = null; /* the record the cursor is on */
   let playing = null; /* the playback timer */
 
-  /* The records the cursor can be on: exactly the ones on screen.
-     Filtered to what the catalogue names, because that is what `bin()`
-     draws and `nearest()` clicks — an unnamed record left in here would
-     be a mark a reader cannot see, that a step can land on and that
-     playback stops dead at, since there is nothing to caption it with.
-     One firmware hook ahead of this UI was enough to do that. */
+  /* The records the cursor can be on: exactly the ones drawn. Filtered
+     to what the catalogue names, since that is what `bin()` draws and
+     `nearest()` clicks — an uncatalogued record would be an invisible
+     mark that a step lands on and playback stops dead at, with nothing
+     to caption it. A firmware hook ahead of this UI produces them. */
   function laid() {
     const window_ = bounds();
     if (!window_) return [];
@@ -684,10 +678,9 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     const rows = laid();
     if (positionOf(rows) < 0) select(0, rows);
     const tick = () => {
-      /* The step reports where it landed and in what list, so the pause
-         is measured against the records that are actually there — a
-         following strip grows underneath playback — without building
-         that list a second time to ask. */
+      /* The step reports where it landed and in which list, so the
+         pause is taken against the records actually there — a following
+         strip grows underneath playback — without rebuilding it. */
       const landed = step(+1);
       if (!landed || landed.at >= landed.rows.length - 1) return stop();
       const gap = landed.rows[landed.at + 1].ts - landed.rows[landed.at].ts;

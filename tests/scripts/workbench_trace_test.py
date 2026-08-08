@@ -390,8 +390,8 @@ class GapTest(unittest.TestCase):
 
 
 class BudgetTest(unittest.TestCase):
-    """The ring depth is a latency budget, and a budget nobody measures
-    is a number from one afternoon on one laptop."""
+    """The ring depth is a latency budget, so both of its terms — the
+    peak fill and the stall between looks — are measured per run."""
 
     def records(self, count: int, cpu: int = 0):
         return [trace.Record(ts=index, code=TRAP, cpu=cpu, a=0, b=0, c=0)

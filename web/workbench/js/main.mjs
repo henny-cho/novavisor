@@ -438,9 +438,7 @@ function onTopo(data) {
 
 /* What the ring depth buys on this host, in the two numbers that set
    it: how fast the busiest core filled a ring, and how long this
-   process actually went between looks. Both measured, because a
-   horizon quoted from a design note is not a fact about the machine
-   the reader is looking at. */
+   process went between looks. Both come measured from the bridge. */
 function budgetText(budget) {
   if (!budget.peak_rate) return `링 ${budget.capacity}건`;
   const rate =
@@ -670,9 +668,8 @@ function onFrame(frame) {
           ? `${data.span.n} 레코드 · 지평선 도달`
           : `${data.span.n} 레코드`;
         timelineNote.textContent = data.budget ? `${held} · ${budgetText(data.budget)}` : held;
-        /* The promise and the reality side by side, and the crossing
-           marked. A budget that only ever appeared in a design note is
-           one nobody checks against the machine in front of them. */
+        /* The declared horizon and the observed stall side by side,
+           with the crossing marked. */
         timelineNote.classList.toggle("over", Boolean(data.budget?.overrun));
       }
       if (data.dropped) noteLoss(data.dropped);

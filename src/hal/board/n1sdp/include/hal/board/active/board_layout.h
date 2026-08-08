@@ -15,16 +15,14 @@
 #define NOVA_BOARD_GUEST_PA_BASE 0x80000000
 #define NOVA_BOARD_GUEST_PA_SIZE 0x20000000 /* windows end at the IVC page */
 #define NOVA_BOARD_IVC_SHM_PA    0xA0000000
-/* Trace rings: the gap between the IVC page and the pristine
- * images. EL2-mapped already, never in a guest's Stage 2. */
-/* Trace rings. Sized by the host stall the T layer must survive: 133k
- * records/s/core at peak, times a declared 1 s horizon. Twice the
- * two-core boards' reservation because four cores divide it — the same
- * rule, not a different one, and it lands on the same 2^18 per ring
- * (1.97 s of that peak). At half this the division falls to 2^17 and
- * the horizon to 0.99 s, which meets the declaration by one percent
- * and would break the first time a guest ran hotter than the one it
- * was measured against. */
+/* Trace rings, in the gap between the IVC page and the pristine images.
+ * Sized by the host stall the T layer must survive: 133k records/s/core
+ * at peak times a declared 1 s horizon. Twice the two-core boards'
+ * reservation because four cores divide it — the same rule applied to a
+ * different core count — landing on the same 2^18 per ring, 1.97 s of
+ * that peak. At half this the division falls to 2^17 and the horizon to
+ * 0.99 s, which only just meets the declaration. EL2-mapped already,
+ * never in a guest's Stage 2. */
 #define NOVA_BOARD_TRACE_PA      0xA0001000
 #define NOVA_BOARD_TRACE_SIZE    0x02010000 /* 32 MiB + 64 KiB */
 #define NOVA_BOARD_PRISTINE_PA   0xA2100000

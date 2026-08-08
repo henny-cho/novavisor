@@ -82,14 +82,14 @@ static_assert(sizeof(Header) <= NOVA_TRACE_HEADER_SIZE);
 }
 
 // How deep a ring gets, given the region it shares and how many share
-// it. This is the inverse of region_size(), and it is the direction the
-// real system runs in: a board reserves bytes, a build fixes the core
-// count, and the capacity is whatever those two divide into. Nobody
-// declares it, so nobody can declare it wrong.
+// it. The inverse of region_size(), and the direction the real system
+// runs in: a board reserves bytes, a build fixes the core count, and
+// the capacity is what those two divide into. Nothing declares it, so
+// nothing can declare it wrong.
 //
-// Floored to a power of two so indexing stays a mask. The floor is why
-// the region wants a little slack above the arithmetic minimum —
-// landing one record short of a boundary halves every ring.
+// Floored to a power of two so indexing stays a mask, which is why a
+// region wants slack above the arithmetic minimum: landing one record
+// short of a boundary halves every ring.
 [[nodiscard]] constexpr auto records_per_ring(std::size_t size, std::size_t rings) noexcept -> std::size_t {
   if (rings == 0 || size < NOVA_TRACE_HEADER_SIZE) {
     return 0;
@@ -101,11 +101,10 @@ static_assert(sizeof(Header) <= NOVA_TRACE_HEADER_SIZE);
   return std::bit_floor((per_ring - NOVA_TRACE_RECORDS_OFF) / NOVA_TRACE_REC_SIZE);
 }
 
-// Events emitted before any ring was placed. There is nowhere to put
-// them, so they are lost by construction — but a loss nobody counts is
-// indistinguishable from nothing having happened, and this one falls
-// in early boot, where that difference matters most. place() folds the
-// total into the region header.
+// Events emitted before any ring was placed. Lost by construction,
+// since there is nowhere to put them, but an uncounted loss reads as
+// nothing having happened — and these fall in early boot. place() folds
+// the total into the region header.
 inline std::atomic<std::uint32_t> g_early{};
 
 // One core's ring. Default-constructed it is inert, which is what a
@@ -117,8 +116,7 @@ public:
 
   // The mask travels with the ring rather than sitting in a constant
   // beside it: the depth is a property of the region this ring was cut
-  // from, and a writer that read it from anywhere else would be the
-  // second opinion the derivation exists to remove.
+  // from, and reading it from anywhere else would be a second opinion.
   Ring(void* base, std::size_t capacity) noexcept
       : head_(reinterpret_cast<std::uint64_t*>(static_cast<char*>(base) + NOVA_TRACE_HEAD_OFF)),
         records_(reinterpret_cast<Record*>(static_cast<char*>(base) + NOVA_TRACE_RECORDS_OFF)), mask_(capacity - 1) {}
