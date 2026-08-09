@@ -6,9 +6,10 @@ import sys
 from pathlib import Path
 
 from ...core import config
-from . import elfsym, snapshot
+from ...image import elfsym, observe
+from . import snapshot
 from .events import EVENTS, STOPS
-from .observations import MAX_CPUS, OBSERVATIONS, WALK_SYMBOLS, timer_slot_labels
+from .observations import MAX_CPUS, OBSERVATIONS, timer_slot_labels
 from .paths import EDGES
 
 
@@ -108,7 +109,7 @@ def verify_manifest(elf: Path | None = None) -> int:
 
         # The page tables the memory map walks. Renamed, they would
         # leave the view empty with nothing to say why.
-        for symbol in WALK_SYMBOLS:
+        for symbol in observe.WALK:
             try:
                 index.resolve(symbol)
             except KeyError as error:
@@ -149,6 +150,6 @@ def verify_manifest(elf: Path | None = None) -> int:
     if failures == 0:
         print(
             f"[workbench] manifest check: {len(OBSERVATIONS)} observations, "
-            f"{len(WALK_SYMBOLS)} table symbols and {len(STOPS)} stop points resolve"
+            f"{len(observe.WALK)} table symbols and {len(STOPS)} stop points resolve"
         )
     return 1 if failures else 0

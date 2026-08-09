@@ -22,15 +22,15 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit.services.workbench import elfsym, snapshot  # noqa: E402
+from novakit.image import elfsym, observe  # noqa: E402  # noqa: E402
 
 ELF = REPO / "build" / "aarch64-debug" / "novavisor.elf"
 
 
 @functools.cache
-def view() -> snapshot.ImageView:
+def view() -> observe.View:
     """Every observation and table symbol resolved against the image."""
-    return snapshot.resolve_image(ELF)
+    return observe.resolve(ELF)
 
 
 @functools.cache

@@ -566,7 +566,7 @@ class PollLoopTest(Draining):
             # has no ELF to resolve, and the split only matters to where
             # the resolving happens.
             with (
-                mock.patch.object(server_module.snapshot, "resolve_image", _no_image),
+                mock.patch.object(server_module.observe, "resolve", _no_image),
                 mock.patch.object(server_module.snapshot, "open_provider", factory),
             ):
                 poll = asyncio.create_task(bridge._poll_loop())
@@ -625,7 +625,7 @@ class PollLoopTest(Draining):
             # has no ELF to resolve, and the split only matters to where
             # the resolving happens.
             with (
-                mock.patch.object(server_module.snapshot, "resolve_image", _no_image),
+                mock.patch.object(server_module.observe, "resolve", _no_image),
                 mock.patch.object(server_module.snapshot, "open_provider", factory),
             ):
                 poll = asyncio.create_task(bridge._poll_loop())

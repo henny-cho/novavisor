@@ -47,7 +47,7 @@ SINGLE_OWNER = {
     "parents[3]": "core/config.py",
     "GITHUB_": "core/actions.py",
     "-machine": "core/board.py",
-    "__main__": "image/dtb.py, image/layout.py",
+    "__main__": "image/dtb.py, image/layout.py, image/observe.py",
 }
 # Naming a marker is not using it: the table above spells all four.
 RULE_SOURCE = "services/boundaries.py"

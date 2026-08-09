@@ -9,8 +9,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit.services.workbench import elfsym  # noqa: E402
-from novakit.services.workbench.elfsym import Field, TypeInfo  # noqa: E402
+from novakit.image import elfsym  # noqa: E402
+from novakit.image.elfsym import Field, TypeInfo  # noqa: E402
 
 
 class MangleTest(unittest.TestCase):

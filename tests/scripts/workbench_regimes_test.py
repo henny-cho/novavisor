@@ -14,6 +14,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
 import workbench_image  # noqa: E402
+from novakit.image import observe  # noqa: E402
 from novakit.services.workbench import (  # noqa: E402
     hardware,
     observations,  # noqa: E402
@@ -51,7 +52,7 @@ class CaptureTest(unittest.TestCase):
         # so the backend is a sparse file rather than a buffer of that
         # size allocated, filled and copied for every test.
         self.words: dict[int, int] = {}
-        self.symbols = self.view.regimes
+        self.symbols = self.view.walk
 
     def poke(self, pa: int, *words: int) -> None:
         for index, word in enumerate(words):
@@ -74,10 +75,10 @@ class CaptureTest(unittest.TestCase):
 
     def build_guest_tables(self) -> tuple[int, int]:
         """One guest window: an L1 table entry over four 2 MiB blocks."""
-        sets = self.symbols[observations.STAGE2_SETS]
-        vttbr = self.symbols[observations.VTTBR]
-        l1 = sets.address + self.field(observations.STAGE2_SETS, "l1")
-        l2 = sets.address + self.field(observations.STAGE2_SETS, "l2_pool")
+        sets = self.symbols[observe.STAGE2_SETS]
+        vttbr = self.symbols[observe.VTTBR]
+        l1 = sets.address + self.field(observe.STAGE2_SETS, "l1")
+        l2 = sets.address + self.field(observe.STAGE2_SETS, "l2_pool")
         self.poke(l1, l2 | S2.type_mask)
         for slot in range(4):
             self.poke(l2 + slot * 8, (0x8000_0000 + slot * translation.STAGE2.span(1)) | 0x7FC | 1)
@@ -103,20 +104,20 @@ class CaptureTest(unittest.TestCase):
         self.build_guest_tables()
         captured = regimes.capture(self.provider(), self.symbols)
         found = {entry["id"]: entry["tables"] for entry in captured["regimes"]}
-        sets = self.symbols[observations.STAGE2_SETS].type.element
-        el2 = self.symbols[observations.EL2_ROOT].size + self.symbols[observations.EL2_POOL].size
+        sets = self.symbols[observe.STAGE2_SETS].type.element
+        el2 = self.symbols[observe.EL2_ROOT].size + self.symbols[observe.EL2_POOL].size
         self.assertEqual(found["vm0.cpu"], sets.size // translation.STAGE2.table_bytes)
         self.assertEqual(found["el2.self"], el2 // translation.STAGE1.table_bytes)
 
     def test_dma_regimes_come_from_the_contexts_the_smmu_built(self):
         self.build_guest_tables()
-        contexts = self.symbols[observations.DMA_CONTEXTS]
-        tables = self.symbols[observations.DMA_TABLES]
-        root = tables.address + self.field(observations.DMA_TABLES, "l1")
+        contexts = self.symbols[observe.DMA_CONTEXTS]
+        tables = self.symbols[observe.DMA_TABLES]
+        root = tables.address + self.field(observe.DMA_TABLES, "l1")
         entry = contexts.address
-        self.poke(entry + self.field(observations.DMA_CONTEXTS, "owner_vm"), 0)
-        self.poke(entry + self.field(observations.DMA_CONTEXTS, "root_pa"), root)
-        self.poke(self.symbols[observations.DMA_CONTEXT_COUNT].address, 1)
+        self.poke(entry + self.field(observe.DMA_CONTEXTS, "owner_vm"), 0)
+        self.poke(entry + self.field(observe.DMA_CONTEXTS, "root_pa"), root)
+        self.poke(self.symbols[observe.DMA_CONTEXT_COUNT].address, 1)
 
         captured = regimes.capture(self.provider(), self.symbols)
         dma = next(entry for entry in captured["regimes"] if entry["id"] == "vm0.dma")

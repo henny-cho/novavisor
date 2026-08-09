@@ -17,14 +17,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ...core import config
-from ...image import abi
-from . import elfsym, translation
+from ...image import abi, elfsym, observe
+from . import translation
 
 Shape = Callable[[object, elfsym.TypeInfo], object]
-
-# The firmware enum the syndrome's class field indexes. Named here, read
-# from the image, published in the topology — never retyped.
-EC_ENUM = "nova::esr::ExceptionClass"
 
 # ICH_LR<n>_EL2 field positions, from the GICv3 register header the
 # firmware's delivery logic compiles against. One definition, so there
@@ -207,7 +203,7 @@ def syndrome_vocabulary(elf: Path) -> dict[str, dict[int, str]]:
         return {}
     index = elfsym.ElfIndex(elf)
     try:
-        return {"esr_ec": index.enum_labels(EC_ENUM)}
+        return {"esr_ec": index.enum_labels(observe.EC_ENUM)}
     except KeyError:
         return {}
     finally:

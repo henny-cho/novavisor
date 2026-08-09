@@ -14,7 +14,8 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
 import workbench_image  # noqa: E402
-from novakit.services.workbench import elfsym, hardware, snapshot  # noqa: E402
+from novakit.image import elfsym  # noqa: E402
+from novakit.services.workbench import hardware, snapshot  # noqa: E402
 from novakit.services.workbench.observations import OBSERVATIONS, Obs  # noqa: E402
 
 ELF = workbench_image.ELF

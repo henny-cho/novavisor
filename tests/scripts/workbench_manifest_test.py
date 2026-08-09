@@ -19,6 +19,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
 import workbench_image  # noqa: E402
+from novakit.image import observe  # noqa: E402
 from novakit.services.workbench import (  # noqa: E402
     events,
     hardware,
@@ -27,6 +28,37 @@ from novakit.services.workbench import (  # noqa: E402
 )
 
 ELF = workbench_image.ELF
+
+
+class ManifestJoinTest(unittest.TestCase):
+    """The build's question and the bridge's policy meet at the topic.
+
+    Half a manifest is worse than a broken one: each half is separately
+    valid, so nothing raises — the panel is simply blank, or the value
+    arrives at a rate nobody chose. The join is the only place that can
+    see both.
+    """
+
+    def test_a_policy_for_a_topic_nobody_resolves_is_refused(self):
+        with mock.patch.dict(observations.POLICY, {"sched.ghost": observations.Policy()}):
+            with self.assertRaises(SystemExit):
+                observations._joined()
+
+    def test_a_resolved_symbol_nobody_draws_is_refused(self):
+        asked = (*observe.OBSERVED, observe.Want("sched.ghost", "nova::vcpu::g_sched"))
+        with mock.patch.object(observe, "OBSERVED", asked):
+            with self.assertRaises(SystemExit):
+                observations._joined()
+
+    def test_the_join_carries_both_halves(self):
+        merged = {obs.topic: obs for obs in observations.OBSERVATIONS}
+        for want in observe.OBSERVED:
+            with self.subTest(topic=want.topic):
+                self.assertEqual(merged[want.topic].symbol, want.symbol)
+                self.assertEqual(merged[want.topic].fields, want.fields)
+                self.assertEqual(
+                    merged[want.topic].rate_hz, observations.POLICY[want.topic].rate_hz
+                )
 
 
 class TimerSlotTest(unittest.TestCase):

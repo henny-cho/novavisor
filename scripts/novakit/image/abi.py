@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 from ..core.config import REPO
+from . import inputs
 
 GUEST_LAYOUT = REPO / "src" / "nova" / "abi" / "guest_layout.h"
 IVC_RING = REPO / "src" / "nova" / "abi" / "ivc_ring.h"
@@ -34,9 +35,20 @@ TELEMETRY_COMPONENT = (
 DMA = REPO / "src" / "nova" / "abi" / "dma.hpp"
 
 
+def _text(path: Path) -> str:
+    """Read a header, and remember that it was read.
+
+    Every header this package reads passes through here, which is what
+    lets a generator report its own inputs instead of a build file
+    listing them.
+    """
+    inputs.record(path)
+    return path.read_text()
+
+
 def read_defines(path: Path, wanted: list[str]) -> dict[str, int]:
     """Pull integer #define constants from a platform header."""
-    text = path.read_text()
+    text = _text(path)
     values: dict[str, int] = {}
     for name in wanted:
         match = re.search(
@@ -67,7 +79,7 @@ def read_define_family(path: Path, prefix: str) -> dict[str, int]:
         match.group(1): int(match.group(2), 0)
         for match in re.finditer(
             rf"^#define\s+({re.escape(prefix)}\w+)\s+(0[xX][0-9a-fA-F]+|\d+)",
-            path.read_text(),
+            _text(path),
             re.MULTILINE,
         )
     }
@@ -154,7 +166,7 @@ def read_constexprs(
     """
     values = dict(known or {})
     read: dict[str, int] = {}
-    for name, expression in _CONSTEXPR.findall(_COMMENT.sub("", path.read_text())):
+    for name, expression in _CONSTEXPR.findall(_COMMENT.sub("", _text(path))):
         asked = wanted is None or name in wanted
         try:
             values[name] = _evaluate(expression, values, f"{path.name}: {name}")
@@ -173,7 +185,7 @@ def read_constexprs(
 def read_string_define(path: Path, name: str) -> str:
     match = re.search(
         rf'^#define\s+{re.escape(name)}\s+"([^"]+)"',
-        path.read_text(),
+        _text(path),
         re.MULTILINE,
     )
     if match is None:

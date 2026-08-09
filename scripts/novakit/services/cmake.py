@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,6 +14,17 @@ def selected_preset(*, release: bool = False, preset: str | None = None) -> str:
     if preset:
         return preset
     return "aarch64-release" if release else "aarch64-debug"
+
+
+def configure(preset: str) -> None:
+    """Configure a preset, naming the interpreter its generators run under.
+
+    The build graph runs programs out of this package, so they need the
+    environment this package's dependencies are installed in — which is
+    the one already running. Left to `python3` on PATH, a build would
+    resolve a different environment than the tool that started it.
+    """
+    proc.run(["cmake", "--preset", preset, f"-DNOVA_PYTHON={sys.executable}"])
 
 
 def _require(path: Path, what: str) -> Path:
@@ -85,7 +97,7 @@ def build(spec: BuildSpec) -> Path:
     sync_active(spec.payloads_path, output / "active_payloads.yml")
 
     if not (output / "build.ninja").is_file():
-        proc.run(["cmake", "--preset", spec.preset])
+        configure(spec.preset)
     proc.run(["cmake", "--build", "--preset", spec.preset])
     return output / "novavisor.elf"
 

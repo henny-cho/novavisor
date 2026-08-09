@@ -1,5 +1,11 @@
 """Symbol addresses and type layouts, read from the debug ELF.
 
+Here rather than beside the bridge because the ELF is a build input and
+this is what reads it: the same tree that holds the layout check and the
+guest bundle generator. What it produces — the type model and the
+decoder below — travels on to whoever reads bytes at runtime, so the
+model and the reader ship together and only one of them runs late.
+
 Resolution is two-staged on purpose (verified against the real image):
 addresses come from .symtab — never stripped, and reachable by
 self-mangling the C++ qualified name, so no demangler is needed —

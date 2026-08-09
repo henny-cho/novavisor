@@ -29,7 +29,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import elfsym, events
+from ...image import elfsym
+from . import events
 
 _XML_REFERENCE = re.compile(r'href="([^"]+)"')
 _XML_REGISTER = re.compile(r"<reg\b[^>]*/>")

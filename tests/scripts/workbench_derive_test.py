@@ -10,7 +10,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit.services.workbench import derive, elfsym, translation  # noqa: E402
+from novakit.image import elfsym  # noqa: E402
+from novakit.services.workbench import derive, translation  # noqa: E402
 from novakit.services.workbench.observations import OBSERVATIONS  # noqa: E402
 
 # The STE field positions, from the header the encoder compiles against.

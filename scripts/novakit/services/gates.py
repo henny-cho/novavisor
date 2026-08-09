@@ -87,7 +87,7 @@ def lint() -> int:
 
 def test() -> int:
     preset = HOST_PRESET
-    proc.run(["cmake", "--preset", preset])
+    cmake.configure(preset)
     proc.run(["cmake", "--build", "--preset", preset])
     proc.run(["ctest", "--preset", preset, "--output-on-failure"])
     proc.run(

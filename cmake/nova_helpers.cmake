@@ -1,5 +1,11 @@
 # Target-definition helpers shared by the NovaVisor build.
 
+# Which interpreter runs the generators below. The automation hands its
+# own over when it configures, because the generators import the package
+# it is already running from; a tree configured by hand gets whatever
+# python3 is on PATH, and a generator needing more than that says so.
+set(NOVA_PYTHON "python3" CACHE FILEPATH "Python interpreter for build-graph generators")
+
 # nova_python_module(<out-var> <module>)
 #
 # Resolve the argv that runs an automation module out of scripts/. A
@@ -9,7 +15,7 @@
 function(nova_python_module out_var module)
     set(${out_var}
         ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_SOURCE_DIR}/scripts
-        python3 -m novakit.${module}
+        ${NOVA_PYTHON} -m novakit.${module}
         PARENT_SCOPE)
 endfunction()
 

@@ -21,6 +21,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from ...core import config
+from ...image import observe
 from . import (
     commands,
     halt,
@@ -1177,7 +1178,7 @@ class Bridge:
         """This run's S reader: the image parsed elsewhere, RAM mapped
         here. Split so the expensive half can leave this process."""
         view = await asyncio.get_running_loop().run_in_executor(
-            self._image_pool(), snapshot.resolve_image, elf_path
+            self._image_pool(), observe.resolve, elf_path
         )
         return snapshot.open_provider(
             elf_path, shm_path, self._board_numbers()["NOVA_BOARD_PHYS_RAM_BASE"], view

@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import elfsym, observations, translation
+from ...image import elfsym, observe
+from . import translation
 
 # Descriptor formats by the name the wire calls their kind, so the two
 # cannot drift.
@@ -53,8 +54,8 @@ def _regime(role: str, vm: int | None, fmt: translation.Format, root: int, pool_
 
 
 def _stage2_regimes(reader, resolved: dict[str, elfsym.ResolvedSymbol]) -> list[dict]:
-    vttbr = resolved[observations.VTTBR]
-    pool = resolved[observations.STAGE2_SETS].type.element.size
+    vttbr = resolved[observe.VTTBR]
+    pool = resolved[observe.STAGE2_SETS].type.element.size
     fmt = translation.STAGE2_FORMAT
     regimes = []
     for vm in range(vttbr.type.count):
@@ -67,12 +68,12 @@ def _stage2_regimes(reader, resolved: dict[str, elfsym.ResolvedSymbol]) -> list[
 
 
 def _dma_regimes(reader, resolved: dict[str, elfsym.ResolvedSymbol]) -> list[dict]:
-    contexts = resolved[observations.DMA_CONTEXTS]
-    pool = resolved[observations.DMA_TABLES].type.element.size
+    contexts = resolved[observe.DMA_CONTEXTS]
+    pool = resolved[observe.DMA_TABLES].type.element.size
     entry = contexts.type.element
     owner = _field(entry, "owner_vm")
     root = _field(entry, "root_pa")
-    count = min(_word(reader, resolved[observations.DMA_CONTEXT_COUNT].address), contexts.type.count)
+    count = min(_word(reader, resolved[observe.DMA_CONTEXT_COUNT].address), contexts.type.count)
     regimes = []
     for index in range(count):
         at = contexts.address + index * entry.size
@@ -85,8 +86,8 @@ def _dma_regimes(reader, resolved: dict[str, elfsym.ResolvedSymbol]) -> list[dic
 
 def _el2_regime(resolved: dict[str, elfsym.ResolvedSymbol]) -> dict:
     """EL2's own translation: its root table plus the builder's pool."""
-    root = resolved[observations.EL2_ROOT]
-    pool = resolved[observations.EL2_POOL]
+    root = resolved[observe.EL2_ROOT]
+    pool = resolved[observe.EL2_POOL]
     return _regime("self", None, translation.STAGE1_FORMAT, root.address, root.size + pool.size)
 
 
@@ -109,7 +110,7 @@ def capture(reader, resolved: dict[str, elfsym.ResolvedSymbol]) -> dict | None:
         return None
     words = {}
     extents = []
-    for symbol in observations.TABLES:
+    for symbol in observe.TABLES:
         entry = resolved[symbol]
         extents.append([f"{entry.address:#x}", entry.size])
         raw = reader.read_bytes(entry.address, entry.size)

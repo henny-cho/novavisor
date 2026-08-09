@@ -11,13 +11,11 @@ from __future__ import annotations
 import mmap
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from ...image import abi
-from . import elfsym
-from .observations import OBSERVATIONS, PUBLISH_HZ, WALK_SYMBOLS, Obs
+from ...image import abi, elfsym, observe
+from .observations import OBSERVATIONS, PUBLISH_HZ, Obs
 
 _U32 = elfsym.TypeInfo("uint", 4)
 _U64 = elfsym.TypeInfo("uint", 8)
@@ -136,52 +134,6 @@ class MemoryReader(Protocol):
     def read_bytes(self, pa: int, size: int) -> bytes: ...
 
 
-@dataclass(frozen=True)
-class ImageView:
-    """Everything the S layer needs from an image, holding nothing open.
-
-    Plain data by construction — resolved addresses, decoded type
-    layouts, and the symbol table — so producing it is separable from
-    using it. That matters because producing it is three seconds of
-    pure Python that lands during guest boot, which is the busiest the
-    trace rings ever get: work this shape can be sent somewhere it
-    cannot compete with the drain.
-
-    `regimes` is keyed by symbol rather than topic: the page tables feed
-    no observation, and what the map wants is where they are and how
-    big, not a decoded reading.
-    """
-
-    resolved: dict[str, elfsym.ResolvedSymbol]
-    symbols: elfsym.SymbolTable
-    regimes: dict[str, elfsym.ResolvedSymbol] = field(default_factory=dict)
-    # Where each observed global lives, for matching against what the
-    # firmware says it publishes. Keyed by symbol because that is what a
-    # slot names; `resolved` is keyed by topic and four topics share one.
-    addresses: dict[str, int] = field(default_factory=dict)
-
-
-def resolve_image(elf_path: Path) -> ImageView:
-    """Resolve every observation against an image.
-
-    Pure: opens the ELF, reads it, closes it, and returns data. No mmap
-    of guest RAM and no live handle in the result, so the caller is free
-    to run this in another process.
-    """
-    index = elfsym.ElfIndex(elf_path)
-    try:
-        resolved = {obs.topic: index.resolve(obs.symbol) for obs in OBSERVATIONS if obs.pa is None}
-        return ImageView(
-            resolved,
-            index.symbols,
-            {symbol: index.resolve(symbol) for symbol in WALK_SYMBOLS},
-            {obs.symbol: resolved[obs.topic].address for obs in OBSERVATIONS if obs.pa is None}
-            | {TELEMETRY_REGION: index.resolve(TELEMETRY_REGION).address},
-        )
-    finally:
-        index.close()
-
-
 class ElfRamProvider:
     """Decode firmware globals straight out of the shared RAM file.
 
@@ -193,14 +145,16 @@ class ElfRamProvider:
     provider itself never holds the ELF open past construction.
     """
 
-    def __init__(self, elf_path: Path, ram_path: Path, ram_base: int, view: ImageView | None = None):
+    def __init__(
+        self, elf_path: Path, ram_path: Path, ram_base: int, view: observe.View | None = None
+    ):
         # No publisher behind these bytes, so no clock to quote for them.
         self.stamps: dict[str, int] = {}
         self._base = ram_base
-        image = resolve_image(elf_path) if view is None else view
+        image = observe.resolve(elf_path) if view is None else view
         self._resolved = image.resolved
         self._symbols = image.symbols
-        self.regimes = image.regimes
+        self.regimes = image.walk
         with ram_path.open("rb") as backing:
             self._ram = mmap.mmap(backing.fileno(), 0, prot=mmap.PROT_READ)
         highest = max(
@@ -353,17 +307,17 @@ class TelemetryProvider:
     changes.
     """
 
-    def __init__(self, inner, view: ImageView):
+    def __init__(self, inner, view: observe.View):
         self._inner = inner
         self._resolved = view.resolved
         self._symbols = view.symbols
-        self.regimes = view.regimes
+        self.regimes = view.walk
         self._seen: dict[str, int] = {}
         # What the firmware last said about each topic, for a caller
         # placing a reading on the trace timeline.
         self.stamps: dict[str, int] = {}
 
-        base = view.addresses[TELEMETRY_REGION]
+        base = view.symbols.extent_of(TELEMETRY_REGION)[0]
         header = inner.read_bytes(base, _TLM["NOVA_TLM_HEADER_SIZE"])
         if _u64(header, _TLM["NOVA_TLM_MAGIC_OFF"]) != _TLM["NOVA_TLM_MAGIC"]:
             raise NotPublishedYet("the firmware has not opened its region yet")
@@ -479,7 +433,9 @@ class NotPublishedYet(Exception):
     """
 
 
-def open_provider(elf_path: Path, ram_path: Path, ram_base: int, view: ImageView) -> SnapshotProvider:
+def open_provider(
+    elf_path: Path, ram_path: Path, ram_base: int, view: observe.View
+) -> SnapshotProvider:
     """The S reader for a live run.
 
     Published state where the firmware publishes it, raw memory

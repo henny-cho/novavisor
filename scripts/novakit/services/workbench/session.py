@@ -20,8 +20,9 @@ from enum import StrEnum
 from pathlib import Path
 
 from ...core import board
+from ...image import elfsym
 from .. import artifacts, cmake, expect, manifest, spawn
-from . import anchors, derive, elfsym, events, hardware, paths
+from . import anchors, derive, events, hardware, paths
 from .observations import observation_rates, timer_slot_labels
 from .protocol import MAX_BUCKETS, Kind, Src, Topic
 from .store import StateStore
