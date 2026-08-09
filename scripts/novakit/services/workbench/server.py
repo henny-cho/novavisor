@@ -9,13 +9,11 @@ without a socket.
 from __future__ import annotations
 
 import asyncio  # noqa: TID251 — the event loop lives here
-import multiprocessing
 import signal
 import sys
 import time
 import uuid
 from collections.abc import Callable
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -206,9 +204,6 @@ class Bridge:
         # about a second, so this is where the cause of anything noticed
         # late is still findable.
         self._history = history.History(trace_history)
-        # Where images are parsed. Built on first use and kept, so a
-        # restart's re-parse does not pay for a process as well.
-        self._images: ProcessPoolExecutor | None = None
         # Stamped into every connect topology: a changed token is the
         # restart signal, whatever the sequence counter says.
         self._token = uuid.uuid4().hex[:8]
@@ -313,12 +308,6 @@ class Bridge:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
-        if self._images is not None:
-            # Not waited on: a parse in flight has nothing left to
-            # deliver to, and a supervisor's SIGTERM should not queue
-            # behind three seconds of DWARF.
-            self._images.shutdown(wait=False, cancel_futures=True)
-            self._images = None
         self._release()
         await self.session.stop()
         if self._recorder is not None:
@@ -483,8 +472,9 @@ class Bridge:
             self._release()
         if self._inspector is None:
             surfaces = self.session.surfaces
+            view = self.session.view
             self._inspector = halt.HaltInspector(
-                surfaces.qmp_path, surfaces.gdb_path, self.session.elf_path
+                surfaces.qmp_path, surfaces.gdb_path, None if view is None else view.symbols
             )
             self._inspector_run = self.session.run_id
         return self._inspector
@@ -720,32 +710,6 @@ class Bridge:
         if self._board is None:
             self._board = hardware.platform()
         return self._board
-
-    def _image_pool(self):
-        """Where an image gets parsed: another process, if there is one.
-
-        Reading the DWARF is seconds of pure Python and it runs while
-        the guest boots, which is when the trace rings burst. On a
-        thread it holds the GIL through that window and the drain falls
-        behind; in its own process it competes for a core and for
-        nothing this interpreter needs.
-
-        One worker, because there is one image at a time, and kept once
-        made so a restart's re-parse does not also pay to respawn.
-
-        A failure to start one is not remembered: the constructor is
-        cheap, the workers spawn lazily, and this is asked once per run,
-        so latching "no pool" would turn one transient into the rest of
-        the session on a thread.
-        """
-        if self._images is None:
-            try:
-                self._images = ProcessPoolExecutor(
-                    max_workers=1, mp_context=multiprocessing.get_context("forkserver")
-                )
-            except (OSError, ValueError, ImportError):
-                return None  # this attempt runs on a thread; the next may not
-        return self._images
 
     def _set_trace_state(self, state: str, **detail) -> None:
         """Say where the T layer stands, once per transition."""
@@ -1159,11 +1123,11 @@ class Bridge:
         # A rebuild moves symbols, so a new run needs a new reader.
         self._drop_provider()
         shm_path = session.surfaces.shm_path
-        # Cheap gate: no per-retry DWARF walk while QEMU is still
-        # creating and sizing the backend.
+        # The backend is created and sized by QEMU; until it is there,
+        # there is nothing to map.
         if not shm_path.exists() or shm_path.stat().st_size == 0:
             return None
-        built = await self._build_provider(session.elf_path, shm_path)
+        built = self._build_provider(session.elf_path, shm_path)
         if session.run_id != current:
             # A restart landed mid-build: this provider maps the
             # previous run's RAM file.
@@ -1174,12 +1138,12 @@ class Bridge:
         self._provider_run = current
         return self._poller
 
-    async def _build_provider(self, elf_path: Path, shm_path: Path):
-        """This run's S reader: the image parsed elsewhere, RAM mapped
-        here. Split so the expensive half can leave this process."""
-        view = await asyncio.get_running_loop().run_in_executor(
-            self._image_pool(), observe.resolve, elf_path
-        )
+    def _build_provider(self, elf_path: Path, shm_path: Path):
+        """This run's S reader: RAM mapped here, the image already
+        answered by the build that produced it."""
+        view = self.session.view
+        if view is None:
+            raise observe.Stale(f"no observation view for {elf_path.name}")
         return snapshot.open_provider(
             elf_path, shm_path, self._board_numbers()["NOVA_BOARD_PHYS_RAM_BASE"], view
         )
@@ -1187,9 +1151,9 @@ class Bridge:
     async def _poll_loop(self) -> None:
         """Publish S-layer snapshots while a run is live.
 
-        Construction — one full DWARF walk — happens in another process.
-        RAM backend races at startup retry silently; any other fault ends
-        this run's S layer, is reported once, and never kills the loop.
+        RAM backend races at startup retry silently; any other fault
+        ends this run's S layer, is reported once, and never kills the
+        loop.
         """
         try:
             while True:

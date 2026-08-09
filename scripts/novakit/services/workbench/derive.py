@@ -12,9 +12,7 @@ observation knows which it is.
 
 from __future__ import annotations
 
-import functools
 from collections.abc import Callable
-from pathlib import Path
 
 from ...core import config
 from ...image import abi, elfsym, observe
@@ -187,27 +185,21 @@ def trap_syndrome(value: object, info: elfsym.TypeInfo) -> object:
     return out
 
 
-@functools.cache
-def syndrome_vocabulary(elf: Path) -> dict[str, dict[int, str]]:
-    """Names for the syndrome's class field, from the built image.
+def syndrome_vocabulary(view: observe.View | None) -> dict[str, dict[int, str]]:
+    """Names for the syndrome's class field, out of what the build read.
 
-    The firmware's own enum is the vocabulary. Reading it costs a DWARF
-    walk, so it is cached per image — the enum cannot change without a
-    rebuild, and a rebuild writes a new file.
+    The firmware's own enum is the vocabulary. Reading it costs a walk of
+    the whole debug section, which is why the build does it once and this
+    is a lookup — and why there is nothing here to cache and nothing to
+    decide about when the cache went stale.
 
-    An image that is not there yet yields nothing rather than failing:
-    the topology is published before the first build finishes, and a
-    class shown as its number is still the truth.
+    A tree with no image yields nothing rather than failing: the topology
+    is published before the first build finishes, and a class shown as
+    its number is still the truth.
     """
-    if not elf.is_file():
+    if view is None:
         return {}
-    index = elfsym.ElfIndex(elf)
-    try:
-        return {"esr_ec": index.enum_labels(observe.EC_ENUM)}
-    except KeyError:
-        return {}
-    finally:
-        index.close()
+    return {"esr_ec": view.enums[observe.EC_ENUM]}
 
 
 def timer_armed(value: object, info: elfsym.TypeInfo) -> object:

@@ -295,7 +295,21 @@ TEST(TelemetryRegion, NoAcceptedReadingIsEverAMixOfTwo) {
 // Two writers, which is what a halt makes: the periodic turn runs on
 // the primary and the final turn runs on whichever core found the
 // machine empty. Nothing orders those two, so the publisher has to.
-TEST(TelemetryRegion, TwoWritersDoNotInterleaveIntoOneReading) {
+//
+// The payload cannot witness that. Both turns copy the same source, so
+// their bytes agree unless the source moves underneath them — and a
+// source moving under a copy tears the same way for one writer as for
+// two. Wholeness here is a property of the transfer, which the single
+// writer above already holds it to; a source in motion is the reader's
+// business and stays outside this claim.
+//
+// The sequence witnesses it. A turn that finds nothing changed puts
+// back the number it read, so two turns racing to read and put back
+// lose an increment between them and the number goes backwards. Under
+// the publisher's own order it cannot, which is why this asserts the
+// direction rather than a payload: it can fail to notice a missing
+// order, but it can never fail while the order holds.
+TEST(TelemetryRegion, TwoWritersDoNotLoseEachOthersSequence) {
   Fixture           fixture;
   Source            source{};
   std::atomic<bool> running{true};
@@ -315,21 +329,35 @@ TEST(TelemetryRegion, TwoWritersDoNotInterleaveIntoOneReading) {
     }
   });
 
-  std::size_t accepted = 0;
-  for (int attempt = 0; attempt < 100'000; ++attempt) {
-    std::array<std::uint64_t, kWords> out{};
-    if (!nova::telemetry::read_slot(fixture.base(), 0, out.data(), sizeof out).stable) {
+  // The sequence alone, in a tight loop. Copying a payload each time
+  // would put the reader thousands of turns behind the writers and it
+  // would only ever see the number's long climb, never the moment one
+  // turn puts back what the other had already moved past.
+  const std::atomic_ref<std::uint64_t> sequence{fixture.descriptor(0).seq};
+  std::uint64_t                        highest = 0;
+  std::uint64_t                        undone  = 0;
+  for (int attempt = 0; attempt < 20'000'000 && undone == 0; ++attempt) {
+    const std::uint64_t seen = sequence.load(std::memory_order_relaxed);
+    // Odd is a turn inside its window, and a window that finds nothing
+    // changed ends by putting its own number back — so only completed
+    // turns are comparable.
+    if (seen % 2 != 0) {
       continue;
     }
-    ++accepted;
-    for (const auto value : out) {
-      ASSERT_EQ(value, out[0]) << "attempt " << attempt << " read two writers at once";
+    if (seen < highest) {
+      undone = highest;
     }
+    highest = seen;
   }
   running.store(false, std::memory_order_relaxed);
   periodic.join();
   final_turn.join();
-  EXPECT_GT(accepted, 0U);
+
+  // After the joins: a failing assertion inside the loop would leave
+  // two threads running into their own destructors.
+  EXPECT_EQ(undone, 0U) << "a turn put back a number another had moved past";
+  // Not vacuous: the number moved while this watched it.
+  EXPECT_GT(highest, 0U);
 }
 
 } // namespace

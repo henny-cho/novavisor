@@ -29,7 +29,7 @@ from pathlib import Path
 
 import yaml
 
-from . import abi
+from . import abi, inputs
 
 REPO = abi.REPO
 DEFAULT_LAYOUT = abi.GUEST_LAYOUT
@@ -284,8 +284,19 @@ def ranges_overlap(lhs_base: int, lhs_size: int, rhs_base: int, rhs_size: int) -
     return lhs_base < rhs_base + rhs_size and rhs_base < lhs_base + lhs_size
 
 
+def _yaml(path: Path):
+    """Load a document, and remember that it was read.
+
+    The build reruns this generator when one of these moves, and what
+    they are is known here rather than in a build file: this program
+    opens them, so this program is what can say so.
+    """
+    inputs.record(path)
+    return yaml.safe_load(path.read_text())
+
+
 def load_inventory(path: Path, layout: dict[str, int]) -> dict:
-    doc = yaml.safe_load(path.read_text())
+    doc = _yaml(path)
     if not isinstance(doc, dict):
         config_error(path, "inventory must be a mapping")
     sid_bits = integer(doc.get("sid_bits"), path, "sid_bits")
@@ -387,7 +398,7 @@ def load_inventory(path: Path, layout: dict[str, int]) -> dict:
 
 
 def load_config(path: Path, layout: dict[str, int], inventory: dict) -> tuple[list[dict], list[dict]]:
-    doc = yaml.safe_load(path.read_text())
+    doc = _yaml(path)
     guests = doc.get("guests") if isinstance(doc, dict) else None
     if not isinstance(guests, list) or not 1 <= len(guests) <= abi.MAX_GUESTS:
         sys.exit(f"nova dtb: {path}: 'guests' must list 1..{abi.MAX_GUESTS} entries")
@@ -512,7 +523,7 @@ def load_config(path: Path, layout: dict[str, int], inventory: dict) -> tuple[li
 
 
 def load_payloads(path: Path, guests: list[dict], layout: dict[str, int]) -> list[dict | None]:
-    doc = yaml.safe_load(path.read_text())
+    doc = _yaml(path)
     records = doc.get("payloads") if isinstance(doc, dict) else None
     if not isinstance(records, list):
         config_error(path, "'payloads' must be a list")
@@ -540,6 +551,7 @@ def load_payloads(path: Path, guests: list[dict], layout: dict[str, int]) -> lis
         binary = Path(binary_value)
         if not binary.is_absolute() or not binary.is_file():
             config_error(path, f"payloads[{record_index}].binary must be an existing absolute file")
+        inputs.record(binary)
         data = binary.read_bytes()
         if not data:
             config_error(path, f"payloads[{record_index}].binary must not be empty")
@@ -715,6 +727,7 @@ def main() -> int:
                          "the cpu enable-method that depends on it")
     ap.add_argument("--payloads", type=Path, required=True,
                     help="resolved guest binary payload manifest")
+    ap.add_argument("--depfile", type=Path, help="where to write what this read")
     args = ap.parse_args()
 
     layout = read_layout(args.layout, args.board_layout)
@@ -754,6 +767,8 @@ def main() -> int:
         emit_asm(args.outdir.resolve(), guests, payloads, digest.hexdigest()))
     (args.outdir / "device_policy.hpp").write_text(
         emit_device_policy(inventory, assigned))
+    if args.depfile is not None:
+        args.depfile.write_text(inputs.depfile(args.outdir / "guest_dtbs.S"))
     print(f"nova dtb: {args.config} -> {len(guests)} guest DTB(s), "
           f"{len(assigned)} device assignment(s) in {args.outdir}")
     return 0

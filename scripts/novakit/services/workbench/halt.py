@@ -327,10 +327,12 @@ class HaltInspector:
     only read.
     """
 
-    def __init__(self, qmp_path: Path, gdb_path: Path, elf_path: Path | None = None):
+    def __init__(
+        self, qmp_path: Path, gdb_path: Path, symbols: elfsym.SymbolTable | None = None
+    ):
         self._qmp_path = qmp_path
         self._gdb_path = gdb_path
-        self._elf_path = elf_path
+        self._symbols = symbols
         self._gdb: GdbClient | None = None
         self._addresses: dict[str, int] | None = None
         self._armed: dict[str, int] = {}
@@ -348,21 +350,16 @@ class HaltInspector:
     def addresses(self) -> dict[str, int]:
         """Where each catalogued event sits in *this* build.
 
-        Resolved once per run and from `.symtab` alone — a breakpoint
-        needs an entry address, not a layout, so this works on an image
-        with no debug info at all.
+        From the symbol table the build wrote down — a breakpoint needs
+        an entry address, not a layout, and a table that is small and
+        complete answers questions it was never aimed at.
         """
         if self._addresses is None:
-            if self._elf_path is None:
+            if self._symbols is None:
                 raise RuntimeError("no image to resolve breakpoints against")
-            index = elfsym.ElfIndex(self._elf_path)
-            try:
-                self._addresses = {
-                    event.id: index.resolve_function(event.symbol)
-                    for event in events.STOPS
-                }
-            finally:
-                index.close()
+            self._addresses = {
+                event.id: self._symbols.address_of(event.symbol) for event in events.STOPS
+            }
         return self._addresses
 
     def arm(self, wanted: Iterable[str]) -> list[str]:

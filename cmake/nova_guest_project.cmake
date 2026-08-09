@@ -37,14 +37,9 @@ function(nova_add_guest_project)
                 --board-layout ${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/board_layout.h
                 --inventory ${NOVA_BOARD_DIR}/device_inventory.yml
                 --payloads ${guest_payload_file}
+                --depfile ${guest_dtb_dir}/guest_dtbs.S.d
                 ${nova_dtb_psci_flag}
-        DEPENDS ${guest_config_file}
-                ${guest_payload_file}
-                ${CMAKE_SOURCE_DIR}/scripts/novakit/image/dtb.py
-                ${CMAKE_SOURCE_DIR}/src/nova/abi/guest_layout.h
-                ${CMAKE_SOURCE_DIR}/src/nova/arch/gicv3/regs.h
-                ${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/board_layout.h
-                ${NOVA_BOARD_DIR}/device_inventory.yml
+        DEPFILE ${guest_dtb_dir}/guest_dtbs.S.d
         COMMENT "Generating guest payload bundle"
     )
 

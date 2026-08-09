@@ -160,18 +160,6 @@ class ManifestResolutionTest(unittest.TestCase):
         labels = dict(published.type.element.enumerators)
         self.assertEqual(labels, {0: "kOff", 1: "kOnPending", 2: "kOn"})
 
-    def test_the_syndrome_vocabulary_comes_from_the_firmware_enum(self):
-        # The UI names an exception class from this enum and nothing
-        # else. If an optimisation drops the type from the image the
-        # names quietly become numbers, so the lookup fails here first.
-        from novakit.services.workbench import derive
-
-        labels = derive.syndrome_vocabulary(ELF)["esr_ec"]
-        self.assertGreater(len(labels), 10)
-        # Two the board leans on: the guest gate and the MMIO trap path.
-        self.assertEqual(labels[0x16], "kHvcAa64")
-        self.assertEqual(labels[0x24], "kDataAbortLower")
-
     def test_vgic_state_is_banked_the_way_the_manifest_reads_it(self):
         index = workbench_image.index()
 

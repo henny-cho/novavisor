@@ -9,9 +9,9 @@ default executor so the event loop keeps serving connections.
 from __future__ import annotations
 
 import asyncio  # noqa: TID251 — the event loop lives here
-import functools
 import shutil
 import socket
+import sys
 import tempfile
 import time
 from collections.abc import Callable
@@ -20,7 +20,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from ...core import board
-from ...image import elfsym
+from ...image import observe
 from .. import artifacts, cmake, expect, manifest, spawn
 from . import anchors, derive, events, hardware, paths
 from .observations import observation_rates, timer_slot_labels
@@ -70,23 +70,54 @@ def _debug_image() -> Path:
     return cmake.preset_dir(cmake.selected_preset()) / "novavisor.elf"
 
 
-@functools.cache
-def _image_symbols(elf: Path, _stamp: float) -> elfsym.SymbolTable | None:
-    """The built image's symbol table, or None if there is not one yet.
+def image_view(elf: Path | None = None) -> observe.View | None:
+    """What the build answered about an image, or nothing if there is
+    no image yet.
 
-    Cached on the file's mtime: the answer cannot change without a
-    rebuild, and reading it is a third of a second the topology path
-    would otherwise pay on every publish.
+    Read fresh every time. It is milliseconds where the walk it replaces
+    was seconds, and a cache here would need a rule for when it had gone
+    stale — which is the question this whole path exists to stop asking.
+
+    Two absences, told apart. No image at all is not a fault: the
+    topology goes out before the first build finishes and a machine that
+    does not exist has no answers to give. A built image whose view is
+    missing or answers a different question is refused, because every
+    image this runs comes out of a build that writes one.
     """
-    if not elf.is_file():
+    path = _debug_image() if elf is None else Path(elf)
+    if not path.is_file():
         return None
+    artifact = observe.artifact_of(path)
+    if not artifact.is_file():
+        raise observe.Stale(f"{path.name} has no observation view beside it: rebuild")
+    return observe.load(artifact, path)
+
+
+def image_answers(elf: Path | None = None) -> observe.View | None:
+    """The view, or nothing with the reason said once.
+
+    Nothing above this can fail over a stale view: a client still gets a
+    board, a catalogue and a machine — with numbers where names would be
+    and no direct evidence claimed. Saying it is what keeps the
+    degradation from being silent.
+    """
     try:
-        return elfsym.SymbolTable.of(elf)
-    except (OSError, SystemExit):
+        return image_view(elf)
+    except (observe.Stale, OSError, ValueError) as error:
+        _say_once(str(error))
         return None
 
 
-def image_capability(tracing: bool = False) -> set[str]:
+_SAID: set[str] = set()
+
+
+def _say_once(message: str) -> None:
+    if message not in _SAID:
+        _SAID.add(message)
+        print(f"[workbench] {message}", file=sys.stderr)
+
+
+def image_capability(view: observe.View | None, tracing: bool = False) -> set[str]:
     """Which paths this run can show direct evidence for.
 
     `tracing` is false before a machine exists, which is honest rather
@@ -95,9 +126,7 @@ def image_capability(tracing: bool = False) -> set[str]:
     arrived is the overstatement the grades exist to prevent. The bridge
     republishes when it does arrive.
     """
-    elf = _debug_image()
-    stamp = elf.stat().st_mtime if elf.is_file() else 0.0
-    return events.observable(_image_symbols(elf, stamp), tracing)
+    return events.observable(None if view is None else view.symbols, tracing)
 
 
 def initial_topology() -> dict:
@@ -106,13 +135,14 @@ def initial_topology() -> dict:
     The board map rides along, so the hardware picture is drawable
     before anything boots — it describes the machine, not the run.
     """
+    view = image_answers()
     return {
         "demo": None,
         "guests": [],
-        "board": hardware.board_map(direct=image_capability()),
+        "board": hardware.board_map(direct=image_capability(view)),
         "catalog": _catalog(),
         "stops": events.catalogue(),
-        "taxonomy": vocabulary() | derive.syndrome_vocabulary(_debug_image()),
+        "taxonomy": vocabulary() | derive.syndrome_vocabulary(view),
         "timer_slots": timer_slot_labels(),
         "observations": observation_rates(),
         "limits": {"buckets": MAX_BUCKETS},
@@ -142,6 +172,9 @@ def prepare(target: Target) -> Prepared:
     _, demo_manifest = manifest.load_manifest(name)
     variant = _select_variant(demo_manifest, target.variant)
     scenario = artifacts.scenario_for(name, demo_manifest, variant)
+    # After the build, so what the image can show is read from the image
+    # this run will use rather than from whatever preceded it.
+    view = image_answers()
     topology = {
         "demo": name,
         "variant": target.variant,
@@ -159,10 +192,10 @@ def prepare(target: Target) -> Prepared:
             }
             for guest in demo_manifest.get("guests", [])
         ],
-        "board": hardware.board_map(direct=image_capability()),
+        "board": hardware.board_map(direct=image_capability(view)),
         "catalog": _catalog(),
         "stops": events.catalogue(),
-        "taxonomy": vocabulary() | derive.syndrome_vocabulary(_debug_image()),
+        "taxonomy": vocabulary() | derive.syndrome_vocabulary(view),
         "timer_slots": timer_slot_labels(),
         "observations": observation_rates(),
         "limits": {"buckets": MAX_BUCKETS},
@@ -315,6 +348,9 @@ class Session:
         self.scenario: expect.Scenario | None = None
         self.surfaces = surfaces
         self.elf_path: Path | None = None
+        # What the build resolved about this run's image, read once
+        # before it starts.
+        self.view: observe.View | None = None
         # H-layer machine state: the bridge sets it around QMP stop/cont
         # and every phase transition that replaces the machine clears it.
         self.paused = False
@@ -338,7 +374,7 @@ class Session:
         regraded = paths.edges(
             board["cpus"],
             [block["id"] for block in board["blocks"]],
-            image_capability(tracing),
+            image_capability(image_answers(), tracing),
         )
         if regraded == board["edges"]:
             return
@@ -392,6 +428,12 @@ class Session:
                     qmp_path=self.surfaces.qmp_path,
                     gdb_path=self.surfaces.gdb_path,
                 )
+            self.elf_path = _kernel_of(command)
+            # Before the machine starts. The image's answers are a file
+            # the build wrote, so the observer can be standing by when
+            # the first instruction runs instead of arriving seconds
+            # into the boot it was meant to watch.
+            self.view = image_answers(self.elf_path) if self.elf_path else None
             try:
                 self._live = self._deps.launch(tuple(command))
             except (Exception, SystemExit) as error:
@@ -400,7 +442,6 @@ class Session:
             self._assembler = anchors.LineAssembler()
             self._fd = self._live.fileno()
             loop.add_reader(self._fd, self._on_readable)
-            self.elf_path = _kernel_of(command)
             self.paused = False  # a fresh machine is running by definition
             self.run_id += 1
             self._set_phase(Phase.RUNNING, demo=target.demo)

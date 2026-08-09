@@ -99,5 +99,39 @@ class BuildPresetContractTest(unittest.TestCase):
         self.assertTrue(NOVA.stat().st_mode & 0o111)
 
 
+class GeneratedInputContractTest(unittest.TestCase):
+    """A build step that produces something has to declare its inputs.
+
+    Every other step beside the link is a check, and a check can be a
+    POST_BUILD command: it declares nothing, runs whenever the target
+    relinks, and leaves nothing behind to go stale. A generator cannot.
+    Its second input — the manifest, the configuration — moves without
+    relinking anything, and a POST_BUILD step would not notice.
+
+    Both generators in this build report their own inputs, so the check
+    is that neither is written the other way.
+    """
+
+    GUEST_PROJECT = (REPO / "cmake" / "nova_guest_project.cmake").read_text()
+
+    def test_each_generator_declares_a_depfile(self):
+        generated = [
+            block
+            for block in self.GUEST_PROJECT.split("add_custom_command(")[1:]
+            if "OUTPUT" in block.split(")")[0] or "OUTPUT " in block[:40]
+        ]
+        self.assertGreaterEqual(len(generated), 2, "expected the guest bundle and the view")
+        for block in generated:
+            body = block[: block.index("COMMENT")]
+            with self.subTest(output=body.split("\n")[0].strip()):
+                self.assertIn("DEPFILE", body)
+
+    def test_no_generator_hides_behind_a_post_build_step(self):
+        for block in self.GUEST_PROJECT.split("add_custom_command(TARGET")[1:]:
+            body = block[: block.index("COMMENT")]
+            with self.subTest(step=body.split("COMMAND")[1].strip().split("\n")[0]):
+                self.assertNotIn("--out", body, "a POST_BUILD step cannot declare its inputs")
+
+
 if __name__ == "__main__":
     unittest.main()
