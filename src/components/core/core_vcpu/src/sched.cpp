@@ -51,8 +51,8 @@ void core_vcpu_component::telemetry(TelemetryCall* call) noexcept {
   call->declare(&vcpu::g_vm_generation, sizeof vcpu::g_vm_generation);
   call->declare(&vcpu::g_budget, sizeof vcpu::g_budget);
   // What the machine was built to run, as it built it. The manifest
-  // that asked for it is one answer and this is the other, and only
-  // this one comes from the machine.
+  // that asked for it is the other answer, and only this one is the
+  // machine's.
   const auto guests = guest_table_storage();
   call->declare(guests.data(), guests.size_bytes());
 }

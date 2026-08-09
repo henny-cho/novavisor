@@ -103,12 +103,11 @@ function(nova_add_guest_project)
     # The observation view: the manifest resolved against this image, so
     # whoever observes the machine reads an answer instead of walking the
     # debug section for it. Only a build with debug information can be
-    # asked, and that is exactly the build the workbench runs.
+    # asked, which is the build the workbench runs.
     #
-    # An OUTPUT rule rather than a POST_BUILD step, because this produces
-    # something and POST_BUILD declares no inputs: the manifest is the
-    # second input and moves without relinking. What that input is, the
-    # generator reports for itself.
+    # An OUTPUT rule and not a POST_BUILD step: this produces something,
+    # and POST_BUILD declares no inputs — the manifest is the second
+    # input and moves without relinking. The generator reports it.
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         nova_python_module(nova_observe_command image.observe)
         set(observe_view ${CMAKE_BINARY_DIR}/novavisor.observe.json)

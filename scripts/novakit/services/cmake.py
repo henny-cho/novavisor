@@ -20,9 +20,9 @@ def configure(preset: str) -> None:
     """Configure a preset, naming the interpreter its generators run under.
 
     The build graph runs programs out of this package, so they need the
-    environment this package's dependencies are installed in — which is
-    the one already running. Left to `python3` on PATH, a build would
-    resolve a different environment than the tool that started it.
+    environment its dependencies are installed in — the one already
+    running. `python3` on PATH is a different environment than the tool
+    that started the build.
     """
     proc.run(["cmake", "--preset", preset, f"-DNOVA_PYTHON={sys.executable}"])
 

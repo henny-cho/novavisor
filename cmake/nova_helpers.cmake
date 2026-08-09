@@ -1,9 +1,9 @@
 # Target-definition helpers shared by the NovaVisor build.
 
 # Which interpreter runs the generators below. The automation hands its
-# own over when it configures, because the generators import the package
-# it is already running from; a tree configured by hand gets whatever
-# python3 is on PATH, and a generator needing more than that says so.
+# own over when it configures, since the generators import the package
+# it is running from; a tree configured by hand gets python3 from PATH,
+# and a generator needing more than that says so.
 set(NOVA_PYTHON "python3" CACHE FILEPATH "Python interpreter for build-graph generators")
 
 # nova_python_module(<out-var> <module>)

@@ -1,16 +1,13 @@
 """What a generator read, reported by the generator.
 
-The build has to know when to run a generator again, and the answer is
-every file the generator actually opened — its own module, the modules
-it imported, and the headers it read for constants. Written out by hand
-in the build files, that list is a list to forget: the one that reaches
-the compiler is the one the compiler wrote, which is why compilers emit
-depfiles instead of being told their includes.
+The build reruns a generator when its inputs move, and its inputs are
+every file it opened: its own module, what it imported, the headers it
+read. Listed by hand in a build file that is a list to forget — which is
+why compilers emit depfiles instead of being told their includes.
 
-So this reports rather than restates. Modules come from what the import
-machinery loaded; headers come from the readers in `abi`, which are the
-one door every header in this package is read through. A generator that
-grows a dependency does not have to remember anything.
+Modules come from what the import machinery loaded; headers from the
+readers in `abi`, the one door every header here is read through. A
+generator that grows a dependency has nothing to remember.
 """
 
 from __future__ import annotations
@@ -31,17 +28,11 @@ def record(path: Path) -> None:
     _READ.add(Path(path).resolve())
 
 
-def read() -> set[Path]:
-    """Everything recorded so far. Mostly for the tests that check it."""
-    return set(_READ)
-
-
 def _loaded() -> set[Path]:
     """Modules of this tooling that the import actually reached.
 
-    Snapshotted from `sys.modules` rather than parsed out of the source:
-    a conditional import, a lazy one and a plain one are all the same
-    question — was it read — and only the loader knows.
+    From `sys.modules` rather than parsed out of the source: conditional,
+    lazy and plain imports are one question, and only the loader knows.
     """
     found = set()
     for module in list(sys.modules.values()):
@@ -57,9 +48,8 @@ def _loaded() -> set[Path]:
 def depfile(output: Path) -> str:
     """A make rule naming what `output` was built from.
 
-    The format ninja and make agree on: one target, a colon, and the
-    inputs. Absolute paths, because the reader's idea of "here" is the
-    build directory and this program's is wherever it was run from.
+    Absolute paths: the reader's "here" is the build directory and this
+    program's is wherever it was run from.
     """
     inputs = sorted(_loaded() | _READ)
     listed = " \\\n  ".join(_escape(path) for path in inputs)

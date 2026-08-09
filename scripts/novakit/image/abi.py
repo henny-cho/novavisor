@@ -39,8 +39,7 @@ def _text(path: Path) -> str:
     """Read a header, and remember that it was read.
 
     Every header this package reads passes through here, which is what
-    lets a generator report its own inputs instead of a build file
-    listing them.
+    lets a generator report its own inputs.
     """
     inputs.record(path)
     return path.read_text()

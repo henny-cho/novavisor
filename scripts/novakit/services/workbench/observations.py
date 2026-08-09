@@ -1,19 +1,17 @@
 """How each observation is sampled and drawn.
 
-The other half of the manifest lives where the build can read it: which
-global feeds which topic, and which of its members travel. That half is
-the question the build answers by walking the image; this one is the
-bridge's alone — a rate, a shape, a spelling — and nothing in it can be
-checked against an ELF.
+The other half — which global feeds which topic, and which members
+travel — is the build's, since only an image can answer it. This half is
+a rate, a shape and a spelling, and nothing in it can be checked against
+an ELF.
 
-The two meet at the topic, and the join is checked both ways. A policy
-naming a topic the question dropped would sample nothing; a question
-with no policy would go out at the default rate with no shape, which is
-a decision nobody made.
+The two meet at the topic, checked both ways: a policy for a topic
+nobody resolves samples nothing, and a resolved symbol with no policy
+goes out at a rate nobody chose.
 
-The one exception carries no symbol at all: a page of guest memory the
-hypervisor lends out has no DWARF, so its address and layout are
-declared here by hand and held to the board map by the manifest check.
+The one exception carries no symbol: a page of guest memory has no
+DWARF, so its address and layout are declared here and held to the board
+map by the manifest check.
 """
 
 from __future__ import annotations
@@ -89,8 +87,8 @@ POLICY: dict[str, Policy] = {
     # instead of forty.
     "ctx.syndrome": Policy(rate_hz=10, shape=derive.trap_syndrome),
     "ctx.el1": Policy(rate_hz=2, hex=True),
-    # Built once during EL2 init and never again, so the change gate
-    # emits it a single time and the rate only decides how soon.
+    # Built once in EL2 init, so the change gate emits it once and the
+    # rate only decides how soon.
     "vm.table": Policy(rate_hz=2, shape=derive.guest_table),
     # PSCI / SMP panel
     "smp.lifecycle": Policy(rate_hz=5),
@@ -127,9 +125,7 @@ PAGES: tuple[Obs, ...] = (
 def _joined() -> tuple[Obs, ...]:
     """The question and the policy, met at the topic.
 
-    Both directions fail loudly. Either alone is a half-observation: a
-    symbol nobody draws, or a panel reading a global the build no longer
-    resolves.
+    Either alone is a half-observation, and neither raises on its own.
     """
     asked = {want.topic for want in observe.OBSERVED}
     if asked != set(POLICY):
@@ -173,16 +169,13 @@ def _check_rates() -> None:
 _check_rates()
 
 
-# The reading that says what the machine actually built, as against
-# what it was asked to build. Named here because the manifest is where
-# a topic's identity lives; the session is what does something with it.
+# The reading the topology defers to. Named here with the rest of the
+# manifest; the session is what does something with it.
 GUEST_TABLE = "vm.table"
 
 # The page the host writes commands into. Named here rather than beside
-# the writer that opens it: a renamed global should fail the manifest
-# check, which reads this file, not a control that quietly stops
-# working. Its extent comes from the symbol table, so the build has no
-# question to answer about it.
+# the writer, so a rename fails the manifest check instead of a control
+# that quietly stops working. Its extent comes from the symbol table.
 COMMAND_PAGE = "nova::command::g_page"
 
 

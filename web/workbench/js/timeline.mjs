@@ -730,9 +730,8 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     stop();
     picked = null;
     marked = null;
-    /* Said, not just done. Whatever was placed against the selected
-       moment — a line naming it, a drawer measuring from it — is now
-       describing a mark nothing is on. */
+    /* Said, not just done: a line naming the mark and a drawer
+       measuring from it are now describing one nothing is on. */
     onSelect({ kind: "none" });
   }
 

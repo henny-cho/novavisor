@@ -174,6 +174,9 @@ class Bridge:
         self._poller: snapshot.SnapshotPoller | None = None
         self._provider: snapshot.SnapshotProvider | None = None
         self._provider_run: int | None = None
+        # The run whose S layer ended in a fault, so it is reported
+        # once: the fault is a property of the run, not of the tick.
+        self._provider_failed: int | None = None
         # Which run's tables have been published. Built once and never
         # rewritten, so one capture per run is all of them.
         self._mapped_run: int | None = None
@@ -1120,6 +1123,11 @@ class Bridge:
         current = session.run_id
         if self._provider_run == current:
             return self._poller
+        if self._provider_failed == current:
+            # Ended for this run, and nothing inside a run un-ends it:
+            # image, view and backend are all fixed at launch. Retrying
+            # republishes the same fault twenty times a second.
+            return None
         # A rebuild moves symbols, so a new run needs a new reader.
         self._drop_provider()
         shm_path = session.surfaces.shm_path
@@ -1140,7 +1148,7 @@ class Bridge:
 
     def _build_provider(self, elf_path: Path, shm_path: Path):
         """This run's S reader: RAM mapped here, the image already
-        answered by the build that produced it."""
+        answered by the build."""
         view = self.session.view
         if view is None:
             raise observe.Stale(f"no observation view for {elf_path.name}")
@@ -1153,7 +1161,7 @@ class Bridge:
 
         RAM backend races at startup retry silently; any other fault
         ends this run's S layer, is reported once, and never kills the
-        loop.
+        loop. The next run starts clean.
         """
         try:
             while True:
@@ -1183,8 +1191,7 @@ class Bridge:
                         if stamp is not None:
                             payload["ts"] = stamp
                         self.store.publish(obs.topic, Kind.SNAPSHOT, payload, src=Src.SNAP)
-                        # The one reading the topology defers to: what
-                        # the machine built beats what it was asked to.
+                        # The one reading the topology defers to.
                         if obs.topic == observations.GUEST_TABLE:
                             self.session.adopt_guest_table(value)
                 except (FileNotFoundError, snapshot.NotPublishedYet):
@@ -1197,6 +1204,7 @@ class Bridge:
                         Kind.EVENT,
                         {"phase": "snapshot-unavailable", "error": str(error)},
                     )
+                    self._provider_failed = self.session.run_id
                     self._drop_provider()
         finally:
             self._drop_provider()

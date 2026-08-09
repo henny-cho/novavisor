@@ -44,19 +44,17 @@ LAYER_DEPTH = {"core": 0, "image": 0, "services": 1, "commands": 2, "": 3}
 # A fact about the tree that one module derives and the rest are handed.
 # Spelling it twice is how the second copy goes stale unnoticed.
 SINGLE_OWNER = {
-    # Parsing an image is build-time work: it costs a walk of the whole
-    # debug section and its answer cannot change while the image does
-    # not. The generator does it once and writes the answers down;
-    # anything asking at run time is a second, slower reader of a
-    # question already answered.
+    # Parsing an image is build-time work: a walk of the whole debug
+    # section whose answer cannot change while the image does not. The
+    # generator does it once and writes the answers down; a reader at
+    # run time is a second, slower answer to the same question.
     "ElfIndex(": "image/observe.py",
-    "SymbolTable.of(": "image/observe.py",
     "parents[3]": "core/config.py",
     "GITHUB_": "core/actions.py",
     "-machine": "core/board.py",
     "__main__": "image/dtb.py, image/layout.py, image/observe.py",
 }
-# Naming a marker is not using it: the table above spells all four.
+# Naming a marker is not using it: the table above spells every one.
 RULE_SOURCE = "services/boundaries.py"
 
 

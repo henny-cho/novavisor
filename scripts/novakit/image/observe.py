@@ -1,22 +1,15 @@
-"""What the build asks the image: which globals travel, and what feeds
-each topic.
+"""What the build asks the image, and the program that asks it.
 
-Here rather than beside the bridge because the answer is the build's to
-produce. Resolving a name to an address and a type layout costs a walk
-of the whole debug section, the answer cannot change while the image
-does not, and the image is a build output — so the question belongs
-where the build can read it, and the answer is written down once.
+Answering costs a walk of the whole debug section and the answer cannot
+change while the image does not, so the question lives where the build
+can read it and the answer is written down once.
 
-The descent is only as deep as the expense. A name that the symbol
-table alone answers — a stop point's entry address, a region's extent —
-does not need its question here: the table is small, complete, and
-travels whole, so those questions stay with the consumers that ask
-them. What is here is what a walk has to be aimed at: named globals with
-their layouts, the page-table storage the memory map measures, and the
-enumerations whose member names the UI speaks.
+Only what a walk must be aimed at is here: named globals with their
+layouts, the page-table storage, the enums the UI speaks. What the
+symbol table alone answers — a stop point's entry, a region's extent —
+stays with the consumer that asks it, since that table travels whole.
 
-Nothing here says how often a value is sampled or how it is drawn.
-Those are the bridge's, and they meet this list at the topic.
+Rates and shapes are the bridge's; the two halves meet at the topic.
 """
 
 from __future__ import annotations
@@ -35,10 +28,9 @@ from . import elfsym, inputs
 class Want:
     """One firmware global to resolve, and the topic it feeds.
 
-    `fields` narrows a struct to the members that travel. It is part of
-    the question rather than of presentation: the build proves each one
-    exists in the layout, which is what makes a renamed member a build
-    failure instead of a blank panel.
+    `fields` narrows a struct to the members that travel, and the build
+    proves each one exists — a renamed member otherwise resolves fine
+    and reaches the bridge as a selector matching nothing.
     """
 
     topic: str
@@ -57,10 +49,9 @@ OBSERVED: tuple[Want, ...] = (
     Want("timer.programmed", "nova::soft_timer::(anonymous)::g_programmed"),
     Want("timer.cntvoff", "nova::vcpu::g_cntvoff"),
     Want("vm.generation", "nova::vcpu::g_vm_generation"),
-    # One array, three readings. The trap frame is forty words; the
-    # syndrome is three of them and the EL1 bank is another cut. Three
-    # entries over one symbol is what lets each travel at its own rate
-    # without the others riding along.
+    # One array, three readings: the trap frame is forty words, the
+    # syndrome three of them, the EL1 bank another cut. Separate entries
+    # let each travel at its own rate.
     Want("ctx.trap", "nova::vcpu::g_vcpus", ("ctx",)),
     Want("ctx.syndrome", "nova::vcpu::g_vcpus", ("ctx",)),
     Want("ctx.el1", "nova::vcpu::g_vcpus", ("el1",)),
@@ -73,13 +64,11 @@ OBSERVED: tuple[Want, ...] = (
     Want("smp.online", "nova::smp::g_online"),
     Want("smp.mail", "nova::smp::g_mail", ("count",)),
     Want("smp.budget", "nova::vcpu::g_budget"),
-    # Injection state, and the only route to it: the gdb stub's register
-    # set carries no ICH_*, so the EL2 shadow is all there is.
+    # The only route to injection state: the gdb stub carries no ICH_*.
     Want("vgic.lr", "nova::vgic::(anonymous)::g_cpu", ("lr", "lr_token")),
-    # The hop before that one: posted by a device, not yet refilled into
-    # a register. refill() moves the token rather than copying it, so
-    # this list and the in-flight one are disjoint by construction —
-    # which is what makes the position readable from a single snapshot.
+    # The hop before that one: posted, not yet refilled. refill() moves
+    # the token rather than copying it, so this list and the in-flight
+    # one are disjoint — which is what makes one snapshot enough.
     Want("vgic.token", "nova::vgic::(anonymous)::g_spi_tokens"),
     Want(
         "vgic.dist",
@@ -90,26 +79,24 @@ OBSERVED: tuple[Want, ...] = (
     Want("vgic.capacity", "nova::vgic::(anonymous)::g_lr_count"),
     Want("dev.uart", "nova::vuart::(anonymous)::g_uart", ("head", "count", "imsc")),
     Want("dev.dma", "nova::dma_device::(anonymous)::g_registry"),
-    # What each device stream is allowed to do. Read from the table the
-    # SMMU actually walks rather than from the policy that built it, so
-    # a quarantined stream shows as the hardware has it.
+    # The table the SMMU walks, not the policy that built it: a
+    # quarantined stream shows as the hardware has it.
     Want("smmu.stream", "nova::smmu::(anonymous)::g_stream_table"),
     Want("dev.watchdog", "nova::(anonymous)::g_update_sequence"),
 )
 
 
-# Page table storage. Extents come from the layout, so a resized pool is
-# copied whole without this list changing.
+# Page table storage. Extents come from the layout, so a resized pool
+# is copied whole without this list changing.
 STAGE2_SETS = "nova::(anonymous)::g_stage2_sets"
 DMA_TABLES = "nova::smmu::(anonymous)::g_dma_tables"
 EL2_ROOT = "nova_el2_l1_root"
 EL2_POOL = "(anonymous)::g_pool"
 TABLES = (STAGE2_SETS, DMA_TABLES, EL2_ROOT, EL2_POOL)
 
-# Where each walk starts, as the machine holds it: the register value
-# the CPU is given, and the root the SMMU built its stream table from.
-# Read from the run's configuration instead, these would describe a
-# machine that was intended rather than one that booted.
+# Where each walk starts, as the machine holds it: the register the CPU
+# is given and the root the SMMU built from. The run's configuration
+# would describe a machine that was intended rather than one that booted.
 VTTBR = "nova::(anonymous)::g_vttbr"
 DMA_CONTEXTS = "nova::smmu::(anonymous)::g_contexts"
 DMA_CONTEXT_COUNT = "nova::smmu::(anonymous)::g_context_count"
@@ -117,9 +104,8 @@ ROOTS = (VTTBR, DMA_CONTEXTS, DMA_CONTEXT_COUNT)
 
 WALK = TABLES + ROOTS
 
-# Firmware enumerations whose member names the UI speaks. The firmware's
-# own enum is the vocabulary; a table of the same names kept anywhere
-# else drifts the first time a class is added and nothing notices.
+# Enums whose member names the UI speaks. A table of the same names
+# kept elsewhere drifts the first time a class is added.
 EC_ENUM = "nova::esr::ExceptionClass"
 ENUMS = (EC_ENUM,)
 
@@ -128,13 +114,11 @@ ENUMS = (EC_ENUM,)
 class View:
     """Every answer this image gives, as plain data holding nothing open.
 
-    Separable from its use on purpose: producing it is a walk of the
-    whole debug section, and reading it back is four milliseconds. That
-    gap is the reason the walk belongs to the build.
+    Producing it is a walk of the whole debug section; reading it back
+    is four milliseconds, which is why the walk belongs to the build.
 
-    `walk` is keyed by symbol rather than topic — the page tables feed no
-    observation, and what the memory map wants is where they are and how
-    big, not a decoded reading.
+    `walk` is keyed by symbol rather than topic: the page tables feed no
+    observation, and the memory map wants extents, not a reading.
     """
 
     resolved: dict[str, elfsym.ResolvedSymbol]
@@ -151,13 +135,12 @@ class View:
 def resolve(elf: Path) -> View:
     """Answer every question above against one image.
 
-    Opens the ELF, reads it, closes it, and returns data — so the caller
-    is free to run this anywhere, including a build step.
+    Opens the ELF, reads it, closes it, returns data — runnable
+    anywhere, including a build step.
 
-    A question with no answer stops here rather than yielding a hole. A
-    dropped enum would turn named exception classes into bare numbers and
-    a renamed global would blank a panel, both silently; raising is what
-    makes the rename a build failure instead.
+    A question with no answer raises rather than yielding a hole: a
+    dropped enum turns exception classes into bare numbers and a renamed
+    global blanks a panel, both silently.
     """
     index = elfsym.ElfIndex(elf)
     try:
@@ -178,12 +161,10 @@ def resolve(elf: Path) -> View:
 def _prove(want: Want, entry: elfsym.ResolvedSymbol) -> None:
     """Hold one answer to the question that asked for it.
 
-    Resolving proves the name; these two prove the rest of the request.
-    A member that was renamed still resolves — the global is there — and
-    would reach the bridge as a selector that matches nothing, which is
-    a blank panel and no error. Decoding a zero-filled extent is the
-    same question asked of the decoder: a layout it cannot walk is one
-    the bridge would fail on, per reading, at run time.
+    Resolving proves the name. A renamed member still resolves — the
+    global is there — so the members are checked too, and decoding a
+    zero-filled extent asks the same of the decoder: a layout it cannot
+    walk would fail per reading at run time.
     """
     members = entry.type
     while members.kind == "array":
@@ -216,10 +197,9 @@ def artifact_of(elf: Path) -> Path:
 def request_id() -> str:
     """A name for the question this module asks.
 
-    The artifact carries it so a reader can tell whether the answer it
-    found is an answer to its own question. Without it, adding a topic
-    leaves an artifact that is valid, current for its image, and missing
-    the new panel — which reads as an answer.
+    Carried in the artifact so a reader can tell whether the answer it
+    found answers *its* question. Without it, adding a topic leaves an
+    artifact that is valid, current for its image, and short a panel.
     """
     return _digest(
         {
@@ -231,10 +211,10 @@ def request_id() -> str:
 
 
 def image_id(elf: Path) -> str:
-    """A name for the image the answer came from, by its content.
+    """A name for the image the answer came from.
 
-    By content rather than by path or timestamp: a rebuild writes the
-    same path, and a copied tree carries the same times.
+    By content: a rebuild writes the same path and a copied tree carries
+    the same times.
     """
     return hashlib.sha256(Path(elf).read_bytes()).hexdigest()
 
@@ -261,12 +241,14 @@ def dumps(view: View, elf: Path) -> str:
 def load(path: Path, elf: Path) -> View:
     """Read a view back, or say why it cannot be believed.
 
-    Three questions, each with its own answer: does this reader speak the
-    document, did it come from this image, and does it answer this
-    question. All three are cheap next to the walk they replace, and any
-    one of them failing means the same thing — rebuild.
+    Three questions: does this reader speak the document, did it come
+    from this image, does it answer this question. All three are cheap
+    next to the walk they replace and any one failing means rebuild.
     """
-    document = json.loads(Path(path).read_text())
+    try:
+        document = json.loads(Path(path).read_text())
+    except ValueError as error:
+        raise Stale(f"{path.name} is not a document this reads ({error}): rebuild") from None
     if document.get("format") != FORMAT:
         raise Stale(
             f"{path.name} is format {document.get('format')}, this reads {FORMAT}: rebuild"
@@ -275,6 +257,15 @@ def load(path: Path, elf: Path) -> View:
         raise Stale(f"{path.name} was resolved against a different {Path(elf).name}: rebuild")
     if document.get("request") != request_id():
         raise Stale(f"{path.name} answers an older observation manifest: rebuild")
+    try:
+        return _view_of(document)
+    except (KeyError, TypeError) as error:
+        # It carries the three names, so it claims to be this document.
+        # Refusing beats decoding a fragment into panels.
+        raise Stale(f"{path.name} is missing {error}: rebuild") from None
+
+
+def _view_of(document: dict) -> View:
     return View(
         {topic: _symbol_of(entry) for topic, entry in document["resolved"].items()},
         elfsym.SymbolTable(
@@ -311,8 +302,7 @@ def _symbol_of(data: dict) -> elfsym.ResolvedSymbol:
 
 
 def _type_json(info: elfsym.TypeInfo) -> dict:
-    # Only what this type has: a scalar carries two keys, and the members
-    # a struct does not have are absent rather than empty.
+    # Only what this type has: a scalar carries two keys.
     out: dict = {"kind": info.kind, "size": info.size}
     if info.name:
         out["name"] = info.name
@@ -354,9 +344,8 @@ def _type_of(data: dict) -> elfsym.TypeInfo:
 def main(argv: list[str] | None = None) -> int:
     """Resolve the manifest against a freshly linked image and write it.
 
-    Run from the build graph, right after the link. A name this image
-    does not carry stops the build here — earlier than a test lane, and
-    at the change that caused it.
+    A name this image does not carry stops the build here — earlier than
+    a test lane, and at the change that caused it.
     """
     parser = argparse.ArgumentParser(description="Resolve the observation manifest against an image")
     parser.add_argument("--elf", required=True, type=Path, help="the linked image to resolve against")
@@ -367,8 +356,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         view = resolve(args.elf)
     except (KeyError, ValueError) as error:
-        # KeyError renders its argument as a repr, and the argument here
-        # is already a sentence.
+        # KeyError reprs its argument, which here is already a sentence.
         print(
             f"[observe] {args.elf.name}: {error.args[0]}\n"
             f"[observe] the observation manifest asks for a name this image does not have",

@@ -1,13 +1,10 @@
 """What the manifest claims beyond what the build already proved.
 
-The build resolves every observed global against the image it just
-linked, proves the members that travel exist, and writes the answers
-down; a name that is gone stops the build there. So this is not that
-check again. It reads the same document — refusing one that answers a
-different question — and asks what is left: that the bridge's own
-constants still match the image's extents, that every stop point is a
-function and no two of them the same one, and that the layouts declared
-by hand are known.
+The build resolves every observed global against the image it linked and
+proves the members that travel exist, so this is not that check again.
+It reads the same document and asks what is left: the bridge's own
+constants against the image's extents, every stop point a function and
+no two of them the same one, and the hand-declared layouts known.
 """
 
 from __future__ import annotations
@@ -54,8 +51,7 @@ def _read(what: str, elf: Path | None) -> observe.View | None:
 def describe_symbols(elf: Path | None = None) -> int:
     """Print where every observation lives in the image.
 
-    The terminal twin of the S layer: the same manifest, the same
-    answers the poller reads, laid out for a human.
+    The terminal twin of the S layer: the same answers the poller reads.
     """
     view = _read("symbols", elf)
     if view is None:

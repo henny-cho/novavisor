@@ -147,17 +147,13 @@ export function createPanels({ tabs, host }) {
   /* Where a reading sits on the firmware's own clock, and what it is
      placed against.
 
-     A panel shows a sample, and a sample without an instant cannot be
-     placed against the events around it — which is why the publisher
-     stamps every slot with the counter the trace records carry. The
-     arrival time answers a different question: it is when this process
-     got to the reading, which differs from when the machine took it by
-     however long the poll interval and the decode ran.
+     The publisher stamps every slot with the counter the trace records
+     carry. Arrival time answers a different question — when this process
+     got to the reading — and differs by the poll interval and the decode.
 
      With a mark selected the reference is that mark, so a panel says
-     whether what it shows is from before or after the moment the reader
-     clicked. With none it is the newest reading held, so a panel that
-     is behind the others says so. */
+     whether what it shows predates the moment the reader clicked. With
+     none it is the newest reading held, so a lagging panel says so. */
   let counterHz = 0;
   let reference = null;
   /* Per topic, the mask of what moved between the last two stops.
@@ -606,10 +602,10 @@ export function createPanels({ tabs, host }) {
     return found;
   }
 
-  /* How far a panel's newest reading sits from the reference, in the
-     firmware's own units. Null when there is nothing to place it
-     against — no counter rate yet, or a provider that stamps nothing —
-     and the header falls back to saying when the reading arrived. */
+  /* How far a panel's newest reading sits from the reference. Null when
+     there is nothing to place it against — no counter rate yet, or a
+     provider that stamps nothing — and the header falls back to
+     arrival. */
   function placement(topics) {
     if (!counterHz) return null;
     let mine = null;
@@ -644,9 +640,8 @@ export function createPanels({ tabs, host }) {
     const head = el("div", "phead");
     head.append(el("span", "pt", entry.panel.title));
     if (newest) {
-      /* The instant the machine took it, where there is one: it places
-         the reading against the events on the strip, which the arrival
-         time cannot. */
+      /* The instant the machine took it, where there is one: only that
+         places the reading against the events on the strip. */
       const placed = placement(entry.panel.topics);
       head.append(
         el("span", "pfresh", `src ${newest.src} · ${placed ?? stamp(newest.ts, 1)}`),
@@ -698,9 +693,9 @@ export function createPanels({ tabs, host }) {
       latest.set(frame.topic, {
         value: data.values,
         ts: frame.ts,
-        /* The publisher's counter for this slot. Absent from a provider
-           with no publisher behind it — a script, a replay, a reader of
-           raw addresses — and absent is not zero. */
+        /* The publisher's counter for this slot. Absent from a
+           provider with no publisher behind it, and absent is not
+           zero. */
         at: typeof data.ts === "number" ? data.ts : undefined,
         src: frame.src,
       });
@@ -727,15 +722,15 @@ export function createPanels({ tabs, host }) {
        drawn as "not yet read", because the alternative is leaving a
        later value on screen at a moment the machine had not produced
        it, which is the one thing a cursor exists to prevent. */
-    /* The counter rate the firmware's stamps are in, which arrives with
-       the trace summary. Without it a stamp is a number, not a moment. */
+    /* The rate the stamps are in, from the trace summary. Without it a
+       stamp is a number, not a moment. */
     setClock(hz) {
       if (!hz || hz === counterHz) return;
       counterHz = hz;
       renderAll();
     },
-    /* The mark a reader selected, as the instant to place readings
-       against. Null puts them back against the newest reading held. */
+    /* The instant to place readings against. Null puts them back
+       against the newest reading held. */
     setReference(at) {
       const next = typeof at === "number" ? at : null;
       if (next === reference) return;

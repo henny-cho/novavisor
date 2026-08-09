@@ -70,40 +70,26 @@ def _debug_image() -> Path:
     return cmake.preset_dir(cmake.selected_preset()) / "novavisor.elf"
 
 
-def image_view(elf: Path | None = None) -> observe.View | None:
-    """What the build answered about an image, or nothing if there is
-    no image yet.
+def image_answers(elf: Path | None = None) -> observe.View | None:
+    """What the build answered about an image, or nothing and why.
 
-    Read fresh every time. It is milliseconds where the walk it replaces
-    was seconds, and a cache here would need a rule for when it had gone
-    stale — which is the question this whole path exists to stop asking.
+    Read fresh: milliseconds where the walk it replaces was seconds, and
+    a cache would need a rule for when it had gone stale.
 
-    Two absences, told apart. No image at all is not a fault: the
-    topology goes out before the first build finishes and a machine that
-    does not exist has no answers to give. A built image whose view is
-    missing or answers a different question is refused, because every
-    image this runs comes out of a build that writes one.
+    Two absences, told apart. No image is not a fault — the topology
+    goes out before the first build finishes. A built image whose view
+    is missing or answers another question is refused with the reason
+    said once, and the client still gets a board and a catalogue.
     """
     path = _debug_image() if elf is None else Path(elf)
     if not path.is_file():
         return None
     artifact = observe.artifact_of(path)
-    if not artifact.is_file():
-        raise observe.Stale(f"{path.name} has no observation view beside it: rebuild")
-    return observe.load(artifact, path)
-
-
-def image_answers(elf: Path | None = None) -> observe.View | None:
-    """The view, or nothing with the reason said once.
-
-    Nothing above this can fail over a stale view: a client still gets a
-    board, a catalogue and a machine — with numbers where names would be
-    and no direct evidence claimed. Saying it is what keeps the
-    degradation from being silent.
-    """
     try:
-        return image_view(elf)
-    except (observe.Stale, OSError, ValueError) as error:
+        if not artifact.is_file():
+            raise observe.Stale(f"{path.name} has no observation view beside it: rebuild")
+        return observe.load(artifact, path)
+    except (observe.Stale, OSError) as error:
         _say_once(str(error))
         return None
 
@@ -348,8 +334,7 @@ class Session:
         self.scenario: expect.Scenario | None = None
         self.surfaces = surfaces
         self.elf_path: Path | None = None
-        # What the build resolved about this run's image, read once
-        # before it starts.
+        # What the build resolved about this run's image.
         self.view: observe.View | None = None
         # H-layer machine state: the bridge sets it around QMP stop/cont
         # and every phase transition that replaces the machine clears it.
@@ -393,23 +378,22 @@ class Session:
     def adopt_guest_table(self, entries: list) -> None:
         """Replace what this run was asked for with what it built.
 
-        The demo manifest is a request and the table the firmware filled
-        is the answer, and where the two differ it is the answer that is
-        true of the machine on screen. So the placement on the topology
-        becomes the machine's; only the name stays from the request,
-        which is the one thing the firmware has none of.
+        The manifest is a request and the table EL2 filled is the
+        answer; where they differ the answer is what is true of the
+        machine on screen. So the placement becomes the machine's and
+        only the name stays from the request — the one thing the
+        firmware has none of.
 
-        A difference is worth saying out loud rather than only drawing:
-        a guest that landed somewhere other than where it was asked to
-        is either a generator that rounded or a configuration nobody
-        reloaded, and both are worth noticing before reading anything
-        placed against it.
+        A difference is said as well as drawn: a guest that landed
+        elsewhere is a generator that rounded or a configuration nobody
+        reloaded, both worth knowing before reading anything placed
+        against it.
         """
         topology = self._store.topology
         asked = topology.get("guests")
         if not isinstance(asked, list) or not entries:
             return
-        built = {entry["vm"]: entry for entry in entries if isinstance(entry, dict)}
+        built = {entry["vm"]: entry for entry in entries if isinstance(entry, dict) and "vm" in entry}
         merged = []
         differs = []
         for index, guest in enumerate(asked):
@@ -417,8 +401,8 @@ class Session:
             if entry is None:
                 merged.append(guest)
                 continue
-            # kNone -> none: the firmware spells its enumerators in its
-            # own convention and the wire has always used the manifest's.
+            # kNone -> none: the enumerator's spelling is the
+            # firmware's, the wire's has always been the manifest's.
             uart = str(entry.get("uart", "")).removeprefix("k").lower()
             says = {
                 "name": guest.get("name"),
@@ -480,10 +464,9 @@ class Session:
                     gdb_path=self.surfaces.gdb_path,
                 )
             self.elf_path = _kernel_of(command)
-            # Before the machine starts. The image's answers are a file
-            # the build wrote, so the observer can be standing by when
-            # the first instruction runs instead of arriving seconds
-            # into the boot it was meant to watch.
+            # Before the machine starts: the answers are a file, so the
+            # observer stands by for the first instruction instead of
+            # arriving seconds into the boot it was meant to watch.
             self.view = image_answers(self.elf_path) if self.elf_path else None
             try:
                 self._live = self._deps.launch(tuple(command))

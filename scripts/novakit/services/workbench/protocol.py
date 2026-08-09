@@ -47,20 +47,6 @@ class Topic(StrEnum):
     PROBE = "probe"
 
 
-DOWNLINK = frozenset(
-    {
-        Topic.TOPO,
-        Topic.CONSOLE,
-        Topic.EV,
-        Topic.LIFE,
-        Topic.VERIFY,
-        Topic.SYSREG,
-        Topic.TRACE,
-        Topic.PROBE,
-    }
-)
-
-
 class Kind(StrEnum):
     SNAPSHOT = "snapshot"
     DELTA = "delta"

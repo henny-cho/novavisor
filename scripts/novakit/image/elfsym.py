@@ -1,10 +1,9 @@
 """Symbol addresses and type layouts, read from the debug ELF.
 
-Here rather than beside the bridge because the ELF is a build input and
-this is what reads it: the same tree that holds the layout check and the
-guest bundle generator. What it produces — the type model and the
-decoder below — travels on to whoever reads bytes at runtime, so the
-model and the reader ship together and only one of them runs late.
+Here rather than beside the bridge because the ELF is a build input, in
+the tree that holds the layout check and the bundle generator. The type
+model and the decoder ship with it because whoever reads bytes at run
+time needs the model and not the walk.
 
 Resolution is two-staged on purpose (verified against the real image):
 addresses come from .symtab — never stripped, and reachable by
@@ -85,12 +84,6 @@ class SymbolTable:
 
     def __init__(self, entries: dict[str, tuple[int, int]]):
         self.entries = entries
-
-    @classmethod
-    def of(cls, path: Path) -> SymbolTable:
-        elffile_type = _require_elftools()
-        with Path(path).open("rb") as stream:
-            return cls(_symtab_of(elffile_type(stream), Path(path)))
 
     def has(self, qualified: str) -> bool:
         """Is this variable in the image?"""
@@ -217,9 +210,6 @@ class ElfIndex:
         info = self._type_of(die)
         return ResolvedSymbol(qualified, address, size or info.size, info)
 
-    def resolve_function(self, qualified: str) -> int:
-        return self.symbols.address_of(qualified)
-
     def enum_labels(self, qualified: str) -> dict[int, str]:
         """The enumerators of a firmware enum, by its qualified name.
 
@@ -249,12 +239,11 @@ class ElfIndex:
     def _walk(self) -> None:
         """One pass over the tree for both tables it holds.
 
-        Both questions have the same shape — descend namespaces and class
-        scopes, take what is at each level — and the descent is what
-        costs: the whole debug section, twice over, to answer two
-        questions about the same nodes. Subprogram bodies are skipped for
-        both, since a local has no fixed address and no scope a caller
-        can name, and they are most of the tree.
+        Both questions descend namespaces and class scopes and take what
+        is at each level, and the descent is nearly all of the cost.
+        Subprogram bodies are skipped for both: a local has no fixed
+        address and no scope a caller can name, and they are most of the
+        tree.
         """
         variables: dict[int, object] = {}
         enums: dict[str, tuple[tuple[int, str], ...]] = {}

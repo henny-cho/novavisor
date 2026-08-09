@@ -110,6 +110,21 @@ class RoundTripTest(unittest.TestCase):
         with self.assertRaises(observe.Stale):
             observe.load(self.artifact, self.elf)
 
+    def test_a_document_that_is_not_one_is_refused(self):
+        self.artifact.write_text("{not json")
+        with self.assertRaises(observe.Stale):
+            observe.load(self.artifact, self.elf)
+
+    def test_a_document_missing_what_it_claims_to_carry_is_refused(self):
+        """Past the three names, so it says it is this document. A
+        fragment decoded into panels is worse than a refusal."""
+        self.write()
+        document = json.loads(self.artifact.read_text())
+        del document["walk"]
+        self.artifact.write_text(json.dumps(document))
+        with self.assertRaises(observe.Stale):
+            observe.load(self.artifact, self.elf)
+
     def test_a_view_answering_an_older_manifest_is_refused(self):
         """The quiet one. Adding a topic changes no image and moves no
         file, so every other check passes and the new panel is simply

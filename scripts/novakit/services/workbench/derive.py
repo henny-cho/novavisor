@@ -188,14 +188,13 @@ def trap_syndrome(value: object, info: elfsym.TypeInfo) -> object:
 def syndrome_vocabulary(view: observe.View | None) -> dict[str, dict[int, str]]:
     """Names for the syndrome's class field, out of what the build read.
 
-    The firmware's own enum is the vocabulary. Reading it costs a walk of
-    the whole debug section, which is why the build does it once and this
-    is a lookup — and why there is nothing here to cache and nothing to
-    decide about when the cache went stale.
+    A lookup, because reading the enum costs a walk of the whole debug
+    section and the build has already done it — so there is nothing here
+    to cache and nothing to decide about when a cache went stale.
 
-    A tree with no image yields nothing rather than failing: the topology
-    is published before the first build finishes, and a class shown as
-    its number is still the truth.
+    No image yields nothing rather than failing: the topology is
+    published before the first build finishes, and a class shown as its
+    number is still the truth.
     """
     if view is None:
         return {}
@@ -206,14 +205,11 @@ def guest_table(value: object, info: elfsym.TypeInfo) -> object:
     """The guest table as the entries the machine actually built.
 
     The array is sized for the configuration ceiling and the machine
-    fills a prefix of it, so most of what travels is zeros. A vmid of
-    zero is reserved — the firmware never issues one — which is what
-    tells a built entry from an unused slot without a second reading for
-    the count.
+    fills a prefix, so a vmid tells a built entry from an unused slot —
+    zero is reserved and the firmware never issues one.
 
-    Only what places a guest travels. The rest of a descriptor (entry
-    point, stack, the DTB pointer) describes how it starts, not where it
-    is, and nothing on screen asks.
+    Only what places a guest travels; entry point, stack and the DTB
+    pointer describe how it starts, which nothing on screen asks.
     """
     del info
     return [

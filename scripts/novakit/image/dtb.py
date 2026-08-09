@@ -287,9 +287,8 @@ def ranges_overlap(lhs_base: int, lhs_size: int, rhs_base: int, rhs_size: int) -
 def _yaml(path: Path):
     """Load a document, and remember that it was read.
 
-    The build reruns this generator when one of these moves, and what
-    they are is known here rather than in a build file: this program
-    opens them, so this program is what can say so.
+    The build reruns this generator when one of these moves, and this
+    program is the one that opens them.
     """
     inputs.record(path)
     return yaml.safe_load(path.read_text())
