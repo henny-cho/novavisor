@@ -1,9 +1,7 @@
-// tests/host/data_abort_test.cpp
-//
-// Host-side GTest suite for MMIO read widening (nova/arch/data_abort.hpp).
-// The syndrome decode itself is pinned by static_asserts in the header,
-// where every build checks it; what is left here is the case analysis
-// over access size, sign extension and register width.
+// Host-side GTest suite for MMIO read widening. The syndrome decode
+// itself is pinned by static_asserts in the header, where every build
+// checks it; what is left here is the case analysis over access size,
+// sign extension and register width.
 
 #include "nova/arch/data_abort.hpp"
 

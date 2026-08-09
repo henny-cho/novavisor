@@ -42,7 +42,7 @@ def tail(port: int, seconds: float, limit: int, forever: bool) -> int:
     a window still too busy says so rather than printing nothing.
     """
     try:
-        from websockets.sync.client import connect
+        from websockets.sync.client import connect  # noqa: TID251
     except ImportError:
         print("[workbench] trace: the pinned websockets package is missing", file=sys.stderr)
         return 1

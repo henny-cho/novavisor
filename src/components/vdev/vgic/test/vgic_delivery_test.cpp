@@ -1,12 +1,9 @@
-// tests/host/vgic_delivery_test.cpp
-//
-// Host-side GTest suite for the pure vGICv3 delivery logic
-// (components/vgic/include/vgic_delivery.hpp): pending bitmap →
-// list-register multiplexing, over the multi-step sequences that
-// exposed real delivery losses (a re-asserted timer behind an active
-// copy, a duplicate INTID waiting on an EOI). The single-call encodings
-// it builds on are pinned in vgic_delivery.hpp; register emulation is
-// covered by vgic_model_test.cpp.
+// Host-side GTest suite for the pure vGICv3 delivery logic: pending
+// bitmap → list-register multiplexing, over the multi-step sequences
+// that exposed real delivery losses (a re-asserted timer behind an
+// active copy, a duplicate INTID waiting on an EOI). The single-call
+// encodings it builds on are pinned in vgic_delivery.hpp; register
+// emulation is covered by vgic_model_test.cpp.
 
 #include "vgic/vgic_delivery.hpp"
 

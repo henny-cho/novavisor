@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
-import argparse
+import argparse  # noqa: TID251 — the build graph runs this as a program
 import re
-import subprocess
+import subprocess  # noqa: TID251 — the build graph runs this as a program
 from pathlib import Path
 from typing import NamedTuple
 

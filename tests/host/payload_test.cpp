@@ -1,5 +1,3 @@
-// tests/host/payload_test.cpp
-//
 // Host-side GTest suite for payload validation. The CRC-32 check value
 // and the two well-formed layouts are pinned by static_asserts in the
 // header; what is tested here is rejection — a corrupted image, and a

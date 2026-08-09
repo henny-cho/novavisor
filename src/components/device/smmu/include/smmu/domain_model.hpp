@@ -132,9 +132,12 @@ inline constexpr std::uint64_t kOutputAddressLimit = std::uint64_t{1} << 40U;
     if (context.root_pa >= kOutputAddressLimit) {
       return ContextError::kRootOutOfRange;
     }
-    // Whether the window is well formed is the DMA policy's answer, given
-    // before any context is built; what is left is that it fits.
-    if (!range_contains(0, kOutputAddressLimit, guests[i].load_pa, guests[i].ipa_size)) {
+    // The window must be a range at all before it can fit inside the
+    // output space: an empty one is contained by every address, so the
+    // contract states it here rather than inheriting it from the DMA
+    // policy having run first.
+    if (!range_well_formed(guests[i].load_pa, guests[i].ipa_size) ||
+        !range_contains(0, kOutputAddressLimit, guests[i].load_pa, guests[i].ipa_size)) {
       return ContextError::kGuestPaOutOfRange;
     }
     for (std::size_t j = 0; j < i; ++j) {

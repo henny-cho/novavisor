@@ -24,7 +24,7 @@ _SIGNED_ENCODINGS = (0x05, 0x06, 0x0D)
 
 def _require_elftools():
     try:
-        from elftools.elf.elffile import ELFFile
+        from elftools.elf.elffile import ELFFile  # noqa: TID251
 
         return ELFFile
     except ImportError as error:

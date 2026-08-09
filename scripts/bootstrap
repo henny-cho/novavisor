@@ -220,14 +220,15 @@ PY
 check_node() {
     local binary
     binary="$(command -v node || true)"
+    local remedy="the toolchain image carries it; on an older host install it from nodesource or nvm"
     if [[ -z "${binary}" ]]; then
-        echo "Node ${NODE_VERSION}+ is required for the web toolchain" >&2
+        echo "Node ${NODE_VERSION}+ is required for the web toolchain — ${remedy}" >&2
         return 1
     fi
     local installed
     installed="$(version_tuple "$("${binary}" --version)")"
     if ((${installed%%.*} < NODE_VERSION)); then
-        echo "Node ${NODE_VERSION}+ is required; found ${installed}" >&2
+        echo "Node ${NODE_VERSION}+ is required; found ${installed} — ${remedy}" >&2
         return 1
     fi
 }

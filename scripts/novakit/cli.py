@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import sys
 
-import typer
+import typer  # noqa: TID251 — the CLI boundary lives here
 
 from .commands import ci, demo, firmware, quality, workbench, workspace
 

@@ -52,8 +52,12 @@ class PublicCommandContractTest(unittest.TestCase):
 
     def test_workbench_attachment_leaves_the_board_model_frozen(self):
         base = board.command(kernel=Path("novavisor.elf"))
+        # The list handed over is the one checked afterwards. Passing a
+        # throwaway copy asked whether `command()` is deterministic, and
+        # a rewrite of the caller's argument went unnoticed.
+        given = list(base)
         attached = board.attach_workbench(
-            list(base),
+            given,
             shm_path="/dev/shm/wb.ram",
             qmp_path="/tmp/wb.qmp",
             gdb_path="/tmp/wb.gdb",
@@ -67,8 +71,10 @@ class PublicCommandContractTest(unittest.TestCase):
         )
         self.assertIn("unix:/tmp/wb.qmp,server=on,wait=off", attached)
         self.assertIn("unix:/tmp/wb.gdb,server=on,wait=off", attached)
-        # The observation surfaces are additive: the original command and
-        # the frozen tuple are both left untouched.
+        # The observation surfaces are additive: the list that went in,
+        # the model it was built from and the frozen tuple are all left
+        # as they were.
+        self.assertEqual(given, base)
         self.assertEqual(base, board.command(kernel=Path("novavisor.elf")))
         self.assertNotIn("memory-backend", " ".join(board.MACHINE_ARGS))
 

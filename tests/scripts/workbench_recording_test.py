@@ -19,6 +19,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
+from novakit.image import abi  # noqa: E402
 from novakit.services.workbench import recording, trace  # noqa: E402
 from novakit.services.workbench.protocol import (  # noqa: E402
     Clock,
@@ -36,13 +37,23 @@ def records(count: int, first: int = 100) -> list[trace.Record]:
     ]
 
 
-class RoundTripTest(unittest.TestCase):
+class Recorded(unittest.TestCase):
+    """A directory to record into, and a UI root to serve a bridge from.
+
+    Every class below wants one or both, made and removed the same way.
+    """
+
     def setUp(self):
-        self.directory = Path(tempfile.mkdtemp(prefix="nova-rec-"))
+        self.directory = self.tmpdir("run")
+        self.ui = self.tmpdir("ui")
 
-    def tearDown(self):
-        shutil.rmtree(self.directory, ignore_errors=True)
+    def tmpdir(self, name: str) -> Path:
+        made = Path(tempfile.mkdtemp(prefix=f"nova-{name}-"))
+        self.addCleanup(shutil.rmtree, made, ignore_errors=True)
+        return made
 
+
+class RoundTripTest(Recorded):
     def test_the_envelopes_come_back_exactly_as_they_went_out(self):
         """Not "equivalent": identical. A replay that reconstructed
         frames would be a second bridge, free to answer differently
@@ -231,19 +242,13 @@ class RoundTripTest(unittest.TestCase):
             recording.Recorder(self.directory, {})
 
 
-class KilledTest(unittest.TestCase):
+class KilledTest(Recorded):
     """A recording is readable from the moment it is opened.
 
     Deferring that to a clean exit made every file's readability
     conditional on how the process ended — and the run somebody most
     wants back is the one that ended badly.
     """
-
-    def setUp(self):
-        self.directory = Path(tempfile.mkdtemp(prefix="nova-kill-"))
-
-    def tearDown(self):
-        shutil.rmtree(self.directory, ignore_errors=True)
 
     def killed(self) -> None:
         """A recorder that got as far as a flush and no further."""
@@ -295,14 +300,8 @@ class KilledTest(unittest.TestCase):
         self.assertGreater((self.directory / "run-1" / recording.WIRE).stat().st_size, 0)
 
 
-class TeeTest(unittest.TestCase):
+class TeeTest(Recorded):
     """Where the tee sits decides what it can be missing."""
-
-    def setUp(self):
-        self.directory = Path(tempfile.mkdtemp(prefix="nova-tee-"))
-
-    def tearDown(self):
-        shutil.rmtree(self.directory, ignore_errors=True)
 
     def test_the_recording_holds_what_the_frame_window_dropped(self):
         """The window sheds console frames when a batch overruns, and a
@@ -339,21 +338,13 @@ class TeeTest(unittest.TestCase):
         self.assertLess(first["seq"], second["seq"])
 
 
-class IdentityTest(unittest.TestCase):
+class IdentityTest(Recorded):
     """A replay is answered by the live code.
 
     A separate path would be a second bridge, and from its first
     divergence there are two accounts of one run with nothing to settle
     which is right.
     """
-
-    def setUp(self):
-        self.directory = Path(tempfile.mkdtemp(prefix="nova-id-"))
-        self.ui = Path(tempfile.mkdtemp(prefix="nova-ui-"))
-
-    def tearDown(self):
-        for root in (self.directory, self.ui):
-            shutil.rmtree(root, ignore_errors=True)
 
     def answer(self, bridge, request):
         bridge.store.drain()  # discard whatever setup published
@@ -553,6 +544,66 @@ class IdentityTest(unittest.TestCase):
         self.assertTrue(all(seq < 900 for seq in seqs), seqs)
 
 
+# The region a board reserves is a board number; a fixture states its
+# own, big enough for the one small ring below and nothing more.
+REGION_SIZE = 0x10000
+RING = abi.read_defines(
+    abi.TRACE_RING,
+    ["NOVA_TRACE_HEADER_SIZE", "NOVA_TRACE_HEAD_OFF", "NOVA_TRACE_RECORDS_OFF"],
+)
+
+
+class DrainJoinTest(Recorded):
+    """The index a seek moves on is read off the frames a drain publishes.
+
+    Both halves were only ever checked apart: everything below builds
+    the summary by hand and the recorded fixture is a frozen file, so a
+    drain that stopped stamping its span would leave all of them green —
+    and every cursor move landing at the end of the run.
+    """
+
+    def region(self, count: int) -> bytes:
+        """A formatted region with `count` records in its one ring.
+
+        Written with the reader's own packer, so the fixture cannot
+        drift from the layout it is read back through.
+        """
+        buffer = bytearray(REGION_SIZE)
+        trace.format_region(buffer, 0, rings=1, capacity=64, freq_hz=62_500_000)
+        ring = RING["NOVA_TRACE_HEADER_SIZE"]
+        for index, record in enumerate(records(count)):
+            at = ring + RING["NOVA_TRACE_RECORDS_OFF"] + index * trace.REC_SIZE
+            trace.pack_into(buffer, at, record)
+        head = ring + RING["NOVA_TRACE_HEAD_OFF"]
+        buffer[head : head + 8] = count.to_bytes(8, "little")
+        return bytes(buffer)
+
+    def test_the_span_a_drain_publishes_is_what_the_seek_index_reads(self):
+        from novakit.services.workbench.server import Bridge
+        from novakit.services.workbench.session import Surfaces
+
+        surfaces = Surfaces(self.directory)
+        surfaces.shm_path.write_bytes(self.region(8))
+        bridge = Bridge(ui_root=self.ui, surfaces=surfaces)
+        # The region sits at the start of the RAM aperture, so the
+        # fixture is the region rather than half a gigabyte of run-up.
+        bridge._board = {
+            "NOVA_BOARD_PHYS_RAM_BASE": 0,
+            "NOVA_BOARD_TRACE_PA": 0,
+            "NOVA_BOARD_TRACE_SIZE": REGION_SIZE,
+        }
+        self.addCleanup(bridge._drop_tracer)
+
+        bridge._pump_trace()
+
+        published = bridge.store.drain()
+        summary = [frame for frame in published if frame["topic"] == "trace"]
+        rec = recording.Recording(directory=self.directory, meta={}, frames=published)
+        # One pair: the newest record that drain took in, against the
+        # frame that reported it.
+        self.assertEqual(rec.drains, ((records(8)[-1].ts, summary[-1]["ts"]),))
+
+
 class SeekTest(unittest.TestCase):
     """Going back to a moment, from an index the stream produced.
 
@@ -635,16 +686,8 @@ class SeekTest(unittest.TestCase):
         self.assertEqual(rec.wire_ts(1 << 40), frames[-1]["ts"])
 
 
-class CursorTest(unittest.TestCase):
+class CursorTest(Recorded):
     """One number moves the strip, the panels and the console."""
-
-    def setUp(self):
-        self.ui = Path(tempfile.mkdtemp(prefix="nova-ui-"))
-        self.directory = Path(tempfile.mkdtemp(prefix="nova-cur-"))
-
-    def tearDown(self):
-        for root in (self.ui, self.directory):
-            shutil.rmtree(root, ignore_errors=True)
 
     def recorded(self):
         recorder = recording.Recorder(self.directory, {"freq_hz": 1_000_000})

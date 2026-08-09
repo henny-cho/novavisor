@@ -68,15 +68,25 @@ static_assert(
       const SpiRegisters first = spi_registers(kSpiIntidBase);
       const SpiRegisters last  = spi_registers(kSpiIntidBase + kIntidsPerBank - 1);
       const SpiRegisters next  = spi_registers(kSpiIntidBase + kIntidsPerBank);
-      return first.valid && last.valid && next.valid &&                    //
-             first.bit == 1U && last.bit == 1U << 31U && next.bit == 1U && //
-             first.group_offset == NOVA_GICD_IGROUPR + kBankStride &&      //
-             first.grpmod_offset == NOVA_GICD_IGRPMODR + kBankStride &&    //
-             first.enable_offset == NOVA_GICD_ISENABLER + kBankStride &&   //
-             first.disable_offset == NOVA_GICD_ICENABLER + kBankStride &&  //
-             first.clear_offset == NOVA_GICD_ICPENDR + kBankStride &&      //
-             first.deactive_offset == NOVA_GICD_ICACTIVER + kBankStride && //
+      // Two INTIDs sharing one ICFGR word, neither of them at its start:
+      // the config bit is the odd bit of the INTID's own pair, and only
+      // an INTID away from a word boundary tells that apart from the
+      // pair index.
+      const SpiRegisters cfg_lo = spi_registers(106);
+      const SpiRegisters cfg_hi = spi_registers(109);
+      return first.valid && last.valid && next.valid && cfg_lo.valid && cfg_hi.valid && //
+             first.bit == 1U && last.bit == 1U << 31U && next.bit == 1U &&              //
+             first.group_offset == NOVA_GICD_IGROUPR + kBankStride &&                   //
+             first.grpmod_offset == NOVA_GICD_IGRPMODR + kBankStride &&                 //
+             first.enable_offset == NOVA_GICD_ISENABLER + kBankStride &&                //
+             first.disable_offset == NOVA_GICD_ICENABLER + kBankStride &&               //
+             first.clear_offset == NOVA_GICD_ICPENDR + kBankStride &&                   //
+             first.deactive_offset == NOVA_GICD_ICACTIVER + kBankStride &&              //
              first.config_offset == NOVA_GICD_ICFGR + 2U * kBankStride && first.edge_bit == 1U << 1U &&
+             cfg_lo.config_offset == NOVA_GICD_ICFGR + 6U * kBankStride && // 106 / 16 = word 6
+             cfg_hi.config_offset == cfg_lo.config_offset &&               // 109 lands in it too
+             cfg_lo.edge_bit == 1U << 21U &&                               // (106 % 16) * 2 + 1
+             cfg_hi.edge_bit == 1U << 27U &&                               // (109 % 16) * 2 + 1
              first.route_offset == NOVA_GICD_IROUTER + kSpiIntidBase * kRouteStride &&
              last.enable_offset == first.enable_offset &&                                     // same word
              last.route_offset == first.route_offset + (kIntidsPerBank - 1) * kRouteStride && //

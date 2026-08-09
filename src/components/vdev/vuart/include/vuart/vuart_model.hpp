@@ -124,6 +124,17 @@ struct WriteEffect {
 // QEMU's PL011 identification block (PeriphID0..3, CellID0..3).
 inline constexpr std::array<std::uint8_t, 8> kUartIdValues{0x11, 0x10, 0x14, 0x00, 0x0D, 0xF0, 0x05, 0xB1};
 
+// These bytes are how a guest decides what this device is: Linux's
+// AMBA bus matches the driver by the periphid it reads here, and the
+// cell ID is the fixed PrimeCell signature that says a periphid is even
+// there to read. Pinned to their values, not to the array holding them.
+static_assert(kUartIdValues[0] == 0x11 && kUartIdValues[1] == 0x10 && // part number 0x011
+                  kUartIdValues[2] == 0x14 &&                         // designer 0x41 (Arm), revision 1
+                  kUartIdValues[3] == 0x00 &&                         // no configuration options
+                  kUartIdValues[4] == 0x0D && kUartIdValues[5] == 0xF0 && kUartIdValues[6] == 0x05 &&
+                  kUartIdValues[7] == 0xB1, // PrimeCell 0xB105F00D, low byte first
+              "the identification block reads back the PL011 periphid a guest driver binds on");
+
 [[nodiscard]] constexpr auto reg_read(UartState& u, std::uint64_t off) noexcept -> RegRead {
   if (off >= kUartIds && off < kUartFrameSize && (off % 4U) == 0U) {
     return {.known = true, .value = kUartIdValues[(off - kUartIds) / 4U]};

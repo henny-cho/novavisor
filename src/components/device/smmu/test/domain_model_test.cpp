@@ -53,6 +53,12 @@ TEST(SmmuDomain, RejectsInvalidOrSharedRoots) {
   guests[1].load_pa = (1ULL << 40U) - 0x10'0000;
   EXPECT_EQ(validate_contexts(kContexts, guests, false), ContextError::kGuestPaOutOfRange);
 
+  // An empty window fits inside every address space, so containment
+  // alone would admit it — the range has to be a range first.
+  guests             = kGuests;
+  guests[1].ipa_size = 0;
+  EXPECT_EQ(validate_contexts(kContexts, guests, false), ContextError::kGuestPaOutOfRange);
+
   contexts            = kContexts;
   contexts[1].root_pa = contexts[0].root_pa;
   EXPECT_EQ(validate_contexts(contexts, kGuests, false), ContextError::kDuplicateRoot);

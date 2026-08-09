@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { Cursor, createPanels, plain, table } from "../workbench/js/panels.mjs";
+import { BareCell, Cursor, createPanels, plain, table } from "../workbench/js/panels.mjs";
 import { element, find, findAll, fire, installDom, movedIn, rowsOf } from "./dom.mjs";
 
 function harness() {
@@ -166,12 +166,29 @@ describe("panel drawer", () => {
 
 describe("panel faults", () => {
   it("does not file a renderer's own fault as an unreadable value", () => {
-    const { panels, document } = harness();
+    const { panels, host, document } = harness();
     panels.apply(SCHED);
-    /* What a cell with no provenance raises. Swallowed, the refusal
-       above would be a guard nothing enforces. */
-    document.failOn("table", new TypeError("table cell is neither a cursor nor plain(): 3"));
-    assert.throws(() => panels.settle(), TypeError);
+    /* A cell with no provenance is this file's bug, not the machine's,
+       and it says so — while still leaving the drawer able to draw the
+       next batch. */
+    document.failOn("table", new BareCell("table cell is neither a cursor nor plain(): 3"));
+
+    panels.settle();
+    assert.match(host.textContent, /출처를 잃었다/);
+    assert.doesNotMatch(host.textContent, /표시할 수 없는 값/);
+  });
+
+  it("keeps drawing after a panel faulted", () => {
+    const { panels, host, document } = harness();
+    panels.apply(SCHED);
+    document.failOn("table", new BareCell("bare"));
+    panels.settle();
+
+    /* The fault must not latch: a throw escaping settle() would leave
+       the dirty set uncleared and refault on every batch from here on. */
+    panels.apply(SCHED);
+    panels.settle();
+    assert.ok(findAll(host, "ptable").length > 0);
   });
 
   it("lets a shape it cannot walk take down only its own panel", () => {

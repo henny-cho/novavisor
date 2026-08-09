@@ -35,8 +35,11 @@
 // NOLINTBEGIN(cppcoreguidelines-macro-usage, cppcoreguidelines-macro-to-enum, modernize-macro-to-enum)
 
 /* 'NVCMD\0\0\0' little-endian, and the version of everything below it. */
-#define NOVA_CMD_MAGIC   0x000000444D43564E
-#define NOVA_CMD_VERSION 1
+#define NOVA_CMD_MAGIC 0x000000444D43564E
+/* 2 added the accepted bands below. A page placed by an older EL2 has
+ * zeros where they now sit and would read as a machine that accepts
+ * nothing, so the version is what refuses it rather than the values. */
+#define NOVA_CMD_VERSION 2
 
 /* Header (one cache line), then the two indices on lines of their own:
  * they are the only fields both sides touch, and from opposite

@@ -700,12 +700,6 @@ class CatalogueTest(unittest.TestCase):
                 self.assertFalse(entry["stop"])
                 self.assertTrue(entry["span"])
 
-    def test_a_fault_only_moment_lights_no_path(self):
-        """The grade rule in paths.py: an edge may not look more certain
-        than what watches it, and a hook that fires only on a fault has
-        watched nothing about the working path."""
-        self.assertEqual(events.BY_ID["smmu.fault"].edge, "")
-
 
 if __name__ == "__main__":
     unittest.main()

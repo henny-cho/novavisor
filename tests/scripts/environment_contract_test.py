@@ -29,6 +29,13 @@ class ToolVersionTests(unittest.TestCase):
             r"^FROM ubuntu:26\.04@sha256:[0-9a-f]{64}$",
         )
 
+    def test_the_fetched_toolchain_is_still_checked_against_its_digest(self):
+        # The only integrity check on an archive pulled over the network,
+        # and the only consumer of the ARM_GNU_SHA256_* pins. Deleting
+        # the call would leave those pins validated for shape by
+        # config.tool_versions() and used for nothing.
+        self.assertIn('verify_sha256 "${TOOLCHAIN_SHA256}" "${archive}"', BOOTSTRAP.read_text())
+
     def test_python_cli_environment_is_reproducible(self):
         # An unpinned requirement resolves to whatever is newest on the
         # day the image is built, which is how two machines diverge.

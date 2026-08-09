@@ -6,7 +6,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Annotated
 
-import typer
+import typer  # noqa: TID251 — typer stops at this layer
 
 from ..services import tfa
 

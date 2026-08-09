@@ -204,18 +204,21 @@ void reschedule_slice() noexcept {
   }
 }
 
-// Move the preemption quantum, machine-wide.
-//
-// Takes effect where the quantum is armed: this core re-arms now, and a
-// peer picks the new value up at its next ready-set change — the same
-// moment it would have read the old one. Nothing already armed is
-// shortened, so a guest mid-slice keeps the turn it was given.
+// The band set_slice_us will accept, and the quantum booted with. Read
+// from the same constants that gate the setter, so what is offered and
+// what is taken cannot drift apart.
 auto slice_band() noexcept -> SliceBand {
   // Narrowing on purpose: these are constant expressions, so a band the
   // published field cannot hold stops the build here.
   return {.min_us = kSliceMinUs, .default_us = kSliceUs, .max_us = kSliceMaxUs};
 }
 
+// Move the preemption quantum, machine-wide.
+//
+// Takes effect where the quantum is armed: this core re-arms now, and a
+// peer picks the new value up at its next ready-set change — the same
+// moment it would have read the old one. Nothing already armed is
+// shortened, so a guest mid-slice keeps the turn it was given.
 auto set_slice_us(std::uint64_t microseconds) noexcept -> bool {
   if (microseconds < kSliceMinUs || microseconds > kSliceMaxUs) {
     return false;

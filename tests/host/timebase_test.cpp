@@ -1,5 +1,3 @@
-// tests/host/timebase_test.cpp
-//
 // Host-side GTest suite for the tick conversions. The counter-rate
 // window is pinned by a static_assert in the header; what is tested
 // here is the arithmetic every bounded wait derives from — resolution

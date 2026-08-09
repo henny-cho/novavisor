@@ -19,7 +19,12 @@ WEB_DIR = REPO / "web"
 WORKBENCH_UI_DIR = WEB_DIR / "workbench"
 
 
-_ENTRY = re.compile(r"([A-Z][A-Z0-9_]*)=([^\s#]+)")
+# A version, a digest, a tag, a commit. Deliberately narrower than what
+# bash would accept: `$(…)`, backticks and `${…}` are all ordinary
+# characters to this file's own grammar but commands to the shell that
+# sources it, so the charset is the guard rather than a list of
+# forbidden shapes.
+_ENTRY = re.compile(r"([A-Z][A-Z0-9_]*)=([A-Za-z0-9_.:/+-]+)")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -27,20 +32,24 @@ def tool_versions() -> dict[str, str]:
     """Every pinned version, read the way bash reads the same file.
 
     The file is sourced by the bootstrap script before any Python exists,
-    so it must stay assignments and nothing else. Anything bash would
-    execute, or a digest too short to identify an archive, is refused
-    here rather than trusted downstream.
+    so it must stay assignments of literal text and nothing else.
+    Anything the shell would expand or run, or a digest too short to
+    identify an archive, is refused here rather than trusted downstream.
     """
     entries: dict[str, str] = {}
-    for line in VERSION_SOURCE.read_text().splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+    for raw in VERSION_SOURCE.read_text().splitlines():
+        # A stray carriage return would reach bash as part of the value
+        # and Python as nothing, which is one file with two readings.
+        if raw.endswith("\r"):
+            raise RuntimeError(f"{VERSION_SOURCE}: CRLF line ending: {raw!r}")
+        line = raw.strip()
+        if not line or line.startswith("#"):
             continue
-        match = _ENTRY.fullmatch(stripped)
+        match = _ENTRY.fullmatch(line)
         if match is None:
-            raise RuntimeError(f"{VERSION_SOURCE}: not a plain assignment: {line!r}")
+            raise RuntimeError(f"{VERSION_SOURCE}: not a plain assignment: {raw!r}")
         name, value = match.groups()
-        if "_SHA256_" in name and not _SHA256.fullmatch(value):
+        if "SHA256" in name and not _SHA256.fullmatch(value):
             raise RuntimeError(f"{VERSION_SOURCE}: {name} is not a sha256 digest")
         entries[name] = value
     return entries

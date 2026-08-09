@@ -1,5 +1,5 @@
 // Host-side tests for ivc/ring.hpp — the SPSC protocol under real
-// thread concurrency. The guest C helper (demo/common/guest_ring.h)
+// thread concurrency. The guest C helper (demo/common/include/guest_ring.h)
 // implements the identical layout and ordering, so what these threads
 // prove holds between two cores.
 

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,7 +17,6 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
 from novakit.services.workbench import events, trace  # noqa: E402
-from novakit.services.workbench.session import Phase  # noqa: E402
 
 BIND = events.BY_ID["vgic.bind"].code
 TRAP = events.BY_ID["trap"].code
@@ -83,12 +81,11 @@ class WindowRequestTest(unittest.IsolatedAsyncioTestCase):
     """The uplink, against a bridge whose history is seeded directly."""
 
     def bridge(self, stamps=range(0, 100)):
+        # No UI root and no phase: a window is answered from the history
+        # alone, which is why its handler asks the session for nothing.
         from novakit.services.workbench.server import Bridge
 
-        directory = Path(tempfile.mkdtemp())
-        self.addCleanup(lambda: directory.rmdir())
-        bridge = Bridge(ui_root=directory, trace_history=4096)
-        bridge.session.phase = Phase.RUNNING
+        bridge = Bridge(ui_root=Path("/nonexistent"), trace_history=4096)
         bridge._history.append(records(stamps))
         bridge.store.drain()
         return bridge

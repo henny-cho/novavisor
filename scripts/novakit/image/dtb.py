@@ -17,12 +17,12 @@ it is kept, so a structural mistake the writer cannot see itself fails
 the build. Inspect a blob the same way: dtc -I dtb -O dts guest0.dtb
 """
 
-import argparse
+import argparse  # noqa: TID251 — the build graph runs this as a program
 import hashlib
 import re
 import shutil
 import struct
-import subprocess
+import subprocess  # noqa: TID251 — the build graph runs this as a program
 import sys
 import zlib
 from pathlib import Path

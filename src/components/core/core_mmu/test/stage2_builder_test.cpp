@@ -1,7 +1,4 @@
-// tests/host/stage2_builder_test.cpp
-//
-// Host GTest for the Stage 2 identity-map builder
-// (components/core_mmu/include/stage2_builder.hpp).
+// Host GTest for the Stage 2 identity-map builder.
 //
 // Covers map_range as an algorithm over a table set: the single-window
 // scenario (IPA 0x5000_0000, 1 MiB), the L2 Block path for 2 MiB-aligned

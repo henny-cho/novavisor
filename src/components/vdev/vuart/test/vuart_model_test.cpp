@@ -1,8 +1,5 @@
-// vuart_model_test.cpp
-//
-// Host-side GTest suite for the pure PL011 register model
-// (components/vuart/include/vuart/vuart_model.hpp): RX FIFO, flag and
-// interrupt views, register decode.
+// Host-side GTest suite for the pure PL011 register model: RX FIFO,
+// flag and interrupt views, register decode.
 
 #include "vuart/vuart_model.hpp"
 

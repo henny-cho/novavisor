@@ -65,6 +65,16 @@ _LAYOUT = abi.read_defines(
         "NOVA_CMD_WIDX_OFF",
         "NOVA_CMD_RIDX_OFF",
         "NOVA_CMD_RECORDS_OFF",
+        "NOVA_CMD_MAGIC_OFF",
+        "NOVA_CMD_VERSION_OFF",
+        "NOVA_CMD_RECSIZE_OFF",
+        "NOVA_CMD_SLOTS_OFF",
+        "NOVA_CMD_PERIOD_OFF",
+        "NOVA_CMD_SLICE_MIN_OFF",
+        "NOVA_CMD_SLICE_DEF_OFF",
+        "NOVA_CMD_SLICE_MAX_OFF",
+        "NOVA_CMD_SPI_LO_OFF",
+        "NOVA_CMD_SPI_HI_OFF",
     ],
 )
 MAGIC = _LAYOUT["NOVA_CMD_MAGIC"]
@@ -88,12 +98,34 @@ _WORD = "Q"  # one command word, at the width the record declares
 _HEADER = struct.Struct("<QIIIIIIIII")
 _RECORD = struct.Struct("<" + _WORD * 3)
 _INDEX = struct.Struct("<" + _WORD)
-# The spelling above and the size the ABI declares are two statements of
-# one layout. Tied here, because untied they part silently: a record
+# The spellings above and the layout the ABI declares are two statements
+# of one thing. Tied here, because untied they part silently: a record
 # grown to four words would still be packed as three and leave the rest
-# of each slot holding the last command that used it.
+# of each slot holding the last command that used it, and a header field
+# inserted upstream would shift every field this reader takes after it.
 if _RECORD.size != REC_SIZE:
     raise SystemExit(f"command record is {REC_SIZE} bytes; this packs {_RECORD.size}")
+_HEADER_FIELDS = (
+    "NOVA_CMD_MAGIC_OFF",
+    "NOVA_CMD_VERSION_OFF",
+    "NOVA_CMD_RECSIZE_OFF",
+    "NOVA_CMD_SLOTS_OFF",
+    "NOVA_CMD_PERIOD_OFF",
+    "NOVA_CMD_SLICE_MIN_OFF",
+    "NOVA_CMD_SLICE_DEF_OFF",
+    "NOVA_CMD_SLICE_MAX_OFF",
+    "NOVA_CMD_SPI_LO_OFF",
+    "NOVA_CMD_SPI_HI_OFF",
+)
+_packed = 0
+for _name, _size in zip(_HEADER_FIELDS, (8, *(4,) * 9), strict=True):
+    if _LAYOUT[_name] != _packed:
+        raise SystemExit(
+            f"command header: {_name} is {_LAYOUT[_name]:#x}; this reader has it at {_packed:#x}"
+        )
+    _packed += _size
+if _packed != _HEADER.size:
+    raise SystemExit(f"command header packs {_HEADER.size} bytes over {_packed} of fields")
 _WORD_MAX = (1 << (8 * struct.calcsize(_WORD))) - 1
 
 

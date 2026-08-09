@@ -8,7 +8,7 @@ default executor so the event loop keeps serving connections.
 
 from __future__ import annotations
 
-import asyncio
+import asyncio  # noqa: TID251 — the event loop lives here
 import functools
 import shutil
 import socket

@@ -67,26 +67,38 @@ def _layer_of(path: Path, base: Path) -> str:
     return parts[0] if len(parts) > 1 else ""
 
 
+# A command adapts one service call to the CLI. Reaching past services
+# for a process, a board or an image generator puts that knowledge in
+# the top layer, where the next consumer has to depend on an adapter.
+COMMANDS_MAY_REACH = {"commands", "services"}
+
+
 def find_layer_violations(root: Path) -> list[tuple[Path, int, str, str]]:
-    """Report package-relative imports that reach up, or sideways in commands."""
+    """Report package-relative imports that leave the layer they may reach."""
     base = root / PACKAGE
     violations: list[tuple[Path, int, str, str]] = []
     for path in _package_modules(root):
         here = _layer_of(path, base)
+        own = path.relative_to(base).parts[:-1]
         for node in ast.walk(ast.parse(path.read_text())):
             if not isinstance(node, ast.ImportFrom) or not node.level:
                 continue
-            # `from . import x` names a sibling, so it stays in this
-            # layer; `from ..core import x` names the layer it reaches.
-            head = (node.module or "").split(".")[0]
-            reached = head if head and head in LAYER_DEPTH else here
+            # Where the import lands, not how many dots it took to get
+            # there: climb level - 1 packages from this module's own,
+            # then descend through the dotted name. A nested package
+            # spends a dot on itself, so counting dots would read
+            # `from .. import x` in workbench/ as leaving services.
+            climb = node.level - 1
+            start = own[: len(own) - climb] if climb <= len(own) else ()
+            target = (*start, *((node.module or "").split(".") if node.module else ()))
+            reached = target[0] if target and target[0] in LAYER_DEPTH else ""
             if LAYER_DEPTH[reached] > LAYER_DEPTH[here]:
-                reason = f"{here or 'root'} imports the higher layer {reached}"
-            elif here == "commands" and node.level == 1 and node.module is None:
-                # A command reaching a command puts shared logic in the
-                # top layer, where two consumers then depend on an
-                # adapter instead of on a service.
+                reason = f"{here or 'root'} imports the higher layer {reached or 'root'}"
+            elif here == "commands" and node.level == 1:
+                # commands has no sub-packages, so one dot is a sibling.
                 reason = "a command imports a sibling command"
+            elif here == "commands" and reached not in COMMANDS_MAY_REACH:
+                reason = f"a command reaches past services into {reached}"
             else:
                 continue
             violations.append((path.relative_to(root), node.lineno, reason, "layering"))

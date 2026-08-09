@@ -46,10 +46,15 @@ struct Fixture {
   auto ridx() noexcept -> std::uint64_t& { return at(NOVA_CMD_RIDX_OFF); }
 };
 
-// Everything a drain handed over, in the order it arrived.
+// Everything a drain handed over, in the order it arrived. The tally the
+// drain returns is checked here rather than in each case: it is a count
+// of the records the caller was handed, so it has to be exactly that —
+// including on the resynchronisation path, which moves the read index
+// and hands over nothing.
 auto take(Ring& ring) -> std::vector<Record> {
   std::vector<Record> got;
-  ring.drain([&got](const Record& command) { got.push_back(command); });
+  const std::size_t   handed = ring.drain([&got](const Record& command) { got.push_back(command); });
+  EXPECT_EQ(handed, got.size());
   return got;
 }
 
@@ -73,6 +78,31 @@ TEST(CommandRingFormat, GeometryIsPublishedAndTheMagicComesLast) {
 
   nova::command::publish(page.byte.data());
   EXPECT_EQ(header->magic, NOVA_CMD_MAGIC);
+}
+
+TEST(CommandRingFormat, TheAcceptedBandsReachThePageWhereTheHostReadsThem) {
+  Page page{};
+  // Five distinct non-zero values: a band written from the wrong member,
+  // or not written at all, shows up as a different number rather than as
+  // the same default every other field already has.
+  constexpr nova::command::Limits kBands{
+      .slice_min_us = 200, .slice_def_us = 10'000, .slice_max_us = 100'000, .spi_lo = 32, .spi_hi = 991};
+  nova::command::format(page.byte.data(), kPeriodUs, kBands);
+
+  // Read at the ABI offsets rather than through Header, because what the
+  // Python producer parses is the page and not this struct.
+  const auto word = [&page](std::size_t offset) {
+    return *reinterpret_cast<const std::uint32_t*>(page.byte.data() + offset);
+  };
+  EXPECT_EQ(word(NOVA_CMD_SLICE_MIN_OFF), kBands.slice_min_us);
+  EXPECT_EQ(word(NOVA_CMD_SLICE_DEF_OFF), kBands.slice_def_us);
+  EXPECT_EQ(word(NOVA_CMD_SLICE_MAX_OFF), kBands.slice_max_us);
+  EXPECT_EQ(word(NOVA_CMD_SPI_LO_OFF), kBands.spi_lo);
+  EXPECT_EQ(word(NOVA_CMD_SPI_HI_OFF), kBands.spi_hi);
+  // The version these fields were added for. A host that trusted the
+  // zeros an older page has here would offer a machine that accepts
+  // nothing, so the version is what has to refuse it.
+  EXPECT_EQ(word(NOVA_CMD_VERSION_OFF), std::uint32_t{NOVA_CMD_VERSION});
 }
 
 TEST(CommandRing, AnUnplacedRingRefusesRatherThanFaults) {
@@ -150,7 +180,7 @@ TEST(CommandRing, ADrainStopsAtTheIndexItReadOnEntry) {
 
   ASSERT_TRUE(ring.push(command(NOVA_CMD_OP_MARK, 1)));
   std::vector<std::uint64_t> seen;
-  ring.drain([&](const Record& taken) {
+  const std::size_t          handed = ring.drain([&](const Record& taken) {
     seen.push_back(taken.a);
     // What a producer racing this drain does. The bound is what keeps a
     // timer callback from being lengthened by a host that keeps writing.
@@ -158,6 +188,7 @@ TEST(CommandRing, ADrainStopsAtTheIndexItReadOnEntry) {
       EXPECT_TRUE(ring.push(command(NOVA_CMD_OP_MARK, taken.a + 1)));
     }
   });
+  EXPECT_EQ(handed, 1U); // the entry index, not whatever the ring grew to
   EXPECT_EQ(seen, std::vector<std::uint64_t>{1});
   // Not lost, only deferred: the next drain takes what arrived during
   // this one.
@@ -214,12 +245,16 @@ TEST(CommandRing, EveryAcceptedCommandArrivesExactlyOnceUnderConcurrency) {
 
   std::vector<Record> got;
   got.reserve(kCommands);
+  std::size_t handed = 0;
   while (writing.load(std::memory_order_acquire) || got.size() < kCommands) {
-    consumer.drain([&got](const Record& taken) { got.push_back(taken); });
+    handed += consumer.drain([&got](const Record& taken) { got.push_back(taken); });
   }
   writer.join();
 
   ASSERT_EQ(got.size(), kCommands);
+  // Summed over however many passes it took: the tallies account for
+  // every record and count none of them twice.
+  EXPECT_EQ(handed, got.size());
   for (std::uint64_t index = 0; index < kCommands; ++index) {
     EXPECT_EQ(got[index].op, NOVA_CMD_OP_MARK);
     EXPECT_EQ(got[index].a, index);

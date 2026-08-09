@@ -247,13 +247,11 @@ class UplinkTest(unittest.TestCase):
     """
 
     def _bridge(self):
+        # The UI root is only ever read by the HTTP path, which nothing
+        # here goes through.
         from novakit.services.workbench.server import Bridge
 
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        root = Path(directory.name)
-        (root / "index.html").write_text("<title>wb</title>")
-        bridge = Bridge(ui_root=root)
+        bridge = Bridge(ui_root=Path("/nonexistent"))
         bridge.store.drain()
         return bridge
 

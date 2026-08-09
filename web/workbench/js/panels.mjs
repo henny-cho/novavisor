@@ -75,6 +75,11 @@ export class Cursor extends Cell {
    bare value in a cell is indistinguishable from a forgotten cursor. */
 export const plain = (shown) => new Cell(shown, false);
 
+/* A cell handed to table() with no provenance: an authoring fault,
+   distinct from the decode failures that arrive from guest RAM. Its own
+   type so the drawer can name it without catching theirs. */
+export class BareCell extends TypeError {}
+
 export function table(headers, rows) {
   const node = el("table", "ptable");
   const head = el("tr");
@@ -88,7 +93,7 @@ export function table(headers, rows) {
          arrangement exists to make impossible — so it must not be a
          thing that draws correctly. */
       if (!(cell instanceof Cell)) {
-        throw new TypeError(`table cell is neither a cursor nor plain(): ${String(cell)}`);
+        throw new BareCell(`table cell is neither a cursor nor plain(): ${String(cell)}`);
       }
       row.append(el("td", cell.moved ? "moved" : "", fmt(cell.shown)));
     }
@@ -601,16 +606,20 @@ export function createPanels({ tabs, host }) {
       try {
         entry.panel.render(entry.body);
       } catch (error) {
-        /* A cell with no provenance is a fault in this file, and the
-           refusal above is the whole reason it cannot instead draw
-           correctly and silently never highlight — swallowed here, that
-           guard would guard nothing. Readings arrive as parsed JSON, so
-           nothing on this path raises a TypeError by accident.
+        /* Two different failures, said differently. A bare cell is a
+           fault in this file and would otherwise draw correctly while
+           never highlighting, so it is named rather than blamed on the
+           machine. Everything else is a shape decoded straight out of
+           live guest RAM.
 
-           Everything else is a shape decoded straight out of live guest
-           RAM, and must not take the drawer down with it. */
-        if (error instanceof TypeError) throw error;
-        entry.body.append(el("div", "pnote", "표시할 수 없는 값 — 다음 갱신에서 다시 그립니다"));
+           Neither escapes: the scroll restore below and the caller's
+           dirty-set clear are what let the next batch draw at all, so a
+           throw here would freeze this drawer — and the board view
+           after it — for the rest of the session. */
+        const note = error instanceof BareCell
+          ? "이 표는 값의 출처를 잃었다 — 패널 코드의 결함이다"
+          : "표시할 수 없는 값 — 다음 갱신에서 다시 그립니다";
+        entry.body.append(el("div", "pnote", note));
       }
     }
     host.scrollLeft = left;

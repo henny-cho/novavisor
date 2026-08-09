@@ -99,6 +99,47 @@ enum class ScanAction : std::uint8_t {
   return ScanAction::kFail;
 }
 
+// The table itself, row by row. Each verdict decides what a walk does
+// to a real device — start a quiesce, wait, or fail the VM closed — so
+// a row that moves is a policy change, not a refactor, and is pinned
+// here rather than left to the switch to imply.
+static_assert(
+    [] {
+      return classify_begin_quiesce(State::kUnavailable) == ScanAction::kSkip &&
+             classify_begin_quiesce(State::kQuiesced) == ScanAction::kSkip &&     // already at the target
+             classify_begin_quiesce(State::kQuiescing) == ScanAction::kPending && // converges through complete_quiesce
+             classify_begin_quiesce(State::kDetaching) == ScanAction::kPending && //
+             classify_begin_quiesce(State::kActive) == ScanAction::kCollect &&    // the only entry a walk starts on
+             classify_begin_quiesce(State::kFailed) == ScanAction::kFail &&       //
+             classify_begin_quiesce(State::kResuming) == ScanAction::kFail;       // a quiesce racing a resume
+    }(),
+    "begin_quiesce starts a new quiesce on active devices alone");
+
+static_assert(
+    [] {
+      return classify_quiescing(State::kUnavailable, true) == ScanAction::kSkip &&
+             classify_quiescing(State::kQuiesced, true) == ScanAction::kSkip &&
+             classify_quiescing(State::kQuiescing, true) == ScanAction::kCollect &&  // blocked: this one advances
+             classify_quiescing(State::kQuiescing, false) == ScanAction::kPending && // still able to master the bus
+             classify_quiescing(State::kDetaching, true) == ScanAction::kPending &&  //
+             classify_quiescing(State::kResuming, true) == ScanAction::kPending &&   // the walk ran ahead
+             classify_quiescing(State::kActive, true) == ScanAction::kPending &&     //
+             classify_quiescing(State::kFailed, true) == ScanAction::kFail;
+    }(),
+    "a quiescing device advances only once its bus mastering is blocked");
+
+static_assert(
+    [] {
+      return classify_resume(State::kUnavailable) == ScanAction::kSkip &&
+             classify_resume(State::kQuiesced) == ScanAction::kCollect && // the one state a generation advances from
+             classify_resume(State::kQuiescing) == ScanAction::kFail &&   //
+             classify_resume(State::kDetaching) == ScanAction::kFail &&   //
+             classify_resume(State::kResuming) == ScanAction::kFail &&    //
+             classify_resume(State::kActive) == ScanAction::kFail &&      // never quiesced: its DMA was never stopped
+             classify_resume(State::kFailed) == ScanAction::kFail;
+    }(),
+    "resume adopts a new generation only from a fully quiesced VM");
+
 template <std::size_t Capacity>
 class Registry {
 public:

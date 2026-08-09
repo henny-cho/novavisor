@@ -134,6 +134,31 @@ struct DeadlinePlan {
   return {.accepted = true, .ticks = whole + fraction};
 }
 
+// The second guard, at the exact remainder where it starts refusing.
+// The whole seconds alone fit — the first guard admitted them — and it
+// is the sub-second part that carries the sum past the end of the
+// counter. On the fastest rate EL2 accepts, the room left above those
+// seconds is kMax % hz ticks, so the largest remainder that still fits
+// is that many ticks' worth and the next one over is refused. A plan
+// that wrapped instead would arm a deadline already in the past.
+static_assert(
+    [] {
+      constexpr std::uint64_t kMax    = std::numeric_limits<std::uint64_t>::max();
+      constexpr std::uint64_t kHz     = kMaxCounterHz;
+      constexpr std::uint64_t kFull   = kMax / kHz; // the most whole seconds the first guard lets through
+      constexpr std::uint64_t kRoom   = kMax % kHz; // 709'551'615 ticks above them
+      const TickPlan          ms_fits = ms_to_ticks(kHz, (kFull * 1000) + 709);
+      const TickPlan          ms_over = ms_to_ticks(kHz, (kFull * 1000) + 710);
+      const TickPlan          us_fits = us_to_ticks(kHz, (kFull * 1'000'000) + 709'551);
+      const TickPlan          us_over = us_to_ticks(kHz, (kFull * 1'000'000) + 709'552);
+      return kRoom == 709'551'615ULL &&                                          // where the two literals come from
+             ms_fits.accepted && ms_fits.ticks == (kFull * kHz) + 709'000'000 && //
+             !ms_over.accepted && ms_over.ticks == 0 &&                          // a refusal arms nothing
+             us_fits.accepted && us_fits.ticks == (kFull * kHz) + 709'551'000 && //
+             !us_over.accepted && us_over.ticks == 0;
+    }(),
+    "a remainder that would carry the tick count past the counter's end is refused, and the one below it is not");
+
 // Absolute counter value `ms` from `now`, or a rejected plan when the
 // conversion or the addition would wrap.
 [[nodiscard]] constexpr auto deadline_after_ms(std::uint64_t now, std::uint64_t hz, std::uint64_t ms) noexcept

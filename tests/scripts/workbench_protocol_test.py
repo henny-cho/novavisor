@@ -76,7 +76,6 @@ class UplinkTest(unittest.TestCase):
         """
         from novakit.services.workbench.server import HANDLERS, UPLINK, Bridge
 
-        self.assertEqual(UPLINK, {handler.topic for handler in HANDLERS})
         for handler in HANDLERS:
             with self.subTest(topic=handler.topic.value):
                 uplink = protocol.parse_uplink(

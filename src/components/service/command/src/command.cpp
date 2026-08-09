@@ -62,7 +62,11 @@ void arm() noexcept {
 void on_tick(TrapContext* /*ctx*/, std::uint64_t /*arg*/) noexcept {
   // By address, not through a lambda: taking it keeps the stop-point
   // symbol from being inlined away and collected with --gc-sections.
-  g_ring.drain(&execute);
+  //
+  // The tally is dropped on purpose: execute() emits a trace record per
+  // command, so how many arrived is already on the timeline and a second
+  // count here would be the same fact from a worse vantage point.
+  static_cast<void>(g_ring.drain(&execute));
   arm();
 }
 

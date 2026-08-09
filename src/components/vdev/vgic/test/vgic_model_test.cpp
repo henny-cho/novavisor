@@ -1,5 +1,3 @@
-// tests/host/vgic_model_test.cpp
-//
 // Host-side GTest suite for the pure vGICv3 register model (the vgic
 // component): the stateful half of GICD/GICR frame emulation, which
 // dist_read/dist_write and redist_read/redist_write reach through
@@ -97,6 +95,26 @@ TEST(VgicDist, Typer2ReadsAsZero) {
   const DistState d{};
   EXPECT_TRUE(dist_read(d, kGicdTyper2, 4).known); // no extended features
   EXPECT_EQ(dist_read(d, kGicdTyper2, 4).value, 0U);
+}
+
+// What the words hold is asserted where they are defined; what this
+// covers is the read path to them. A driver probes the distributor
+// through these three offsets and binds on what comes back, so a case
+// answering out of a neighbour's constant is a mis-identified GIC while
+// every constant in the header still reads correctly.
+TEST(VgicDist, IdentificationWordsComeFromTheirOwnRegisters) {
+  const DistState d{};
+
+  const auto typer = dist_read(d, kGicdTyper, 4);
+  const auto iidr  = dist_read(d, kGicdIidr, 4);
+  const auto pidr2 = dist_read(d, kGicdPidr2, 4);
+
+  ASSERT_TRUE(typer.known);
+  ASSERT_TRUE(iidr.known);
+  ASSERT_TRUE(pidr2.known);
+  EXPECT_EQ(typer.value, kGicdTyperValue);
+  EXPECT_EQ(iidr.value, kGicIidrValue);
+  EXPECT_EQ(pidr2.value, kPidr2GicV3);
 }
 
 // ---------------------------------------------------------------------------

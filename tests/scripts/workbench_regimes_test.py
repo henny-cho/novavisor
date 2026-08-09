@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import struct
 import sys
@@ -12,6 +13,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
+import workbench_image  # noqa: E402
 from novakit.services.workbench import (  # noqa: E402
     hardware,
     observations,  # noqa: E402
@@ -20,7 +22,7 @@ from novakit.services.workbench import (  # noqa: E402
     translation,
 )
 
-ELF = REPO / "build" / "aarch64-debug" / "novavisor.elf"
+ELF = workbench_image.ELF
 RAM_BASE = hardware.platform()["NOVA_BOARD_PHYS_RAM_BASE"]
 S2 = translation.STAGE2_FORMAT
 
@@ -35,28 +37,32 @@ def _ram_size() -> int:
 
 
 @unittest.skipUnless(ELF.is_file(), "debug ELF not built")
+@unittest.skipUnless(importlib.util.find_spec("elftools"), "pyelftools is not installed")
 class CaptureTest(unittest.TestCase):
     """Against the real image: the field offsets are the DWARF's."""
-
-    @classmethod
-    def setUpClass(cls):
-        # One DWARF walk for the module; it is three seconds of work and
-        # the answer cannot change between these tests.
-        cls.view = snapshot.resolve_image(ELF)
 
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.ram_path = Path(self.directory.name) / "guest-ram"
-        self.ram = bytearray(_ram_size())
+        self.view = workbench_image.view()
+        # Written where they are poked and nowhere else. The aperture is
+        # half a gigabyte and a test sets a handful of descriptors in it,
+        # so the backend is a sparse file rather than a buffer of that
+        # size allocated, filled and copied for every test.
+        self.words: dict[int, int] = {}
         self.symbols = self.view.regimes
 
     def poke(self, pa: int, *words: int) -> None:
-        at = pa - RAM_BASE
-        self.ram[at : at + 8 * len(words)] = struct.pack(f"<{len(words)}Q", *words)
+        for index, word in enumerate(words):
+            self.words[pa + index * 8] = word
 
     def provider(self):
-        self.ram_path.write_bytes(bytes(self.ram))
+        with self.ram_path.open("wb") as ram:
+            ram.truncate(_ram_size())
+            for pa, word in self.words.items():
+                ram.seek(pa - RAM_BASE)
+                ram.write(struct.pack("<Q", word))
         made = snapshot.ElfRamProvider(ELF, self.ram_path, RAM_BASE, self.view)
         self.addCleanup(made.close)
         return made

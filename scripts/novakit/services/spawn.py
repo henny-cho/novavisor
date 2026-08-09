@@ -65,7 +65,7 @@ class Run:
 
 def _require_pexpect():
     try:
-        import pexpect
+        import pexpect  # noqa: TID251 — a child is spawned here
 
         return pexpect
     except ImportError:

@@ -1,5 +1,3 @@
-// tests/host/el2_stage1_test.cpp
-//
 // EL2 Stage-1 identity-map builder: block-size selection, W^X
 // attribute placement, and overlap/pool-exhaustion rejection. The
 // translation register values are pinned by static_asserts alongside

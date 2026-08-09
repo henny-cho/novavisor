@@ -1,10 +1,8 @@
-// tests/host/esr_parse_test.cpp
-//
 // Host-side GTest suite for the ESR_EL2 routing policy and the trapped
-// MSR/MRS syndrome matchers (nova/arch/esr.hpp, sysreg_trap.hpp). Field
-// extraction and the TrapContext layout are pinned by static_asserts in
-// their own headers, so every build checks them; what remains here is
-// the policy each syndrome feeds.
+// MSR/MRS syndrome matchers. Field extraction and the TrapContext
+// layout are pinned by static_asserts in their own headers, so every
+// build checks them; what remains here is the policy each syndrome
+// feeds.
 //
 // Depends only on <cstdint> — no bare-metal headers required.
 

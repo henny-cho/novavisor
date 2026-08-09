@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shlex
-import subprocess
+import subprocess  # noqa: TID251 — this is the process boundary
 import sys
 from collections.abc import Sequence
 from pathlib import Path

@@ -138,8 +138,13 @@ public:
   // run past the ring's depth has broken the protocol push() enforces,
   // so it is resynchronised to and nothing stale is executed. Neither
   // branch can make this callback longer than a ring.
+  //
+  // The count is how many commands this pass handed over — the same
+  // number as the bound it computed. Discarding it is a decision the
+  // caller states, like push()'s refusal, rather than one it can drop
+  // by accident.
   template <typename Fn>
-  auto drain(Fn&& consume) noexcept -> std::size_t {
+  [[nodiscard]] auto drain(Fn&& consume) noexcept -> std::size_t {
     if (!placed()) {
       return 0;
     }

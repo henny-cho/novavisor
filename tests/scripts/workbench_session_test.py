@@ -86,7 +86,14 @@ def store() -> StateStore:
     return StateStore(Envelopes(Clock()))
 
 
-class SessionTest(unittest.IsolatedAsyncioTestCase):
+class Draining(unittest.IsolatedAsyncioTestCase):
+    """Waiting on a store until it has published what a test is after.
+
+    Nothing below drives a clock, so every wait here is on real work
+    landing: the point is to fail with the frames that did arrive rather
+    than on a sleep somebody tuned.
+    """
+
     async def drain_until(self, state, predicate, timeout: float = 2.0) -> list[dict]:
         frames: list[dict] = []
         deadline = asyncio.get_running_loop().time() + timeout
@@ -97,6 +104,8 @@ class SessionTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.01)
         self.fail(f"condition not met; frames={frames}")
 
+
+class SessionTest(Draining):
     async def test_select_publishes_building_topo_running(self):
         live = FakeLive()
         self.addCleanup(live.terminate)
@@ -151,7 +160,9 @@ class SessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(received, b"ping\n\x14")
 
     async def test_input_is_rejected_unless_running(self):
-        session = Session(store(), deps_for(FakeLive()))
+        live = FakeLive()
+        self.addCleanup(live.terminate)
+        session = Session(store(), deps_for(live))
         self.assertEqual(session.send_bytes(b"x"), "session is idle")
 
     async def test_input_is_rejected_while_paused(self):
@@ -263,6 +274,9 @@ class SessionTest(unittest.IsolatedAsyncioTestCase):
                 return False
 
         live = Immortal()
+        # The override is a child that refuses to die, so the socketpair
+        # it holds is released by the base implementation at cleanup.
+        self.addCleanup(FakeLive.terminate, live)
         state = store()
         session = Session(state, deps_for(live))
         await session.select(Target(demo="10_console_mux"))
@@ -481,6 +495,8 @@ class SurfaceSweepTest(unittest.TestCase):
             self.assertTrue(idle.exists(), "an idle bridge holds no RAM file to reclaim")
 
 
+# initial_topology resolves observation symbols, so it needs the parser.
+@unittest.skipUnless(importlib.util.find_spec("elftools"), "pyelftools is not installed")
 class InitialTopologyTest(unittest.TestCase):
     def test_lists_the_pickable_world(self):
         from novakit.services.workbench.session import initial_topology
@@ -498,7 +514,7 @@ def _no_image(_elf_path):
     return None
 
 
-class PollLoopTest(unittest.IsolatedAsyncioTestCase):
+class PollLoopTest(Draining):
     """The S-layer loop against scripted providers: faults and restarts
     must end one run's polling, never the loop."""
 
@@ -516,16 +532,6 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
         # same path a host that cannot start a pool takes.
         bridge._image_pool = lambda: None
         return bridge
-
-    async def drain_until(self, bridge, predicate, timeout: float = 2.0) -> list[dict]:
-        frames: list[dict] = []
-        deadline = asyncio.get_running_loop().time() + timeout
-        while asyncio.get_running_loop().time() < deadline:
-            frames.extend(bridge.store.drain())
-            if predicate(frames):
-                return frames
-            await asyncio.sleep(0.01)
-        self.fail(f"condition not met; frames={frames}")
 
     async def test_provider_fault_ends_the_run_not_the_loop(self):
         from unittest import mock
@@ -563,7 +569,7 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
                 poll = asyncio.create_task(bridge._poll_loop())
                 try:
                     await self.drain_until(
-                        bridge,
+                        bridge.store,
                         lambda seen: any(
                             frame["data"].get("phase") == "snapshot-unavailable"
                             for frame in seen
@@ -573,7 +579,7 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
                     state["fail"] = False
                     bridge.session.run_id = 2
                     await self.drain_until(
-                        bridge,
+                        bridge.store,
                         lambda seen: any(frame["topic"] == "sched.cpu" for frame in seen),
                     )
                 finally:
@@ -619,7 +625,7 @@ class PollLoopTest(unittest.IsolatedAsyncioTestCase):
                 poll = asyncio.create_task(bridge._poll_loop())
                 try:
                     await self.drain_until(
-                        bridge,
+                        bridge.store,
                         lambda seen: any(frame["topic"] == "sched.cpu" for frame in seen),
                     )
                 finally:

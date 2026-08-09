@@ -15,15 +15,8 @@ select = ["E4", "E7", "E9", "F", "I", "ARG", "TID251"]
 "argparse".msg = "the CLI boundary is typer; image/ programs the build graph runs are their own"
 "typer".msg = "typer stops at cli.py and the commands layer"
 
+# The owners carry `# noqa: TID251` on the import itself. A file-wide
+# exemption would waive the rule for the other six packages too, which
+# is the opposite of what naming an owner means.
 [lint.per-file-ignores]
-"scripts/novakit/cli.py" = ["TID251"]
-"scripts/novakit/commands/*.py" = ["TID251"]
-"scripts/novakit/core/proc.py" = ["TID251"]
-"scripts/novakit/image/dtb.py" = ["TID251"]
-"scripts/novakit/image/layout.py" = ["TID251"]
-"scripts/novakit/services/spawn.py" = ["TID251"]
-"scripts/novakit/services/workbench/client.py" = ["TID251"]
-"scripts/novakit/services/workbench/elfsym.py" = ["TID251"]
-"scripts/novakit/services/workbench/server.py" = ["TID251"]
-"scripts/novakit/services/workbench/session.py" = ["TID251"]
 "tests/scripts/*.py" = ["TID251"]

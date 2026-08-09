@@ -1,5 +1,3 @@
-// components/soft_timer/test/timer_queue_test.cpp
-//
 // Host-side tests for the pure deadline-slot queue.
 
 #include "soft_timer/timer_queue.hpp"

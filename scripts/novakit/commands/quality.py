@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-import typer
+import typer  # noqa: TID251 — typer stops at this layer
 
 from ..services import gates
 

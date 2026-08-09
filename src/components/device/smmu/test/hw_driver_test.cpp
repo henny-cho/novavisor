@@ -262,6 +262,19 @@ inline constexpr std::size_t kMissing = static_cast<std::size_t>(-1);
   return kMissing;
 }
 
+// Index of the first barrier of `op`, kMissing when it never happened.
+// The ordering assertions below are all of the shape "this barrier came
+// before that pointer move", which is the only way the log can show a
+// barrier doing its job.
+[[nodiscard]] auto barrier_index(Op op) -> std::size_t {
+  for (std::size_t i = 0; i < FakeSmmu::log.size(); ++i) {
+    if (FakeSmmu::log[i].op == op) {
+      return i;
+    }
+  }
+  return kMissing;
+}
+
 [[nodiscard]] auto read_count(std::uint32_t offset) -> std::size_t {
   std::size_t count = 0;
   for (const Access& access : FakeSmmu::log) {
@@ -384,15 +397,7 @@ TEST_F(SmmuHwDriver, SubmitAppendsCommandsThenSync) {
   EXPECT_EQ(ring.queue.producer, 3U);
   EXPECT_NE(write_index(regs::kCmdqProd, 3U), kMissing);
   // The ring contents must be visible before the producer pointer moves.
-  const std::size_t publish = [] {
-    for (std::size_t i = 0; i < FakeSmmu::log.size(); ++i) {
-      if (FakeSmmu::log[i].op == Op::kPublish) {
-        return i;
-      }
-    }
-    return kMissing;
-  }();
-  EXPECT_LT(publish, write_index(regs::kCmdqProd, 3U));
+  EXPECT_LT(barrier_index(Op::kPublish), write_index(regs::kCmdqProd, 3U));
 }
 
 TEST_F(SmmuHwDriver, SubmitWrapsAroundTheRingBoundary) {
@@ -628,8 +633,14 @@ TEST_F(SmmuHwDriver, DrainEventsDeliversRecordsInOrderAndReleasesSlots) {
 
   std::uint32_t            consumer = 0;
   std::vector<EventRecord> seen{};
-  const DrainStats         stats = nova::smmu::drain_events<FakeSmmu>(
-      event_memory, kLog2, consumer, [&seen](const EventRecord& record) { seen.push_back(record); });
+  std::size_t              first_read_at = kMissing;
+  const DrainStats         stats         = nova::smmu::drain_events<FakeSmmu>(event_memory, kLog2, consumer,
+                                                                              [&seen, &first_read_at](const EventRecord& record) {
+                                                                if (first_read_at == kMissing) {
+                                                                  first_read_at = FakeSmmu::log.size();
+                                                                }
+                                                                seen.push_back(record);
+                                                              });
 
   EXPECT_FALSE(stats.corrupt);
   EXPECT_FALSE(stats.overflow);
@@ -639,7 +650,25 @@ TEST_F(SmmuHwDriver, DrainEventsDeliversRecordsInOrderAndReleasesSlots) {
     EXPECT_EQ(nova::smmu::event_stream_id(seen[i]), i + 1U);
   }
   EXPECT_EQ(consumer, 3U);
-  EXPECT_NE(write_index(regs::kEvtqCons, 3U), kMissing);
+
+  // The whole ordering, because each half fails differently: the
+  // acquire must precede the record reads or they may predate what the
+  // device wrote, and the release must follow them or the device may
+  // overwrite a slot still being read. Neither barrier is visible in
+  // the result, so without this both can be deleted outright and every
+  // gate stays green.
+  const std::size_t acquire     = barrier_index(Op::kAcquire);
+  const std::size_t release     = barrier_index(Op::kPublish);
+  const std::size_t consumed_at = write_index(regs::kEvtqCons, 3U);
+  ASSERT_NE(acquire, kMissing);
+  ASSERT_NE(release, kMissing);
+  ASSERT_NE(first_read_at, kMissing);
+  ASSERT_NE(consumed_at, kMissing);
+  EXPECT_LT(acquire, first_read_at);
+  // The reads themselves are memory, not register traffic, so they
+  // leave no entry: the release is the next thing logged after them.
+  EXPECT_LE(first_read_at, release);
+  EXPECT_LT(release, consumed_at);
 }
 
 TEST_F(SmmuHwDriver, DrainEventsRejectsCorruptPointersWithoutConsuming) {

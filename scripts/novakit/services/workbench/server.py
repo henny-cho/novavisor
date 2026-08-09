@@ -8,7 +8,7 @@ without a socket.
 
 from __future__ import annotations
 
-import asyncio
+import asyncio  # noqa: TID251 — the event loop lives here
 import multiprocessing
 import signal
 import sys
@@ -127,9 +127,9 @@ class Handler:
 
 def _require_websockets():
     try:
-        from websockets.asyncio import server as websocket_server
-        from websockets.datastructures import Headers
-        from websockets.http11 import Response
+        from websockets.asyncio import server as websocket_server  # noqa: TID251
+        from websockets.datastructures import Headers  # noqa: TID251
+        from websockets.http11 import Response  # noqa: TID251
     except ImportError as error:
         raise SystemExit(
             "nova workbench: the pinned websockets package is missing; "

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import NamedTuple
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
@@ -70,7 +71,82 @@ class FakeChild:
         return self.terminate_result
 
 
-class DemoRunnerVerificationTest(unittest.TestCase):
+class Ran(NamedTuple):
+    """What one `run_scenario` left behind."""
+
+    code: int | None
+    console: str
+    tail: Path
+    diagnostics: dict
+
+
+class ScenarioHarness(unittest.TestCase):
+    """Driving `verify.run_scenario` against a stand-in child.
+
+    Four tests want the same four things around it — a pexpect that
+    hands back their child, a scenario to run, somewhere to put the tail
+    log, and the diagnostics written beside it — and differ only in what
+    the child does and what they then assert. Kept together, the setup
+    is one thing to read and the tests are their own subject.
+    """
+
+    def observe(self, child=None, *, label, launch=None, expectations=None,
+                interrupt=False, clock=False) -> Ran:
+        """Run one scenario and hand back what it wrote.
+
+        `launch` replaces the spawn itself, for a test about a launch
+        that never produces a child; `interrupt` is for the children
+        whose failure escapes rather than being reported; and `clock` for
+        the one test that reads a duration out of the diagnostics and so
+        needs the module's clock to be the child's.
+        """
+
+        def hand_over(*_args, **_kwargs):
+            return child
+
+        class FakePexpect:
+            TIMEOUT = FakeTimeout
+            EOF = FakeEof
+            spawn = staticmethod(launch or hand_over)
+
+        prepared = expect.Scenario(
+            label=label,
+            phase=0,
+            command=("fake-qemu",),
+            timeout_seconds=10,
+            expectations=tuple(expectations or ({"pattern": "ready"},)),
+        )
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        tail_path = Path(directory.name) / f"{label}.qemu-tail.log"
+        console = io.StringIO()
+        patches = [
+            mock.patch.object(spawn, "_require_pexpect", return_value=FakePexpect),
+            mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(console),
+        ]
+        if clock:
+            patches.append(mock.patch.object(spawn.time, "monotonic", side_effect=child.clock))
+
+        code = None
+        with contextlib.ExitStack() as opened:
+            for patch in patches:
+                opened.enter_context(patch)
+            if interrupt:
+                # Entered last, so it unwinds first and takes the escape
+                # before the redirects come off.
+                opened.enter_context(self.assertRaises(KeyboardInterrupt))
+            code = verify.run_scenario(prepared, verify.Sink(tail=tail_path), scope="nova demo")
+        return Ran(
+            code,
+            console.getvalue(),
+            tail_path,
+            json.loads(report.diagnostics_path_for_tail(tail_path).read_text()),
+        )
+
+
+class DemoRunnerVerificationTest(ScenarioHarness):
     def verify(self, child, expectations, timeout=10):
         return expect.observe_output(
             child,
@@ -428,43 +504,15 @@ class DemoRunnerVerificationTest(unittest.TestCase):
 
     def test_keyboard_interrupt_preserves_diagnostics_then_propagates(self):
         child = FakeChild(FakeClock(), actions=[KeyboardInterrupt()])
+        ran = self.observe(child, label="interrupt", interrupt=True)
 
-        class FakePexpect:
-            TIMEOUT = FakeTimeout
-            EOF = FakeEof
-
-            @staticmethod
-            def spawn(*_args, **_kwargs):
-                return child
-
-        prepared = expect.Scenario(
-            label="interrupt",
-            phase=0,
-            command=("fake-qemu",),
-            timeout_seconds=10,
-            expectations=({"pattern": "ready"},),
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            tail_path = Path(directory) / "interrupt.qemu-tail.log"
-            with (
-                mock.patch.object(spawn, "_require_pexpect", return_value=FakePexpect),
-                mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
-                contextlib.redirect_stdout(io.StringIO()),
-                contextlib.redirect_stderr(io.StringIO()),
-            ):
-                with self.assertRaises(KeyboardInterrupt):
-                    verify.run_scenario(prepared, verify.Sink(tail=tail_path), scope="nova demo")
-
-            diagnostics = json.loads(
-                report.diagnostics_path_for_tail(tail_path).read_text()
-            )
-            self.assertEqual(diagnostics["failure"]["kind"], "interrupted")
-            self.assertEqual(diagnostics["termination"], {
-                "attempted": True,
-                "succeeded": True,
-                "error": "",
-            })
-            self.assertEqual(child.terminate_calls, [True])
+        self.assertEqual(ran.diagnostics["failure"]["kind"], "interrupted")
+        self.assertEqual(ran.diagnostics["termination"], {
+            "attempted": True,
+            "succeeded": True,
+            "error": "",
+        })
+        self.assertEqual(child.terminate_calls, [True])
 
     def test_failure_capture_keeps_only_the_recent_32_kib_of_utf8(self):
         capture = spawn.OutputCapture(None)
@@ -543,54 +591,26 @@ class DemoRunnerVerificationTest(unittest.TestCase):
                 )
                 raise RuntimeError("expect failed")
 
-        clock = FakeClock()
-        child = LoggingFailureChild(clock)
+        child = LoggingFailureChild(FakeClock())
+        ran = self.observe(child, label="attempt")
 
-        class FakePexpect:
-            TIMEOUT = FakeTimeout
-            EOF = FakeEof
-
-            @staticmethod
-            def spawn(*_args, **_kwargs):
-                return child
-
-        prepared = expect.Scenario(
-            label="fake",
-            phase=0,
-            command=("fake-qemu",),
-            timeout_seconds=10,
-            expectations=({"pattern": "ready"},),
+        self.assertEqual(ran.code, 1)
+        tail = ran.tail.read_text()
+        self.assertLessEqual(len(tail.encode("utf-8")), 32 * 1024)
+        self.assertNotIn("discarded:", tail)
+        self.assertTrue(tail.endswith("recent"))
+        self.assertEqual(child.terminate_calls, [True])
+        self.assertEqual(ran.diagnostics["failure"]["kind"], "exception")
+        self.assertEqual(
+            ran.diagnostics["failure"]["error"],
+            "RuntimeError: expect failed",
         )
-        with tempfile.TemporaryDirectory() as directory:
-            tail_path = Path(directory) / "attempt.qemu-tail.log"
-            with (
-                mock.patch.object(spawn, "_require_pexpect", return_value=FakePexpect),
-                mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
-                contextlib.redirect_stdout(io.StringIO()),
-                contextlib.redirect_stderr(io.StringIO()),
-            ):
-                return_code = verify.run_scenario(prepared, verify.Sink(tail=tail_path), scope="nova demo")
-
-            self.assertEqual(return_code, 1)
-            tail = tail_path.read_text()
-            self.assertLessEqual(len(tail.encode("utf-8")), 32 * 1024)
-            self.assertNotIn("discarded:", tail)
-            self.assertTrue(tail.endswith("recent"))
-            self.assertEqual(child.terminate_calls, [True])
-            diagnostics = json.loads(
-                report.diagnostics_path_for_tail(tail_path).read_text()
-            )
-            self.assertEqual(diagnostics["failure"]["kind"], "exception")
-            self.assertEqual(
-                diagnostics["failure"]["error"],
-                "RuntimeError: expect failed",
-            )
-            self.assertIn("raise RuntimeError", diagnostics["failure"]["traceback"])
-            self.assertEqual(diagnostics["termination"], {
-                "attempted": True,
-                "succeeded": True,
-                "error": "",
-            })
+        self.assertIn("raise RuntimeError", ran.diagnostics["failure"]["traceback"])
+        self.assertEqual(ran.diagnostics["termination"], {
+            "attempted": True,
+            "succeeded": True,
+            "error": "",
+        })
 
     def test_timeout_and_cleanup_interrupt_share_console_and_diagnostics(self):
         class TimeoutChild(FakeChild):
@@ -604,88 +624,41 @@ class DemoRunnerVerificationTest(unittest.TestCase):
             FakeClock(),
             terminate_error=KeyboardInterrupt(),
         )
-
-        class FakePexpect:
-            TIMEOUT = FakeTimeout
-            EOF = FakeEof
-
-            @staticmethod
-            def spawn(*_args, **_kwargs):
-                return child
-
-        prepared = expect.Scenario(
+        ran = self.observe(
+            child,
             label="timeout",
-            phase=0,
-            command=("fake-qemu",),
-            timeout_seconds=10,
             expectations=({"pattern": "ready", "within_seconds": 6},),
+            interrupt=True,
+            clock=True,
         )
-        with tempfile.TemporaryDirectory() as directory:
-            tail_path = Path(directory) / "timeout.qemu-tail.log"
-            stderr = io.StringIO()
-            with (
-                mock.patch.object(spawn, "_require_pexpect", return_value=FakePexpect),
-                mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
-                mock.patch.object(spawn.time, "monotonic", side_effect=child.clock),
-                contextlib.redirect_stdout(io.StringIO()),
-                contextlib.redirect_stderr(stderr),
-            ):
-                with self.assertRaises(KeyboardInterrupt):
-                    verify.run_scenario(prepared, verify.Sink(tail=tail_path), scope="nova demo")
 
-            self.assertIn("timeout waiting for /ready/", stderr.getvalue())
-            self.assertIn("QEMU cleanup: KeyboardInterrupt", stderr.getvalue())
-            diagnostics = json.loads(
-                report.diagnostics_path_for_tail(tail_path).read_text()
-            )
-            self.assertEqual(diagnostics["failure"]["kind"], "timeout")
-            self.assertEqual(diagnostics["failure"]["pattern"], "ready")
-            self.assertEqual(diagnostics["failure"]["elapsed_seconds"], 6.0)
-            self.assertEqual(diagnostics["failure"]["remaining_seconds"], 4.0)
-            self.assertEqual(diagnostics["termination"], {
-                "attempted": True,
-                "succeeded": False,
-                "error": "KeyboardInterrupt",
-            })
+        self.assertIn("timeout waiting for /ready/", ran.console)
+        self.assertIn("QEMU cleanup: KeyboardInterrupt", ran.console)
+        self.assertEqual(ran.diagnostics["failure"]["kind"], "timeout")
+        self.assertEqual(ran.diagnostics["failure"]["pattern"], "ready")
+        self.assertEqual(ran.diagnostics["failure"]["elapsed_seconds"], 6.0)
+        self.assertEqual(ran.diagnostics["failure"]["remaining_seconds"], 4.0)
+        self.assertEqual(ran.diagnostics["termination"], {
+            "attempted": True,
+            "succeeded": False,
+            "error": "KeyboardInterrupt",
+        })
 
     def test_spawn_failure_is_recorded_without_stopping_the_suite(self):
-        class FakePexpect:
-            TIMEOUT = FakeTimeout
-            EOF = FakeEof
+        def spawn_fails(*_args, **_kwargs):
+            raise OSError("spawn failed")
 
-            @staticmethod
-            def spawn(*_args, **_kwargs):
-                raise OSError("spawn failed")
+        ran = self.observe(label="spawn", launch=spawn_fails)
 
-        prepared = expect.Scenario(
-            label="spawn",
-            phase=0,
-            command=("missing-qemu",),
-            timeout_seconds=10,
-            expectations=({"pattern": "ready"},),
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            tail_path = Path(directory) / "spawn.qemu-tail.log"
-            with (
-                mock.patch.object(spawn, "_require_pexpect", return_value=FakePexpect),
-                mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
-                contextlib.redirect_stdout(io.StringIO()),
-                contextlib.redirect_stderr(io.StringIO()),
-            ):
-                return_code = verify.run_scenario(prepared, verify.Sink(tail=tail_path), scope="nova demo")
-
-            self.assertEqual(return_code, 1)
-            diagnostics = json.loads(
-                report.diagnostics_path_for_tail(tail_path).read_text()
-            )
-            self.assertEqual(diagnostics["failure"]["kind"], "spawn")
-            self.assertEqual(diagnostics["failure"]["error"], "OSError: spawn failed")
-            self.assertIn("raise OSError", diagnostics["failure"]["traceback"])
-            self.assertEqual(diagnostics["termination"], {
-                "attempted": False,
-                "succeeded": False,
-                "error": "not attempted: process was not started",
-            })
+        self.assertEqual(ran.code, 1)
+        self.assertEqual(ran.diagnostics["failure"]["kind"], "spawn")
+        self.assertEqual(ran.diagnostics["failure"]["error"], "OSError: spawn failed")
+        self.assertIn("raise OSError", ran.diagnostics["failure"]["traceback"])
+        self.assertEqual(ran.diagnostics["termination"], {
+            "attempted": False,
+            "succeeded": False,
+            "error": "not attempted: process was not started",
+        })
 
 
 @unittest.skipUnless(importlib.util.find_spec("pexpect"), "pexpect is not installed")

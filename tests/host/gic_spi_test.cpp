@@ -1,5 +1,3 @@
-// tests/host/gic_spi_test.cpp
-//
 // Host-side GTest suite for the SPI selection boundaries. The bank
 // arithmetic itself is pinned by a static_assert in the header; what is
 // tested here is which INTIDs a distributor will accept at all.

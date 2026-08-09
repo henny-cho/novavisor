@@ -1,5 +1,3 @@
-// tests/host/cpu_features_test.cpp
-//
 // Host-side GTest suite for the SMCCC mitigation verdicts. Field
 // extraction is pinned by a static_assert in the header; what is tested
 // here is the judgement each verdict makes from those fields.

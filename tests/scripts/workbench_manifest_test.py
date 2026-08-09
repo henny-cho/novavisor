@@ -9,6 +9,7 @@ image at all.
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 import unittest
 from pathlib import Path
@@ -17,15 +18,15 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
+import workbench_image  # noqa: E402
 from novakit.services.workbench import (  # noqa: E402
-    elfsym,
     events,
     hardware,
     observations,
     snapshot,
 )
 
-ELF = REPO / "build" / "aarch64-debug" / "novavisor.elf"
+ELF = workbench_image.ELF
 
 
 class TimerSlotTest(unittest.TestCase):
@@ -108,14 +109,14 @@ class PageLayoutTest(unittest.TestCase):
 
 
 @unittest.skipUnless(ELF.is_file(), "debug ELF not built")
+@unittest.skipUnless(importlib.util.find_spec("elftools"), "pyelftools is not installed")
 class ManifestResolutionTest(unittest.TestCase):
     """Layouts the manifest reads by hand, beyond what `verify_manifest`
     resolves. The resolution itself is that check's, and the static lane
     runs it."""
 
     def test_scheduler_layout_matches_the_firmware(self):
-        index = elfsym.ElfIndex(ELF)
-        self.addCleanup(index.close)
+        index = workbench_image.index()
 
         sched = index.resolve("nova::vcpu::g_sched")
         self.assertEqual(sched.type.count, observations.MAX_CPUS)
@@ -140,8 +141,7 @@ class ManifestResolutionTest(unittest.TestCase):
         self.assertEqual(labels[0x24], "kDataAbortLower")
 
     def test_vgic_state_is_banked_the_way_the_manifest_reads_it(self):
-        index = elfsym.ElfIndex(ELF)
-        self.addCleanup(index.close)
+        index = workbench_image.index()
 
         extents = {
             "nova::vgic::(anonymous)::g_cpu": observations.MAX_VCPUS,
@@ -166,6 +166,7 @@ class ManifestResolutionTest(unittest.TestCase):
 
 
 @unittest.skipUnless(ELF.is_file(), "debug ELF not built")
+@unittest.skipUnless(importlib.util.find_spec("elftools"), "pyelftools is not installed")
 class StopPointTest(unittest.TestCase):
     """How a stop point is found, against the real image.
 
@@ -175,8 +176,7 @@ class StopPointTest(unittest.TestCase):
     """
 
     def setUp(self):
-        self.index = elfsym.ElfIndex(ELF)
-        self.addCleanup(self.index.close)
+        self.index = workbench_image.index()
 
     def test_a_shorter_name_is_not_a_prefix_of_a_longer_one(self):
         """Itanium length prefixes are what make the match safe:

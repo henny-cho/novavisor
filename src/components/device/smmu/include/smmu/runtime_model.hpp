@@ -89,6 +89,17 @@ inline constexpr std::uint32_t kCr2Protected = regs::kCr2Protected | regs::kCr2R
 inline constexpr std::uint32_t kFaultIrqs    = regs::kIrqEvent | regs::kIrqGerror;
 inline constexpr std::uint32_t kEnabledCr0   = regs::kCr0CmdqEnable | regs::kCr0EvtqEnable | regs::kCr0SmmuEnable;
 
+// The words that reach the device. Composed from named fields above,
+// which says the intent but not the placement: a field shifted to the
+// wrong offset still reads as the same sentence and programs a
+// different SMMU, so the profile is pinned to the values a register
+// dump shows.
+static_assert(kCr1Cacheable == 0x0D75 &&  // write-back inner+outer, inner shareable, for queues [5:0] and table [11:6]
+                  kCr2Protected == 0x6 && // private TLB maintenance, and record the SID of a faulting stream
+                  kFaultIrqs == 0x5 &&    // GERROR and the event queue
+                  kEnabledCr0 == 0xD,     // command queue, event queue, then translation
+              "the control profile encodes the fields where the registers hold them");
+
 [[nodiscard]] constexpr auto decode_capabilities(std::uint32_t idr0, std::uint32_t idr1, std::uint32_t idr5) noexcept
     -> Capabilities {
   return {
@@ -161,5 +172,16 @@ inline constexpr std::uint32_t kEnabledCr0   = regs::kCr0CmdqEnable | regs::kCr0
 [[nodiscard]] constexpr auto stream_table_config(std::uint8_t sid_bits) noexcept -> std::uint32_t {
   return sid_bits;
 }
+
+// A base register carries the structure's address, the hint the device
+// walks it with, and — for a queue — its size, all in one word. Getting
+// a field's position wrong points the device at memory nobody wrote
+// while every capability check still passes, so the encodings are
+// pinned to the words themselves.
+static_assert(stream_table_base(0x4000'0000) == 0x4000'0000'4000'0000 && // address, plus read-allocate at bit 62
+                  queue_base(0x4000'1000, 4) == 0x4000'0000'4000'1004 && // and log2 entries in the low bits
+                  queue_base(0x4000'2000, 4) == 0x4000'0000'4000'2004 && //
+                  stream_table_config(5) == 5,                           // linear table: LOG2SIZE is the whole word
+              "the base registers encode address, walk hint and size in the fields the device reads");
 
 } // namespace nova::smmu

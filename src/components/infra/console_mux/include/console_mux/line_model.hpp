@@ -41,7 +41,8 @@ constexpr void render_tag(LineBuf& l, std::size_t vm) noexcept {
 // caller must emit it. '\r' is dropped (a CRLF guest would otherwise
 // print an extra blank line through the tagged path), '\n' terminates
 // the line — including an empty one — and a payload reaching kLineMax
-// flushes early, which is also what keeps the buffer from overrunning.
+// flushes early, so a guest that never sends a newline still reaches
+// the console.
 [[nodiscard]] constexpr auto put_char(LineBuf& l, char c) noexcept -> bool {
   if (c == '\r') {
     return false;

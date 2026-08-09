@@ -48,6 +48,16 @@ enum class ExceptionClass : std::uint8_t {
   kBrk              = 0x3C, // BRK instruction
 };
 
+// The classes the trap router is built around, pinned to the numbers
+// the architecture assigns them. EC arrives as a raw field out of
+// hardware, so a renumbered enumerator routes real traps to the wrong
+// handler while every comparison written against the enum still holds.
+static_assert(static_cast<std::uint8_t>(ExceptionClass::kUnknown) == 0x00 &&     // a blank syndrome
+                  static_cast<std::uint8_t>(ExceptionClass::kHvcAa64) == 0x16 && // the guest hypercall gate
+                  static_cast<std::uint8_t>(ExceptionClass::kInstAbortLower) == 0x20 &&
+                  static_cast<std::uint8_t>(ExceptionClass::kDataAbortLower) == 0x24, // the MMIO trap path
+              "the exception classes hold the values ESR_EL2 encodes");
+
 // A synchronous exception taken through the lower-EL vector belongs to
 // the guest unless its EC claims that it originated at EL2, or reports
 // an asynchronous machine error. Routed classes are handled before

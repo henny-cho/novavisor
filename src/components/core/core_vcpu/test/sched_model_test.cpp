@@ -1,5 +1,3 @@
-// components/core_vcpu/test/sched_model_test.cpp
-//
 // Host-side tests for the pure scheduler core.
 
 #include "core_vcpu/sched_model.hpp"

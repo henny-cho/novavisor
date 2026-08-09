@@ -34,6 +34,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace nova::vgic {
 
@@ -342,8 +343,7 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
 inline constexpr std::array kDistIgnored{kGicdIcfgr2, kGicdIcfgr3, kGicdIgrpmodr1, kGicdIsactiver1, kGicdIcactiver1};
 inline constexpr std::array kRedistIgnored{kGicrIcfgr0, kGicrIcfgr1, kGicrIgrpmodr0, kGicrIsactiver0, kGicrIcactiver0};
 
-[[nodiscard]] constexpr auto is_ignored(const std::array<std::uint64_t, 5>& offsets, std::uint64_t off) noexcept
-    -> bool {
+[[nodiscard]] constexpr auto is_ignored(std::span<const std::uint64_t> offsets, std::uint64_t off) noexcept -> bool {
   for (const std::uint64_t candidate : offsets) {
     if (candidate == off) {
       return true;

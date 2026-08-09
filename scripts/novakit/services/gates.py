@@ -111,11 +111,20 @@ def _web() -> None:
     """Lint the UI and run its modules, with its own pinned toolchain.
 
     The dependency set is a lock file, so installing it is a decision
-    about a directory rather than about a run: once it is there the gate
-    stays offline, and `npm ci` rebuilds it from the lock the moment it
-    is not.
+    about a directory rather than about a run: once it is installed from
+    the current lock the gate stays offline, and `npm ci` rebuilds it
+    the moment the lock moves past what is there.
     """
-    if not (config.WEB_DIR / "node_modules").is_dir():
+    # node --test is content to match no files and exit 0, so a renamed
+    # directory would turn every check justified by it into silence.
+    suite = sorted((config.WEB_DIR / "test").glob("*.test.mjs"))
+    if not suite:
+        raise SystemExit("web test suite is empty; nothing would be checked")
+    print(f"web suite: {len(suite)} module(s)", file=sys.stderr)
+
+    lock = config.WEB_DIR / "package-lock.json"
+    installed = config.WEB_DIR / "node_modules" / ".package-lock.json"
+    if not installed.is_file() or installed.stat().st_mtime < lock.stat().st_mtime:
         proc.run(["npm", "ci"], cwd=config.WEB_DIR)
     proc.run(["npm", "test"], cwd=config.WEB_DIR)
 

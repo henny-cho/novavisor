@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Annotated
 
-import typer
+import typer  # noqa: TID251 — typer stops at this layer
 
 from ..services import manifest
 from ..services.workbench import client, hardware, history, server, session, trace

@@ -140,19 +140,27 @@ static_assert(
     "the PSCI range is claimed whole, and a slot the table does not fill answers NOT_SUPPORTED");
 
 // Bit 30 picks the calling convention, never the function — checked
-// across the table so a row added later cannot lose its twin.
+// across the table so a row added later cannot lose its twin. The same
+// walk asks PSCI_FEATURES about each row: discovery and dispatch read
+// one table, so a function that dispatches must also be reported, in
+// either convention.
 static_assert(
     [] {
       for (const Entry& entry : kTable) {
-        const Verdict v32 = dispatch(entry.fid, 0);
-        const Verdict v64 = dispatch(entry.fid | static_cast<std::uint32_t>(PSCI_FN_SMC64), 0);
+        const auto    fid64 = entry.fid | static_cast<std::uint32_t>(PSCI_FN_SMC64);
+        const Verdict v32   = dispatch(entry.fid, 0);
+        const Verdict v64   = dispatch(fid64, 0);
         if (!v32.claimed || !v64.claimed || v64.action != v32.action || v64.ret != v32.ret) {
+          return false;
+        }
+        if (dispatch(PSCI_FN_FEATURES, entry.fid).ret != std::uint64_t{PSCI_SUCCESS} ||
+            dispatch(PSCI_FN_FEATURES, fid64).ret != std::uint64_t{PSCI_SUCCESS}) {
           return false;
         }
       }
       return true;
     }(),
-    "every function dispatches identically through its SMC64 twin");
+    "every function dispatches identically through its SMC64 twin, and PSCI_FEATURES reports both");
 
 // Only Aff0 names a vCPU; a higher affinity field names something the
 // flat virtual topology has no seat for, and must not fold onto seat 0.

@@ -85,9 +85,17 @@ TEST(SmmuQueue, EventOverflowTogglesOnceAndAcknowledgesProducer) {
   EXPECT_FALSE(nova::smmu::try_record_event(queue));
   EXPECT_EQ(queue.producer, overflowed);
 
+  // Acknowledging is about the flag alone. A consumer that has read an
+  // entry keeps its place across it — the flag and the read pointer
+  // share a register, so clearing one must not rewind the other and
+  // re-present an event the driver already handled.
+  ASSERT_TRUE(queue.try_consume());
+  const std::uint32_t position = queue.consumer & queue.pointer_mask();
+  EXPECT_EQ(position, 1U);
+
   nova::smmu::acknowledge_event_overflow(queue);
   EXPECT_FALSE(nova::smmu::event_overflow_pending(queue));
-  EXPECT_EQ(queue.consumer & queue.pointer_mask(), 0);
+  EXPECT_EQ(queue.consumer & queue.pointer_mask(), position);
 }
 
 } // namespace

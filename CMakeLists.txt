@@ -165,7 +165,7 @@ else()
     endif()
 
     # Foundation-tree tests (tests/host/).
-    nova_add_host_test(esr_parse_test)  # nova/arch/esr.hpp + trap_context.hpp
+    nova_add_host_test(esr_parse_test)  # nova/arch/esr.hpp + sysreg_trap.hpp
     nova_add_host_test(data_abort_test) # nova/arch/data_abort.hpp MMIO decode
     nova_add_host_test(spin_lock_test)     # nova/sync.hpp mutual exclusion
     nova_add_host_test(dma_policy_test)    # Stream ID ownership and DMA windows

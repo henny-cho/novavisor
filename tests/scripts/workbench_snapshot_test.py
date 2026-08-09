@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import pickle
 import struct
 import sys
@@ -12,10 +13,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
+import workbench_image  # noqa: E402
 from novakit.services.workbench import elfsym, hardware, snapshot  # noqa: E402
 from novakit.services.workbench.observations import OBSERVATIONS, Obs  # noqa: E402
 
-ELF = REPO / "build" / "aarch64-debug" / "novavisor.elf"
+ELF = workbench_image.ELF
 RAM_BASE = hardware.platform()["NOVA_BOARD_PHYS_RAM_BASE"]
 
 
@@ -127,13 +129,12 @@ class SweepTest(unittest.TestCase):
 
 
 @unittest.skipUnless(ELF.is_file(), "debug ELF not built")
+@unittest.skipUnless(importlib.util.find_spec("elftools"), "pyelftools is not installed")
 class ElfRamProviderTest(unittest.TestCase):
     """End-to-end address arithmetic against a synthetic RAM file."""
 
     def test_reads_a_seeded_scheduler_state(self):
-        index = elfsym.ElfIndex(ELF)
-        self.addCleanup(index.close)
-        sched = index.resolve("nova::vcpu::g_sched")
+        sched = workbench_image.index().resolve("nova::vcpu::g_sched")
 
         with tempfile.TemporaryDirectory() as directory:
             ram_path = Path(directory) / "guest-ram"
@@ -146,6 +147,11 @@ class ElfRamProviderTest(unittest.TestCase):
                 # CpuSched: current=1, fp=kNoOwner, fp_trap=1, idling=0
                 ram.write(struct.pack("<QQ??6x", 1, (1 << 64) - 1, True, False))
 
+            # The one place the provider is left to resolve the image
+            # itself, which is what `view=None` means. Everything else
+            # here is handed the suite's parse, since paying seconds of
+            # DWARF walk to reach an assertion about mmap arithmetic
+            # buys nothing.
             provider = snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE)
             self.addCleanup(provider.close)
             observed = {obs.topic: obs for obs in OBSERVATIONS}
@@ -167,7 +173,7 @@ class ElfRamProviderTest(unittest.TestCase):
             ram_path = Path(directory) / "guest-ram"
             ram_path.write_bytes(b"\0" * 4096)
             with self.assertRaises(ValueError):
-                snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE)
+                snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE, workbench_image.view())
 
     def test_raw_memory_comes_back_at_the_address_asked_for(self):
         """What a page table walk needs: bytes at an address it learned
@@ -181,7 +187,7 @@ class ElfRamProviderTest(unittest.TestCase):
                 ram.seek(at - RAM_BASE)
                 ram.write(marker)
 
-            provider = snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE)
+            provider = snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE, workbench_image.view())
             self.addCleanup(provider.close)
             self.assertEqual(provider.read_bytes(at, len(marker)), marker)
             self.assertEqual(provider.read_bytes(at + 4, 4), marker[4:8])
@@ -195,7 +201,7 @@ class ElfRamProviderTest(unittest.TestCase):
             with ram_path.open("wb") as ram:
                 ram.truncate(_observed_top() - RAM_BASE)
 
-            provider = snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE)
+            provider = snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE, workbench_image.view())
             self.addCleanup(provider.close)
             top = RAM_BASE + (_observed_top() - RAM_BASE)
             with self.assertRaises(ValueError):
@@ -266,6 +272,7 @@ class ChangedMaskTest(unittest.TestCase):
 
 
 @unittest.skipUnless(ELF.is_file(), "debug ELF not built")
+@unittest.skipUnless(importlib.util.find_spec("elftools"), "pyelftools is not installed")
 class ImageViewTest(unittest.TestCase):
     """Reading the image is separable from using it.
 
@@ -276,7 +283,7 @@ class ImageViewTest(unittest.TestCase):
     """
 
     def test_a_resolved_image_survives_being_sent_between_processes(self):
-        view = snapshot.resolve_image(ELF)
+        view = workbench_image.view()
         restored = pickle.loads(pickle.dumps(view))
 
         self.assertEqual(restored.resolved.keys(), view.resolved.keys())
@@ -287,7 +294,7 @@ class ImageViewTest(unittest.TestCase):
     def test_a_provider_given_a_view_never_opens_the_image(self):
         """Which is what lets the parse happen somewhere else: the
         provider that maps RAM is not the thing that read the ELF."""
-        view = snapshot.resolve_image(ELF)
+        view = workbench_image.view()
         with tempfile.TemporaryDirectory() as directory:
             ram_path = Path(directory) / "guest-ram"
             with ram_path.open("wb") as ram:

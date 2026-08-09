@@ -1,5 +1,4 @@
-// Host-side GTest suite for the console multiplexer's pure logic
-// (components/console_mux/include/console_mux/line_model.hpp): line
+// Host-side GTest suite for the console multiplexer's pure logic: line
 // assembly, tag rendering and input-focus cycling.
 
 #include "console_mux/line_model.hpp"
@@ -70,7 +69,9 @@ TEST(ConsoleMuxLine, EarlyFlushAtLineMax) {
   EXPECT_EQ(feed(l, std::string(kLineMax - 1, 'x')), 0);
   EXPECT_TRUE(put_char(l, 'x')); // the kLineMax-th byte forces the flush
   EXPECT_EQ(l.len, kLineMax);
-  EXPECT_EQ(completed_line(l, 2).size(), kTagLen + kLineMax + 1);
+  // A full payload is framed like any other: nothing is dropped to make
+  // room for the newline the tag and the buffer already account for.
+  EXPECT_EQ(completed_line(l, 2), "[vm2] " + std::string(kLineMax, 'x') + "\n");
   l.len = 0;
 
   // The flush is per line, not per buffer: the next payload starts over.

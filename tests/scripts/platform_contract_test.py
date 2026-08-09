@@ -126,17 +126,47 @@ class AutomationLayerTests(unittest.TestCase):
 
     def test_a_command_importing_a_command_is_rejected(self):
         # Shared logic between two commands belongs to a service; reaching
-        # sideways leaves it in the top layer with two consumers.
+        # sideways leaves it in the top layer with two consumers. Both
+        # spellings of a sibling import say the same thing.
+        for spelling in ("from . import two", "from .two import value"):
+            with self.subTest(spelling=spelling), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                commands = self._package(root) / "commands"
+                (commands / "one.py").write_text(f"{spelling}\n")
+                (commands / "two.py").write_text("value = 1\n")
+
+                violations = boundaries.find_layer_violations(root)
+
+                self.assertEqual(len(violations), 1)
+                self.assertIn("sibling command", violations[0][2])
+
+    def test_a_command_reaching_past_services_is_rejected(self):
+        # A command adapts one service call to the CLI. Reaching a
+        # foundation directly puts that knowledge in the top layer, and
+        # depth alone would allow it — core sits below services.
+        for spelling in ("from ..core import proc", "from ..image import dtb"):
+            with self.subTest(spelling=spelling), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (self._package(root) / "commands" / "one.py").write_text(f"{spelling}\n")
+
+                violations = boundaries.find_layer_violations(root)
+
+                self.assertEqual(len(violations), 1)
+                self.assertIn("past services", violations[0][2])
+
+    def test_a_nested_package_may_reach_its_own_layer(self):
+        # `from .. import x` inside services/workbench names services,
+        # not the root: a nested package spends one dot on itself, so
+        # counting dots would read this as leaving the layer.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            commands = self._package(root) / "commands"
-            (commands / "one.py").write_text("from . import two\n")
-            (commands / "two.py").write_text("value = 1\n")
+            package = self._package(root)
+            nested = package / "services" / "workbench"
+            nested.mkdir()
+            (nested / "one.py").write_text("from .. import cmake\nfrom ...core import board\n")
+            (package / "services" / "cmake.py").write_text("value = 1\n")
 
-            violations = boundaries.find_layer_violations(root)
-
-        self.assertEqual(len(violations), 1)
-        self.assertIn("sibling command", violations[0][2])
+            self.assertEqual(boundaries.find_layer_violations(root), [])
 
     def test_a_downward_import_is_allowed(self):
         with tempfile.TemporaryDirectory() as directory:
