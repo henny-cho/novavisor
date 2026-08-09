@@ -15,6 +15,7 @@ set(NOVA_COMPONENTS
     core_gic
     vgic
     soft_timer
+    telemetry
     core_timer
     console_mux
     core_vcpu

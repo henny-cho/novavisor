@@ -99,6 +99,8 @@ TAG_BADGES: dict[str, Badge] = {
     "psci": Badge.PSCI,
     "smmu": Badge.SMMU,
     "smp": Badge.SMP,
+    # What the machine will publish about itself, said once at init.
+    "telemetry": Badge.BOOT,
     "trap_handler": Badge.TRAP,
     "vgic": Badge.VGIC,
     "vuart": Badge.VUART,

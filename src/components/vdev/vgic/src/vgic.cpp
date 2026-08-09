@@ -429,6 +429,16 @@ auto has_deliverable(std::size_t index) noexcept -> bool {
 
 namespace nova {
 
+// Injection state is the only route to it: the gdb stub's register set
+// carries no ICH_*, so the EL2 shadow is all there is.
+void vgic_component::telemetry(TelemetryCall* call) noexcept {
+  call->declare(&vgic::g_cpu, sizeof vgic::g_cpu);
+  call->declare(&vgic::g_spi_tokens, sizeof vgic::g_spi_tokens);
+  call->declare(&vgic::g_dist, sizeof vgic::g_dist);
+  call->declare(&vgic::g_resident, sizeof vgic::g_resident);
+  call->declare(&vgic::g_lr_count, sizeof vgic::g_lr_count);
+}
+
 void vgic_component::handle_mmio(MmioCall* call) noexcept {
   if (call->ipa >= vgic::kGicdIpaBase && call->ipa < vgic::kGicdIpaBase + vgic::kGicdFrameSize) {
     call->handled = true;

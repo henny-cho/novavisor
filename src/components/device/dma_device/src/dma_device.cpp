@@ -512,6 +512,12 @@ auto start_dma(dma::DeviceId device_id, std::size_t vm, std::uint64_t generation
 
 namespace nova {
 
+// Which device belongs to which VM, and where each one is in its
+// lifecycle.
+void dma_device_component::telemetry(TelemetryCall* call) noexcept {
+  call->declare(&dma_device::g_registry, sizeof dma_device::g_registry);
+}
+
 void dma_device_component::handle_irq(IrqCall* call) noexcept {
   if (call->handled) {
     return;

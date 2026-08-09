@@ -74,6 +74,16 @@ void cancel(std::size_t slot) noexcept {
   reprogram();
 }
 
+auto telemetry_spans() noexcept -> std::span<const telemetry::Span> {
+  // Sized from the objects themselves, so a queue that gains a slot or
+  // a board that gains a core travels whole without this line changing.
+  static const std::array<telemetry::Span, 2> kSpans{{
+      {.at = &g_queue, .bytes = sizeof g_queue},
+      {.at = &g_programmed, .bytes = sizeof g_programmed},
+  }};
+  return kSpans;
+}
+
 } // namespace nova::soft_timer
 
 namespace nova {

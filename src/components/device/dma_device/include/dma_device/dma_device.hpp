@@ -3,6 +3,7 @@
 #include "core_vcpu/core_vcpu.hpp"
 #include "nova/abi/dma.hpp"
 #include "smp/dma_quiesce.hpp"
+#include "telemetry/telemetry.hpp"
 #include "vgic/vgic.hpp"
 
 #include <cib/top.hpp>
@@ -47,10 +48,14 @@ struct dma_device_component {
 
   // Registers vIRQ backends, so it needs vgic and core_vcpu up first —
   // an ordering the project nexus declares.
+  // What this component offers the S layer.
+  static void telemetry(TelemetryCall* call) noexcept;
+
   constexpr static auto config =
       cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<IrqService>(&dma_device_component::handle_irq),
                   cib::extend<VirtualEoiService>(&dma_device_component::handle_virtual_eoi),
-                  cib::extend<DmaQuiesceService>(&dma_device_component::handle_quiesce));
+                  cib::extend<DmaQuiesceService>(&dma_device_component::handle_quiesce),
+                  cib::extend<TelemetryService>(&dma_device_component::telemetry));
 };
 
 } // namespace nova

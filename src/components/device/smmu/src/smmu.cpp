@@ -490,6 +490,13 @@ auto poll_events() noexcept -> std::size_t {
   return batch.processed;
 }
 
+// What each device stream is allowed to do. Published rather than read
+// once with the tables it points at: a fault quarantines a stream, and
+// this entry is the one that changes.
+void telemetry(TelemetryCall* call) noexcept {
+  call->declare(&g_stream_table, sizeof g_stream_table);
+}
+
 void handle_irq(IrqCall* call) noexcept {
   if (call->handled || !g_enabled) {
     return;

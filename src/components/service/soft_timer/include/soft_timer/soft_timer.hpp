@@ -19,12 +19,14 @@
 
 #include "core_gic/core_gic.hpp"
 #include "nova/abi/guest.hpp"
+#include "nova/telemetry.hpp"
 #include "soft_timer/timer_queue.hpp"
 
 #include <cib/top.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <flow/flow.hpp>
+#include <span>
 
 namespace nova::soft_timer {
 
@@ -35,7 +37,8 @@ inline constexpr std::size_t kSlotWatchdog    = kSlotCntvWake + kMaxVcpus;   // 
 inline constexpr std::size_t kSlotLifecycle   = kSlotWatchdog + kMaxGuests;  // + VM index, kMaxGuests wide
 inline constexpr std::size_t kSlotDmaDrain    = kSlotLifecycle + kMaxGuests; // + VM index, kMaxGuests wide
 inline constexpr std::size_t kSlotCommand     = kSlotDmaDrain + kMaxGuests;
-inline constexpr std::size_t kSlotCount       = kSlotCommand + 1;
+inline constexpr std::size_t kSlotTelemetry   = kSlotCommand + 1;
+inline constexpr std::size_t kSlotCount       = kSlotTelemetry + 1;
 
 // Enable the CNTHP PPI at the GIC (RuntimeStart).
 void init() noexcept;
@@ -45,6 +48,15 @@ void init() noexcept;
 // immediately).
 void arm(std::size_t slot, std::uint64_t deadline, Callback fn, std::uint64_t arg) noexcept;
 void cancel(std::size_t slot) noexcept;
+
+// What this component offers the S layer: the per-core queues and the
+// deadline each core's hardware timer is currently programmed to.
+//
+// Handed over through a plain function rather than by extending
+// TelemetryService, and for one reason: the publisher runs on a slot of
+// this queue, so it already sits above this component in the graph.
+// Subscribing would be a dependency back down.
+[[nodiscard]] auto telemetry_spans() noexcept -> std::span<const telemetry::Span>;
 
 } // namespace nova::soft_timer
 

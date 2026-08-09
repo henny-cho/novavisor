@@ -1,4 +1,4 @@
 nova_add_component(vgic
     SOURCES src/vgic.cpp
-    DEPS trap_handler core_gic trace
+    DEPS trap_handler core_gic trace telemetry
 )

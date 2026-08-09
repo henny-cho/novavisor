@@ -33,6 +33,7 @@
 #include "hal/vcpu_context.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/arch/trap_context.hpp"
+#include "telemetry/telemetry.hpp"
 #include "trap_handler/fp_simd.hpp"
 #include "trap_handler/hvc.hpp"
 #include "trap_handler/wfx.hpp"
@@ -213,11 +214,15 @@ struct core_vcpu_component {
   constexpr static auto INIT  = flow::action<"core_vcpu_init">([]() noexcept { vcpu::init(); });
   constexpr static auto ENTER = flow::action<"core_vcpu_enter">([]() noexcept { vcpu::enter_cpu(); });
 
+  // What this component offers the S layer.
+  static void telemetry(TelemetryCall* call) noexcept;
+
   constexpr static auto config =
       cib::config(cib::exports<VmResetService>, cib::extend<cib::RuntimeStart>(*INIT),
                   cib::extend<cib::MainLoop>(*ENTER), cib::extend<HvcService>(&core_vcpu_component::handle_hvc),
                   cib::extend<WfxService>(&core_vcpu_component::handle_wfx),
-                  cib::extend<FpSimdService>(&core_vcpu_component::handle_fp_simd));
+                  cib::extend<FpSimdService>(&core_vcpu_component::handle_fp_simd),
+                  cib::extend<TelemetryService>(&core_vcpu_component::telemetry));
 };
 
 } // namespace nova

@@ -164,6 +164,7 @@ SLOT_NAMES = {
     "kSlotLifecycle": "lifecycle vm{}",
     "kSlotDmaDrain": "dma_drain vm{}",
     "kSlotCommand": "command",
+    "kSlotTelemetry": "telemetry",
     "kSlotCount": "",  # the end marker, not a group
 }
 

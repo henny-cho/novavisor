@@ -100,6 +100,15 @@ void reevaluate_virq(std::size_t slot) noexcept {
 
 namespace nova {
 
+// Which cores are up, what work is queued for them, and where each VM
+// is in a power transition.
+void smp_component::telemetry(TelemetryCall* call) noexcept {
+  call->declare(&smp::g_online, sizeof smp::g_online);
+  call->declare(&smp::g_mail, sizeof smp::g_mail);
+  call->declare(&smp::g_lifecycle, sizeof smp::g_lifecycle);
+  call->declare(&smp::g_lifecycle_mode, sizeof smp::g_lifecycle_mode);
+}
+
 void smp_component::handle_virq_reevaluate(VirqReevaluateCall* call) noexcept {
   smp::reevaluate_virq(call->slot);
 }

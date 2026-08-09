@@ -23,6 +23,7 @@
 #include "nova/abi/guest.hpp"
 #include "nova/abi/hvc_abi.h"
 #include "nova/panic.hpp"
+#include "nova/telemetry.hpp"
 #include "soft_timer/soft_timer.hpp"
 #include "trace/trace.hpp"
 #include "vcpu_internal.hpp"
@@ -36,6 +37,20 @@
 #include <span>
 
 namespace nova {
+
+// Who runs where, what they are allowed to run for, and the trap frame
+// each one last came out of.
+void core_vcpu_component::telemetry(TelemetryCall* call) noexcept {
+  call->declare(&vcpu::g_sched, sizeof vcpu::g_sched);
+  call->declare(&vcpu::g_vcpus, sizeof vcpu::g_vcpus);
+  call->declare(&vcpu::g_slice_ticks, sizeof vcpu::g_slice_ticks);
+  call->declare(&vcpu::g_published_state, sizeof vcpu::g_published_state);
+  call->declare(&vcpu::g_affinity, sizeof vcpu::g_affinity);
+  call->declare(&vcpu::g_slot_valid, sizeof vcpu::g_slot_valid);
+  call->declare(&vcpu::g_cntvoff, sizeof vcpu::g_cntvoff);
+  call->declare(&vcpu::g_vm_generation, sizeof vcpu::g_vm_generation);
+  call->declare(&vcpu::g_budget, sizeof vcpu::g_budget);
+}
 
 // Defined in hal/arch/aarch64/guest/vcpu_enter.S. x0_arg is the guest's boot
 // argument (PSCI CPU_ON context_id) — the only seeded GP register the
@@ -168,6 +183,13 @@ void schedule_out(TrapContext* live) noexcept {
     if (g_alive.load(std::memory_order_acquire) == 0 && g_lifecycle_transitions.load(std::memory_order_acquire) == 0 &&
         !g_halt_announced.exchange(true)) {
       console::write("[core_vcpu] all VCPUs off — halting\n");
+      // Leave the last reading behind. A published value is only as
+      // fresh as the next turn, and there is no next turn past here —
+      // so the state a reader most wants would otherwise be the one
+      // state never published. Through the foundation storage rather
+      // than the component, like a trace emit: a profile built without
+      // the publisher leaves it unplaced and this does nothing.
+      static_cast<void>(telemetry::g_publisher.publish_all(hyp_timer::now()));
       halt();
     }
 

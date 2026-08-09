@@ -20,6 +20,7 @@
 
 #include "core_gic/core_gic.hpp"
 #include "core_vcpu/core_vcpu.hpp"
+#include "telemetry/telemetry.hpp"
 #include "trap_handler/mmio.hpp"
 
 #include <cib/top.hpp>
@@ -54,10 +55,14 @@ struct vuart_component {
 
   // enable_spi programs the distributor, so the physical GIC bring-up
   // must have run first — the project nexus orders it.
+  // What this component offers the S layer.
+  static void telemetry(TelemetryCall* call) noexcept;
+
   constexpr static auto config =
       cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<MmioService>(&vuart_component::handle_mmio),
                   cib::extend<IrqService>(&vuart_component::handle_irq),
-                  cib::extend<VmResetService>(&vuart_component::handle_vm_reset));
+                  cib::extend<VmResetService>(&vuart_component::handle_vm_reset),
+                  cib::extend<TelemetryService>(&vuart_component::telemetry));
 };
 
 } // namespace nova

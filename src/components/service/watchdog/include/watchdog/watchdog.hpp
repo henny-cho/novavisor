@@ -14,6 +14,7 @@
 // disarms explicitly; boot generations reject delayed old-instance
 // updates.
 
+#include "telemetry/telemetry.hpp"
 #include "trap_handler/hvc.hpp"
 
 #include <cib/top.hpp>
@@ -24,7 +25,11 @@ struct watchdog_component {
   // Claims HVC_HEARTBEAT.
   static void handle_hvc(HvcCall* call) noexcept;
 
-  constexpr static auto config = cib::config(cib::extend<HvcService>(&watchdog_component::handle_hvc));
+  // What this component offers the S layer.
+  static void telemetry(TelemetryCall* call) noexcept;
+
+  constexpr static auto config = cib::config(cib::extend<HvcService>(&watchdog_component::handle_hvc),
+                                             cib::extend<TelemetryService>(&watchdog_component::telemetry));
 };
 
 } // namespace nova

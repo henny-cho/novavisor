@@ -80,6 +80,12 @@ void vm_reset(std::size_t vm) noexcept {
 
 namespace nova {
 
+// Each guest's PL011 as the model holds it: what it has buffered and
+// what it has unmasked.
+void vuart_component::telemetry(TelemetryCall* call) noexcept {
+  call->declare(&vuart::g_uart, sizeof vuart::g_uart);
+}
+
 void vuart_component::handle_mmio(MmioCall* call) noexcept {
   if (call->ipa < NOVA_VUART_IPA_BASE || call->ipa >= NOVA_VUART_IPA_BASE + vuart::kUartFrameSize) {
     return;

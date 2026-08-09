@@ -29,6 +29,7 @@
 #include "psci/psci.hpp"
 #include "smp/smp.hpp"
 #include "soft_timer/soft_timer.hpp"
+#include "telemetry/telemetry.hpp"
 #include "trace/trace.hpp"
 #include "trap_handler/trap_handler.hpp"
 #include "vgic/vgic.hpp"
@@ -46,13 +47,15 @@ namespace nova {
 //     distributor or redistributor frames it wakes.
 //   - core_timer before soft_timer: CNTHP must be disarmed first.
 //   - boot_msg once the guest table is seeded.
-//   - smp last: a secondary touches shared state the instant CPU_ON
-//     lands, so every other init must have completed.
+//   - smp before telemetry: a secondary touches shared state the
+//     instant CPU_ON lands, so every other init must have completed.
+//   - telemetry last: the first turn should read a machine that is
+//     built, not one still building.
 struct boot_order_component {
   constexpr static auto config = cib::config(cib::extend<cib::RuntimeStart>(
       trace_component::INIT >> core_mmu_component::INIT >> core_gic_component::INIT >> vgic_component::INIT >>
       core_timer_component::INIT >> soft_timer_component::INIT >> core_vcpu_component::INIT >> vuart_component::INIT >>
-      boot_msg_component::PRINT_BOOT_MSG >> smp_component::INIT));
+      boot_msg_component::PRINT_BOOT_MSG >> smp_component::INIT >> telemetry_component::INIT));
 };
 
 struct nova_project {
@@ -60,7 +63,7 @@ struct nova_project {
       cib::components<trace_component, core_mmu_component, core_gic_component, vgic_component, core_timer_component,
                       soft_timer_component, boot_msg_component, trap_handler_component, demo_hvc_component,
                       ivc_component, psci_component, watchdog_component, smp_component, vuart_component,
-                      core_vcpu_component, boot_order_component>;
+                      core_vcpu_component, telemetry_component, boot_order_component>;
 };
 
 using nova_top = cib::top<nova_project>;

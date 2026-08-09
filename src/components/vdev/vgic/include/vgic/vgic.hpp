@@ -20,6 +20,7 @@
 // post_private()/post_spi().
 
 #include "core_gic/core_gic.hpp"
+#include "telemetry/telemetry.hpp"
 #include "trap_handler/mmio.hpp"
 #include "trap_handler/sysreg.hpp"
 #include "vgic/vgic_delivery.hpp"
@@ -128,12 +129,16 @@ struct vgic_component {
   // Group 0 generators are WI. ICC_SGI1R itself belongs to smp.
   static void handle_sysreg(SysregCall* call) noexcept;
 
+  // What this component offers the S layer.
+  static void telemetry(TelemetryCall* call) noexcept;
+
   constexpr static auto INIT = flow::action<"vgic_init">([]() noexcept { vgic::init(); });
 
   constexpr static auto config = cib::config(
       cib::exports<VirtualEoiService, VirqReevaluateService>, cib::extend<cib::RuntimeStart>(*INIT),
       cib::extend<MmioService>(&vgic_component::handle_mmio), cib::extend<IrqService>(&vgic_component::handle_irq),
-      cib::extend<SysregService>(&vgic_component::handle_sysreg));
+      cib::extend<SysregService>(&vgic_component::handle_sysreg),
+      cib::extend<TelemetryService>(&vgic_component::telemetry));
 };
 
 } // namespace nova

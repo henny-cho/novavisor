@@ -68,6 +68,11 @@ void on_expiry(TrapContext* ctx, std::uint64_t vm) noexcept {
 
 } // namespace
 
+// The heartbeat each guest is judged against.
+void watchdog_component::telemetry(TelemetryCall* call) noexcept {
+  call->declare(&g_update_sequence, sizeof g_update_sequence);
+}
+
 void watchdog_component::handle_hvc(HvcCall* call) noexcept {
   if (call->handled) {
     return;
