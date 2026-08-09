@@ -1,64 +1,19 @@
 // tests/host/esr_parse_test.cpp
 //
-// Host-side GTest suite for ESR_EL2 parsing utilities (nova/arch/esr.hpp)
-// and TrapContext layout assertions (nova/arch/trap_context.hpp).
+// Host-side GTest suite for the ESR_EL2 routing policy and the trapped
+// MSR/MRS syndrome matchers (nova/arch/esr.hpp, sysreg_trap.hpp). Field
+// extraction and the TrapContext layout are pinned by static_asserts in
+// their own headers, so every build checks them; what remains here is
+// the policy each syndrome feeds.
 //
 // Depends only on <cstdint> — no bare-metal headers required.
 
 #include "nova/arch/esr.hpp"
 #include "nova/arch/sysreg_trap.hpp"
-#include "nova/arch/trap_context.hpp"
 
 #include <gtest/gtest.h>
 
 using namespace nova::esr;
-
-// ---------------------------------------------------------------------------
-// ExceptionClass enum values
-// ---------------------------------------------------------------------------
-
-TEST(EsrExceptionClass, HvcAa64Value) {
-  EXPECT_EQ(static_cast<std::uint8_t>(ExceptionClass::kHvcAa64), 0x16U);
-}
-
-TEST(EsrExceptionClass, DataAbortLowerValue) {
-  EXPECT_EQ(static_cast<std::uint8_t>(ExceptionClass::kDataAbortLower), 0x24U);
-}
-
-TEST(EsrExceptionClass, InstAbortLowerValue) {
-  EXPECT_EQ(static_cast<std::uint8_t>(ExceptionClass::kInstAbortLower), 0x20U);
-}
-
-TEST(EsrExceptionClass, UnknownValue) {
-  EXPECT_EQ(static_cast<std::uint8_t>(ExceptionClass::kUnknown), 0x00U);
-}
-
-// ---------------------------------------------------------------------------
-// get_ec — extract EC field (bits 31:26)
-// ---------------------------------------------------------------------------
-
-TEST(GetEc, HvcAa64) {
-  // EC = 0x16 → bits 31:26 = 0b010110 → shift left 26
-  const std::uint64_t esr = static_cast<std::uint64_t>(0x16U) << 26U;
-  EXPECT_EQ(get_ec(esr), ExceptionClass::kHvcAa64);
-}
-
-TEST(GetEc, DataAbortLower) {
-  const std::uint64_t esr = static_cast<std::uint64_t>(0x24U) << 26U;
-  EXPECT_EQ(get_ec(esr), ExceptionClass::kDataAbortLower);
-}
-
-TEST(GetEc, IgnoresLowerBits) {
-  // EC = HVC_AA64, ISS = 0xFFFFFF (all lower bits set)
-  const std::uint64_t esr = (static_cast<std::uint64_t>(0x16U) << 26U) | 0x01FF'FFFFU;
-  EXPECT_EQ(get_ec(esr), ExceptionClass::kHvcAa64);
-}
-
-TEST(GetEc, IgnoresUpperBits) {
-  // EC = HVC_AA64, upper 32 bits set (RES0 in real HW, but parsing must be robust)
-  const std::uint64_t esr = (static_cast<std::uint64_t>(0x16U) << 26U) | (0xFFFF'FFFFULL << 32U);
-  EXPECT_EQ(get_ec(esr), ExceptionClass::kHvcAa64);
-}
 
 TEST(LowerSyncPolicy, GuestOriginatedClassesAreIsolated) {
   EXPECT_TRUE(is_lower_sync_guest_fault(ExceptionClass::kUnknown));
@@ -78,28 +33,6 @@ TEST(LowerSyncPolicy, HypervisorInvariantClassesStayFatal) {
   EXPECT_FALSE(is_lower_sync_guest_fault(ExceptionClass::kSoftstepCurrent));
   EXPECT_FALSE(is_lower_sync_guest_fault(ExceptionClass::kWatchptCurrent));
   EXPECT_FALSE(is_lower_sync_guest_fault(ExceptionClass::kSerror));
-}
-
-// ---------------------------------------------------------------------------
-// TrapContext layout (static_asserts are compile-time, but verify sizes too)
-// ---------------------------------------------------------------------------
-
-TEST(TrapContextLayout, Size) {
-  EXPECT_EQ(sizeof(nova::TrapContext), 288U);
-}
-
-TEST(TrapContextLayout, Alignment) {
-  EXPECT_EQ(alignof(nova::TrapContext), 16U);
-}
-
-TEST(TrapContextLayout, FieldOffsets) {
-  EXPECT_EQ(offsetof(nova::TrapContext, x), 0U);
-  EXPECT_EQ(offsetof(nova::TrapContext, x) + (30 * sizeof(std::uint64_t)), 240U);
-  EXPECT_EQ(offsetof(nova::TrapContext, sp), 248U);
-  EXPECT_EQ(offsetof(nova::TrapContext, elr), 256U);
-  EXPECT_EQ(offsetof(nova::TrapContext, spsr), 264U);
-  EXPECT_EQ(offsetof(nova::TrapContext, esr), 272U);
-  EXPECT_EQ(offsetof(nova::TrapContext, far), 280U);
 }
 
 // ---------------------------------------------------------------------------

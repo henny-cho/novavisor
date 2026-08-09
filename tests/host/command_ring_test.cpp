@@ -33,7 +33,7 @@ struct Fixture {
   Page page{};
 
   Fixture() {
-    nova::command::format(base(), kPeriodUs);
+    nova::command::format(base(), kPeriodUs, {});
     nova::command::publish(base());
   }
 
@@ -59,7 +59,7 @@ auto command(std::uint64_t op, std::uint64_t a = 0, std::uint64_t b = 0) -> Reco
 
 TEST(CommandRingFormat, GeometryIsPublishedAndTheMagicComesLast) {
   Page page{};
-  nova::command::format(page.byte.data(), kPeriodUs);
+  nova::command::format(page.byte.data(), kPeriodUs, {});
 
   auto* header = reinterpret_cast<nova::command::Header*>(page.byte.data());
   EXPECT_EQ(header->version, NOVA_CMD_VERSION);

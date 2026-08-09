@@ -80,8 +80,23 @@ inline constexpr std::uint64_t kWfxTiWfe = 1ULL << 0U; // WFx ISS.TI bit 0: 0 = 
 inline constexpr std::uint32_t kSrtZeroReg = 31U;
 
 // Extract the Exception Class from ESR_EL2.
-[[nodiscard]] inline auto get_ec(std::uint64_t esr) noexcept -> ExceptionClass {
+[[nodiscard]] constexpr auto get_ec(std::uint64_t esr) noexcept -> ExceptionClass {
   return static_cast<ExceptionClass>((esr >> kEcShift) & kEcMask);
 }
+
+// The class comes from bits 31:26 and from nowhere else: neither the
+// ISS below the field nor the RES0 half above it may reach the routing
+// decision.
+static_assert(
+    [] {
+      const std::uint64_t hvc = static_cast<std::uint64_t>(ExceptionClass::kHvcAa64) << kEcShift;
+      return get_ec(hvc) == ExceptionClass::kHvcAa64 &&
+             get_ec(static_cast<std::uint64_t>(ExceptionClass::kDataAbortLower) << kEcShift) ==
+                 ExceptionClass::kDataAbortLower &&
+             get_ec(hvc | NOVA_ESR_ISS_MASK) == ExceptionClass::kHvcAa64 &&       // syndrome bits below
+             get_ec(hvc | (0xFFFF'FFFFULL << 32U)) == ExceptionClass::kHvcAa64 && // reserved bits above
+             get_ec(0) == ExceptionClass::kUnknown;                               // a blank syndrome claims nothing
+    }(),
+    "the exception class is ESR_EL2 bits 31:26 alone");
 
 } // namespace nova::esr

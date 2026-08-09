@@ -198,6 +198,10 @@ b{font-weight:700}
 }
 .lg b{color:var(--ink2);font-family:var(--mono)}
 .lg i{width:12px;height:0;border-top:2px solid var(--ink2);display:inline-block}
+/* One swatch per grade, each stated: a swatch left to the base rule is
+   another grade's swatch, and the legend then explains one stroke
+   twice and another not at all. Solid and dimmed, as the edge is. */
+.lg i.console{opacity:.6}
 .lg i.direct{border-top-width:3px;border-color:var(--hyp)}
 .lg i.poll{border-top-style:dashed;border-color:var(--hyp)}
 .lg i.none{border-top-style:dashed;opacity:.5}

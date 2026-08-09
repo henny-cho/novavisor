@@ -45,6 +45,22 @@ enum class TimebaseError : std::uint8_t {
   return TimebaseError::kNone;
 }
 
+// The verdict at the edges that decide it, and on the rates real parts
+// report. Zero keeps its own answer because an unprogrammed register is
+// the defect this gate exists for, not merely a value out of range.
+static_assert(
+    [] {
+      return validate_timebase(0) == TimebaseError::kUnprogrammed &&
+             validate_timebase(kMinCounterHz - 1) == TimebaseError::kOutOfRange &&
+             validate_timebase(kMinCounterHz) == TimebaseError::kNone &&
+             validate_timebase(24'000'000) == TimebaseError::kNone && // a common board oscillator
+             validate_timebase(62'500'000) == TimebaseError::kNone && // QEMU virt
+             validate_timebase(kMaxCounterHz) == TimebaseError::kNone &&
+             validate_timebase(kMaxCounterHz + 1) == TimebaseError::kOutOfRange &&
+             validate_timebase(~std::uint64_t{0}) == TimebaseError::kOutOfRange;
+    }(),
+    "the timebase window admits every real counter rate and nothing else");
+
 [[nodiscard]] constexpr auto to_string(TimebaseError error) noexcept -> std::string_view {
   switch (error) {
   case TimebaseError::kUnprogrammed:

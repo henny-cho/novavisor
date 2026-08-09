@@ -1,3 +1,9 @@
+// tests/host/cpu_features_test.cpp
+//
+// Host-side GTest suite for the SMCCC mitigation verdicts. Field
+// extraction is pinned by a static_assert in the header; what is tested
+// here is the judgement each verdict makes from those fields.
+
 #include "nova/arch/cpu_features.hpp"
 
 #include <gtest/gtest.h>
@@ -22,31 +28,6 @@ constexpr auto pfr1(std::uint64_t ssbs, std::uint64_t csv2_frac) -> std::uint64_
 // CLRBHB at [31:28].
 constexpr auto isar2(std::uint64_t clrbhb) -> std::uint64_t {
   return clrbhb << 28U;
-}
-
-TEST(CpuFeatures, DecodesEachField) {
-  const auto s = read_speculation_state(pfr0(2, 1), pfr1(2, 1), isar2(1));
-  EXPECT_EQ(s.csv2, 2U);
-  EXPECT_EQ(s.csv3, 1U);
-  EXPECT_EQ(s.ssbs, 2U);
-  EXPECT_EQ(s.csv2_frac, 1U);
-  EXPECT_TRUE(s.clrbhb);
-}
-
-TEST(CpuFeatures, IgnoresNeighbouringFields) {
-  // Every bit set: each accessor must still yield only its own nibble.
-  const auto all = read_speculation_state(~std::uint64_t{0}, ~std::uint64_t{0}, ~std::uint64_t{0});
-  EXPECT_EQ(all.csv2, 0xFU);
-  EXPECT_EQ(all.csv3, 0xFU);
-  EXPECT_EQ(all.ssbs, 0xFU);
-  EXPECT_EQ(all.csv2_frac, 0xFU);
-  EXPECT_TRUE(all.clrbhb);
-
-  // Every bit except the CSV2 nibble: neighbours must not leak into it.
-  constexpr std::uint64_t kCsv2Mask = 0xFULL << 56U;
-  const auto              without   = read_speculation_state(~kCsv2Mask, 0, 0);
-  EXPECT_EQ(without.csv2, 0U);
-  EXPECT_EQ(without.csv3, 0xFU);
 }
 
 // A zero field discloses nothing, so the hypervisor must not claim the

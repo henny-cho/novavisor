@@ -76,17 +76,14 @@ def prepare_payload_manifest(
     records = []
     for index, guest in enumerate(manifest.get("guests", [])):
         binary = resolve_guest_binary(demo_name, demo_build, guest)
-        try:
-            records.append(make_record(
-                binary,
-                guest=index,
-                name=guest["name"],
-                load_pa=guest["load_addr"],
-                entry=guest["entry"],
-                memory_size=guest["memory_size"],
-            ))
-        except ValueError as exc:
-            sys.exit(f"[nova demo] {demo_name}: {exc}")
+        records.append(make_record(
+            binary,
+            guest=index,
+            name=guest["name"],
+            load_pa=guest["load_addr"],
+            entry=guest["entry"],
+            memory_size=guest["memory_size"],
+        ))
     if not records:
         raise SystemExit(f"[nova demo] {demo_name}: embedded mode requires guests")
 

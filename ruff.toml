@@ -1,4 +1,29 @@
 target-version = "py311"
 
 [lint]
-select = ["E4", "E7", "E9", "F", "I", "ARG"]
+select = ["E4", "E7", "E9", "F", "I", "ARG", "TID251"]
+
+# Each of these belongs to one module, so the rest of the package stays
+# testable without the thing it wraps: no socket, no child process, no
+# event loop, no ELF. The owner is exempted below.
+[lint.flake8-tidy-imports.banned-api]
+"pexpect".msg = "a child is spawned in services/spawn.py"
+"websockets".msg = "the socket has two ends: workbench/server.py serves, workbench/client.py asks"
+"elftools".msg = "the image is parsed in workbench/elfsym.py"
+"asyncio".msg = "the event loop lives in workbench/server.py and session.py"
+"subprocess".msg = "the process boundary is core/proc.py; image/ programs the build graph runs are their own"
+"argparse".msg = "the CLI boundary is typer; image/ programs the build graph runs are their own"
+"typer".msg = "typer stops at cli.py and the commands layer"
+
+[lint.per-file-ignores]
+"scripts/novakit/cli.py" = ["TID251"]
+"scripts/novakit/commands/*.py" = ["TID251"]
+"scripts/novakit/core/proc.py" = ["TID251"]
+"scripts/novakit/image/dtb.py" = ["TID251"]
+"scripts/novakit/image/layout.py" = ["TID251"]
+"scripts/novakit/services/spawn.py" = ["TID251"]
+"scripts/novakit/services/workbench/client.py" = ["TID251"]
+"scripts/novakit/services/workbench/elfsym.py" = ["TID251"]
+"scripts/novakit/services/workbench/server.py" = ["TID251"]
+"scripts/novakit/services/workbench/session.py" = ["TID251"]
+"tests/scripts/*.py" = ["TID251"]

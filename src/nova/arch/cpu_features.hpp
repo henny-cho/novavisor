@@ -69,6 +69,27 @@ struct SpeculationState {
           .clrbhb    = isar2_clrbhb(isar2)};
 }
 
+// Each field reaches its own slot and no other. A neighbouring nibble
+// leaking in would turn "not disclosed" into a claim the PE never made.
+static_assert(
+    [] {
+      const auto pfr0  = [](std::uint64_t csv2, std::uint64_t csv3) { return (csv2 << 56U) | (csv3 << 60U); };
+      const auto pfr1  = [](std::uint64_t ssbs, std::uint64_t csv2_frac) { return (ssbs << 4U) | (csv2_frac << 32U); };
+      const auto isar2 = [](std::uint64_t clrbhb) { return clrbhb << 28U; };
+
+      const SpeculationState mixed = read_speculation_state(pfr0(2, 1), pfr1(2, 1), isar2(1));
+      const SpeculationState all   = read_speculation_state(~std::uint64_t{0}, ~std::uint64_t{0}, ~std::uint64_t{0});
+      const SpeculationState blank = read_speculation_state(0, 0, 0);
+      // Every bit set except the CSV2 nibble: its neighbours must not fill it in.
+      const SpeculationState without = read_speculation_state(~(0xFULL << 56U), 0, 0);
+
+      return mixed.csv2 == 2 && mixed.csv3 == 1 && mixed.ssbs == 2 && mixed.csv2_frac == 1 && mixed.clrbhb &&
+             all.csv2 == 0xF && all.csv3 == 0xF && all.ssbs == 0xF && all.csv2_frac == 0xF && all.clrbhb &&
+             blank.csv2 == 0 && blank.csv3 == 0 && blank.ssbs == 0 && blank.csv2_frac == 0 && !blank.clrbhb &&
+             without.csv2 == 0 && without.csv3 == 0xF;
+    }(),
+    "each speculation ID field is read from its own bits");
+
 enum class Mitigation : std::uint8_t {
   kUnaffected,     // the PE reports the property — SMCCC NOT_REQUIRED is honest
   kGuestMitigates, // affected, and the guest has what it needs to act itself

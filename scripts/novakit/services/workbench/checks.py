@@ -115,17 +115,29 @@ def verify_manifest(elf: Path | None = None) -> int:
                 failures += 1
                 print(f"[workbench] stale table symbol: {error}", file=sys.stderr)
 
-        # Every stop point must still be a function in this image. An
-        # inlined or renamed one would otherwise leave the UI offering a
-        # breakpoint that can never be hit.
+        # Every stop point must still be a function in this image, and no
+        # two of them the same one. An inlined or renamed stop leaves the
+        # UI offering a breakpoint that can never be hit; two events at
+        # one address are one stop wearing two names, and arming either
+        # fires both.
         edge_ids = {edge.id for edge in EDGES}
+        entries: dict[int, str] = {}
         for event in EVENTS:
             if event.stop:
                 try:
-                    index.resolve_function(event.symbol)
+                    address = index.resolve_function(event.symbol)
                 except KeyError as error:
                     failures += 1
                     print(f"[workbench] stale event {event.id}: {error}", file=sys.stderr)
+                else:
+                    shared = entries.setdefault(address, event.id)
+                    if shared != event.id:
+                        failures += 1
+                        print(
+                            f"[workbench] events {shared} and {event.id} both stop at "
+                            f"{address:#x}",
+                            file=sys.stderr,
+                        )
             if event.edge and event.edge not in edge_ids:
                 failures += 1
                 print(

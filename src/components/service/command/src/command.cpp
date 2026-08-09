@@ -90,7 +90,15 @@ void start() noexcept {
     return;
   }
   g_period_ticks = plan.ticks;
-  place(kPeriodUs);
+  // The bands come from the components that enforce them, so what the
+  // page advertises and what run() accepts cannot drift apart.
+  const auto slice = vcpu::slice_band();
+  const auto spi   = vgic::spi_band();
+  place(kPeriodUs, {.slice_min_us = slice.min_us,
+                    .slice_def_us = slice.default_us,
+                    .slice_max_us = slice.max_us,
+                    .spi_lo       = spi.lo,
+                    .spi_hi       = spi.hi});
   arm();
 }
 

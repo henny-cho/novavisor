@@ -58,7 +58,8 @@ void dispatch_hvc(TrapContext* ctx) noexcept {
   // Shared with the SMC conduit, which the router has already stepped
   // over; an HVC needs no advance at all. Handlers that halt (HVC_EXIT)
   // never return through this path anyway.
-  static_assert(trap::elr_policy(esr::ExceptionClass::kHvcAa64) == trap::ElrAdvance::kNone);
+  static_assert(trap::elr_policy(esr::ExceptionClass::kHvcAa64) == trap::ElrAdvance::kNone &&
+                trap::elr_policy(esr::ExceptionClass::kSmcAa64) == trap::ElrAdvance::kBeforeDispatch);
   HvcCall call{.ctx = ctx, .func_id = static_cast<std::uint32_t>(ctx->x[0]), .handled = false};
   cib::service<HvcService>(&call);
 
@@ -125,7 +126,16 @@ void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
   trace_emit(NOVA_TRACE_EV_TRAP, static_cast<std::uint32_t>(ec), ctx->esr, ctx->far);
 
   // Classes whose ELR must be stepped over before their handler runs
-  // (trap_handler/elr_policy.hpp owns the full matrix).
+  // (trap_handler/elr_policy.hpp owns the full matrix). Exactly the two
+  // conduits that arrive with ELR at the trapped instruction qualify —
+  // stepping an HVC here would make the guest skip the instruction after
+  // it, and stepping a data abort would skip the access being emulated.
+  static_assert(trap::elr_policy(esr::ExceptionClass::kSmcAa64) == trap::ElrAdvance::kBeforeDispatch &&
+                trap::elr_policy(esr::ExceptionClass::kWfx) == trap::ElrAdvance::kBeforeDispatch &&
+                trap::elr_policy(esr::ExceptionClass::kHvcAa64) != trap::ElrAdvance::kBeforeDispatch &&
+                trap::elr_policy(esr::ExceptionClass::kFpSimd) != trap::ElrAdvance::kBeforeDispatch &&
+                trap::elr_policy(esr::ExceptionClass::kMsrMrs) != trap::ElrAdvance::kBeforeDispatch &&
+                trap::elr_policy(esr::ExceptionClass::kDataAbortLower) == trap::ElrAdvance::kPerHandler);
   if (trap::elr_policy(ec) == trap::ElrAdvance::kBeforeDispatch) {
     ctx->elr += 4;
   }
@@ -158,6 +168,16 @@ void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
     break;
   }
 
+  // Nothing below is routed, so nothing below resumes the instruction:
+  // guest classes are isolated through GuestFaultService and EL2-origin
+  // ones panic. Either way the resume rule is kFault.
+  static_assert(trap::elr_policy(esr::ExceptionClass::kInstAbortLower) == trap::ElrAdvance::kFault &&
+                trap::elr_policy(esr::ExceptionClass::kSvcAa64) == trap::ElrAdvance::kFault &&
+                trap::elr_policy(esr::ExceptionClass::kSve) == trap::ElrAdvance::kFault &&
+                trap::elr_policy(esr::ExceptionClass::kBrk) == trap::ElrAdvance::kFault &&
+                trap::elr_policy(esr::ExceptionClass::kUnknown) == trap::ElrAdvance::kFault &&
+                trap::elr_policy(esr::ExceptionClass::kDataAbortCurrent) == trap::ElrAdvance::kFault &&
+                trap::elr_policy(esr::ExceptionClass::kSerror) == trap::ElrAdvance::kFault);
   if (esr::is_lower_sync_guest_fault(ec)) {
     console::write("[trap_handler] unhandled guest synchronous exception\n");
     dump_trap_context(ctx);

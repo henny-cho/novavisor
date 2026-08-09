@@ -41,4 +41,3 @@ def register(root: typer.Typer) -> None:
     root.command("format")(format_sources)
     root.command()(lint)
     root.command()(test)
-    root.command("fmt", hidden=True)(format_sources)

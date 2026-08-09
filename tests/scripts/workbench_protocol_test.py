@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import sys
 import tempfile
@@ -65,25 +66,46 @@ class EnvelopeTest(unittest.TestCase):
 
 class UplinkTest(unittest.TestCase):
     def test_accepts_every_uplink_topic(self):
-        for topic in protocol.UPLINK:
-            with self.subTest(topic=topic.value):
-                uplink = protocol.parse_uplink(json.dumps({"topic": topic.value, "data": {}}))
-                self.assertEqual(uplink.topic, topic)
+        """What the parser lets through and what the bridge answers are
+        one table, read from one end.
+
+        The two used to be a set here and an if-chain there, and the
+        chain ended in the target branch — so a topic added to the set
+        and to no branch was accepted, dispatched to target, and refused
+        as a malformed launch.
+        """
+        from novakit.services.workbench.server import HANDLERS, UPLINK, Bridge
+
+        self.assertEqual(UPLINK, {handler.topic for handler in HANDLERS})
+        for handler in HANDLERS:
+            with self.subTest(topic=handler.topic.value):
+                uplink = protocol.parse_uplink(
+                    json.dumps({"topic": handler.topic.value, "data": {}}), UPLINK
+                )
+                self.assertEqual(uplink.topic, handler.topic)
+                # And what answers it is a method of the bridge the
+                # message arrived at, taking the parsed payload.
+                self.assertIs(getattr(Bridge, handler.call.__name__), handler.call)
+                self.assertEqual(len(inspect.signature(handler.call).parameters), 2)
 
     def test_data_defaults_to_an_empty_object(self):
-        self.assertEqual(protocol.parse_uplink('{"topic":"uart"}').data, {})
+        self.assertEqual(
+            protocol.parse_uplink('{"topic":"uart"}', frozenset({protocol.Topic.UART})).data, {}
+        )
 
     def test_rejections(self):
+        accepted = frozenset({protocol.Topic.UART})
         for text in (
             "not json",
             "[1,2]",
             '{"topic":"console","data":{}}',  # downlink topic
+            '{"topic":"target","data":{}}',  # uplink the caller does not take
             '{"topic":"nope","data":{}}',
             '{"topic":"uart","data":[1]}',
         ):
             with self.subTest(text=text):
                 with self.assertRaises(protocol.UplinkError):
-                    protocol.parse_uplink(text)
+                    protocol.parse_uplink(text, accepted)
 
     def test_control_bytes_decode(self):
         self.assertEqual(protocol.decode_bytes("ping\n"), b"ping\n")

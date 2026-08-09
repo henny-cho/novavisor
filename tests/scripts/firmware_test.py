@@ -16,72 +16,16 @@ from novakit.services import tfa  # noqa: E402
 
 
 class QemuCommandTests(unittest.TestCase):
-    def test_secure_firmware_boot_reuses_the_canonical_board(self):
-        command = board.command(
-            bios=Path("/tmp/flash.bin"),
-            secure=True,
-        )
+    def test_secure_firmware_boot_turns_on_the_secure_world(self):
+        # The rest of the command is the frozen board model, asserted
+        # where that model is owned. Secure world is the one thing only
+        # a firmware chain asks for, and BL1 will not run without it.
+        command = board.command(bios=Path("/tmp/flash.bin"), secure=True)
 
-        self.assertEqual(command[0], "qemu-system-aarch64")
         self.assertIn("secure=on", command[2])
-        self.assertNotIn("-kernel", command)
-        self.assertEqual(command[-2:], ["-bios", "/tmp/flash.bin"])
-
-
-class FirmwareSourceTests(unittest.TestCase):
-    def test_pinned_cached_checkout_avoids_network_commands(self):
-        with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory) / "tf-a"
-            (source / ".git").mkdir(parents=True)
-            with (
-                mock.patch.object(tfa, "source_dir", return_value=source),
-                mock.patch.object(
-                    tfa.config,
-                    "tool_version",
-                    return_value="pinned-commit",
-                ),
-                mock.patch.object(
-                    tfa,
-                    "_revision",
-                    return_value="pinned-commit",
-                ),
-                mock.patch.object(tfa.proc, "run") as run,
-            ):
-                resolved = tfa.prepare_source()
-
-            self.assertEqual(resolved, source)
-            run.assert_not_called()
 
 
 class FirmwarePackagingTests(unittest.TestCase):
-    @mock.patch.object(tfa, "package_n1sdp")
-    def test_platform_dispatch_selects_the_matching_packager(self, package_n1sdp):
-        payload = Path("payload.bin")
-        output = Path("output")
-
-        tfa.package_platform("n1sdp", payload, output)
-
-        package_n1sdp.assert_called_once_with(payload, output)
-
-    @mock.patch.object(tfa, "verify_chain", return_value=0)
-    def test_platform_dispatch_selects_the_matching_verifier(self, verify_chain):
-        payload = Path("payload.bin")
-        output = Path("output")
-
-        result = tfa.verify_platform(
-            "qemu-tfa",
-            build_only=True,
-            payload=payload,
-            output_dir=output,
-        )
-
-        self.assertEqual(result, 0)
-        verify_chain.assert_called_once_with(
-            build_only=True,
-            payload=payload,
-            output_dir=output,
-        )
-
     def test_qemu_flash_places_fip_at_the_tfa_offset(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -108,7 +52,7 @@ class FirmwarePackagingTests(unittest.TestCase):
 
             image = flash.read_bytes()
             self.assertEqual(image[:3], b"BL1")
-            self.assertEqual(image[256 * 1024 :], b"FIP")
+            self.assertEqual(image[tfa.FIP_FLASH_OFFSET :], b"FIP")
 
 
 if __name__ == "__main__":

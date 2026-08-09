@@ -43,12 +43,28 @@ static_assert(offsetof(Record, op) == NOVA_CMD_REC_OP_OFF);
 static_assert(offsetof(Record, a) == NOVA_CMD_REC_A_OFF);
 static_assert(offsetof(Record, b) == NOVA_CMD_REC_B_OFF);
 
+// The bands EL2 checks an argument against, published so the host can
+// ask the machine what it accepts. Filled by whoever places the page,
+// which is the component that owns the checks.
+struct Limits {
+  std::uint32_t slice_min_us = 0;
+  std::uint32_t slice_def_us = 0;
+  std::uint32_t slice_max_us = 0;
+  std::uint32_t spi_lo       = 0;
+  std::uint32_t spi_hi       = 0;
+};
+
 struct Header {
-  std::uint64_t magic       = 0;
-  std::uint32_t version     = 0;
-  std::uint32_t record_size = 0;
-  std::uint32_t slots       = 0;
-  std::uint32_t period_us   = 0;
+  std::uint64_t magic        = 0;
+  std::uint32_t version      = 0;
+  std::uint32_t record_size  = 0;
+  std::uint32_t slots        = 0;
+  std::uint32_t period_us    = 0;
+  std::uint32_t slice_min_us = 0;
+  std::uint32_t slice_def_us = 0;
+  std::uint32_t slice_max_us = 0;
+  std::uint32_t spi_lo       = 0;
+  std::uint32_t spi_hi       = 0;
 };
 
 static_assert(offsetof(Header, magic) == NOVA_CMD_MAGIC_OFF);
@@ -56,6 +72,11 @@ static_assert(offsetof(Header, version) == NOVA_CMD_VERSION_OFF);
 static_assert(offsetof(Header, record_size) == NOVA_CMD_RECSIZE_OFF);
 static_assert(offsetof(Header, slots) == NOVA_CMD_SLOTS_OFF);
 static_assert(offsetof(Header, period_us) == NOVA_CMD_PERIOD_OFF);
+static_assert(offsetof(Header, slice_min_us) == NOVA_CMD_SLICE_MIN_OFF);
+static_assert(offsetof(Header, slice_def_us) == NOVA_CMD_SLICE_DEF_OFF);
+static_assert(offsetof(Header, slice_max_us) == NOVA_CMD_SLICE_MAX_OFF);
+static_assert(offsetof(Header, spi_lo) == NOVA_CMD_SPI_LO_OFF);
+static_assert(offsetof(Header, spi_hi) == NOVA_CMD_SPI_HI_OFF);
 static_assert(sizeof(Header) <= NOVA_CMD_WIDX_OFF);
 
 // The depth is a mask, and the deepest the page allows: doubling it
@@ -148,14 +169,19 @@ private:
 // Deliberately not the magic — that flag means "everything beside me is
 // now true", and a producer sampling it early would write into indices
 // about to be cleared.
-inline void format(void* base, std::uint32_t period_us) noexcept {
-  auto* header        = reinterpret_cast<Header*>(base);
-  header->version     = NOVA_CMD_VERSION;
-  header->record_size = NOVA_CMD_REC_SIZE;
-  header->slots       = NOVA_CMD_SLOTS;
-  header->period_us   = period_us;
-  auto* write         = reinterpret_cast<std::uint64_t*>(static_cast<char*>(base) + NOVA_CMD_WIDX_OFF);
-  auto* read          = reinterpret_cast<std::uint64_t*>(static_cast<char*>(base) + NOVA_CMD_RIDX_OFF);
+inline void format(void* base, std::uint32_t period_us, const Limits& limits) noexcept {
+  auto* header         = reinterpret_cast<Header*>(base);
+  header->version      = NOVA_CMD_VERSION;
+  header->record_size  = NOVA_CMD_REC_SIZE;
+  header->slots        = NOVA_CMD_SLOTS;
+  header->period_us    = period_us;
+  header->slice_min_us = limits.slice_min_us;
+  header->slice_def_us = limits.slice_def_us;
+  header->slice_max_us = limits.slice_max_us;
+  header->spi_lo       = limits.spi_lo;
+  header->spi_hi       = limits.spi_hi;
+  auto* write          = reinterpret_cast<std::uint64_t*>(static_cast<char*>(base) + NOVA_CMD_WIDX_OFF);
+  auto* read           = reinterpret_cast<std::uint64_t*>(static_cast<char*>(base) + NOVA_CMD_RIDX_OFF);
   std::atomic_ref{*write}.store(0, std::memory_order_relaxed);
   std::atomic_ref{*read}.store(0, std::memory_order_relaxed);
 }
@@ -178,8 +204,8 @@ inline Ring g_ring{};
 // Bind the ring to the page and open it to the host. Runs once from the
 // component's init, before the slot that drains it is armed;
 // `period_us` is that slot's period, which is the wait being promised.
-inline void place(std::uint32_t period_us) noexcept {
-  format(g_page.byte.data(), period_us);
+inline void place(std::uint32_t period_us, const Limits& limits) noexcept {
+  format(g_page.byte.data(), period_us, limits);
   g_ring = Ring{g_page.byte.data()};
   publish(g_page.byte.data());
 }

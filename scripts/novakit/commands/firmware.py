@@ -78,6 +78,3 @@ def verify(
     )
     if code:
         raise typer.Exit(code)
-
-
-app.command("profile", hidden=True)(build)

@@ -16,6 +16,7 @@
 
 #include "hal/cpu.hpp"
 #include "hal/timer.hpp"
+#include "nova/abi/guest_layout.h"
 #include "nova/trace.hpp"
 
 #include <cib/top.hpp>
@@ -44,6 +45,12 @@ static_assert(trace::records_per_ring(board::active::kTraceSize, cpu::kMaxCpus) 
 // that grew into them would surface as a guest restarting into rubble.
 static_assert(board::active::kTracePa + board::active::kTraceSize <= board::active::kGuestPristinePa,
               "the trace region overruns the pristine guest images");
+
+// And its lower bound, the same rule from the other side: the IVC page
+// is the guests' one window into EL2 memory, so a page that reached into
+// the rings would let a guest rewrite the history of its own run.
+static_assert(board::active::kIvcShmPa + NOVA_IVC_SHM_SIZE <= board::active::kTracePa,
+              "the IVC shared page overruns the trace region");
 
 namespace trace_detail {
 

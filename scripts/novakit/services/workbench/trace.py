@@ -89,6 +89,54 @@ if _RECORD.size != REC_SIZE:
     raise SystemExit(f"trace record is {REC_SIZE} bytes; this reads {_RECORD.size}")
 
 
+def stride_for(capacity: int) -> int:
+    """How far apart two rings sit: one head, then that many records.
+
+    Stated once. The reader holds a region's own stride to this, and
+    whoever lays a region out derives it from the same place, so the two
+    cannot arrive at different numbers for one depth.
+    """
+    return _RECORDS_OFF + capacity * REC_SIZE
+
+
+def format_region(
+    buffer,
+    offset: int,
+    *,
+    rings: int,
+    capacity: int,
+    freq_hz: int,
+    early: int = 0,
+    magic: int | None = None,
+    version: int | None = None,
+    stride: int | None = None,
+    header_rings: int | None = None,
+) -> None:
+    """Write a region header the way the firmware writes one.
+
+    Beside the reader that consumes it, because the two are one layout:
+    a caller spelling the struct out itself is a copy that stays right
+    exactly until a field moves, and then decodes neighbours as geometry.
+
+    The overrides are how a caller writes a header the firmware could not
+    have — a wrong magic, a stride that disagrees with the capacity —
+    which is what the reader's vetting is for. Left alone the fields stay
+    consistent with each other.
+    """
+    _HEADER.pack_into(
+        buffer,
+        offset,
+        MAGIC if magic is None else magic,
+        VERSION if version is None else version,
+        REC_SIZE,
+        stride_for(capacity) if stride is None else stride,
+        rings if header_rings is None else header_rings,
+        capacity,
+        freq_hz,
+        early,
+    )
+
+
 class NotFormatted(RuntimeError):
     """The region carries no ring this reader understands.
 
@@ -409,7 +457,7 @@ class TraceReader:
             raise NotFormatted(f"trace region declares {rings} rings, expected 1..{MAX_RINGS}")
         if capacity < 1 or capacity & (capacity - 1):
             raise NotFormatted(f"trace ring capacity {capacity} is not a power of two")
-        if stride != _RECORDS_OFF + capacity * REC_SIZE:
+        if stride != stride_for(capacity):
             raise NotFormatted(f"trace stride {stride} disagrees with capacity {capacity}")
         if _HEADER_SIZE + rings * stride > self._region_size:
             raise NotFormatted(f"{rings} rings of {capacity} do not fit {self._region_size} bytes")

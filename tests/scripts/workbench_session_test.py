@@ -6,7 +6,6 @@ import asyncio
 import importlib.util
 import json
 import socket
-import struct
 import sys
 import tempfile
 import unittest
@@ -16,6 +15,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
 from novakit.services import expect, spawn  # noqa: E402
+from novakit.services.workbench import trace  # noqa: E402
 from novakit.services.workbench.protocol import Clock, Envelopes  # noqa: E402
 from novakit.services.workbench.session import (  # noqa: E402
     Deps,
@@ -643,29 +643,18 @@ class TraceAttachTest(unittest.TestCase):
     that neither is answered by counting failures of the other.
     """
 
-    def setUp(self):
-        from novakit.image import abi
-
-        self.layout = abi.read_defines(
-            abi.TRACE_RING,
-            [
-                "NOVA_TRACE_MAGIC",
-                "NOVA_TRACE_VERSION",
-                "NOVA_TRACE_HEADER_SIZE",
-                "NOVA_TRACE_RECORDS_OFF",
-                "NOVA_TRACE_REC_SIZE",
-            ],
-        )
-
     def region_bytes(self, *, formatted: bool, version: int | None = None, early: int = 0) -> bytes:
+        """A RAM backend with, or without, a region placed at its start.
+
+        Laid out by the reader's own packer: a header spelled here would
+        be a second copy of the layout under test, right up until a field
+        of it moves.
+        """
         buffer = bytearray(REGION_SIZE)
         if formatted:
-            stride = self.layout["NOVA_TRACE_RECORDS_OFF"] + 16 * self.layout["NOVA_TRACE_REC_SIZE"]
-            struct.pack_into(
-                "<QIIIIIII", buffer, 0,
-                self.layout["NOVA_TRACE_MAGIC"],
-                self.layout["NOVA_TRACE_VERSION"] if version is None else version,
-                self.layout["NOVA_TRACE_REC_SIZE"], stride, 1, 16, 62_500_000, early,
+            trace.format_region(
+                buffer, 0,
+                rings=1, capacity=16, freq_hz=62_500_000, early=early, version=version,
             )
         return bytes(buffer)
 
@@ -755,7 +744,7 @@ class TraceAttachTest(unittest.TestCase):
             directory = Path(name)
             bridge = self.bridge_at(directory)
             bridge.session.surfaces.shm_path.write_bytes(
-                self.region_bytes(formatted=True, version=self.layout["NOVA_TRACE_VERSION"] + 1)
+                self.region_bytes(formatted=True, version=trace.VERSION + 1)
             )
 
             self.assertFalse(bridge._attach_tracer())

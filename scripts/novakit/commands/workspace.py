@@ -137,7 +137,3 @@ def register(root: typer.Typer) -> None:
     root.command()(run)
     root.command()(clean)
     root.add_typer(inspect_app, name="inspect")
-
-    # Compatibility paths remain callable without duplicating public help.
-    root.command("size", hidden=True)(size)
-    root.command("objdump", hidden=True)(disassemble)

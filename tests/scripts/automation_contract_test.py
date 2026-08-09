@@ -1,14 +1,13 @@
-"""Public automation contracts that must survive the CLI migration."""
+"""Public automation contracts, asked of the command registry itself."""
 
 from __future__ import annotations
 
 import json
-import re
-import subprocess
 import sys
 import unittest
 from pathlib import Path
 
+from typer.main import get_command
 from typer.testing import CliRunner
 
 REPO = Path(__file__).resolve().parents[2]
@@ -17,157 +16,39 @@ PRESETS = REPO / "CMakePresets.json"
 sys.path.insert(0, str(REPO / "scripts"))
 
 from novakit import cli  # noqa: E402
-from novakit.core import board  # noqa: E402
-
-
-def run(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        args,
-        cwd=REPO,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
+from novakit.core import board, config  # noqa: E402
+from novakit.services import ci, gates, tfa  # noqa: E402
 
 RUNNER = CliRunner()
 
 
-def listed(output: str, command: str) -> bool:
-    return (
-        re.search(
-            rf"(?m)^[^A-Za-z0-9_\n]*{re.escape(command)}\s",
-            output,
-        )
-        is not None
-    )
+def leaves(command, path: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
+    """Every runnable command in the app tree, by the words that reach it."""
+    children = getattr(command, "commands", {})
+    if not children:
+        return [path] if path else []
+    return [leaf for name, child in children.items() for leaf in leaves(child, (*path, name))]
 
 
 class PublicCommandContractTest(unittest.TestCase):
-    def test_every_canonical_leaf_has_valid_typer_help(self):
-        commands = (
-            ("build",),
-            ("run",),
-            ("clean",),
-            ("inspect", "size"),
-            ("inspect", "symbols"),
-            ("inspect", "disassemble"),
-            ("format",),
-            ("lint",),
-            ("test",),
-            ("demo", "list"),
-            ("demo", "build"),
-            ("demo", "fetch", "--all"),
-            ("demo", "run", "1"),
-            ("demo", "verify", "--all"),
-            ("demo", "soak", "1", "--runs", "1"),
-            ("firmware", "build", "n1sdp"),
-            ("firmware", "package", "n1sdp", "--payload", "payload.bin"),
-            ("firmware", "verify", "qemu-tfa"),
-            ("workbench", "serve"),
-            ("ci", "host"),
-        )
-        for command in commands:
+    def test_every_registered_command_answers_for_itself(self):
+        # Walking the registry covers whatever is registered, so a new
+        # command is in scope the moment it exists.
+        found = leaves(get_command(cli.app))
+        self.assertTrue(found, "the command tree walk found nothing to check")
+        for command in found:
             with self.subTest(command=command):
                 result = RUNNER.invoke(cli.app, [*command, "--help"], color=False)
                 self.assertEqual(result.exit_code, 0, result.output)
 
-    def test_nova_help_exposes_every_top_level_command(self):
-        result = run(str(NOVA), "--help")
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        for command in (
-            "build",
-            "clean",
-            "format",
-            "inspect",
-            "lint",
-            "run",
-            "test",
-            "demo",
-            "firmware",
-            "workbench",
-            "ci",
-        ):
-            self.assertIn(command, result.stdout)
-
-        for legacy in ("fmt", "size", "objdump"):
-            self.assertFalse(listed(result.stdout, legacy))
-
-    def test_inspect_help_groups_image_queries(self):
-        result = run(str(NOVA), "inspect", "--help")
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        for operation in ("size", "symbols", "disassemble"):
-            self.assertTrue(listed(result.stdout, operation))
-
-    def test_demo_help_exposes_every_public_operation(self):
-        result = run(str(NOVA), "demo", "--help")
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        for command in (
-            "list",
-            "build",
-            "fetch",
-            "run",
-            "verify",
-            "soak",
-        ):
-            self.assertTrue(listed(result.stdout, command))
-        self.assertFalse(listed(result.stdout, "verify-all"))
-
-    def test_debug_is_an_option_on_run_commands(self):
-        for command in ((str(NOVA), "run", "--help"), (str(NOVA), "demo", "run", "1", "--help")):
-            result = run(*command)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("--debug", result.stdout)
-
-    def test_firmware_help_exposes_role_based_operations(self):
-        result = run(str(NOVA), "firmware", "--help")
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        for operation in ("build", "package", "verify"):
-            self.assertTrue(listed(result.stdout, operation))
-        self.assertFalse(listed(result.stdout, "profile"))
-
-    def test_legacy_command_paths_remain_hidden_compatibility_aliases(self):
-        aliases = (
-            ("fmt",),
-            ("size",),
-            ("objdump",),
-            ("demo", "verify-all"),
-            ("firmware", "profile"),
-        )
-        for alias in aliases:
-            with self.subTest(alias=alias):
-                result = run(str(NOVA), *alias, "--help")
-                self.assertEqual(result.returncode, 0, result.stderr)
-
     def test_demo_set_operations_require_one_scope(self):
+        # A set operation acts on one demo or on all of them; leaving it
+        # unsaid, or saying both, is a usage error rather than a default.
         for operation in ("fetch", "verify"):
             with self.subTest(operation=operation, scope="missing"):
-                self.assertEqual(run(str(NOVA), "demo", operation).returncode, 2)
+                self.assertEqual(RUNNER.invoke(cli.app, ["demo", operation]).exit_code, 2)
             with self.subTest(operation=operation, scope="conflicting"):
-                result = run(str(NOVA), "demo", operation, "1", "--all")
-                self.assertEqual(result.returncode, 2)
-
-    def test_qemu_board_arguments_have_one_internal_owner(self):
-        self.assertEqual(
-            list(board.MACHINE_ARGS),
-            [
-                "-machine",
-                "virt,virtualization=on,gic-version=3,iommu=smmuv3,highmem-ecam=off",
-                "-cpu",
-                "cortex-a57",
-                "-smp",
-                "2",
-                "-nographic",
-                "-nic",
-                "none",
-                "-m",
-                "1024",
-            ],
-        )
+                self.assertEqual(RUNNER.invoke(cli.app, ["demo", operation, "1", "--all"]).exit_code, 2)
 
     def test_workbench_attachment_leaves_the_board_model_frozen(self):
         base = board.command(kernel=Path("novavisor.elf"))
@@ -191,49 +72,22 @@ class PublicCommandContractTest(unittest.TestCase):
         self.assertEqual(base, board.command(kernel=Path("novavisor.elf")))
         self.assertNotIn("memory-backend", " ".join(board.MACHINE_ARGS))
 
-    def test_removed_compatibility_commands_are_rejected(self):
-        commands = (
-            ("debug",),
-            ("demo", "debug", "1"),
-            ("demo", "verify" + "-repeat", "1", "--runs", "1"),
-            ("demo", "qemu-args"),
-            ("firmware", "smoke"),
-            ("firmware", "qemu-smoke"),
-            ("firmware", "fip"),
-        )
-        for command in commands:
-            with self.subTest(command=command):
-                self.assertEqual(run(str(NOVA), *command).returncode, 2)
-
-    def test_compatibility_entrypoints_are_removed(self):
-        for name in (
-            "task" + ".sh",
-            "task" + "_legacy.sh",
-            "demo" + "_runner.py",
-            "setup" + "_env.sh",
-            "qemu" + "_tfa_smoke.sh",
-            "n1sdp" + "_firmware.sh",
-        ):
-            self.assertFalse((REPO / "scripts" / name).exists(), name)
-
 
 class BuildPresetContractTest(unittest.TestCase):
-    def test_every_ci_profile_has_matching_configure_and_build_presets(self):
-        data = json.loads(PRESETS.read_text())
-        configure = {preset["name"] for preset in data["configurePresets"]}
-        build = {preset["name"] for preset in data["buildPresets"]}
-
+    def test_every_preset_the_automation_names_is_defined(self):
+        # The names come from the modules that build them, so this asks
+        # whether Python and CMake agree — not whether a list was updated.
         required = {
-            "host-debug",
-            "aarch64-debug",
-            "aarch64-release",
-            "aarch64-minimal-release",
-            "aarch64-standard-release",
-            "aarch64-qemu-tfa-release",
-            "aarch64-n1sdp-release",
+            config.HV_PRESET,
+            gates.HOST_PRESET,
+            ci.RECHECK_PRESET,
+            *ci.RUNTIME_PRESETS,
+            *ci.EVIDENCE_PRESETS,
+            *(profile.preset for profile in tfa.PROFILES.values()),
         }
-        self.assertLessEqual(required, configure)
-        self.assertLessEqual(required, build)
+        data = json.loads(PRESETS.read_text())
+        self.assertLessEqual(required, {preset["name"] for preset in data["configurePresets"]})
+        self.assertLessEqual(required, {preset["name"] for preset in data["buildPresets"]})
 
     def test_public_entrypoints_are_executable(self):
         self.assertTrue(NOVA.stat().st_mode & 0o111)

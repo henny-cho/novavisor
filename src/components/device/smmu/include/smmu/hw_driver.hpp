@@ -65,31 +65,27 @@ template <typename Hw>
 }
 
 // Producer side of the device-shared command queue. `entries` spans the ring
-// itself (size == 1 << log2_entries); `producer` mirrors CMDQ_PROD and is the
-// state the caller's lock protects — a submit outside that lock would corrupt
-// it silently.
+// itself (size == 1 << queue.log2_entries); `queue` carries the ring geometry
+// and mirrors CMDQ_PROD, and is the state the caller's lock protects — a
+// submit outside that lock would corrupt it silently. Its consumer field is
+// a per-submit snapshot of CMDQ_CONS, not state this side owns.
 template <typename Hw>
 struct CommandRing {
   std::span<CommandEntry> entries;
-  std::uint8_t            log2_entries = 0;
-  std::uint32_t           poll_limit   = 0;
-  std::uint32_t           producer     = 0;
-  bool                    ready        = false;
-
-  [[nodiscard]] auto pointer_mask() const noexcept -> std::uint32_t {
-    return (std::uint32_t{1} << (log2_entries + 1U)) - 1U;
-  }
+  QueueState              queue{};
+  std::uint32_t           poll_limit = 0;
+  bool                    ready      = false;
 
   // Wait for the device to consume everything published so far. A consumer
   // error latches the queue, so it is a failure rather than a retry.
   [[nodiscard]] auto wait_idle() noexcept -> bool {
-    const std::uint32_t mask = pointer_mask();
+    const std::uint32_t mask = queue.pointer_mask();
     for (std::uint32_t poll = 0; poll < poll_limit; ++poll) {
       const std::uint32_t consumer = Hw::read32(regs::kCmdqCons);
       if ((consumer & regs::kCmdqConsErrorMask) != 0U) {
         return false;
       }
-      if ((consumer & mask) == producer) {
+      if ((consumer & mask) == queue.producer) {
         Hw::acquire_memory();
         return true;
       }
@@ -98,31 +94,30 @@ struct CommandRing {
   }
 
   // Append `commands` plus a trailing CMD_SYNC and wait for completion, so
-  // the caller may assume the effects are visible on return.
+  // the caller may assume the effects are visible on return. The whole batch
+  // is staged first, so a refused one leaves the mirror where the device
+  // still sees it.
   [[nodiscard]] auto submit(std::span<const CommandEntry> commands) noexcept -> bool {
     if (!ready || commands.size() + 1U > entries.size() || !wait_idle()) {
       return false;
     }
 
-    QueueState queue{
-        .log2_entries = log2_entries,
-        .producer     = producer,
-        .consumer     = Hw::read32(regs::kCmdqCons) & pointer_mask(),
-    };
+    QueueState staged = queue;
+    staged.consumer   = Hw::read32(regs::kCmdqCons) & queue.pointer_mask();
     for (const CommandEntry& command : commands) {
-      entries[queue.producer_index()] = command;
-      if (!queue.try_produce()) {
+      entries[staged.producer_index()] = command;
+      if (!staged.try_produce()) {
         return false;
       }
     }
-    entries[queue.producer_index()] = make_command_sync();
-    if (!queue.try_produce()) {
+    entries[staged.producer_index()] = make_command_sync();
+    if (!staged.try_produce()) {
       return false;
     }
 
     Hw::publish_memory();
-    producer = queue.producer;
-    Hw::write32(regs::kCmdqProd, producer);
+    queue = staged;
+    Hw::write32(regs::kCmdqProd, queue.producer);
     return wait_idle();
   }
 };

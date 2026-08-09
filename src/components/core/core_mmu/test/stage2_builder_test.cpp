@@ -3,10 +3,11 @@
 // Host GTest for the Stage 2 identity-map builder
 // (components/core_mmu/include/stage2_builder.hpp).
 //
-// Covers the Phase 5/6 single-window scenario (IPA 0x5000_0000, 1 MiB),
-// the L2 Block path for 2 MiB-aligned chunks, multi-range composition,
-// and the failure modes (pool exhaustion, address overflow, overlap,
-// bad alignment).
+// Covers map_range as an algorithm over a table set: the single-window
+// scenario (IPA 0x5000_0000, 1 MiB), the L2 Block path for 2 MiB-aligned
+// chunks, multi-range composition, and the failure modes (pool
+// exhaustion, address overflow, overlap, bad alignment). The index
+// extractors are pure and pinned in the header they live in.
 
 #include "core_mmu/stage2_builder.hpp"
 
@@ -44,36 +45,6 @@ constexpr std::uint64_t kIpaBase = 0x5000'0000ULL;
 constexpr std::uint64_t kIpaSize = 0x0010'0000ULL; // 1 MiB = 256 pages
 
 } // namespace
-
-// ---------------------------------------------------------------------------
-// Index extractors — bit slice behavior
-// ---------------------------------------------------------------------------
-
-TEST(Stage2Builder, L1IndexExtractsBits38To30) {
-  EXPECT_EQ(l1_index(0), 0U);
-  EXPECT_EQ(l1_index(k1GiB), 1U);
-  EXPECT_EQ(l1_index(2ULL * k1GiB), 2U);
-  // 0x5000_0000 = 1.25 GiB → L1 index 1
-  EXPECT_EQ(l1_index(kIpaBase), 1U);
-  // Lower bits below 1 GiB must not leak in
-  EXPECT_EQ(l1_index(0x4FFF'FFFFULL), 1U);
-  EXPECT_EQ(l1_index(0x7FFF'FFFFULL), 1U);
-}
-
-TEST(Stage2Builder, L2IndexExtractsBits29To21) {
-  EXPECT_EQ(l2_index(0), 0U);
-  EXPECT_EQ(l2_index(k2MiB), 1U);
-  // 0x5000_0000 → (0x5000_0000 >> 21) & 0x1FF = 0x280 & 0x1FF = 128
-  EXPECT_EQ(l2_index(kIpaBase), 128U);
-}
-
-TEST(Stage2Builder, L3IndexExtractsBits20To12) {
-  EXPECT_EQ(l3_index(0), 0U);
-  EXPECT_EQ(l3_index(k4KiB), 1U);
-  EXPECT_EQ(l3_index(kIpaBase), 0U); // IPA base is 2 MiB-aligned → L3 starts at 0
-  EXPECT_EQ(l3_index(kIpaBase + k4KiB), 1U);
-  EXPECT_EQ(l3_index(kIpaBase + (255U * k4KiB)), 255U);
-}
 
 // ---------------------------------------------------------------------------
 // Shared fixture

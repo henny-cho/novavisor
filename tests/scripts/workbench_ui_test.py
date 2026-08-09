@@ -2,6 +2,18 @@
 
 Without a bundler, a broken import path or a token drift is invisible
 until a browser opens the page; these checks make both fail in CI.
+
+Two other tools hold what this file used to. What a module is forbidden
+to *say* is in `web/eslint.config.mjs`: a parser tells a literal from a
+comment and an operator from the same characters inside a string, which
+a regular expression over the source text cannot. What a module *does*
+is in `web/test/`, where node runs it against a small DOM — a cursor
+that steps, a table that refuses a cell with no provenance, a panel
+that declines to rebuild.
+
+What is left is the agreement between files that no single language's
+tools can see: markup to stylesheet to module, and the vocabulary the
+bridge publishes to the UI that has to name it.
 """
 
 from __future__ import annotations
@@ -14,8 +26,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit.services.workbench.taxonomy import Badge  # noqa: E402
-
 UI = REPO / "web" / "workbench"
 # The design mock the palette came from: local-only, never tracked.
 SIM = REPO / "web_sim" / "novavisor-sim.html"
@@ -23,8 +33,6 @@ SIM = REPO / "web_sim" / "novavisor-sim.html"
 HTML_REFERENCE = re.compile(r'(?:src|href)="([^"]+)"')
 MODULE_IMPORT = re.compile(r'(?:import|from)\s+"(\./[^"]+)"')
 CUSTOM_PROPERTY = re.compile(r"(--[\w-]+)\s*:\s*([^;]+);")
-# A number no observed value legitimately reaches: a sentinel compare.
-BIG_LITERAL = re.compile(r"\b(?:\d{16,}|\d(?:\.\d+)?e(?:1[5-9]|[2-9]\d))\b")
 
 
 class UiStructureTest(unittest.TestCase):
@@ -45,94 +53,15 @@ class UiStructureTest(unittest.TestCase):
                 with self.subTest(module=module.name, target=target):
                     self.assertTrue((module.parent / target).is_file(), target)
 
-    def test_no_module_tests_for_a_firmware_sentinel(self):
-        # The bridge decodes the firmware's all-bits-set "none" to null.
-        # A UI comparing against 9e15 instead is relying on JSON losing
-        # precision past 2^53 — right by accident, and only until a
-        # sentinel narrower than 53 bits appears.
-        for module in sorted((UI / "js").glob("*.mjs")):
-            with self.subTest(module=module.name):
-                self.assertFalse(BIG_LITERAL.findall(module.read_text()))
-
-    def test_no_module_hardcodes_a_taxonomy_badge(self):
-        # The thin-client rule: vocabulary arrives in the topo snapshot.
-        for module in sorted((UI / "js").glob("*.mjs")):
-            text = module.read_text()
-            for badge in Badge:
-                with self.subTest(module=module.name, badge=badge.value):
-                    self.assertNotIn(f'"{badge.value}"', text)
-                    self.assertNotIn(f"'{badge.value}'", text)
-
-
-class PanelReachTest(unittest.TestCase):
-    """Every published observation is on screen without being drawn."""
-
-    def test_unclaimed_topics_fall_to_a_panel_fed_by_the_manifest(self):
-        # Otherwise the default is that an observation is invisible until
-        # somebody writes a table for it, and a value can be polled for
-        # months with nobody able to see it. The fallback's topic list
-        # has to come from the manifest, not from a second list here.
-        source = (UI / "js" / "panels.mjs").read_text()
-        self.assertRegex(
-            source,
-            r"FALLBACK\.topics\s*=\s*Object\.keys\(topo\.observations",
-            "the fallback panel does not follow the observation manifest",
-        )
-        self.assertRegex(source, r"filter\(\(topic\)\s*=>\s*!claimed\.has\(topic\)\)")
-
-    def test_no_panel_reads_a_value_without_its_provenance(self):
-        """A stop's whole product is what moved, and a renderer handed a
-        bare number has already lost it.
-
-        Enforced by removal rather than by review: the accessor that
-        returned a value alone is gone, so the only ways into a reading
-        are `at()`, which carries the mask, and `plain()`, which states
-        out loud that a cell was computed here. Nine renderers were nine
-        chances to forget a highlight, and every new panel was another.
-        """
-        source = (UI / "js" / "panels.mjs").read_text()
-        self.assertNotIn("value(", source)
-        self.assertRegex(source, r"const at = \(topic\) =>")
-        self.assertRegex(source, r"const plain = \(shown\) =>")
-
-    def test_a_table_cell_that_lost_its_provenance_is_refused(self):
-        """Not merely unhighlighted — a bare value in a cell would draw
-        perfectly and silently never light up, which is the exact
-        failure this arrangement exists to make impossible."""
-        source = (UI / "js" / "panels.mjs").read_text()
-        self.assertRegex(source, r"if \(!\(cell instanceof Cell\)\)[\s\S]{0,200}throw new TypeError")
-
-    def test_the_moved_cell_has_a_style_to_be_seen_by(self):
-        css = (UI / "css" / "workbench.css").read_text()
-        self.assertRegex(css, r"\.ptable td\.moved")
-
 
 VIEW_HEADER = re.compile(r'<div class="view-h">(.*?)</div>\s*<div class="board"', re.S)
-# Any literal that looks like a hardware address or an interrupt number.
-HARD_ADDRESS = re.compile(r"0x[0-9a-fA-F]{6,}")
 # `"topic": ["section", ...]`
 PAINTS = re.compile(r'"([\w.]+)":\s*\[([^\]]*)\]')
-# A sample rate written into the UI instead of read from the manifest.
-RATE_LITERAL = re.compile(r"\d+\s*Hz")
 
 
 class MemoryViewTest(unittest.TestCase):
-    """The map draws a walk it is given, and decodes nothing itself."""
-
-    def test_the_view_states_no_address_of_its_own(self):
-        # Addresses reach this view in the answer it asked for. One typed
-        # into the module or the shell would be a claim about a machine
-        # the page has not looked at.
-        for path in (UI / "js" / "memory.mjs", UI / "index.html"):
-            with self.subTest(file=path.name):
-                self.assertFalse(HARD_ADDRESS.findall(path.read_text()))
-
-    def test_the_view_decodes_no_descriptor(self):
-        # A descriptor's bit layout has one source: the headers the
-        # hypervisor compiles. A shift or a mask here would be a second
-        # reading of it, drifting the first time a field moved.
-        source = (UI / "js" / "memory.mjs").read_text()
-        self.assertFalse(re.findall(r"[<>]{2}=?|&\s*0x|\bBigInt\b", source))
+    """What the map is joined to: the tab that switches to it, and the
+    manifest it reads."""
 
     def test_every_view_a_tab_names_is_built(self):
         # A tab pointing at nothing hides the current view and shows no
@@ -141,29 +70,6 @@ class MemoryViewTest(unittest.TestCase):
         table = re.search(r"const VIEWS = \{(.*?)\n\};", (UI / "js" / "main.mjs").read_text(), re.S)
         self.assertIsNotNone(table, "view table not found")
         self.assertEqual(named, set(re.findall(r"^  (\w+):", table.group(1), re.M)))
-
-    def test_a_board_that_was_hidden_measures_itself_again(self):
-        # It draws wires from a measured box; measured at zero they land
-        # on the origin. Folding already says so, and the view switch
-        # leaves it in exactly the same state.
-        self.assertRegex((UI / "js" / "board.mjs").read_text(), r"reveal\(\) \{\s+invalidate\(\)")
-        self.assertRegex((UI / "js" / "main.mjs").read_text(), r"boardView\.reveal\(\)")
-        css = (UI / "css" / "workbench.css").read_text()
-        self.assertRegex(css, r"\.view\.folded\s*>\s*\.mmap\s*\{[^}]*display:\s*none")
-
-    def test_the_map_marks_w_and_x_only_where_the_regime_forbids_it(self):
-        # A guest's Stage 2 grants both on purpose — the guest's own
-        # Stage 1 does the splitting — so marking every such row would
-        # cry wolf on every run. The regime says which it is.
-        source = (UI / "js" / "memory.mjs").read_text()
-        self.assertRegex(source, r"wxn && row\.w && row\.x")
-        self.assertRegex((UI / "css" / "workbench.css").read_text(), r"\.mperm\.wx")
-
-    def test_the_map_states_the_wxn_result_even_when_it_is_none(self):
-        # A check whose result nobody can see is indistinguishable from
-        # one that never ran.
-        self.assertRegex((UI / "js" / "memory.mjs").read_text(), r"if \(tree\.wxn\)")
-        self.assertRegex((UI / "css" / "workbench.css").read_text(), r"\.mverdict")
 
     def test_the_map_reads_only_published_topics(self):
         # The map is static under a run; what a stream is allowed to do
@@ -177,21 +83,6 @@ class MemoryViewTest(unittest.TestCase):
         wanted = set(re.findall(r'"([\w.]+)"', table.group(1)))
         self.assertTrue(wanted)
         self.assertLessEqual(wanted, {obs.topic for obs in OBSERVATIONS})
-
-    def test_a_stream_is_joined_to_a_regime_by_the_root_both_carry(self):
-        # Resolving a stream to a VM on the bridge as well would be a
-        # second answer to one question, and the two would agree only
-        # until somebody changed one.
-        source = (UI / "js" / "memory.mjs").read_text()
-        self.assertRegex(source, r"entry\.root === root")
-        self.assertNotIn('"vm"', (UI / "js" / "memory.mjs").read_text())
-
-    def test_a_short_map_says_so(self):
-        # A walk that could not read a table returns fewer mappings.
-        # Drawn plainly it reads as a machine that had fewer.
-        source = (UI / "js" / "memory.mjs").read_text()
-        self.assertIn("tree.unreadable", source)
-        self.assertIn("tree.truncated", source)
 
 
 class BoardViewTest(unittest.TestCase):
@@ -209,13 +100,6 @@ class BoardViewTest(unittest.TestCase):
         self.assertRegex(css, r"\.view\.folded\s*>\s*\.board\s*\{[^}]*display:\s*none")
         self.assertNotRegex(css, r"\.view\[hidden\]")
 
-    def test_the_board_states_no_hardware_value_of_its_own(self):
-        # Addresses reach the UI in topo.board, generated from the same
-        # headers the linker script reads. One typed into the module
-        # would drift with no way for the browser to notice.
-        source = (UI / "js" / "board.mjs").read_text()
-        self.assertFalse(HARD_ADDRESS.findall(source), "board.mjs hardcodes an address")
-
     def test_the_board_reads_only_published_topics(self):
         # Its topic table is the contract with the observation manifest;
         # a topic the bridge never publishes would silently draw nothing.
@@ -228,14 +112,6 @@ class BoardViewTest(unittest.TestCase):
         self.assertTrue(wanted)
         published = {obs.topic for obs in OBSERVATIONS}
         self.assertLessEqual(wanted, published, f"unpublished: {wanted - published}")
-
-    def test_the_board_states_no_sample_rate_of_its_own(self):
-        # A badge reading "S 20Hz" is a claim about the manifest. Written
-        # here it becomes a lie the moment a rate is tuned, and the
-        # screen goes on asserting it. The rate rides in topo.
-        source = (UI / "js" / "board.mjs").read_text()
-        stated = [hit for hit in RATE_LITERAL.findall(source) if not hit.startswith("$")]
-        self.assertFalse(stated, f"board.mjs states a rate: {stated}")
 
     def test_a_topic_repaints_named_sections_and_nothing_more(self):
         # Twenty scheduler samples a second must not redraw the address
@@ -261,113 +137,8 @@ class BoardViewTest(unittest.TestCase):
         self.assertEqual(painters, claimed, f"painters no topic reaches: {painters - claimed}")
 
 
-def strip_js(source: str) -> str:
-    """Blank out comments and string bodies, keeping every offset.
-
-    Brace matching below has to skip a `{` that lives in a comment or a
-    template literal. Replacing rather than deleting keeps the text the
-    same length, so a reported position still points at real source.
-    """
-    out = list(source)
-    at, end = 0, len(source)
-    while at < end:
-        char = source[at]
-        if char == "/" and at + 1 < end and source[at + 1] in "/*":
-            block = source[at + 1] == "*"
-            close = source.find("*/", at + 2) if block else source.find("\n", at)
-            stop = end if close < 0 else close + (2 if block else 0)
-            for i in range(at, stop):
-                if out[i] != "\n":
-                    out[i] = " "
-            at = stop
-            continue
-        if char in "\"'`":
-            at += 1
-            while at < end and source[at] != char:
-                at += 2 if source[at] == "\\" else 1
-                if at <= end:
-                    continue
-            # The literal's body is blanked; nested ${} is balanced anyway.
-            at += 1
-            continue
-        at += 1
-    text = "".join(out)
-    for quote in "\"'`":
-        text = re.sub(
-            rf"{quote}(?:[^{quote}\\\n]|\\.)*{quote}",
-            lambda hit: " " * len(hit.group(0)),
-            text,
-        )
-    return text
-
-
-def function_bodies(source: str) -> dict[str, str]:
-    """Every `function name(...) {...}` body, by name."""
-    blank = strip_js(source)
-    bodies: dict[str, str] = {}
-    for head in re.finditer(r"\bfunction\s+(\w+)\s*\(", blank):
-        open_brace = blank.find("{", head.end())
-        if open_brace < 0:
-            continue
-        depth, at = 0, open_brace
-        while at < len(blank):
-            if blank[at] == "{":
-                depth += 1
-            elif blank[at] == "}":
-                depth -= 1
-                if depth == 0:
-                    break
-            at += 1
-        bodies[head.group(1)] = source[open_brace : at + 1]
-    return bodies
-
-
-# Anything that makes the browser reflow to answer.
-LAYOUT_READ = re.compile(
-    r"\b(?:getBoundingClientRect|offset(?:Width|Height|Top|Left)"
-    r"|client(?:Width|Height|Top|Left)|scroll(?:Width|Height)|getComputedStyle)\b"
-)
-# Functions a snapshot can reach. Sizing and drag handlers are allowed to
-# measure: they run on a gesture, not on a value.
-DRAW_PATH = re.compile(r"^(?:render|paint|draw|flash|note|relink|residency|put)")
-
-
-class BoardDrawPathTest(unittest.TestCase):
-    """A snapshot must never make the browser reflow.
-
-    The board separates measuring from writing: geometry is read in
-    measure() and cached, and everything a topic can reach only writes
-    text. One getBoundingClientRect on that path costs a forced layout
-    per changed value — fourteen a batch before the split — and nothing
-    on screen looks wrong when it happens.
-    """
-
-    def test_no_function_a_snapshot_reaches_reads_layout(self):
-        bodies = function_bodies((UI / "js" / "board.mjs").read_text())
-        self.assertIn("measure", bodies, "board measure() not found")
-        self.assertRegex(bodies["measure"], LAYOUT_READ, "measure() stopped measuring")
-        reached = [name for name in bodies if DRAW_PATH.match(name)]
-        self.assertTrue(reached, "no draw-path functions found")
-        for name in sorted(reached):
-            with self.subTest(function=name):
-                self.assertNotRegex(bodies[name], LAYOUT_READ)
-
-
 class BoardAnchorTest(unittest.TestCase):
     """Endpoints are named, and the names are registered."""
-
-    def test_every_endpoint_a_wire_uses_is_an_anchor_id(self):
-        # A wire end is an anchor id, not a node, so the draw path never
-        # touches the document. An id nothing registered measures to
-        # undefined and the line quietly collapses onto the origin.
-        source = (UI / "js" / "board.mjs").read_text()
-        self.assertRegex(source, r"function anchor\(id, node\)")
-        self.assertRegex(source, r"live\.anchors\.push\(\{ id, node \}\)")
-        # The registry is reset with the skeleton, before anything fills it.
-        self.assertRegex(source, r"live = \{ anchors: \[\] \}")
-        bodies = function_bodies(source)
-        self.assertNotRegex(bodies["measure"], r"live\.links\[|\.node\.getBounding")
-        self.assertRegex(bodies["measure"], r"for \(const \{ id, node \} of live\.anchors")
 
     def test_the_board_registers_every_anchor_the_bridge_points_at(self):
         # The bridge names endpoints; the board has to have them. An id
@@ -440,158 +211,6 @@ class BoardAnchorTest(unittest.TestCase):
         self.assertEqual({edge.id for edge in paths.EDGES}, captioned)
 
 
-class SelectionTest(unittest.TestCase):
-    """One cursor over the strip, moved three ways.
-
-    A click, an arrow key and playback all push the same selection. A
-    playback path of its own would mean the caption, the board focus and
-    the grade badge exist twice — and two of anything that draws the
-    same fact is how they come to disagree.
-    """
-
-    def setUp(self):
-        self.source = (UI / "js" / "timeline.mjs").read_text()
-        self.main = (UI / "js" / "main.mjs").read_text()
-
-    def body(self, signature: str) -> str:
-        found = re.search(rf"{signature} \{{(.*?)\n  \}}", self.source, re.S)
-        self.assertIsNotNone(found, f"{signature} not found")
-        return found.group(1)
-
-    def test_the_cursor_is_a_record_and_its_position_is_derived(self):
-        """The list a selection came from is rebuilt from the window on
-        demand — a resize, a drag or an arriving batch changes it. An
-        index kept across that names a different record than the caption
-        said, and the paint, which reads the cursor without rebuilding
-        anything, would draw the line where nobody pointed.
-
-        "The next one" is still answerable: find the record in the
-        rebuilt list and move. The position was only ever stored by
-        accident.
-        """
-        self.assertRegex(self.source, r"let picked = null;")
-        self.assertRegex(self.source, r"const positionOf = \(rows\) =>")
-        # Nothing keeps a position across calls.
-        self.assertNotIn("chosenAt", self.source)
-        # And the paint draws from the record, not from an index.
-        self.assertIn("if (!picked) return;", self.body(r"function cursorLine\(window_, at, colours\)"))
-
-    def test_one_rule_says_whether_two_records_are_the_same(self):
-        """Two yields of visible() are different objects for one record,
-        so identity cannot answer it — and a second comparison that
-        forgot the ring would confuse two cores sharing a timestamp."""
-        self.assertRegex(self.source, r"const same = \(a, b\) =>[\s\S]{0,160}a\.cpu === b\.cpu")
-        click = re.search(r'addEventListener\("pointerup".*?\n  \}\);', self.source, re.S)
-        self.assertIn("same(row, hit)", click.group(0))
-
-    def test_playback_moves_the_same_cursor_a_click_moves(self):
-        # The tick calls step(), which calls select() — the one place a
-        # selection is announced.
-        play = self.body(r"function play\(speed = 1\)")
-        self.assertIn("step(+1)", play)
-        self.assertNotIn("onSelect(", play)
-        click = re.search(r'addEventListener\("pointerup".*?\n  \}\);', self.source, re.S)
-        self.assertIsNotNone(click)
-        self.assertRegex(click.group(0), r"select\(index, rows\)")
-        self.assertNotIn('onSelect({ kind: "mark"', click.group(0))
-
-    def test_playback_compresses_idle_time_and_never_the_order(self):
-        """Real time is either a blur or a wait; even spacing lies about
-        the timing. Between the bounds the delay tracks the real gap,
-        and the printed delta is always the real one."""
-        play = self.body(r"function play\(speed = 1\)")
-        self.assertIn("Math.min(STEP_MAX_MS, Math.max(STEP_MIN_MS", play)
-        # The delay the player chose never becomes the delta a reader
-        # reads: playback computes no `dt` at all.
-        self.assertNotIn("dt", play)
-        # That comes from the record timestamps, where the selection is
-        # announced, and reaches the caption unchanged.
-        self.assertRegex(self.body(r"function select\(index, rows = laid\(\)\)"),
-                         r"dt: at > 0 \? micros\(record\.ts - rows\[at - 1\]\.ts\)")
-        self.assertIn("Δt ${choice.dt}us", self.main)
-
-    def test_a_new_set_of_records_drops_the_selection(self):
-        """A record that no longer exists is not a cursor, and keeping
-        it would draw a line at a time nothing is on."""
-        self.assertRegex(self.source, r"function dropSelection\(\)")
-        self.assertIn("dropSelection()", self.body(r"function reset\(\)"))
-
-
-class PathTourTest(unittest.TestCase):
-    """Walking a path is the recorded order, not a script.
-
-    The earlier design was a static chain of numbered hops per path. A
-    script can be wrong about the machine and stay wrong quietly; a
-    recording cannot be wrong about itself. This is the composition
-    that replaced it: a filtered window the bridge already answers, and
-    the selection cursor that already walks whatever came back.
-    """
-
-    def setUp(self):
-        self.board = (UI / "js" / "board.mjs").read_text()
-        self.timeline = (UI / "js" / "timeline.mjs").read_text()
-        self.main = (UI / "js" / "main.mjs").read_text()
-
-    def test_a_path_can_be_aimed_at_without_widening_it(self):
-        """The drawn width is what says how well a path is observed, so
-        the click target is a companion rather than a thicker line."""
-        self.assertIn('hit.dataset.edge = spec.id', self.board)
-        css = (UI / "css" / "workbench.css").read_text()
-        self.assertRegex(css, r"\.edge-hit\{[^}]*stroke:\s*transparent")
-        self.assertRegex(css, r"\.edge-hit\{[^}]*pointer-events:\s*stroke")
-        # Shown and hidden with the path, or it is a target for
-        # something that is not on screen.
-        show = re.search(r"function showEdge\(edge, on\) \{(.*?)\n  \}", self.board, re.S)
-        self.assertIn("edge.hit.style.display", show.group(1))
-
-    def test_the_board_says_which_path_and_nothing_about_the_trace(self):
-        click = re.search(
-            r'wires\.addEventListener\("click".*?\n  \}\);', self.board, re.S)
-        self.assertIsNotNone(click, "no path click handler")
-        self.assertIn("onTour(id)", click.group(0))
-        # The recorded order lives in the strip; a second reading of it
-        # here would be a second answer.
-        self.assertNotIn("window", click.group(0))
-
-    def test_the_moments_that_light_a_path_come_from_the_catalogue(self):
-        """A per-path list of event ids typed into the client would be a
-        second copy of what the bridge already publishes."""
-        self.assertRegex(
-            self.main, r"catalogue\.filter\(\(stop\) => stop\.edge === edge\)")
-
-    def test_the_tour_is_a_filtered_window_walked_by_the_one_cursor(self):
-        tour = re.search(r"function tour\(eventIds, label\) \{(.*?)\n  \}", self.timeline, re.S)
-        self.assertIsNotNone(tour, "tour not found")
-        self.assertIn("events: eventIds", tour.group(1))
-        # No records are drawn here and no selection is announced here;
-        # the window answer starts the same cursor everything else uses.
-        self.assertNotIn("onSelect(", tour.group(1))
-        self.assertRegex(self.timeline, r"if \(touring\) \{[\s\S]{0,200}select\(0\);")
-
-
-class ReplayViewTest(unittest.TestCase):
-    """A replay is real and was real, and a reader has to know which."""
-
-    def setUp(self):
-        self.main = (UI / "js" / "main.mjs").read_text()
-
-    def test_the_phase_is_named_rather_than_shown_as_idle(self):
-        self.assertRegex(self.main, r"replay: \{ text:")
-
-    def test_a_recorded_lifecycle_is_history_not_a_transition(self):
-        """A recording replays its own 'running' and 'exited'. Obeyed,
-        they would put a live badge on a screen with no machine."""
-        self.assertRegex(
-            self.main, r'function setPhase\([\s\S]{0,80}if \(replaying && phase !== "replay"\)')
-
-    def test_launching_is_refused_from_one_place(self):
-        """Seven call sites re-armed the button directly. A replay has
-        to refuse all of them, which is one rule about the session and
-        not seven about them."""
-        self.assertNotIn("runButton.disabled = false", self.main)
-        self.assertRegex(self.main, r"function armRun\(on\) \{\n  runButton\.disabled = replaying")
-
-
 class StepperTest(unittest.TestCase):
     """The controls that stop the machine at an event."""
 
@@ -608,26 +227,41 @@ class StepperTest(unittest.TestCase):
             with self.subTest(id=name):
                 self.assertIn(name, ids)
 
-    def test_the_stop_choices_come_from_the_bridge(self):
-        """The catalogue lives beside the firmware symbols it names. A
-        list typed here would be a second copy, free to disagree."""
-        self.assertIn("setStops(topo.stops)", self.main)
-        for event in ("post_spi_tracked", "drain_eois", "handle_lower_sync"):
-            self.assertNotIn(event, self.main)
-        self.assertNotIn("vgic.bind", self.html)
+    def grades(self) -> set[str]:
+        """Every grade the bridge can put on an edge, asked of the bridge.
 
-    def test_the_grade_a_stop_earns_is_styled(self):
+        A list spelled out here would be a copy of that vocabulary, and
+        it agrees with it only until a grade is added.
+        """
         from novakit.services.workbench import paths
 
-        self.assertIn(f".edge.{paths.GRADE_DIRECT}{{", self.css)
-        self.assertIn(f'"{paths.GRADE_DIRECT}"', (UI / "js" / "board.mjs").read_text())
+        found = {
+            value
+            for name, value in vars(paths).items()
+            if name.startswith("GRADE_") and isinstance(value, str)
+        }
+        self.assertTrue(found)
+        return found
+
+    def test_every_grade_a_stop_can_earn_is_styled(self):
+        # The board writes the bridge's own word for the grade straight
+        # into the class, so a grade nothing styles draws in the base
+        # stroke and says exactly what the path beside it says.
+        for grade in sorted(self.grades()):
+            with self.subTest(grade=grade):
+                self.assertIn(f".edge.{grade}{{", self.css)
 
     def test_the_legend_names_every_grade_the_bridge_can_publish(self):
         """A path drawn in a style the legend does not explain is a
         stroke the reader has no way to read."""
-        for swatch in ("direct", "poll", "none"):
-            with self.subTest(swatch=swatch):
-                self.assertIn(f'class="{swatch}"', self.html)
+        legend = re.search(r'<div class="legend".*?</div>', self.html, re.S)
+        self.assertIsNotNone(legend, "legend not found")
+        for grade in sorted(self.grades()):
+            with self.subTest(swatch=grade):
+                self.assertIn(f'class="{grade}"', legend.group(0))
+                # A swatch with no rule of its own is the base stroke,
+                # which is another grade's swatch.
+                self.assertIn(f".lg i.{grade}", self.css)
 
     def test_a_stop_reaches_the_board_as_measurement(self):
         """The stop carries the event's own argument registers, so the
@@ -636,35 +270,6 @@ class StepperTest(unittest.TestCase):
         board = (UI / "js" / "board.mjs").read_text()
         self.assertRegex(board, r"function stopped\(ts, data\)")
         self.assertIn("stopped,", board)
-
-
-class FocusLayerTest(unittest.TestCase):
-    """Two reasons to hide a row, kept apart."""
-
-    def test_the_board_narrowing_is_not_the_readers_muting(self):
-        # Folded into one set, clearing the focus would un-mute chips the
-        # reader had switched off themselves — their state lost silently,
-        # looking like the log misbehaving rather than the board.
-        source = (UI / "js" / "events.mjs").read_text()
-        self.assertRegex(source, r"const muted = new Set\(\)")
-        self.assertRegex(source, r"let narrowed = null")
-        self.assertRegex(
-            source,
-            r"muted\.has\(name\)\s*\|\|\s*\(narrowed !== null && !narrowed\.has\(name\)\)",
-            "hiding no longer consults both layers",
-        )
-        # narrow() must never touch the reader's set.
-        body = function_bodies(source)["narrow"]
-        self.assertNotIn("muted", body, "narrowing writes the reader's own filter")
-
-    def test_focus_derives_its_badges_from_the_published_paths(self):
-        # A hand-written block-to-subsystem table would be a second copy
-        # of what the path table already says, drifting the moment an
-        # edge is added.
-        source = (UI / "js" / "board.mjs").read_text()
-        body = function_bodies(source)["badgesAt"]
-        self.assertIn("live.edges", body)
-        self.assertIn("edge.badges", body)
 
 
 class ConsoleReachTest(unittest.TestCase):
@@ -679,21 +284,6 @@ class ConsoleReachTest(unittest.TestCase):
         self.assertIsNotNone(block, "no console-event case in the frame dispatch")
         self.assertIn("events.addEvent", block.group(1))
         self.assertIn("boardView.note", block.group(1))
-
-    def test_the_board_does_not_read_console_text_itself(self):
-        # Interpreting the firmware's log is the bridge's, and a contract
-        # test already ties every rule there to a real firmware string. A
-        # pattern here would be a second parser outside that contract,
-        # drifting on its own. The board routes the badge and shows the
-        # message; it never asks what the message says.
-        source = (UI / "js" / "board.mjs").read_text()
-        blank = strip_js(source)
-        for applied in re.findall(r"\.(match|matchAll|exec|test|search)\s*\(", blank):
-            self.fail(f"board.mjs applies a pattern with .{applied}()")
-        body = function_bodies(source)["note"]
-        self.assertIn("byBadge", body, "the console path stopped routing by badge")
-        for literal in re.findall(r"/(?![/*])(?:[^/\\\n]|\\.)+/[gimsuy]*", strip_js(body)):
-            self.fail(f"the console path carries a regular expression: {literal}")
 
 
 PULSE_RULE = re.compile(r"\.edge\.([\w-]+)\s*\{\s*animation:\s*([\w-]+)")
@@ -823,6 +413,19 @@ class SideColumnLayoutTest(unittest.TestCase):
             self.assertRegex(css, r"\.side\s*>\s*\.pane:last-child\s*\{[^}]*flex:\s*1")
 
 
+class PanelStyleTest(unittest.TestCase):
+    """What a highlighted cell needs from the stylesheet.
+
+    Which cells light up is settled in `web/test/panels.test.mjs`, by
+    rendering a reading beside the mask that came with it. The class it
+    lands on has to mean something, and only the stylesheet says so.
+    """
+
+    def test_the_moved_cell_has_a_style_to_be_seen_by(self):
+        css = (UI / "css" / "workbench.css").read_text()
+        self.assertRegex(css, r"\.ptable td\.moved")
+
+
 class PanelStripTest(unittest.TestCase):
     """The control strip over the measurement drawer."""
 
@@ -851,8 +454,13 @@ class PanelStripTest(unittest.TestCase):
 
 
 class DriveViewTest(unittest.TestCase):
-    """The one panel that acts on the machine offers only what the run
-    says it accepts."""
+    """What the one panel that acts on the machine is joined to.
+
+    What it builds, what it sends and when it declines to rebuild are
+    in `web/test/drive.test.mjs`, which presses the controls. Left here
+    are the two joins node cannot see from inside the page: the
+    firmware's opcode vocabulary, and the stylesheet.
+    """
 
     def test_the_panel_names_no_op_the_firmware_does_not_have(self):
         # The names come from the ABI header through the topology. One
@@ -865,45 +473,10 @@ class DriveViewTest(unittest.TestCase):
         self.assertTrue(named)
         self.assertLessEqual(named, set(OPS))
 
-    def test_the_panel_states_no_bound_of_its_own(self):
-        # A quantum or an INTID typed into this module would be a second
-        # copy of a range EL2 decides, right until the firmware moved
-        # it. Both arrive with the run; nothing here is a number.
-        source = (UI / "js" / "drive.mjs").read_text()
-        offered = re.search(r"function renderSlice[\s\S]*?\n  \}", source)
-        self.assertIsNotNone(offered, "slice control not found")
-        self.assertFalse(re.findall(r"\b\d{3,}\b", offered.group(0)))
-        bounds = re.search(r"function renderSpi[\s\S]*?\n  \}", source)
-        self.assertIsNotNone(bounds, "spi control not found")
-        self.assertRegex(bounds.group(0), r"intid\.min = String\(low\)")
-
-    def test_a_run_that_cannot_be_driven_says_so(self):
-        # Hidden controls with no explanation read as a bridge that
-        # failed to draw them.
-        source = (UI / "js" / "drive.mjs").read_text()
-        self.assertRegex(source, r"root\.hidden = !world")
-        self.assertRegex(source, r"note\.textContent = contract \|\|")
-
-    def test_the_panel_is_rebuilt_only_when_the_run_changes_what_it_accepts(self):
-        # The topology is republished whenever anything on it moves —
-        # the page tables landing, an edge regraded — and a rebuild on
-        # each would clear the INTID a reader had just typed.
-        source = (UI / "js" / "drive.mjs").read_text()
-        self.assertRegex(source, r"JSON\.stringify\(next\) === JSON\.stringify\(world\)")
-
-    def test_the_wait_stays_visible_beside_the_verdict(self):
-        # Two halves of one contract: how long the machine promised to
-        # take, and what it did. The first vanishing at the first
-        # command would leave the bound unreadable for the rest of a run.
-        source = (UI / "js" / "drive.mjs").read_text()
-        self.assertRegex(source, r"note\.textContent =\s*\n?\s*`\$\{contract\} ·")
-
-    def test_the_verdict_comes_back_from_the_machine(self):
-        # Nothing here reports success on its own: EL2 answers with a
-        # trace record, and a panel that said "sent" would be stating
-        # something it does not know.
-        source = (UI / "js" / "drive.mjs").read_text()
-        self.assertRegex(source, r"answered\(record\)")
+    def test_the_verdict_reaches_the_panel_and_can_be_read_as_one(self):
+        # EL2 answers with a trace record like everything else it says;
+        # unrouted it never arrives at all, and a refusal drawn like an
+        # acceptance is a verdict nobody can read.
         self.assertRegex((UI / "js" / "main.mjs").read_text(), r"drive\.answered\(data\.command\)")
         self.assertRegex((UI / "css" / "workbench.css").read_text(), r"\.dnote\.bad")
 

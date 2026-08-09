@@ -482,28 +482,38 @@ class IdentityTest(unittest.TestCase):
 
     def test_a_recording_cannot_be_driven(self):
         """Refused with a reason, not accepted and ignored: a control
-        that silently does nothing is worse than one that says why."""
-        from novakit.services.workbench.server import Bridge
+        that silently does nothing is worse than one that says why.
+
+        Walked off the dispatch table rather than named one by one, so a
+        handler added with a machine on its mind is covered the day it is
+        written instead of the day somebody remembers this test.
+        """
+        from novakit.services.workbench import server
 
         recorder = recording.Recorder(self.directory, {"freq_hz": 1})
         recorder.close()
-        bridge = Bridge(ui_root=self.ui)
+        bridge = server.Bridge(ui_root=self.ui)
         bridge.load_replay(recording.load(self.directory))
 
-        bridge.store.drain()
-        bridge._handle_uplink(json.dumps({"topic": "target", "data": {"demo": "09_guest_smp"}}))
-        bridge._handle_uplink(json.dumps({"topic": "halt", "data": {"cmd": "stop"}}))
-        # The third application of one rule: a command ring reaches a
-        # machine, and a recording has none to reach.
-        bridge._handle_uplink(json.dumps({"topic": "cmd", "data": {"op": "mark"}}))
-        said = [
-            frame["data"].get("reason", "")
-            for frame in bridge.store.drain()
-            if frame["topic"] == "life"
+        driving = [
+            handler
+            for handler in server.HANDLERS
+            if handler.needs in (server.Needs.MACHINE, server.Needs.RUNNING)
         ]
-        self.assertTrue(any("replay" in text for text in said), said)
-        self.assertTrue(any("halt: session is replay" in text for text in said), said)
-        self.assertTrue(any("cmd: this is a replay" in text for text in said), said)
+        self.assertTrue(driving)
+        for handler in driving:
+            with self.subTest(topic=handler.topic.value):
+                bridge.store.drain()
+                bridge._handle_uplink(json.dumps({"topic": handler.topic.value, "data": {}}))
+                said = [
+                    frame["data"].get("reason", "")
+                    for frame in bridge.store.drain()
+                    if frame["topic"] == "life"
+                ]
+                self.assertTrue(
+                    any(text.startswith(f"{handler.topic.value}: ") for text in said), said
+                )
+                self.assertTrue(any("replay" in text for text in said), said)
 
     def test_the_recorded_world_is_the_one_the_client_is_given(self):
         """Its catalogue, its board map, its limits — not this process's

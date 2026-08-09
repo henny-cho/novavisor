@@ -1,0 +1,14 @@
+{
+  "name": "novavisor-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Toolchain for the workbench UI: the structural contracts a browser-only, build-step-free page cannot check for itself, and the behaviour of its modules run outside a browser.",
+  "scripts": {
+    "lint": "eslint .",
+    "test": "npm run lint && node --test 'test/*.test.mjs'"
+  },
+  "devDependencies": {
+    "eslint": "10.8.1"
+  }
+}

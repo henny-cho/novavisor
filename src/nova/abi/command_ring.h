@@ -51,6 +51,17 @@
 #define NOVA_CMD_RECSIZE_OFF 0x0C
 #define NOVA_CMD_SLOTS_OFF   0x10
 #define NOVA_CMD_PERIOD_OFF  0x14 /* u32 microseconds between drains */
+
+/* What EL2 will accept, alongside how long it will make you wait. A
+ * host that reads the bands here offers only values the machine takes;
+ * anywhere else they would be a copy of whatever EL2 was built from,
+ * true until the firmware changed without the host. */
+#define NOVA_CMD_SLICE_MIN_OFF 0x18 /* u32 microseconds, narrowest quantum */
+#define NOVA_CMD_SLICE_DEF_OFF 0x1C /* u32 microseconds, the boot value */
+#define NOVA_CMD_SLICE_MAX_OFF 0x20 /* u32 microseconds, widest quantum */
+#define NOVA_CMD_SPI_LO_OFF    0x24 /* u32, lowest virtual INTID accepted */
+#define NOVA_CMD_SPI_HI_OFF    0x28 /* u32, highest, inclusive */
+
 #define NOVA_CMD_WIDX_OFF    0x40 /* u64, producer-owned: commands written */
 #define NOVA_CMD_RIDX_OFF    0x80 /* u64, consumer-owned: commands taken */
 #define NOVA_CMD_RECORDS_OFF 0xC0

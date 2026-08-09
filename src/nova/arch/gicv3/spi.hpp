@@ -57,6 +57,36 @@ struct SpiRegisters {
   };
 }
 
+// Bank arithmetic at the boundaries where the word changes: the first
+// shared INTID is bit 0 of word 1 (word 0 covers private INTIDs and
+// belongs to the redistributor), the last INTID of that word is bit 31,
+// and the next one restarts at bit 0 of the following word. ICFGR banks
+// half as many INTIDs because it spends two bits on each; IROUTER
+// spends a whole 64-bit entry.
+static_assert(
+    [] {
+      const SpiRegisters first = spi_registers(kSpiIntidBase);
+      const SpiRegisters last  = spi_registers(kSpiIntidBase + kIntidsPerBank - 1);
+      const SpiRegisters next  = spi_registers(kSpiIntidBase + kIntidsPerBank);
+      return first.valid && last.valid && next.valid &&                    //
+             first.bit == 1U && last.bit == 1U << 31U && next.bit == 1U && //
+             first.group_offset == NOVA_GICD_IGROUPR + kBankStride &&      //
+             first.grpmod_offset == NOVA_GICD_IGRPMODR + kBankStride &&    //
+             first.enable_offset == NOVA_GICD_ISENABLER + kBankStride &&   //
+             first.disable_offset == NOVA_GICD_ICENABLER + kBankStride &&  //
+             first.clear_offset == NOVA_GICD_ICPENDR + kBankStride &&      //
+             first.deactive_offset == NOVA_GICD_ICACTIVER + kBankStride && //
+             first.config_offset == NOVA_GICD_ICFGR + 2U * kBankStride && first.edge_bit == 1U << 1U &&
+             first.route_offset == NOVA_GICD_IROUTER + kSpiIntidBase * kRouteStride &&
+             last.enable_offset == first.enable_offset &&                                     // same word
+             last.route_offset == first.route_offset + (kIntidsPerBank - 1) * kRouteStride && //
+             next.enable_offset == first.enable_offset + kBankStride &&                       // next word
+             next.config_offset == first.config_offset + 2U * kBankStride &&
+             next.edge_bit == first.edge_bit && // and its own bit 0
+             next.route_offset == first.route_offset + kIntidsPerBank * kRouteStride;
+    }(),
+    "an INTID selects one bit of one bank word in every distributor array");
+
 [[nodiscard]] constexpr auto implemented_intids(std::uint32_t typer) noexcept -> std::uint32_t {
   const std::uint32_t count = ((typer & kTyperLinesMask) + 1U) * kIntidsPerBank;
   return count < kSpecialIntidBase ? count : kSpecialIntidBase;

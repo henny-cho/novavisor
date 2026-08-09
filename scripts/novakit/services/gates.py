@@ -15,8 +15,8 @@ import sys
 from ..core import config, files, proc
 from . import boundaries, cmake
 
-LINT_TREES = ("components", "hal", "nova", "projects")
 SOURCE_SUFFIXES = (".c", ".cpp", ".h", ".hpp")
+HOST_PRESET = "host-debug"
 
 
 def _clang_format() -> str:
@@ -62,12 +62,9 @@ def lint() -> int:
     if not extra_path.is_file() or not compile_path.is_file():
         raise SystemExit("clang-tidy build metadata is missing")
 
-    for tree in LINT_TREES:
-        if not (config.REPO / "src" / tree).is_dir():
-            raise SystemExit(f"lint scope does not exist: src/{tree}")
-
-    tree_pattern = "|".join(LINT_TREES)
-    source_pattern = rf"^{re.escape(str(config.REPO))}/src/({tree_pattern})/.*\.cpp$"
+    # Everything we write lives under src/, so the scope is the tree
+    # itself: a directory added there is linted the day it appears.
+    source_pattern = rf"^{re.escape(str(config.REPO))}/src/.*\.cpp$"
     entries = json.loads(compile_path.read_text())
     selected = {entry["file"] for entry in entries if re.match(source_pattern, entry["file"])}
     if not selected:
@@ -81,7 +78,7 @@ def lint() -> int:
             "-p",
             str(output),
             *extra_path.read_text().splitlines(),
-            f"-header-filter=/src/({tree_pattern})/",
+            "-header-filter=/src/",
             source_pattern,
         ]
     )
@@ -89,7 +86,7 @@ def lint() -> int:
 
 
 def test() -> int:
-    preset = "host-debug"
+    preset = HOST_PRESET
     proc.run(["cmake", "--preset", preset])
     proc.run(["cmake", "--build", "--preset", preset])
     proc.run(["ctest", "--preset", preset, "--output-on-failure"])
@@ -110,10 +107,23 @@ def test() -> int:
     return 0
 
 
+def _web() -> None:
+    """Lint the UI and run its modules, with its own pinned toolchain.
+
+    The dependency set is a lock file, so installing it is a decision
+    about a directory rather than about a run: once it is there the gate
+    stays offline, and `npm ci` rebuilds it from the lock the moment it
+    is not.
+    """
+    if not (config.WEB_DIR / "node_modules").is_dir():
+        proc.run(["npm", "ci"], cwd=config.WEB_DIR)
+    proc.run(["npm", "test"], cwd=config.WEB_DIR)
+
+
 def static_analysis() -> int:
     missing = [
         tool
-        for tool in ("ruff", "shellcheck", "actionlint")
+        for tool in ("ruff", "shellcheck", "actionlint", "node", "npm")
         if shutil.which(tool, path=config.command_env().get("PATH")) is None
     ]
     if missing:
@@ -123,4 +133,5 @@ def static_analysis() -> int:
     proc.run(["ruff", "check", "--no-cache", "scripts", "tests/scripts"])
     proc.run(["shellcheck", "-x", "--exclude=SC1091", *files.shell_scripts()])
     proc.run(["actionlint"])
+    _web()
     return lint()

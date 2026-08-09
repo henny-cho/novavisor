@@ -42,10 +42,9 @@ inline constexpr std::uint64_t kSliceMs = 10;
 // scheduler rather than by their own timers. An experiment moves the
 // quantum; it does not redesign the scheduler.
 //
-// The band is spelled here rather than at set_slice_us(), because the
-// control that offers choices reads these names too — derived twice it
-// would be the firmware and the panel disagreeing about what is
-// acceptable.
+// The band is spelled here, once. set_slice_us() refuses outside it and
+// slice_band() publishes it, so a host offering choices is offering what
+// this machine takes rather than what its sources once said.
 inline constexpr std::uint64_t kSliceSpan  = 10;
 inline constexpr std::uint64_t kSliceUs    = kSliceMs * 1000;
 inline constexpr std::uint64_t kSliceMinUs = kSliceUs / kSliceSpan;

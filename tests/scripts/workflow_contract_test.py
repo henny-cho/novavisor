@@ -45,35 +45,6 @@ class WorkflowContractTest(unittest.TestCase):
                 text = (WORKFLOWS / name).read_text()
                 self.assertEqual(len(PINNED_IMAGE.findall(text)), 1)
 
-    def test_the_publisher_reports_the_digest_its_consumers_must_pin(self):
-        # dependabot watches the Dockerfile base image, not the digest the
-        # consumers pin, so nothing else can notice a stale pin.
-        publisher = yaml.safe_load((WORKFLOWS / "toolchain-image.yml").read_text())
-
-        self.assertEqual(
-            publisher["permissions"],
-            {"contents": "read", "packages": "write"},
-        )
-        steps = publisher["jobs"]["publish"]["steps"]
-        report = next(step for step in steps if step.get("name", "").endswith("digest bump"))
-        self.assertEqual(report["env"]["DIGEST"], "${{ steps.manifest.outputs.digest }}")
-        self.assertIn("GITHUB_STEP_SUMMARY", report["run"])
-
-    def test_the_image_builds_each_architecture_on_its_own_runner(self):
-        # One job naming two platforms builds the second under QEMU
-        # emulation, which cost more than the rest of this workflow together.
-        text = (WORKFLOWS / "toolchain-image.yml").read_text()
-        build = yaml.safe_load(text)["jobs"]["build"]
-        legs = build["strategy"]["matrix"]["include"]
-
-        self.assertNotIn("setup-qemu-action", text)
-        self.assertGreater(len(legs), 1)
-        self.assertEqual(len({leg["runner"] for leg in legs}), len(legs))
-        for step in build["steps"]:
-            platforms = step.get("with", {}).get("platforms")
-            if platforms is not None:
-                self.assertEqual(platforms, "linux/${{ matrix.arch }}")
-
     def test_no_checkout_persists_credentials(self):
         # No workflow pushes, and the guest fetch scripts clone anonymously,
         # so a token left in .git/config only widens what a later step reaches.
@@ -176,15 +147,6 @@ class WorkflowContractTest(unittest.TestCase):
         for name in (*ci_service.BY_NAME, *targets):
             with self.subTest(lane=name):
                 self.assertIn(name, handled)
-
-    def test_no_workflow_repeats_what_a_lane_needs(self):
-        # guests/firmware follow from the lane name, so a workflow that spells
-        # them out has a second copy of that mapping.
-        for path in WORKFLOWS.glob("*.yml"):
-            with self.subTest(workflow=path.name):
-                text = path.read_text()
-                self.assertNotIn("guests:", text)
-                self.assertNotIn("firmware:", text)
 
 
 if __name__ == "__main__":

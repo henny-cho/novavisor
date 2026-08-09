@@ -12,8 +12,9 @@ the platform layout and selected board inventory, and emits:
   <outdir>/device_policy.hpp
                           static DMA ownership and device tables
 
-Pure stdlib + PyYAML — no dtc dependency, so CI needs nothing new.
-Inspect a blob locally with: dtc -I dtb -O dts <outdir>/guest0.dtb
+Pure stdlib + PyYAML to write the blobs; dtc reads each one back before
+it is kept, so a structural mistake the writer cannot see itself fails
+the build. Inspect a blob the same way: dtc -I dtb -O dts guest0.dtb
 """
 
 import argparse
@@ -35,7 +36,9 @@ DEFAULT_LAYOUT = abi.GUEST_LAYOUT
 GIC_REGS = REPO / "src" / "nova" / "arch" / "gicv3" / "regs.h"
 
 MIB = 0x10_0000
-MAX_DEVICES = 8
+# The registry capacity is the runtime's, not this generator's: an
+# inventory it accepts must be one EL2 can hold.
+MAX_DEVICES = abi.read_constexprs(abi.DMA, wanted={"kMaxDevices"})["kMaxDevices"]
 
 # ---------------------------------------------------------------------------
 # Layout header
@@ -721,6 +724,11 @@ def main() -> int:
 
     args.outdir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
+    # dtc reads every blob back below. Checked once, before any is
+    # written, so a broken environment says so instead of surfacing as a
+    # traceback from the first round-trip.
+    if shutil.which("dtc") is None:
+        sys.exit("nova dtb: dtc is missing; run scripts/bootstrap")
     for i, guest in enumerate(guests):
         blob = build_guest_dtb(guest, layout, serves_psci=not args.no_psci)
         if len(blob) > layout["NOVA_GUEST_DTB_SIZE"]:
@@ -728,16 +736,17 @@ def main() -> int:
                      f"{layout['NOVA_GUEST_DTB_SIZE']:#x} guest window reservation")
         (args.outdir / f"guest{i}.dtb").write_bytes(blob)
         digest.update(blob)
-        # Round-trip through dtc when available — catches malformed
-        # structure the byte-level writer cannot see. Optional so the
-        # build works without dtc installed.
-        if shutil.which("dtc"):
-            r = subprocess.run(
-                ["dtc", "-I", "dtb", "-O", "dts", "-o", "/dev/null",
-                 str(args.outdir / f"guest{i}.dtb")],
-                capture_output=True, text=True)
-            if r.returncode != 0:
-                sys.exit(f"nova dtb: {guest['name']}: dtc rejected the blob:\n{r.stderr}")
+        # Round-trip through dtc: the byte-level writer cannot see
+        # malformed structure in what it just emitted. Unconditional —
+        # scripts/bootstrap installs dtc, so a missing one is a broken
+        # environment, and skipping the check quietly is how an image
+        # nobody validated reaches a board.
+        r = subprocess.run(
+            ["dtc", "-I", "dtb", "-O", "dts", "-o", "/dev/null",
+             str(args.outdir / f"guest{i}.dtb")],
+            capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.exit(f"nova dtb: {guest['name']}: dtc rejected the blob:\n{r.stderr}")
     for payload in payloads:
         if payload is not None:
             digest.update(payload["sha256"].encode())

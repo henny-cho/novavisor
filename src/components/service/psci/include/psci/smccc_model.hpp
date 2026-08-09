@@ -26,6 +26,7 @@
 #include "nova/abi/smccc.h"
 #include "nova/arch/cpu_features.hpp"
 
+#include <array>
 #include <cstdint>
 
 namespace nova::smccc {
@@ -40,40 +41,60 @@ struct Verdict {
   return (fid & 0xFFFF0000U) == 0x80000000U;
 }
 
-[[nodiscard]] constexpr auto is_implemented(std::uint32_t fid) noexcept -> bool {
-  switch (fid) {
-  case SMCCC_FN_VERSION:
-  case SMCCC_FN_ARCH_FEATURES:
-  case SMCCC_FN_WORKAROUND_1:
-  case SMCCC_FN_WORKAROUND_2:
-  case SMCCC_FN_WORKAROUND_3:
-    return true;
-  default:
-    return false;
+struct Entry {
+  std::uint32_t fid = 0;
+  // Set when the answer is a claim about the hardware: the query reads
+  // what the PE discloses, and only a disclosed property earns
+  // NOT_REQUIRED.
+  arch::Mitigation (*query)(const arch::SpeculationState&) noexcept = nullptr;
+  std::uint64_t ret                                                 = 0; // x0, where no query decides it
+};
+
+// Every function this service provides, stated once — including which
+// ID register verdict answers each workaround. Discovery (ARCH_FEATURES
+// here, PSCI_FEATURES through is_implemented) and the call itself both
+// read this table, so discovery can never promise what the call refuses.
+inline constexpr std::array kTable{
+    Entry{.fid = SMCCC_FN_VERSION, .ret = SMCCC_VERSION_1_1},
+    Entry{.fid = SMCCC_FN_ARCH_FEATURES}, // ret is decided by x1, below
+    Entry{.fid = SMCCC_FN_WORKAROUND_1, .query = arch::branch_target_mitigation},
+    Entry{.fid = SMCCC_FN_WORKAROUND_2, .query = arch::store_bypass_mitigation},
+    Entry{.fid = SMCCC_FN_WORKAROUND_3, .query = arch::branch_history_mitigation},
+};
+
+// The row for a function ID, or nullptr when the table does not hold
+// one. Exact match: the Arch service has no SMC64 twins.
+[[nodiscard]] constexpr auto find(std::uint32_t fid) noexcept -> const Entry* {
+  for (const Entry& entry : kTable) {
+    if (entry.fid == fid) {
+      return &entry;
+    }
   }
+  return nullptr;
 }
 
-// The answer for one workaround ID, derived from what the PE reports.
-// ARCH_FEATURES and the direct call both route through this so discovery
-// can never disagree with the call it describes.
-[[nodiscard]] constexpr auto workaround_answer(std::uint32_t fid, const arch::SpeculationState& spec) noexcept
+[[nodiscard]] constexpr auto is_implemented(std::uint32_t fid) noexcept -> bool {
+  return find(fid) != nullptr;
+}
+
+// What one row answers on this PE: a workaround states what the ID
+// registers support, everything else is plainly present.
+[[nodiscard]] constexpr auto entry_answer(const Entry& entry, const arch::SpeculationState& spec) noexcept
     -> std::uint64_t {
-  arch::Mitigation m = arch::Mitigation::kUnknown;
-  switch (fid) {
-  case SMCCC_FN_WORKAROUND_1:
-    m = arch::branch_target_mitigation(spec);
-    break;
-  case SMCCC_FN_WORKAROUND_2:
-    m = arch::store_bypass_mitigation(spec);
-    break;
-  case SMCCC_FN_WORKAROUND_3:
-    m = arch::branch_history_mitigation(spec);
-    break;
-  default:
-    return static_cast<std::uint64_t>(SMCCC_NOT_SUPPORTED);
+  if (entry.query == nullptr) {
+    return static_cast<std::uint64_t>(SMCCC_SUCCESS);
   }
-  return m == arch::Mitigation::kUnaffected ? static_cast<std::uint64_t>(SMCCC_NOT_REQUIRED)
-                                            : static_cast<std::uint64_t>(SMCCC_NOT_SUPPORTED);
+  return entry.query(spec) == arch::Mitigation::kUnaffected ? static_cast<std::uint64_t>(SMCCC_NOT_REQUIRED)
+                                                            : static_cast<std::uint64_t>(SMCCC_NOT_SUPPORTED);
+}
+
+// What discovery reports for one function ID. ARCH_FEATURES routes a
+// workaround ID through the same row the call answers from, so the two
+// can never disagree.
+[[nodiscard]] constexpr auto feature_answer(std::uint32_t fid, const arch::SpeculationState& spec) noexcept
+    -> std::uint64_t {
+  const Entry* entry = find(fid);
+  return entry == nullptr ? static_cast<std::uint64_t>(SMCCC_NOT_SUPPORTED) : entry_answer(*entry, spec);
 }
 
 // `arg` is x1 — the queried function ID for ARCH_FEATURES, ignored
@@ -83,32 +104,16 @@ struct Verdict {
   if (!in_range(fid)) {
     return {};
   }
-  Verdict v{.claimed = true, .ret = 0};
-
-  switch (fid) {
-  case SMCCC_FN_VERSION:
-    v.ret = SMCCC_VERSION_1_1;
-    return v;
-  case SMCCC_FN_ARCH_FEATURES: {
-    const auto queried = static_cast<std::uint32_t>(arg);
-    if (!is_implemented(queried)) {
-      v.ret = static_cast<std::uint64_t>(SMCCC_NOT_SUPPORTED);
-    } else if (queried == SMCCC_FN_VERSION || queried == SMCCC_FN_ARCH_FEATURES) {
-      v.ret = SMCCC_SUCCESS;
-    } else {
-      v.ret = workaround_answer(queried, spec);
-    }
-    return v;
+  const Entry* entry = find(fid);
+  if (entry == nullptr) {
+    // In range but not ours to implement: still claimed, so the call
+    // never reaches another subscriber as an unknown HVC.
+    return {.claimed = true, .ret = static_cast<std::uint64_t>(SMCCC_NOT_SUPPORTED)};
   }
-  case SMCCC_FN_WORKAROUND_1:
-  case SMCCC_FN_WORKAROUND_2:
-  case SMCCC_FN_WORKAROUND_3:
-    v.ret = workaround_answer(fid, spec);
-    return v;
-  default:
-    v.ret = static_cast<std::uint64_t>(SMCCC_NOT_SUPPORTED);
-    return v;
+  if (entry->fid == SMCCC_FN_ARCH_FEATURES) {
+    return {.claimed = true, .ret = feature_answer(static_cast<std::uint32_t>(arg), spec)};
   }
+  return {.claimed = true, .ret = entry->query != nullptr ? entry_answer(*entry, spec) : entry->ret};
 }
 
 } // namespace nova::smccc

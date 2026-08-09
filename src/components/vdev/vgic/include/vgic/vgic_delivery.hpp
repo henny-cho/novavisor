@@ -52,6 +52,21 @@ inline constexpr std::uint64_t kLrVintidMask    = NOVA_ICH_LR_VINTID_MASK;
   return static_cast<std::uint32_t>(lr & kLrVintidMask);
 }
 
+// The list register a refill writes, read back through the accessors
+// that decode it. Group 1 is unconditional (the guest's IGROUPR never
+// reaches here), and EOI maintenance is armed only when the caller asks
+// — an unasked-for maintenance interrupt re-enters EL2 on every
+// deactivate the guest performs.
+static_assert(
+    [] {
+      const std::uint64_t injected = make_lr(27, 0x80);
+      return (injected & kLrStateMask) == kLrStatePending && lr_in_flight(injected) && (injected & kLrGroup1) != 0U &&
+             ((injected >> kLrPriorityShift) & 0xFFU) == 0x80U && lr_vintid(injected) == 27U &&
+             (injected & kLrEoi) == 0U && (make_lr(27, 0x80, true) & kLrEoi) != 0U &&
+             !lr_in_flight(0U); // a zero slot is free
+    }(),
+    "an injected list register carries the INTID and priority it was built from, as Group 1");
+
 // --- Per-VCPU state ----------------------------------------------------------
 
 // Full per-VCPU virtual interrupt state: the emulated redistributor
@@ -90,6 +105,28 @@ using EoiToken = CpuState::EoiToken;
   }
   return mask;
 }
+
+// Exactly the SPIs still owing a device EOI are protected, and only the
+// generation says so — an entry whose intids look plausible but whose
+// generation is zero is a cleared slot, and protecting it would pin a
+// pending bit no EOI will ever release.
+static_assert(
+    [] {
+      std::array<EoiToken, kNumSpis> tokens{};
+      const bool                     cleared = pending_token_mask(tokens) == 0U;                      // no live token
+      const bool                     absent  = pending_token_mask(std::span<const EoiToken>{}) == 0U; // no SPI bank
+
+      tokens[0]       = {.virtual_intid = 32, .physical_intid = 32, .generation = 1};
+      tokens[5]       = {.virtual_intid = 37, .physical_intid = 37, .generation = 2};
+      tokens[31]      = {.virtual_intid = 63, .physical_intid = 63, .generation = 3};
+      tokens[7]       = {.virtual_intid = 39, .physical_intid = 39, .generation = 0}; // not a token
+      const bool live = pending_token_mask(tokens) == ((1U << 0U) | (1U << 5U) | (1U << 31U));
+      for (std::uint32_t i = 0; i < kNumSpis; ++i) {
+        tokens[i] = {.virtual_intid = kNumPrivate + i, .physical_intid = kNumPrivate + i, .generation = 1};
+      }
+      return cleared && absent && live && pending_token_mask(tokens) == ~0U; // a full bank protects the whole word
+    }(),
+    "a live EoI token protects its SPI's pending bit against a guest clear, and nothing else does");
 
 // Harvest EoI'd list registers from the shadow after the caller synced
 // hardware into it: EISR bit i marks LR i as invalid-with-EOI. Consumes

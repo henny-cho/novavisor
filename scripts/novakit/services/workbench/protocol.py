@@ -59,18 +59,6 @@ DOWNLINK = frozenset(
         Topic.PROBE,
     }
 )
-# One list, meaning "the bridge answers this". A second naming what was
-# merely recognised used to sit beside it, and two lists to keep in step
-# is how a topic ends up recognised and silently ignored; unlisted here,
-# one is refused by name in parse_uplink with a reason the reader sees.
-#
-# `trace` and `probe` travel both ways: a separate topic for "asking
-# about traces" would say the same word twice in this set, the
-# validation and the documentation, and the Kind already distinguishes a
-# request from what the bridge sends unasked.
-UPLINK = frozenset(
-    {Topic.UART, Topic.TARGET, Topic.HALT, Topic.CMD, Topic.PROBE, Topic.TRACE, Topic.CURSOR}
-)
 
 
 class Kind(StrEnum):
@@ -155,7 +143,14 @@ class Uplink:
     data: dict
 
 
-def parse_uplink(text: str) -> Uplink:
+def parse_uplink(text: str, accepted: frozenset[Topic]) -> Uplink:
+    """One client message, or a fault the client is told about.
+
+    What may arrive is the caller's own dispatch table rather than a
+    second list kept here: two lists to keep in step is how a topic ends
+    up recognised by the parser and answered by nobody. Outside it, a
+    topic is refused by name with a reason the reader sees.
+    """
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as error:
@@ -163,7 +158,7 @@ def parse_uplink(text: str) -> Uplink:
     if not isinstance(payload, dict):
         raise UplinkError("uplink must be a JSON object")
     topic = payload.get("topic")
-    values = {candidate.value: candidate for candidate in UPLINK}
+    values = {candidate.value: candidate for candidate in accepted}
     if topic not in values:
         raise UplinkError(f"unknown uplink topic: {topic!r}")
     data = payload.get("data", {})

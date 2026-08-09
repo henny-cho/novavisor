@@ -112,11 +112,15 @@ export function createDrive({ root, note, send }) {
             guests: topology.guests || [],
             slice: Array.isArray(command.slice_us) ? command.slice_us : [],
             intids: Array.isArray(command.spi_intids) ? command.spi_intids : [],
+            /* Compared because it is drawn: a run that changed only its
+               drain period would otherwise return early here and leave
+               the previous wait on screen for the rest of the session. */
+            period: command.period_us,
           }
         : null;
       if (JSON.stringify(next) === JSON.stringify(world)) return;
       world = next;
-      contract = world ? `≤${usText(command.period_us)}` : "";
+      contract = world ? `≤${usText(world.period)}` : "";
       root.hidden = !world;
       note.classList.remove("bad");
       note.textContent = contract || "이 실행은 명령을 받지 않는다";

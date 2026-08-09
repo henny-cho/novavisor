@@ -161,6 +161,20 @@ void reevaluate_virq(std::size_t slot) noexcept;
 // the window a VM reset gives it to quiesce.
 [[nodiscard]] auto set_slice_us(std::uint64_t microseconds) noexcept -> bool;
 
+// The band set_slice_us accepts, and the value it booted with. Asked
+// for rather than derived, so a caller offers what will be taken
+// instead of learning the bound by being refused.
+// Microseconds at the width the command page publishes them, so a band
+// that outgrew that field is a narrowing error where it is built rather
+// than a truncated number the host would believe.
+struct SliceBand {
+  std::uint32_t min_us     = 0;
+  std::uint32_t default_us = 0;
+  std::uint32_t max_us     = 0;
+};
+
+[[nodiscard]] auto slice_band() noexcept -> SliceBand;
+
 // Seed all VCPUs from guest_table() (RuntimeStart).
 void init() noexcept;
 

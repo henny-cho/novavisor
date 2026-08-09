@@ -23,14 +23,7 @@ from novakit.services.workbench import events, trace  # noqa: E402
 
 L = abi.read_defines(
     abi.TRACE_RING,
-    [
-        "NOVA_TRACE_MAGIC",
-        "NOVA_TRACE_VERSION",
-        "NOVA_TRACE_HEADER_SIZE",
-        "NOVA_TRACE_RECORDS_OFF",
-        "NOVA_TRACE_REC_SIZE",
-        "NOVA_TRACE_MAX_RINGS",
-    ],
+    ["NOVA_TRACE_HEADER_SIZE", "NOVA_TRACE_RECORDS_OFF", "NOVA_TRACE_REC_SIZE"],
 )
 # How much a board spends on the T layer is that board's decision, so a
 # fixture states its own rather than borrowing one. Room for a few rings
@@ -46,18 +39,16 @@ TRACE_PA = 0x4000_1000
 CAPACITY = 16  # small enough that lapping is easy to arrange
 
 
-def stride_for(capacity: int) -> int:
-    return L["NOVA_TRACE_RECORDS_OFF"] + capacity * L["NOVA_TRACE_REC_SIZE"]
-
-
 class Region:
     """A trace region on disk, written the way the firmware writes one.
 
-    The geometry fields are separately overridable because that is the
-    only way to write a header the firmware could not have written —
-    which is what the reader's vetting is for. Left alone they stay
-    consistent with each other, so a test about draining never trips a
-    check about layout.
+    The header is laid out by the reader's own packer, so a fixture
+    cannot drift from the layout it is testing against. The geometry
+    fields are separately overridable because that is the only way to
+    write a header the firmware could not have written — which is what
+    the reader's vetting is for. Left alone they stay consistent with
+    each other, so a test about draining never trips a check about
+    layout.
     """
 
     def __init__(self, rings: int = 2, *, magic: int | None = None, version: int | None = None,
@@ -65,18 +56,15 @@ class Region:
                  header_rings: int | None = None, stride: int | None = None):
         self.rings = rings
         self.capacity = capacity
-        self.stride = stride_for(capacity)
+        # Where the records really are, which a lying header does not move.
+        self.stride = trace.stride_for(capacity)
         self.path = Path(tempfile.mkstemp(dir="/dev/shm", suffix="-ram")[1])
         self.buffer = bytearray((TRACE_PA - RAM_BASE) + REGION_SIZE)
         self.offset = TRACE_PA - RAM_BASE
-        struct.pack_into(
-            "<QIIIIIII", self.buffer, self.offset,
-            L["NOVA_TRACE_MAGIC"] if magic is None else magic,
-            L["NOVA_TRACE_VERSION"] if version is None else version,
-            L["NOVA_TRACE_REC_SIZE"],
-            self.stride if stride is None else stride,
-            rings if header_rings is None else header_rings,
-            capacity, 62_500_000, early,
+        trace.format_region(
+            self.buffer, self.offset,
+            rings=rings, capacity=capacity, freq_hz=62_500_000, early=early,
+            magic=magic, version=version, stride=stride, header_rings=header_rings,
         )
         self.heads = [0] * rings
         self.flush()
@@ -87,7 +75,7 @@ class Region:
     def emit(self, ring: int, ts: int, code: int, cpu: int = 0, a: int = 0, b: int = 0, c: int = 0) -> None:
         index = self.heads[ring]
         at = self.ring_base(ring) + L["NOVA_TRACE_RECORDS_OFF"] + (index % self.capacity) * L["NOVA_TRACE_REC_SIZE"]
-        struct.pack_into("<QHBBIQQ", self.buffer, at, ts, code, cpu, 0, a, b, c)
+        trace.pack_into(self.buffer, at, trace.Record(ts, code, cpu, a, b, c))
         self.heads[ring] = index + 1
         struct.pack_into("<Q", self.buffer, self.ring_base(ring), self.heads[ring])
 
@@ -142,7 +130,7 @@ class GeometryTest(unittest.TestCase):
             region.reader()
 
     def test_a_future_version_is_refused(self):
-        region = Region(version=L["NOVA_TRACE_VERSION"] + 1)
+        region = Region(version=trace.VERSION + 1)
         self.addCleanup(region.cleanup)
         with self.assertRaises(trace.NotFormatted):
             region.reader()
@@ -151,7 +139,7 @@ class GeometryTest(unittest.TestCase):
         """The depth now arrives entirely from the header, so the header
         is what a reader indexes with — and MAX_RINGS is the one bound
         it can still hold that number to."""
-        region = Region(header_rings=L["NOVA_TRACE_MAX_RINGS"] + 1)
+        region = Region(header_rings=trace.MAX_RINGS + 1)
         self.addCleanup(region.cleanup)
         with self.assertRaises(trace.NotFormatted):
             region.reader()
@@ -161,7 +149,7 @@ class GeometryTest(unittest.TestCase):
         indexing with the capacity would read every ring but the first
         at an offset nothing was written to — records that are all
         present, all decodable, and all wrong."""
-        region = Region(stride=stride_for(CAPACITY) + 32)
+        region = Region(stride=trace.stride_for(CAPACITY) + 32)
         self.addCleanup(region.cleanup)
         with self.assertRaises(trace.NotFormatted):
             region.reader()

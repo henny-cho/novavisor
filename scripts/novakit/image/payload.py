@@ -2,6 +2,13 @@
 
 A library, not a program: the build graph never runs this, it is the shape
 that services/artifacts.py and services/tfa.py write manifests from.
+
+A formatter and nothing more. Every record written here is read back by
+the DTB generator, which checks the same fields against the guest table
+it is generating for — an empty binary, a placement that is not the
+guest's, an entry outside guest memory. Repeating a weaker form of those
+checks here would only decide which of the two rejects a bad record
+first.
 """
 
 from __future__ import annotations
@@ -20,16 +27,11 @@ def make_record(
     memory_size: int,
 ) -> dict:
     binary = binary.resolve()
-    data = binary.read_bytes()
-    if not data:
-        raise ValueError("payload binary must not be empty")
-    if guest < 0 or load_pa < 0 or entry < 0 or memory_size <= 0:
-        raise ValueError("payload placement must be non-negative and non-empty")
     return {
         "guest": guest,
         "name": name,
         "binary": str(binary),
-        "sha256": hashlib.sha256(data).hexdigest(),
+        "sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
         "load_pa": load_pa,
         "entry": entry,
         "memory_size": memory_size,

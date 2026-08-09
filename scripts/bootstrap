@@ -36,6 +36,8 @@ CORE_PACKAGES=(
     git
     libssl-dev
     ninja-build
+    nodejs
+    npm
     pipx
     python3
     python3-pexpect
@@ -211,6 +213,25 @@ raise SystemExit(0 if installed >= required else 1)
 PY
 }
 
+# The distribution's nodejs is the pin: Ubuntu 26.04 carries the Node
+# LTS this file names, so the web toolchain needs no third-party archive
+# and no second package source. A host that brought its own older Node
+# is refused here rather than at the first lint.
+check_node() {
+    local binary
+    binary="$(command -v node || true)"
+    if [[ -z "${binary}" ]]; then
+        echo "Node ${NODE_VERSION}+ is required for the web toolchain" >&2
+        return 1
+    fi
+    local installed
+    installed="$(version_tuple "$("${binary}" --version)")"
+    if ((${installed%%.*} < NODE_VERSION)); then
+        echo "Node ${NODE_VERSION}+ is required; found ${installed}" >&2
+        return 1
+    fi
+}
+
 write_environment() {
     local environment="${TOOLCHAIN_ROOT}/env.sh"
     mkdir -p "${TOOLCHAIN_ROOT}"
@@ -235,6 +256,7 @@ install_python_tools
 install_actionlint
 install_toolchain
 check_qemu
+check_node
 if [[ "${MODE}" != "image" ]]; then
     write_environment
 fi

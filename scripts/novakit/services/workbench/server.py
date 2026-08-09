@@ -14,7 +14,10 @@ import signal
 import sys
 import time
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from ...core import config
@@ -65,7 +68,6 @@ WAIT_NOTICE_SECONDS = 2.0
 # ~700 us per instruction over RSP, so this caps one request at a couple
 # of seconds. Stepping is for looking inside an event, not reaching one.
 MAX_STEPS = 2000
-HALT_COMMANDS = ("stop", "cont", "step", "run", "abort")
 # Arming at launch races the guest, so the watch is tight; the budget
 # covers a cold build ahead of the machine it is waiting for.
 LAUNCH_POLL_SECONDS = 0.005
@@ -92,6 +94,35 @@ TRACE_DRAIN_FLOOR = 64
 # window and only the individual marks are gated on it, because more
 # points than pixels is a density by definition.
 DEFAULT_BUCKETS = 1200
+
+
+class Needs(StrEnum):
+    """What a handler must be given before it can act, and what the
+    reader is told when it is not there.
+
+    One rule per name, stated once. Telling a recording from a machine
+    used to be written out at three call sites — twice as a refusal, once
+    inverted — and a rule spread over three sites is the rule the fourth
+    handler gets written without.
+    """
+
+    NOTHING = ""
+    # A recording is an observation, not a machine.
+    MACHINE = "this is a replay; there is no machine to drive"
+    # And one that is up. Stricter than MACHINE and covers it, since a
+    # replay is never RUNNING.
+    RUNNING = "session is {phase}"
+    # The inverse rule: a live machine's now is the only point it has.
+    REPLAY = "only a replay can be moved in time"
+
+
+@dataclass(frozen=True)
+class Handler:
+    """One uplink topic: what answers it, and what it needs to."""
+
+    topic: Topic
+    call: Callable[[Bridge, dict], None]
+    needs: Needs = Needs.NOTHING
 
 
 def _require_websockets():
@@ -365,43 +396,44 @@ class Bridge:
         if isinstance(message, bytes):
             message = message.decode("utf-8", errors="replace")
         try:
-            uplink = parse_uplink(message)
+            uplink = parse_uplink(message, UPLINK)
         except UplinkError as error:
             self._reject(str(error))
             return
-        if uplink.topic is Topic.UART:
-            reason = self.session.send_bytes(decode_bytes(str(uplink.data.get("bytes", ""))))
-            if reason is not None:
-                self._reject(f"uart: {reason}")
+        handler = BY_TOPIC[uplink.topic]
+        unmet = self._unmet(handler.needs)
+        if unmet is not None:
+            # Refused with a reason rather than accepted and ignored: a
+            # control that silently does nothing is worse than one that
+            # says why it cannot.
+            self._reject(f"{handler.topic.value}: {unmet}")
             return
-        if uplink.topic is Topic.TRACE:
-            self._answer_window(uplink.data)
-            return
-        if uplink.topic is Topic.CURSOR:
-            self._answer_cursor(uplink.data)
-            return
-        if uplink.topic is Topic.PROBE:
-            self._answer_probe(uplink.data)
-            return
-        if uplink.topic is Topic.CMD:
-            self._issue_command(uplink.data)
-            return
-        if uplink.topic is Topic.HALT:
-            command = str(uplink.data.get("cmd", ""))
-            if command not in HALT_COMMANDS:
-                self._reject(f"halt: unknown cmd {command!r}")
-            elif self.session.phase is not Phase.RUNNING or self.session.surfaces is None:
-                self._reject(f"halt: session is {self.session.phase.value}")
-            else:
-                self.spawn(self._halt_command(command, uplink.data))
-            return
-        if self._replay is not None:
-            # A recording cannot be driven. Refused with a reason rather
-            # than accepted and ignored: a control that silently does
-            # nothing is worse than one that says why it cannot.
-            self._reject("target: this is a replay; there is no machine to launch")
-            return
-        demo = uplink.data.get("demo")
+        handler.call(self, uplink.data)
+
+    def _unmet(self, needs: Needs) -> str | None:
+        """Why this handler cannot act on this session, or None.
+
+        The one place a recording is told apart from a machine, applied
+        to whatever the table says needs which.
+        """
+        if needs is Needs.MACHINE:
+            refused = self._replay is not None
+        elif needs is Needs.RUNNING:
+            refused = self.session.phase is not Phase.RUNNING or self.session.surfaces is None
+        elif needs is Needs.REPLAY:
+            refused = self._replay is None
+        else:
+            refused = False
+        return needs.value.format(phase=self.session.phase.value) if refused else None
+
+    def _send_uart(self, data: dict) -> None:
+        reason = self.session.send_bytes(decode_bytes(str(data.get("bytes", ""))))
+        if reason is not None:
+            self._reject(f"uart: {reason}")
+
+    def _select_target(self, data: dict) -> None:
+        """Point the session at a demo, and arm before it can run away."""
+        demo = data.get("demo")
         if not demo:
             self._reject("target: missing demo")
             return
@@ -410,11 +442,11 @@ class Bridge:
             # would replay every impatient click as a build+teardown.
             self._reject(f"target: session is {self.session.phase.value}")
             return
-        variant = uplink.data.get("variant")
+        variant = data.get("variant")
         # Hand the outgoing machine back before it is torn down; a run
         # that ends while we hold its stop leaves QEMU frozen mid-exit.
         self._release()
-        stops = [str(name) for name in uplink.data.get("stops", [])]
+        stops = [str(name) for name in data.get("stops", [])]
         if stops:
             self.spawn(self._arm_at_launch(self.session.run_id, stops))
         self.spawn(
@@ -422,7 +454,7 @@ class Bridge:
                 Target(
                     demo=str(demo),
                     variant=None if variant is None else str(variant),
-                    verify=bool(uplink.data.get("verify", False)),
+                    verify=bool(data.get("verify", False)),
                 )
             )
         )
@@ -609,6 +641,14 @@ class Bridge:
             self._halting = False
             self._abort = False
 
+    def _take_halt(self, data: dict) -> None:
+        """Accept one halt command, or say why it is not one."""
+        command = str(data.get("cmd", ""))
+        if command not in HALT_COMMANDS:
+            self._reject(f"halt: unknown cmd {command!r}")
+            return
+        self.spawn(self._halt_command(command, data))
+
     async def _halt_command(self, command: str, data: dict) -> None:
         """Pause is a held gdb connection; the machine stays stopped
         (virtual clock frozen) until it is advanced or resumed."""
@@ -625,27 +665,7 @@ class Bridge:
         self._abort = False
         try:
             inspector = self._hold()
-            loop = asyncio.get_running_loop()
-            if command == "stop":
-                await self._sweep_to_panels(inspector)
-                self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "paused"})
-            elif command == "cont":
-                await loop.run_in_executor(None, self._release)
-                self.session.paused = False
-                self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "resumed"})
-            elif command == "step":
-                if not inspector.paused:
-                    await self._sweep_to_panels(inspector)
-                count = max(1, min(int(data.get("count", 1)), MAX_STEPS))
-                result = await loop.run_in_executor(None, inspector.step, count)
-                self.store.publish(
-                    Topic.LIFE, Kind.EVENT, {"phase": "stepped", **result}
-                )
-                await self._sweep_to_panels(inspector)
-            else:  # "run"
-                if not inspector.paused:
-                    await self._sweep_to_panels(inspector)
-                await self._advance(inspector, data)
+            await HALT_STEPS[command](self, inspector, data)
         except Exception as error:
             # This coroutine is the request boundary: any protocol fault
             # (bad JSON, corrupt RSP hex, a missing XML attribute) must
@@ -654,6 +674,30 @@ class Bridge:
         finally:
             self._halting = False
             self._abort = False
+
+    async def _halt_stop(self, inspector: halt.HaltInspector, _data: dict) -> None:
+        await self._sweep_to_panels(inspector)
+        self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "paused"})
+
+    async def _halt_cont(self, _inspector: halt.HaltInspector, _data: dict) -> None:
+        await asyncio.get_running_loop().run_in_executor(None, self._release)
+        self.session.paused = False
+        self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "resumed"})
+
+    async def _halt_step(self, inspector: halt.HaltInspector, data: dict) -> None:
+        if not inspector.paused:
+            await self._sweep_to_panels(inspector)
+        count = max(1, min(int(data.get("count", 1)), MAX_STEPS))
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, inspector.step, count
+        )
+        self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "stepped", **result})
+        await self._sweep_to_panels(inspector)
+
+    async def _halt_run(self, inspector: halt.HaltInspector, data: dict) -> None:
+        if not inspector.paused:
+            await self._sweep_to_panels(inspector)
+        await self._advance(inspector, data)
 
     def _drop_tracer(self) -> None:
         tracer, self._tracer = self._tracer, None
@@ -836,11 +880,6 @@ class Bridge:
         will say it — the command never reached EL2, so no record can
         describe it.
         """
-        if self._replay is not None:
-            # The rule target and halt already follow: a recording is an
-            # observation, not a machine.
-            self._reject("cmd: this is a replay; there is no machine to drive")
-            return
         name = str(data.get("op", ""))
         if name not in commands.OPS:
             self._reject(f"cmd: unknown op {name!r}")
@@ -907,13 +946,10 @@ class Bridge:
         together, because "what did the machine look like then" is one
         question rather than three.
 
-        Only a replay can answer it: a live machine's now is the only
-        point it has, and a panel returned to an earlier reading would
-        show a value nothing can be checked against.
+        The table admits it only for a replay: a live machine's now is
+        the only point it has, and a panel returned to an earlier reading
+        would show a value nothing can be checked against.
         """
-        if self._replay is None:
-            self._reject("cursor: only a replay can be moved in time")
-            return
         try:
             ts = int(data.get("ts"))
         except (TypeError, ValueError):
@@ -1270,6 +1306,40 @@ class Bridge:
                 await asyncio.wait_for(connection.close(code=1011), timeout=1.0)
             except Exception:
                 pass  # the transport is already beyond a clean close
+
+
+# What a client may send: the topic, what answers it, and what the
+# session has to be for that answer to mean anything. One row per topic,
+# and the accepted set is read off the rows — a topic without a handler
+# cannot be admitted, and a handler's precondition is applied by the
+# dispatch rather than remembered by whoever writes the next one.
+#
+# `trace` and `probe` travel both ways. A separate topic for "asking
+# about traces" would say the same word twice, and the Kind already
+# tells a request from what the bridge sends unasked.
+HANDLERS = (
+    Handler(Topic.UART, Bridge._send_uart),
+    Handler(Topic.TRACE, Bridge._answer_window),
+    Handler(Topic.PROBE, Bridge._answer_probe),
+    Handler(Topic.CURSOR, Bridge._answer_cursor, Needs.REPLAY),
+    Handler(Topic.CMD, Bridge._issue_command, Needs.MACHINE),
+    Handler(Topic.TARGET, Bridge._select_target, Needs.MACHINE),
+    Handler(Topic.HALT, Bridge._take_halt, Needs.RUNNING),
+)
+UPLINK = frozenset(handler.topic for handler in HANDLERS)
+BY_TOPIC = {handler.topic: handler for handler in HANDLERS}
+
+# What `halt` may ask the stop to do. The vocabulary is the table's keys,
+# so a command named in one place and dispatched in another cannot
+# happen. `abort` is not among them: it is answered *while* one of these
+# is running, so it never takes the inspector.
+HALT_STEPS = {
+    "stop": Bridge._halt_stop,
+    "cont": Bridge._halt_cont,
+    "step": Bridge._halt_step,
+    "run": Bridge._halt_run,
+}
+HALT_COMMANDS = ("abort", *HALT_STEPS)
 
 
 async def _serve_forever(

@@ -11,8 +11,6 @@ sys.path.insert(0, str(REPO / "scripts"))
 from novakit.image import dtb  # noqa: E402
 
 BOARD_LAYOUT = REPO / "src/hal/board/qemu_virt/include/hal/board/active/board_layout.h"
-N1SDP_BOARD_LAYOUT = REPO / "src/hal/board/n1sdp/include/hal/board/active/board_layout.h"
-N1SDP_INVENTORY = REPO / "src/hal/board/n1sdp/device_inventory.yml"
 
 INVENTORY = """\
 sid_bits: 8
@@ -129,28 +127,10 @@ class DevicePolicyTest(unittest.TestCase):
     reset: quiesce
 """)
         self.inventory_path.write_text("sid_bits: 8\ndevices:\n" + "".join(records))
-        with self.assertRaisesRegex(SystemExit, "exceeds registry capacity 8"):
+        with self.assertRaisesRegex(
+            SystemExit, f"exceeds registry capacity {dtb.MAX_DEVICES}"
+        ):
             self.load()
-
-
-class BoardPhysicalLayoutTest(unittest.TestCase):
-    def test_n1sdp_keeps_guest_state_outside_el2_image(self):
-        with tempfile.TemporaryDirectory() as directory:
-            config = Path(directory) / "config.yml"
-            config.write_text(
-                "guests:\n"
-                "  - {name: smoke, memory_size: 0x00100000, "
-                "vcpus: 1, uart: none}\n"
-            )
-            layout = dtb.read_layout(
-                dtb.DEFAULT_LAYOUT, N1SDP_BOARD_LAYOUT
-            )
-            inventory = dtb.load_inventory(N1SDP_INVENTORY, layout)
-            guests, _ = dtb.load_config(config, layout, inventory)
-
-        self.assertEqual(guests[0]["load_pa"], 0x80000000)
-        self.assertEqual(guests[0]["entry"], 0x50000000)
-        self.assertEqual(layout["NOVA_BOARD_RAM_BASE"], 0xE0000000)
 
 
 class PayloadBundleTest(unittest.TestCase):

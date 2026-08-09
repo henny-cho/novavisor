@@ -20,7 +20,6 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from ...core import config
 from ...image import abi
 
 _OP_PREFIX = "NOVA_CMD_OP_"
@@ -86,7 +85,7 @@ _RECORDS_OFF = _LAYOUT["NOVA_CMD_RECORDS_OFF"]
 # Page header, then one command. Both fixed by the ABI header the
 # firmware compiles against; these strings only spell its fields.
 _WORD = "Q"  # one command word, at the width the record declares
-_HEADER = struct.Struct("<QIIII")
+_HEADER = struct.Struct("<QIIIIIIIII")
 _RECORD = struct.Struct("<" + _WORD * 3)
 _INDEX = struct.Struct("<" + _WORD)
 # The spelling above and the size the ABI declares are two statements of
@@ -97,31 +96,29 @@ if _RECORD.size != REC_SIZE:
     raise SystemExit(f"command record is {REC_SIZE} bytes; this packs {_RECORD.size}")
 _WORD_MAX = (1 << (8 * struct.calcsize(_WORD))) - 1
 
-# What the scheduler accepts for its quantum: the band `set_slice_us`
-# compares against, read from where it is spelled rather than derived a
-# second time from the default and the span. Ends and middle — anything
-# between them says the same thing at finer grain than a panel wants.
-_SLICE_HEADER = (
-    config.REPO / "src" / "components" / "core" / "core_vcpu" / "src" / "vcpu_internal.hpp"
-)
-_SLICE = abi.read_constexprs(_SLICE_HEADER, wanted={"kSliceMinUs", "kSliceUs", "kSliceMaxUs"})
-SLICE_CHOICES_US = (_SLICE["kSliceMinUs"], _SLICE["kSliceUs"], _SLICE["kSliceMaxUs"])
 
-# Which virtual INTIDs are an SPI, from the model EL2 checks against —
-# the two numbers `post_spi` refuses outside of.
-_VGIC_HEADER = (
-    config.REPO
-    / "src"
-    / "components"
-    / "vdev"
-    / "vgic"
-    / "include"
-    / "vgic"
-    / "vgic_model.hpp"
-)
-_VGIC = abi.read_constexprs(_VGIC_HEADER, wanted={"kNumPrivate", "kMaxIntid"})
-SPI_INTIDS = (_VGIC["kNumPrivate"], _VGIC["kMaxIntid"] - 1)
+def format_page(
+    buffer,
+    offset: int = 0,
+    *,
+    period_us: int,
+    slice_us: tuple[int, int, int],
+    spi_intids: tuple[int, int],
+    magic: int = MAGIC,
+    version: int = VERSION,
+    record_size: int = REC_SIZE,
+    slots: int = SLOTS,
+) -> None:
+    """Lay out a command page the way EL2 lays one out.
 
+    The reader above is the only other place this header is spelled, so
+    anything standing in for a machine builds its page here rather than
+    packing the fields a second time. The overridable arguments are what
+    a page can be wrong about, which is what a reader has to refuse.
+    """
+    _HEADER.pack_into(
+        buffer, offset, magic, version, record_size, slots, period_us, *slice_us, *spi_intids
+    )
 
 class NotFormatted(RuntimeError):
     """The page carries no ring this writer understands.
@@ -163,6 +160,12 @@ class Geometry:
     # How long a command may wait, declared by the side that drains.
     # Read rather than assumed: a copy here would survive a change to it.
     period_us: int
+    # The bands EL2 checks an argument against, in the page it placed.
+    # A panel offering anything else would be offering what this machine
+    # refuses; asking it is the only way to be sure of the firmware in
+    # front of us rather than the sources it might have been built from.
+    slice_us: tuple[int, int, int]
+    spi_intids: tuple[int, int]
 
 
 _ORDER = threading.Lock()
@@ -213,7 +216,8 @@ class Writer:
             raise
 
     def _read_geometry(self) -> Geometry:
-        magic, version, record_size, slots, period_us = _HEADER.unpack_from(self._window, 0)
+        (magic, version, record_size, slots, period_us, slice_min, slice_def, slice_max, spi_lo,
+         spi_hi) = _HEADER.unpack_from(self._window, 0)
         if magic != MAGIC:
             # The magic is written last, so its absence says only that
             # nobody has finished placing a ring here.
@@ -224,7 +228,12 @@ class Writer:
             raise NotFormatted(f"command record is {record_size} bytes, expected {REC_SIZE}")
         if slots != SLOTS:
             raise NotFormatted(f"command ring has {slots} slots, expected {SLOTS}")
-        return Geometry(slots, period_us)
+        return Geometry(
+            slots=slots,
+            period_us=period_us,
+            slice_us=(slice_min, slice_def, slice_max),
+            spi_intids=(spi_lo, spi_hi),
+        )
 
     def _index(self, offset: int) -> int:
         return _INDEX.unpack_from(self._window, offset)[0]
@@ -256,17 +265,17 @@ class Writer:
     def as_dict(self) -> dict:
         """What a reader needs to offer this run's controls.
 
-        The opcodes and the two bands are build constants; the depth and
-        the wait come from the page this run placed. Copied nowhere: the
-        machine is the authority on what it accepts and how long it
-        takes to answer.
+        The opcodes are named by the ABI header both sides compile
+        against; everything else comes from the page this run placed.
+        Copied nowhere: the machine is the authority on what it accepts
+        and how long it takes to answer.
         """
         return {
             "ops": sorted(OPS),
             "slots": self.geometry.slots,
             "period_us": self.geometry.period_us,
-            "slice_us": list(SLICE_CHOICES_US),
-            "spi_intids": list(SPI_INTIDS),
+            "slice_us": list(self.geometry.slice_us),
+            "spi_intids": list(self.geometry.spi_intids),
         }
 
     def close(self) -> None:

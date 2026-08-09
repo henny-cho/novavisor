@@ -60,6 +60,16 @@ void cpu_restore(std::size_t index) noexcept;
 // advertised SPI range.
 [[nodiscard]] auto post_spi(std::size_t vm, std::uint32_t vintid) noexcept -> bool;
 
+// The virtual INTIDs post_spi accepts, inclusive. The model advertises
+// this range in GICD_TYPER, so it is what a guest driver sizes itself
+// to and what an injector may offer.
+struct SpiBand {
+  std::uint32_t lo = 0;
+  std::uint32_t hi = 0;
+};
+
+[[nodiscard]] auto spi_band() noexcept -> SpiBand;
+
 // post_spi for a hardware-backed SPI: binds an EoI token (physical
 // INTID + device generation) so the guest's EOI can be forwarded to
 // the right device incarnation. A live token makes a re-post

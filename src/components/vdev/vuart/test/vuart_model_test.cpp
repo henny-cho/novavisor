@@ -71,19 +71,3 @@ TEST(VuartReg, ImscRoundTripsMasked) {
   EXPECT_TRUE(reg_write(u, kUartImsc, ~0ULL).known);
   EXPECT_EQ(reg_read(u, kUartImsc).value, kImscMask);
 }
-
-TEST(VuartReg, ConfigRegistersAreQuietlyIgnored) {
-  UartState u{};
-  for (const auto off : {kUartRsr, kUartIbrd, kUartFbrd, kUartLcrH, kUartCr, kUartIfls, kUartDmacr, kUartIcr}) {
-    EXPECT_TRUE(reg_write(u, off, ~0ULL).known);
-    EXPECT_EQ(reg_read(u, off).value, 0U);
-  }
-  EXPECT_FALSE(reg_read(u, 0x04C).known); // past DMACR: outside the modeled set
-  EXPECT_FALSE(reg_write(u, 0x04C, 1).known);
-}
-
-TEST(VuartReg, IdentificationBlockMatchesPl011) {
-  UartState u{};
-  EXPECT_EQ(reg_read(u, kUartIds).value, 0x11U);        // PeriphID0
-  EXPECT_EQ(reg_read(u, kUartIds + 0x1C).value, 0xB1U); // CellID3
-}

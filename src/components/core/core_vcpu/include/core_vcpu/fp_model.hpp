@@ -41,10 +41,27 @@ public:
     }
   }
 
-  [[nodiscard]] constexpr auto owner() const noexcept -> std::size_t { return owner_; }
-
 private:
   std::size_t owner_ = kNoOwner;
 };
+
+// One ownership walk: who traps, what each claim hands back to be saved,
+// and what invalidation drops. The last line is the one that matters —
+// saving a reseeded VCPU's registers would write a dead guest's state
+// into the bank of whatever runs next.
+static_assert(
+    [] {
+      Ownership  fp;
+      const bool unowned  = fp.trap_needed(0) && fp.trap_needed(1); // no owner: every VCPU traps
+      const bool first    = fp.claim(0) == kNoOwner && !fp.trap_needed(0) && fp.trap_needed(1);
+      const bool second   = fp.claim(1) == 0U && fp.trap_needed(0) && !fp.trap_needed(1);
+      const bool bounce   = fp.claim(0) == 1U && fp.claim(1) == 0U; // ownership follows preemption
+      const bool spurious = fp.claim(1) == 1U;                      // already owner: nothing to move
+      fp.invalidate(0);                                             // not the owner: no effect
+      const bool kept = !fp.trap_needed(1);
+      fp.invalidate(1);
+      return unowned && first && second && bounce && spurious && kept && fp.trap_needed(1) && fp.claim(0) == kNoOwner;
+    }(),
+    "the FP register file has one owner, and every claim names the state that must be saved first");
 
 } // namespace nova::fp

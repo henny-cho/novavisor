@@ -122,6 +122,18 @@ inline constexpr std::uint64_t kSctlrEl2 = 0x30C50830ULL  // RES1
                                            | kSctlrWxn;
 static_assert(kSctlrEl2 == NOVA_EL2_SCTLR);
 
+// The span the builder refuses to map past and the span the hardware
+// walks are one fact: T0SZ is where the walker learns it. W^X is stated
+// twice for the same reason — the attribute presets place XN on every
+// writable mapping, and WXN makes the MMU enforce it whatever a future
+// preset says.
+static_assert(
+    [] {
+      const std::uint64_t t0sz = kTcrEl2 & 0x3FU; // TCR_EL2.T0SZ [5:0]
+      return (1ULL << (64U - t0sz)) == kVaLimit && (kSctlrEl2 & kSctlrWxn) != 0;
+    }(),
+    "the EL2 translation registers describe the map this builder produces");
+
 // --- Identity map builder ------------------------------------------------------
 //
 // Maps disjoint [base, end) ranges over a caller-provided root + table

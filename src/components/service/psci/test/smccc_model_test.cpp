@@ -1,3 +1,9 @@
+// Host-side tests for the SMCCC Arch service: what the 0x8000_xxxx
+// range claims, and what a workaround call may claim about the PE it
+// runs on. The per-function answers are pinned by the table in
+// smccc_model.hpp and the ID field verdicts by cpu_features_test, so
+// what is tested here is the range and the binding between them.
+
 #include "psci/psci_model.hpp"
 #include "psci/smccc_model.hpp"
 
@@ -19,10 +25,6 @@ TEST(SmcccModel, ClaimsTheWholeArchRange) {
   EXPECT_FALSE(nova::smccc::dispatch(0x1000, 0, kSafePe).claimed);
 }
 
-TEST(SmcccModel, ReportsVersionOnePointOne) {
-  EXPECT_EQ(nova::smccc::dispatch(SMCCC_FN_VERSION, 0, kSilentPe).ret, std::uint64_t{SMCCC_VERSION_1_1});
-}
-
 TEST(SmcccModel, ArchFeaturesAnswersPerFunction) {
   EXPECT_EQ(nova::smccc::dispatch(SMCCC_FN_ARCH_FEATURES, SMCCC_FN_VERSION, kSafePe).ret, std::uint64_t{SMCCC_SUCCESS});
   EXPECT_EQ(nova::smccc::dispatch(SMCCC_FN_ARCH_FEATURES, SMCCC_FN_ARCH_SOC_ID, kSafePe).ret,
@@ -32,35 +34,35 @@ TEST(SmcccModel, ArchFeaturesAnswersPerFunction) {
 // Discovery must not promise something the call then refuses, so
 // ARCH_FEATURES routes a workaround ID through the same verdict.
 TEST(SmcccModel, ArchFeaturesMatchesTheWorkaroundItDescribes) {
-  for (const std::uint32_t fid : {SMCCC_FN_WORKAROUND_1, SMCCC_FN_WORKAROUND_2, SMCCC_FN_WORKAROUND_3}) {
+  for (const nova::smccc::Entry& entry : nova::smccc::kTable) {
+    if (entry.query == nullptr) {
+      continue;
+    }
     for (const SpeculationState& pe : {kSafePe, kSilentPe}) {
-      EXPECT_EQ(nova::smccc::dispatch(SMCCC_FN_ARCH_FEATURES, fid, pe).ret, nova::smccc::dispatch(fid, 0, pe).ret);
+      EXPECT_EQ(nova::smccc::dispatch(SMCCC_FN_ARCH_FEATURES, entry.fid, pe).ret,
+                nova::smccc::dispatch(entry.fid, 0, pe).ret);
     }
   }
 }
 
-// NOT_REQUIRED asserts the PE is unaffected — only a PE that reports the
-// property earns it.
-TEST(SmcccModel, WorkaroundsAreNotRequiredOnlyWithEvidence) {
-  for (const std::uint32_t fid : {SMCCC_FN_WORKAROUND_1, SMCCC_FN_WORKAROUND_2, SMCCC_FN_WORKAROUND_3}) {
-    const auto v = nova::smccc::dispatch(fid, 0, kSafePe);
-    EXPECT_TRUE(v.claimed);
-    EXPECT_EQ(v.ret, static_cast<std::uint64_t>(SMCCC_NOT_REQUIRED));
-  }
-}
-
 // The defect this binding closes: an undisclosed PE used to be told
-// "unaffected", which stops the guest from mitigating.
+// "unaffected", which stops the guest from mitigating. NOT_REQUIRED is
+// a claim about the hardware, so no workaround may earn it here.
 TEST(SmcccModel, UndisclosedPeGetsNotSupportedNotNotRequired) {
-  for (const std::uint32_t fid : {SMCCC_FN_WORKAROUND_1, SMCCC_FN_WORKAROUND_2, SMCCC_FN_WORKAROUND_3}) {
-    const auto v = nova::smccc::dispatch(fid, 0, kSilentPe);
+  for (const nova::smccc::Entry& entry : nova::smccc::kTable) {
+    if (entry.query == nullptr) {
+      continue;
+    }
+    const auto v = nova::smccc::dispatch(entry.fid, 0, kSilentPe);
     EXPECT_TRUE(v.claimed);
     EXPECT_EQ(v.ret, static_cast<std::uint64_t>(SMCCC_NOT_SUPPORTED));
   }
 }
 
 // CLRBHB lets the guest clear the history itself; the PE stays affected,
-// so the branch-history call must not claim otherwise.
+// so the branch-history call must not claim otherwise. This PE is also
+// the one that tells the workaround verdicts apart, so it pins which
+// one the table binds to each function ID.
 TEST(SmcccModel, GuestSideBhbMitigationIsNotAnUnaffectedPe) {
   constexpr SpeculationState kClrbhbOnly{.csv2 = 1, .csv2_frac = 1, .csv3 = 1, .ssbs = 2, .clrbhb = true};
   EXPECT_EQ(nova::smccc::dispatch(SMCCC_FN_WORKAROUND_3, 0, kClrbhbOnly).ret,

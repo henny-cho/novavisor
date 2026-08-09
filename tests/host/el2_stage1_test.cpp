@@ -1,8 +1,9 @@
 // tests/host/el2_stage1_test.cpp
 //
 // EL2 Stage-1 identity-map builder: block-size selection, W^X
-// attribute placement, overlap/pool-exhaustion rejection, and the
-// translation register values shared with boot.S.
+// attribute placement, and overlap/pool-exhaustion rejection. The
+// translation register values are pinned by static_asserts alongside
+// their definitions, where every build checks them.
 
 #include "hal/arch/aarch64/vmsa/stage1_tables.hpp"
 
@@ -159,14 +160,6 @@ TEST_F(Fixture, FailsCleanlyWhenPoolIsExhausted) {
   Stage1Builder tiny{tiny_root, std::span{tiny_pool}};
   // Needs one L2 and one L3 table; the pool only holds one.
   EXPECT_FALSE(tiny.map(0, 4 * kPageSize, desc::kAttrNormalRw));
-}
-
-TEST(Stage1Regs, ValuesMatchBootConstants) {
-  EXPECT_EQ(kMairEl2, static_cast<std::uint64_t>(NOVA_EL2_MAIR));
-  EXPECT_EQ(kTcrEl2, static_cast<std::uint64_t>(NOVA_EL2_TCR));
-  EXPECT_EQ(kSctlrEl2, static_cast<std::uint64_t>(NOVA_EL2_SCTLR));
-  EXPECT_EQ(kTcrEl2 & 0x3FU, 32U);            // T0SZ covers exactly 4 GiB
-  EXPECT_TRUE((kSctlrEl2 & (1U << 19)) != 0); // WXN backs the map's W^X
 }
 
 } // namespace

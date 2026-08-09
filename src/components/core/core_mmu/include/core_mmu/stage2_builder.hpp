@@ -74,6 +74,21 @@ struct Stage2Tables {
   return static_cast<std::size_t>((ipa >> kL3Shift) & kIndexMask);
 }
 
+// Each level reads its own 9-bit slice of the IPA and nothing below it.
+// A slice that leaked lower bits would send two addresses in the same
+// slot to different entries, and the walk would resolve to a frame the
+// caller never mapped.
+static_assert(
+    [] {
+      const std::uint64_t base = 0x5000'0000ULL; // 1.25 GiB → L1 1, L2 128, L3 0
+      return l1_index(0) == 0U && l1_index(k1GiB) == 1U && l1_index(2 * k1GiB) == 2U && l1_index(base) == 1U &&
+             l1_index(0x4FFF'FFFFULL) == 1U && l1_index(0x7FFF'FFFFULL) == 1U && // both ends of the same 1 GiB slot
+             l2_index(0) == 0U && l2_index(k2MiB) == 1U && l2_index(base) == 128U && l3_index(0) == 0U &&
+             l3_index(k4KiB) == 1U && l3_index(base) == 0U && // base is 2 MiB-aligned
+             l3_index(base + k4KiB) == 1U && l3_index(base + (255U * k4KiB)) == 255U;
+    }(),
+    "each level indexes its own slice of the IPA: bits 38:30, 29:21 and 20:12");
+
 // --- Builder ----------------------------------------------------------------
 
 // Reset every table to kInvalid and rewind the L3 pool.

@@ -128,8 +128,3 @@ def soak(
 ) -> None:
     """Repeat verification of one demo."""
     _finish(demo.soak(name, runs, summary=summary, artifact_dir=artifacts))
-
-
-@app.command("verify-all", hidden=True)
-def verify_all(artifacts: Artifacts = None) -> None:
-    _finish(demo.verify_all(artifacts))

@@ -108,6 +108,10 @@ template <std::size_t Capacity, typename Quarantine>
   return {.owner_vm = binding.owner_vm, .stream_id = stream_id, .generation = binding.generation};
 }
 
+// Output address space the Stage-2 contexts are encoded for: 40 bits.
+// A root table and a guest's whole PA window have to sit below it.
+inline constexpr std::uint64_t kOutputAddressLimit = std::uint64_t{1} << 40U;
+
 [[nodiscard]] constexpr auto validate_contexts(std::span<const TranslationContext> contexts,
                                                std::span<const GuestDescriptor> guests, bool vmid16) noexcept
     -> ContextError {
@@ -125,11 +129,12 @@ template <std::size_t Capacity, typename Quarantine>
     if ((context.root_pa & 0xFFFU) != 0U) {
       return ContextError::kUnalignedRoot;
     }
-    if ((context.root_pa & ~0x0000'00FF'FFFF'FFFFULL) != 0U) {
+    if (context.root_pa >= kOutputAddressLimit) {
       return ContextError::kRootOutOfRange;
     }
-    if (!range_well_formed(guests[i].load_pa, guests[i].ipa_size) ||
-        guests[i].load_pa + guests[i].ipa_size - 1U > 0x0000'00FF'FFFF'FFFFULL) {
+    // Whether the window is well formed is the DMA policy's answer, given
+    // before any context is built; what is left is that it fits.
+    if (!range_contains(0, kOutputAddressLimit, guests[i].load_pa, guests[i].ipa_size)) {
       return ContextError::kGuestPaOutOfRange;
     }
     for (std::size_t j = 0; j < i; ++j) {

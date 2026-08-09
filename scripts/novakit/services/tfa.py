@@ -19,6 +19,10 @@ from . import artifacts, cmake, expect, verify
 
 REPOSITORY = "https://github.com/ARM-software/arm-trusted-firmware.git"
 
+# Where BL1 expects to find the FIP in the QEMU virt flash image
+# (TF-A's PLAT_QEMU_FIP_BASE, one 256 KiB bank past the start).
+FIP_FLASH_OFFSET = 256 * 1024
+
 
 @dataclass(frozen=True)
 class Profile:
@@ -169,7 +173,7 @@ def package_qemu(payload: Path, output_dir: Path) -> Path:
     flash = output_dir / "flash.bin"
     with flash.open("wb") as image:
         image.write(bl1.read_bytes())
-        image.seek(256 * 1024)
+        image.seek(FIP_FLASH_OFFSET)
         image.write(fip.read_bytes())
     print(f"QEMU TF-A flash image: {flash}")
     return flash
@@ -207,7 +211,7 @@ def package_n1sdp(payload: Path, output_dir: Path) -> Path:
 
 
 PACKAGERS = {
-    "n1sdp": lambda payload, output: package_n1sdp(payload, output),
+    "n1sdp": package_n1sdp,
 }
 
 
@@ -270,7 +274,7 @@ def verify_chain(
 
 
 VERIFIERS = {
-    "qemu-tfa": lambda **options: verify_chain(**options),
+    "qemu-tfa": verify_chain,
 }
 
 

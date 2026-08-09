@@ -153,4 +153,76 @@ inline constexpr std::uint64_t kInvalid = 0;
   return (d & desc::kXnBit) != 0;
 }
 
+// Attributes a leaf builder may be handed: the lower-attribute block
+// (bits 11:2) plus the upper-attribute bits, and nothing else. A value
+// with a bit outside that would land in the type field or the output
+// address make_block/make_page wraps around it, silently remapping the
+// frame or changing what kind of descriptor it is.
+[[nodiscard]] constexpr auto attrs_well_formed(std::uint64_t attrs) noexcept -> bool {
+  constexpr std::uint64_t kLowerAttrs = 0x3FFULL << desc::kMemAttrShift;
+  return (attrs & ~(kLowerAttrs | desc::kXnBit | desc::kContigBit)) == 0U;
+}
+
+// Where each Stage 2 field sits (Arm ARM D5.3.3). A field that moves
+// remaps guest memory with no diagnostic, so the layout is pinned where
+// it is defined rather than only where it is used.
+static_assert(desc::kTypeInvalid == 0b00ULL && desc::kTypeBlock == 0b01ULL && desc::kTypeTable == 0b11ULL &&
+                  desc::kTypePage == desc::kTypeTable && // one encoding; the level disambiguates it
+                  desc::kMemAttrShift == 2U && desc::kMemAttrMask == 0b11'1100ULL && desc::kS2apShift == 6U &&
+                  desc::kS2apMask == 0b1100'0000ULL && desc::kS2apReadWrite == 0b11ULL && desc::kShShift == 8U &&
+                  desc::kShInnerShareable == 0b11ULL && desc::kAfBit == 1ULL << 10U && desc::kXnBit == 1ULL << 54U,
+              "the Stage 2 descriptor fields sit where the architecture puts them");
+
+// The frame address is bits 47:12 exactly: the page offset below it
+// belongs to the access, the upper attributes above it to the descriptor.
+static_assert(desc::kOutputAddrMask == 0x0000'FFFF'FFFF'F000ULL && (desc::kOutputAddrMask & 0xFFFULL) == 0U &&
+                  (desc::kOutputAddrMask & 0xFFFF'0000'0000'0000ULL) == 0U,
+              "the output address field covers the 4 KiB frame bits and nothing around them");
+
+// Each preset read back through the extractors that decode it, so the
+// combined word and the field definitions cannot drift apart.
+static_assert(
+    [] {
+      const bool code = mem_attr(desc::kAttrNormalRwx) == desc::kMemAttrNormalWB &&
+                        s2ap(desc::kAttrNormalRwx) == desc::kS2apReadWrite &&
+                        shareability(desc::kAttrNormalRwx) == desc::kShInnerShareable &&
+                        access_flag(desc::kAttrNormalRwx) && !execute_never(desc::kAttrNormalRwx);
+      // Data differs from code by exactly one bit: making a region
+      // non-executable must not quietly change its memory type too.
+      const bool data =
+          execute_never(desc::kAttrNormalRwData) && (desc::kAttrNormalRwData ^ desc::kAttrNormalRwx) == desc::kXnBit;
+      const bool device = mem_attr(desc::kAttrDeviceRw) == desc::kMemAttrDeviceNGnRE &&
+                          s2ap(desc::kAttrDeviceRw) == desc::kS2apReadWrite &&
+                          shareability(desc::kAttrDeviceRw) == desc::kShOuterShareable &&
+                          access_flag(desc::kAttrDeviceRw) && execute_never(desc::kAttrDeviceRw);
+      return code && data && device;
+    }(),
+    "each preset decodes to the memory type, permission and shareability its name claims");
+
+static_assert(attrs_well_formed(desc::kAttrNormalRwx) && attrs_well_formed(desc::kAttrNormalRwData) &&
+                  attrs_well_formed(desc::kAttrDeviceRw) &&
+                  !attrs_well_formed(desc::kTypeMask) &&     // the type field belongs to the builder
+                  !attrs_well_formed(desc::kOutputAddrMask), // and so does the frame address
+              "no attribute preset reaches the type field or the output address");
+
+// Builders and extractors are inverses. The frame is taken from the
+// caller's address and the offset inside it dropped, because a Stage 2
+// walk resolves the offset itself — carrying it into the descriptor
+// would double it.
+static_assert(
+    [] {
+      const std::uint64_t frame = 0x0000'0000'5000'0000ULL;
+      const std::uint64_t next  = 0x0000'0000'0100'0000ULL;
+      const std::uint64_t block = make_block(frame | 0xABCULL, desc::kAttrNormalRwx);
+      const std::uint64_t page  = make_page(frame + 0x1000ULL, desc::kAttrNormalRwData);
+      const std::uint64_t table = make_table(next);
+      return descriptor_type(block) == desc::kTypeBlock && is_valid(block) && output_addr(block) == frame &&
+             mem_attr(block) == desc::kMemAttrNormalWB && s2ap(block) == desc::kS2apReadWrite &&
+             descriptor_type(page) == desc::kTypePage && is_valid(page) && output_addr(page) == frame + 0x1000ULL &&
+             execute_never(page) && descriptor_type(table) == desc::kTypeTable && output_addr(table) == next &&
+             mem_attr(table) == 0U && s2ap(table) == 0U && !access_flag(table) && // a table carries no attributes
+             kInvalid == 0U && !is_valid(kInvalid) && descriptor_type(kInvalid) == desc::kTypeInvalid;
+    }(),
+    "each builder encodes the frame, the attributes and the type its level requires");
+
 } // namespace nova::mmu

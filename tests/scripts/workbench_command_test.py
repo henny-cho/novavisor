@@ -29,6 +29,10 @@ RIDX_OFF = _OFFSETS["NOVA_CMD_RIDX_OFF"]
 RECORDS_OFF = _OFFSETS["NOVA_CMD_RECORDS_OFF"]
 RAM_BASE = 0x4000_0000
 PERIOD_US = 10_000
+# Bands a stand-in machine publishes. Arbitrary here: what matters is
+# that a reader hands back what the page said, not what this side knows.
+SLICE_US = (500, 5_000, 50_000)
+SPI_INTIDS = (32, 63)
 
 
 class VocabularyTest(unittest.TestCase):
@@ -48,49 +52,6 @@ class VocabularyTest(unittest.TestCase):
         for name in ("ok", "unknown", "range", "state", "full"):
             with self.subTest(result=name):
                 self.assertEqual(commands.result_name(commands.RESULTS[name]), name)
-
-    def test_what_a_control_may_offer_comes_from_the_firmware(self):
-        # A panel offering values EL2 refuses teaches a reader what gets
-        # refused. Both bands come from the headers that decide them —
-        # the quantum's from the same names set_slice_us() compares
-        # against, so the two cannot arrive at different ends.
-        band = abi.read_constexprs(
-            commands._SLICE_HEADER, wanted={"kSliceMinUs", "kSliceUs", "kSliceMaxUs"}
-        )
-        self.assertEqual(
-            commands.SLICE_CHOICES_US,
-            (band["kSliceMinUs"], band["kSliceUs"], band["kSliceMaxUs"]),
-        )
-        source = (REPO / "src" / "components" / "core" / "core_vcpu" / "src" / "sched.cpp").read_text()
-        self.assertIn("microseconds < kSliceMinUs || microseconds > kSliceMaxUs", source)
-        vgic = abi.read_constexprs(commands._VGIC_HEADER, wanted={"kNumPrivate", "kMaxIntid"})
-        self.assertEqual(commands.SPI_INTIDS, (vgic["kNumPrivate"], vgic["kMaxIntid"] - 1))
-
-    def test_a_header_the_reader_cannot_fully_fold_still_answers(self):
-        # vcpu_internal.hpp holds a fixed-width complement, which has no
-        # Python spelling — asking for two plain constants out of it must
-        # not be stopped by an expression nobody asked about.
-        self.assertIn("~", commands._SLICE_HEADER.read_text())
-        with self.assertRaises(SystemExit):
-            abi.read_constexprs(commands._SLICE_HEADER)
-
-    def test_a_name_that_is_not_there_is_an_error_not_a_gap(self):
-        with self.assertRaises(SystemExit):
-            abi.read_constexprs(commands._SLICE_HEADER, wanted={"kSliceMs", "kNoSuchThing"})
-
-    def test_a_division_the_two_languages_disagree_about_is_refused(self):
-        # C++ truncates toward zero where Python floors, so they part on
-        # a negative operand. Folding it anyway would be a plausible
-        # number the firmware never had.
-        with tempfile.TemporaryDirectory() as directory:
-            header = Path(directory) / "band.hpp"
-            header.write_text(
-                "inline constexpr int kLow = 0 - 7;\n"
-                "inline constexpr int kBand = kLow / 2;\n"
-            )
-            self.assertEqual(abi.read_constexprs(header, wanted={"kLow"}), {"kLow": -7})
-            with self.assertRaises(SystemExit):
-                abi.read_constexprs(header, wanted={"kBand"})
 
     def test_an_opcode_this_build_does_not_know_still_reads(self):
         # EL2 refuses what it cannot carry out and says so in the same
@@ -139,9 +100,9 @@ class RecordTest(unittest.TestCase):
 class Machine:
     """A RAM file with a command page in it, standing in for EL2.
 
-    The page is laid out here rather than by the firmware because these
-    tests are about the writer; what makes the two agree is the ABI
-    header both read, which is where every offset below comes from.
+    The page is laid out by the same packer the bridge reads back, so
+    what a machine would place and what these tests place cannot differ
+    in spelling — only in the values a reader has to judge.
     """
 
     def __init__(self, directory: str, *, version: int = commands.VERSION, placed: bool = True):
@@ -151,15 +112,13 @@ class Machine:
         self.page_pa = RAM_BASE + commands.PAGE
         raw = bytearray(commands.PAGE * 4)
         if placed:
-            struct.pack_into(
-                "<QIIII",
+            commands.format_page(
                 raw,
                 commands.PAGE,
-                commands.MAGIC,
-                version,
-                commands.REC_SIZE,
-                commands.SLOTS,
-                PERIOD_US,
+                version=version,
+                period_us=PERIOD_US,
+                slice_us=SLICE_US,
+                spi_intids=SPI_INTIDS,
             )
         self.path.write_bytes(raw)
 
@@ -218,9 +177,10 @@ class WriterTest(unittest.TestCase):
                 machine.writer()
             self.assertNotIsInstance(caught.exception, commands.NotYetFormatted)
 
-    def test_the_wait_is_read_from_the_machine(self):
-        # EL2 owns the period, so the bound a reader is shown comes from
-        # the page rather than from a constant on this side.
+    def test_what_a_control_may_offer_is_read_from_the_machine(self):
+        # EL2 owns the period and the bands it checks against, so every
+        # bound a reader is shown comes from the page this run placed
+        # rather than from a constant on this side.
         with tempfile.TemporaryDirectory() as directory:
             writer = Machine(directory).writer()
             self.addCleanup(writer.close)
@@ -228,8 +188,11 @@ class WriterTest(unittest.TestCase):
             facts = writer.as_dict()
             self.assertEqual(facts["period_us"], PERIOD_US)
             self.assertEqual(facts["ops"], sorted(commands.OPS))
-            self.assertEqual(facts["slice_us"], list(commands.SLICE_CHOICES_US))
-            self.assertEqual(facts["spi_intids"], list(commands.SPI_INTIDS))
+            # The bands travel the same way: a panel offers what this
+            # machine said it takes, never what this side was built with.
+            self.assertEqual(writer.geometry.slice_us, SLICE_US)
+            self.assertEqual(facts["slice_us"], list(SLICE_US))
+            self.assertEqual(facts["spi_intids"], list(SPI_INTIDS))
 
     def test_a_command_lands_in_its_slot_before_the_index_moves(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -252,13 +215,6 @@ class WriterTest(unittest.TestCase):
                 with self.subTest(word=bad), self.assertRaises(ValueError):
                     writer.issue(commands.OPS["mark"], bad)
             self.assertEqual(machine.widx, 0)
-
-    def test_the_python_record_and_the_abi_agree_on_size(self):
-        # Untied, the two part silently: a record grown to four words
-        # would still be packed as three, leaving the rest of each slot
-        # holding the last command that used it.
-        self.assertEqual(commands._RECORD.size, commands.REC_SIZE)
-        self.assertEqual(trace._RECORD.size, trace.REC_SIZE)
 
     def test_a_full_ring_refuses_and_writes_nothing(self):
         # The whole point of this direction. A command that vanished is

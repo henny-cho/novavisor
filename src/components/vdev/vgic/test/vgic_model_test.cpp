@@ -1,26 +1,17 @@
 // tests/host/vgic_model_test.cpp
 //
-// Host-side GTest suite for the pure vGICv3 register model
-// (the vgic component): register emulation on the
-// GICD/GICR frames. Delivery is covered by vgic_delivery_test.cpp.
+// Host-side GTest suite for the pure vGICv3 register model (the vgic
+// component): the stateful half of GICD/GICR frame emulation, which
+// dist_read/dist_write and redist_read/redist_write reach through
+// mutable state rather than a constant expression. Reset values,
+// identification words and the pure frame decoders are pinned in
+// vgic_model.hpp; delivery is covered by vgic_delivery_test.cpp.
 
 #include "vgic/vgic_model.hpp"
 
 #include <gtest/gtest.h>
 
 using namespace nova::vgic;
-
-// ---------------------------------------------------------------------------
-// Reset state
-// ---------------------------------------------------------------------------
-
-TEST(VgicReset, SgisEnabledPpisDisabledAllGroup1) {
-  const RedistState r{};
-  EXPECT_EQ(r.isenabler0, 0xFFFFU);
-  EXPECT_EQ(r.igroupr0, ~0U);
-  EXPECT_EQ(r.pending, 0U);
-  EXPECT_TRUE(r.asleep);
-}
 
 // ---------------------------------------------------------------------------
 // Distributor frame
@@ -36,19 +27,6 @@ TEST(VgicDist, CtlrRoundTripsWithDsAlwaysSet) {
   // DS is RO-set: a zero write cannot clear it.
   EXPECT_TRUE(dist_write(d, kGicdCtlr, 4, 0));
   EXPECT_EQ(dist_read(d, kGicdCtlr, 4).value, kGicdCtlrDs);
-}
-
-TEST(VgicDist, TyperAdvertisesOneSpiWordAndTenIdBits) {
-  const DistState     d{};
-  const std::uint64_t typer = dist_read(d, kGicdTyper, 4).value;
-  EXPECT_EQ(typer & 0x1FU, 1U);          // ITLinesNumber=1: INTIDs 0..63
-  EXPECT_EQ((typer >> 19U) & 0x1FU, 9U); // IDbits: 10-bit INTID space (specials encodable)
-  EXPECT_EQ(typer & (1U << 17U), 0U);    // LPIS off: no ITS/LPI probing
-}
-
-TEST(VgicDist, Pidr2IsGicV3) {
-  const DistState d{};
-  EXPECT_EQ(dist_read(d, kGicdPidr2, 4).value, 0x30U);
 }
 
 TEST(VgicDist, UnknownOffsetReported) {
@@ -104,9 +82,12 @@ TEST(VgicDist, IrouterKeepsAff0AndRoutesDelivery) {
   EXPECT_EQ(spi_target(d, 32, 2), 0U);           // reset route
 }
 
-TEST(VgicDist, SpiIcfgrAndIgrpmodrAcceptedAndIgnored) {
+// The list is the model's; what this covers is that both directions
+// honour it — a write lands nowhere and the read that follows still
+// answers zero.
+TEST(VgicDist, EveryIgnoredOffsetAcceptsAWriteAndReadsZero) {
   DistState d{};
-  for (const auto off : {kGicdIcfgr2, kGicdIcfgr3, kGicdIgrpmodr1, kGicdIsactiver1, kGicdIcactiver1}) {
+  for (const auto off : kDistIgnored) {
     EXPECT_TRUE(dist_write(d, off, 4, ~0U));
     EXPECT_EQ(dist_read(d, off, 4).value, 0U);
   }
@@ -122,6 +103,22 @@ TEST(VgicDist, Typer2ReadsAsZero) {
 // Redistributor frame
 // ---------------------------------------------------------------------------
 
+// What redist_typer encodes is asserted where it is defined; what this
+// covers is the read path to it — a 64-bit register the guest reaches as
+// two words, whose halves must not come back swapped or duplicated.
+TEST(VgicRedist, TyperIsReadableAsTwoWords) {
+  RedistState        c{};
+  constexpr RedistId kId{.number = 1, .last = true};
+
+  const auto low  = redist_read(c, kGicrTyper, 4, kId);
+  const auto high = redist_read(c, kGicrTyperHi, 4, kId);
+
+  ASSERT_TRUE(low.known);
+  ASSERT_TRUE(high.known);
+  EXPECT_EQ(low.value, redist_typer(kId));
+  EXPECT_EQ(high.value, redist_typer(kId) >> 32U);
+}
+
 TEST(VgicRedist, WakerHandshake) {
   RedistState c{};
   auto        r = redist_read(c, kGicrWaker, 4);
@@ -130,77 +127,6 @@ TEST(VgicRedist, WakerHandshake) {
   EXPECT_TRUE(redist_write(c, kGicrWaker, 4, 0));
   r = redist_read(c, kGicrWaker, 4);
   EXPECT_EQ(r.value, 0U); // ChildrenAsleep clears with ProcessorSleep
-}
-
-TEST(VgicRedist, TyperReportsLast) {
-  const RedistState c{};
-  // Default identity: frame 0 of a single-vCPU VM — Last set, number 0.
-  EXPECT_EQ(redist_read(c, kGicrTyper, 8).value, static_cast<std::uint64_t>(kGicrTyperLast));
-  EXPECT_EQ(redist_read(c, kGicrTyperHi, 4).value, 0U);
-}
-
-TEST(VgicRedist, TyperEncodesFrameIdentity) {
-  const RedistState          c{};
-  const nova::vgic::RedistId frame0{.number = 0, .last = false};
-  const nova::vgic::RedistId frame1{.number = 1, .last = true};
-
-  // Frame 0 of a 2-vCPU VM: Processor_Number 0, affinity 0, not Last.
-  EXPECT_EQ(redist_read(c, kGicrTyper, 8, frame0).value, 0U);
-  // Frame 1: Processor_Number in [23:8], Aff0 in [39:32], Last set —
-  // the guest's affinity walk (TYPER_HI == its MPIDR) must terminate here.
-  const std::uint64_t t1 = redist_read(c, kGicrTyper, 8, frame1).value;
-  EXPECT_EQ((t1 >> 8U) & 0xFFFFU, 1U);
-  EXPECT_EQ(t1 >> 32U, 1U);
-  EXPECT_NE(t1 & kGicrTyperLast, 0U);
-  EXPECT_EQ(redist_read(c, kGicrTyperHi, 4, frame1).value, 1U);
-}
-
-TEST(VgicRedistFrame, DecodesStrideIntoVcpuAndOffset) {
-  const auto first = decode_redist_frame(0, 4);
-  EXPECT_TRUE(first.valid);
-  EXPECT_EQ(first.vcpu, 0);
-  EXPECT_EQ(first.offset, 0U);
-  EXPECT_EQ(first.id.number, 0U);
-  EXPECT_FALSE(first.id.last);
-
-  // Mid frame: register offset survives the stride division.
-  const auto mid = decode_redist_frame(2 * kGicrFrameSize + kGicrIsenabler0, 4);
-  EXPECT_TRUE(mid.valid);
-  EXPECT_EQ(mid.vcpu, 2);
-  EXPECT_EQ(mid.offset, kGicrIsenabler0);
-  EXPECT_EQ(mid.id.number, 2U);
-  EXPECT_FALSE(mid.id.last);
-}
-
-TEST(VgicRedistFrame, LastFlagTerminatesTheAffinityWalk) {
-  const auto last = decode_redist_frame(3 * kGicrFrameSize + kGicrTyper, 4);
-  EXPECT_TRUE(last.valid);
-  EXPECT_EQ(last.vcpu, 3);
-  EXPECT_EQ(last.offset, kGicrTyper);
-  EXPECT_TRUE(last.id.last);
-
-  // A single-vCPU VM has exactly one frame, and it is the last.
-  const auto only = decode_redist_frame(kGicrWaker, 1);
-  EXPECT_TRUE(only.valid);
-  EXPECT_EQ(only.vcpu, 0);
-  EXPECT_TRUE(only.id.last);
-}
-
-TEST(VgicRedistFrame, FramesPastTheVcpuCountAreUnmapped) {
-  EXPECT_FALSE(decode_redist_frame(kGicrFrameSize, 1).valid);
-  EXPECT_FALSE(decode_redist_frame(2 * kGicrFrameSize, 2).valid);
-  EXPECT_FALSE(decode_redist_frame(8 * kGicrFrameSize + kGicrCtlr, 2).valid);
-  EXPECT_FALSE(decode_redist_frame(0, 0).valid); // no vCPU owns any frame
-}
-
-TEST(VgicRedistFrame, SgiFrameBelongsToItsOwnRedistributor) {
-  // The SGI_base half sits inside the same stride: it must resolve to
-  // the same vCPU, at the SGI-relative offset the model expects.
-  const auto ref = decode_redist_frame(kGicrFrameSize + kGicrIspendr0, 2);
-  ASSERT_TRUE(ref.valid);
-  EXPECT_EQ(ref.vcpu, 1);
-  EXPECT_EQ(ref.offset, kGicrIspendr0);
-  EXPECT_GE(ref.offset, kGicrSgiFrame);
 }
 
 TEST(VgicRedist, EnableSetAndClearAreOneSided) {
@@ -236,9 +162,9 @@ TEST(VgicRedist, PriorityByteAndWordAccess) {
   EXPECT_EQ(redist_read(c, kGicrIpriorityr + 27, 1).value, 0x60U);
 }
 
-TEST(VgicRedist, IcfgrAndIgrpmodrAcceptedAndIgnored) {
+TEST(VgicRedist, EveryIgnoredOffsetAcceptsAWriteAndReadsZero) {
   RedistState c{};
-  for (const auto off : {kGicrIcfgr1, kGicrIgrpmodr0, kGicrIsactiver0, kGicrIcactiver0}) {
+  for (const auto off : kRedistIgnored) {
     EXPECT_TRUE(redist_write(c, off, 4, ~0U));
     EXPECT_EQ(redist_read(c, off, 4).value, 0U);
   }
@@ -248,37 +174,6 @@ TEST(VgicRedist, UnknownOffsetReported) {
   RedistState c{};
   EXPECT_FALSE(redist_read(c, 0x1F000, 4).known);
   EXPECT_FALSE(redist_write(c, 0x1F000, 4, 1));
-}
-
-// ---------------------------------------------------------------------------
-// ICC_SGI1R decode (trapped vSGI routing)
-// ---------------------------------------------------------------------------
-
-TEST(VgicSgi1r, TargetListSelectsSiblings) {
-  // INTID 3 to vCPU 1 of a 2-vCPU VM, sent by vCPU 0.
-  const std::uint64_t v = (3ULL << 24U) | 0b10U;
-  EXPECT_EQ(sgi1r_intid(v), 3U);
-  EXPECT_EQ(sgi1r_targets(v, /*sender=*/0, /*vcpus=*/2), 0b10U);
-}
-
-TEST(VgicSgi1r, TargetListClampsToVcpuCount) {
-  EXPECT_EQ(sgi1r_targets(0xFFFF, 0, 2), 0b11U); // slots past vcpus dropped
-}
-
-TEST(VgicSgi1r, SelfTargetingIsAllowed) {
-  EXPECT_EQ(sgi1r_targets(0b01U, 0, 2), 0b01U);
-}
-
-TEST(VgicSgi1r, IrmBroadcastsToAllButSelf) {
-  EXPECT_EQ(sgi1r_targets(kSgi1rIrm | 0xFFFF, /*sender=*/0, /*vcpus=*/2), 0b10U);
-  EXPECT_EQ(sgi1r_targets(kSgi1rIrm, /*sender=*/1, /*vcpus=*/2), 0b01U);
-}
-
-TEST(VgicSgi1r, NonzeroAffinityOrRangeSelectsNobody) {
-  EXPECT_EQ(sgi1r_targets((1ULL << 16U) | 1U, 0, 2), 0U); // Aff1
-  EXPECT_EQ(sgi1r_targets((1ULL << 32U) | 1U, 0, 2), 0U); // Aff2
-  EXPECT_EQ(sgi1r_targets((1ULL << 48U) | 1U, 0, 2), 0U); // Aff3
-  EXPECT_EQ(sgi1r_targets((1ULL << 44U) | 1U, 0, 2), 0U); // RS
 }
 
 // ---------------------------------------------------------------------------

@@ -22,8 +22,12 @@ function fmt(shown) {
 
 /* One cell: what to show, and whether it moved since the previous stop.
    Both, always, because a cell drawn from a bare number has already
-   thrown away the thing a stop is for. */
-class Cell {
+   thrown away the thing a stop is for.
+
+   The kit — this, `Cursor`, `plain()` and `table()` — is exported so
+   its rules can be exercised directly. The panels below are its only
+   callers in the page. */
+export class Cell {
   constructor(shown, moved) {
     this.shown = shown;
     this.moved = Boolean(moved);
@@ -41,7 +45,7 @@ class Cell {
  * Here the mask is shaped like the value, so descending the value
  * descends the mask by the same key. The cursor arrives at the cell
  * carrying both; there is nothing to look up and nothing to forget. */
-class Cursor extends Cell {
+export class Cursor extends Cell {
   constructor(shown, mask) {
     super(shown, mask === true);
     this.mask = mask;
@@ -69,9 +73,9 @@ class Cursor extends Cell {
    unit — something computed here rather than read from the machine.
    The point is that `plain()` is a claim a reader can grep for, where a
    bare value in a cell is indistinguishable from a forgotten cursor. */
-const plain = (shown) => new Cell(shown, false);
+export const plain = (shown) => new Cell(shown, false);
 
-function table(headers, rows) {
+export function table(headers, rows) {
   const node = el("table", "ptable");
   const head = el("tr");
   for (const header of headers) head.append(el("th", "", header));
@@ -596,9 +600,16 @@ export function createPanels({ tabs, host }) {
     } else {
       try {
         entry.panel.render(entry.body);
-      } catch {
-        /* Values decode straight out of live guest RAM; a shape this
-           table cannot walk must not take the drawer down with it. */
+      } catch (error) {
+        /* A cell with no provenance is a fault in this file, and the
+           refusal above is the whole reason it cannot instead draw
+           correctly and silently never highlight — swallowed here, that
+           guard would guard nothing. Readings arrive as parsed JSON, so
+           nothing on this path raises a TypeError by accident.
+
+           Everything else is a shape decoded straight out of live guest
+           RAM, and must not take the drawer down with it. */
+        if (error instanceof TypeError) throw error;
         entry.body.append(el("div", "pnote", "표시할 수 없는 값 — 다음 갱신에서 다시 그립니다"));
       }
     }

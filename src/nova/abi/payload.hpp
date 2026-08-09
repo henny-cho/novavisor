@@ -64,6 +64,18 @@ inline constexpr auto kCrc32Table = make_crc32_table();
   return crc ^ 0xFFFFFFFFU;
 }
 
+// The CRC-32 check value: "123456789" hashes to 0xCBF43926 under the
+// standard polynomial in the standard bit order. What this pins is that
+// the image builder, which computes the checksum from Python's zlib,
+// and the loader, which validates it here, agree on the algorithm and
+// not merely on a table.
+static_assert(
+    [] {
+      const std::array<std::uint8_t, 9> check{'1', '2', '3', '4', '5', '6', '7', '8', '9'};
+      return checksum32(check) == 0xCBF4'3926U;
+    }(),
+    "checksum32 is standard CRC-32");
+
 struct Layout {
   std::uintptr_t source     = 0;
   std::uint64_t  image_size = 0;
@@ -90,6 +102,26 @@ struct Layout {
   }
   return true;
 }
+
+// The two layouts the loader has to accept: an image embedded in the
+// hypervisor binary, and the empty record an external loader leaves
+// behind. Anything in between is a half-described image, which the
+// checks above reject one field at a time.
+static_assert(
+    [] {
+      const Layout embedded{
+          .source     = 0x4001'0000,
+          .image_size = 0x2'0000,
+          .load_pa    = 0x5000'0000,
+          .ipa_base   = 0x5000'0000,
+          .ipa_size   = 0x10'0000,
+          .entry      = 0x5000'0000,
+          .dtb_ipa    = 0x500F'0000,
+          .checksum   = 1,
+      };
+      return layout_valid(embedded) && layout_valid({});
+    }(),
+    "an embedded image and an absent one are both well-formed");
 
 [[nodiscard]] constexpr auto contents_valid(const Layout& layout, std::span<const std::uint8_t> image) noexcept
     -> bool {

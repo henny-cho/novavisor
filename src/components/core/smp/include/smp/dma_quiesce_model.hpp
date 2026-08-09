@@ -35,4 +35,19 @@ enum class DmaQuiesceResult : std::uint8_t {
   return handled ? result : DmaQuiesceResult::kComplete;
 }
 
+// The whole truth table. The unclaimed row answers kComplete whatever
+// the untouched result carried; the claimed row hands the subscriber's
+// verdict through unchanged, negative ones included.
+static_assert(
+    [] {
+      using Result = DmaQuiesceResult;
+      return dma_quiesce_outcome(false, Result::kComplete) == Result::kComplete &&
+             dma_quiesce_outcome(false, Result::kPending) == Result::kComplete &&
+             dma_quiesce_outcome(false, Result::kFailed) == Result::kComplete &&
+             dma_quiesce_outcome(true, Result::kComplete) == Result::kComplete &&
+             dma_quiesce_outcome(true, Result::kPending) == Result::kPending && // a drain still running
+             dma_quiesce_outcome(true, Result::kFailed) == Result::kFailed;     // a device that would not stop
+    }(),
+    "an unclaimed quiesce is already satisfied, and a claimed one keeps the subscriber's verdict");
+
 } // namespace nova

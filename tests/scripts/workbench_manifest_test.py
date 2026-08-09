@@ -1,13 +1,14 @@
-"""The observation manifest resolved against the real debug image.
+"""What the manifest claims about the image, beyond resolving.
 
-CI runs this authoritatively as the static lane's `manifest` step; here
-it also guards local `nova test` runs whenever the ELF is present.
+That every observation, table symbol and stop point resolves — each to
+its own address — is `checks.verify_manifest`, which the static lane runs
+as its `manifest` step. Here are the claims that check does not make: the
+layouts the manifest reads by hand, and the shape rules that hold with no
+image at all.
 """
 
 from __future__ import annotations
 
-import contextlib
-import io
 import sys
 import unittest
 from pathlib import Path
@@ -17,12 +18,10 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
 from novakit.services.workbench import (  # noqa: E402
-    checks,
     elfsym,
     events,
     hardware,
     observations,
-    paths,
     snapshot,
 )
 
@@ -110,16 +109,9 @@ class PageLayoutTest(unittest.TestCase):
 
 @unittest.skipUnless(ELF.is_file(), "debug ELF not built")
 class ManifestResolutionTest(unittest.TestCase):
-    def test_every_observation_resolves(self):
-        self.assertEqual(checks.verify_manifest(ELF), 0)
-
-    def test_symbols_report_covers_every_topic(self):
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            self.assertEqual(checks.describe_symbols(ELF), 0)
-        lines = output.getvalue().splitlines()
-        topics = {line.split()[0] for line in lines[1:]}
-        self.assertEqual(topics, {obs.topic for obs in observations.OBSERVATIONS})
+    """Layouts the manifest reads by hand, beyond what `verify_manifest`
+    resolves. The resolution itself is that check's, and the static lane
+    runs it."""
 
     def test_scheduler_layout_matches_the_firmware(self):
         index = elfsym.ElfIndex(ELF)
@@ -175,44 +167,16 @@ class ManifestResolutionTest(unittest.TestCase):
 
 @unittest.skipUnless(ELF.is_file(), "debug ELF not built")
 class StopPointTest(unittest.TestCase):
-    """Every catalogued stop point must be a real function in the image.
+    """How a stop point is found, against the real image.
 
-    An inlined or renamed one leaves the UI offering a breakpoint that
-    can never be hit — the halt-layer equivalent of a blank panel.
+    That every catalogued one resolves, and to its own address, is
+    `verify_manifest`'s; what is left here is the matching rule it
+    resolves by.
     """
 
     def setUp(self):
         self.index = elfsym.ElfIndex(ELF)
         self.addCleanup(self.index.close)
-
-    def test_every_stop_point_resolves_to_an_entry_address(self):
-        for event in events.STOPS:
-            with self.subTest(event=event.id):
-                address = self.index.resolve_function(event.symbol)
-                self.assertGreater(address, 0)
-
-    def test_addresses_are_distinct(self):
-        """Two events at one address would be one stop wearing two
-        names: arming either would fire both."""
-        seen = {event.id: self.index.resolve_function(event.symbol) for event in events.STOPS}
-        self.assertEqual(len(set(seen.values())), len(seen), seen)
-
-    def test_the_bind_carries_the_binding_in_its_arguments(self):
-        """The whole point of the catalogue's first entry: the physical
-        and virtual numbers are AAPCS64 arguments, so a stop there reads
-        them off x0..x3 without decoding any memory."""
-        bind = events.BY_ID["vgic.bind"]
-        self.assertEqual(bind.args, ("vm", "vintid", "pintid", "generation"))
-
-    def test_resolution_needs_no_debug_info(self):
-        """`.symtab` alone. A function's parameters live in its mangled
-        name, and the prefix match sidesteps having to spell them."""
-        prefix = elfsym.mangle("nova::vgic::post_spi_tracked")
-        self.assertEqual(prefix, "_ZN4nova4vgic16post_spi_trackedE")
-        self.assertEqual(
-            self.index.resolve_function("nova::vgic::post_spi_tracked"),
-            self.index.resolve_function("nova::vgic::post_spi_tracked"),
-        )
 
     def test_a_shorter_name_is_not_a_prefix_of_a_longer_one(self):
         """Itanium length prefixes are what make the match safe:
@@ -234,29 +198,6 @@ class StopCatalogueTest(unittest.TestCase):
     def test_ids_are_unique(self):
         ids = [event.id for event in events.EVENTS]
         self.assertEqual(len(set(ids)), len(ids))
-
-    def test_every_edge_named_is_a_published_path(self):
-        known = {edge.id for edge in paths.EDGES}
-        for event in events.EVENTS:
-            if event.edge:
-                with self.subTest(event=event.id):
-                    self.assertIn(event.edge, known)
-
-    def test_the_catalogue_ships_no_addresses(self):
-        """Addresses change every build and the UI has no use for one;
-        shipping them would invite a client to cache a stale map.
-
-        A record's code and field names are the opposite kind of fact:
-        fixed by the ABI header both the ring writer and this reader
-        compile against, and needed because a column-encoded record
-        carries nothing else to look itself up by or name its words
-        with.
-        """
-        for entry in events.catalogue():
-            self.assertEqual(
-                set(entry),
-                {"id", "edge", "args", "label", "code", "fields", "stop", "span"},
-            )
 
     def test_every_record_word_the_bridge_decodes_is_also_named(self):
         """decode() knows the packing; the catalogue names the words.

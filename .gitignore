@@ -12,3 +12,4 @@ compile_commands.json
 !.vscode/extensions.json
 *.code-workspace
 external/
+web/node_modules/

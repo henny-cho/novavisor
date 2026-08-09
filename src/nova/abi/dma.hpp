@@ -19,6 +19,12 @@ inline constexpr DeviceId      kNoDevice        = std::numeric_limits<DeviceId>:
 inline constexpr std::uint32_t kFaultAuditBurst = 4;
 inline constexpr std::uint64_t kPageSize        = 4096;
 
+// How many devices the runtime registry holds. The device component
+// sizes its tables from this and the image generator rejects a board
+// inventory above it, so a board cannot describe more devices than EL2
+// has room to track.
+inline constexpr std::size_t kMaxDevices = 8;
+
 struct Assignment {
   DeviceId      device_id = kNoDevice;
   std::uint32_t stream_id = 0;

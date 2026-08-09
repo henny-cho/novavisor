@@ -11,6 +11,7 @@
 
 #include <array>
 #include <cstddef>
+#include <string_view>
 
 namespace nova::console_mux {
 
@@ -48,8 +49,22 @@ constexpr void render_tag(LineBuf& l, std::size_t vm) noexcept {
   if (c == '\n') {
     return true;
   }
-  l.data[kTagLen + l.len++] = c;
+  // A full payload keeps saying "emit" rather than writing past itself,
+  // so the reset the caller owes is a matter of losing no bytes, not of
+  // staying inside the buffer.
+  if (l.len < kLineMax) {
+    l.data[kTagLen + l.len++] = c;
+  }
   return l.len == kLineMax;
+}
+
+// The exact bytes the console is handed for a completed line: the tag,
+// the payload, then the newline that ends it. Stamped here so that
+// where a line ends is said once.
+[[nodiscard]] constexpr auto finish_line(LineBuf& l, std::size_t vm) noexcept -> std::string_view {
+  render_tag(l, vm);
+  l.data[kTagLen + l.len] = '\n';
+  return std::string_view{l.data.data(), kTagLen + l.len + 1};
 }
 
 // First index after `from` (wrapping over `count`) that `valid` accepts;

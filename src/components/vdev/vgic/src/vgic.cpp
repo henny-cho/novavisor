@@ -346,6 +346,10 @@ auto post_private(std::size_t index, std::uint32_t vintid) noexcept -> bool {
   return true;
 }
 
+auto spi_band() noexcept -> SpiBand {
+  return {.lo = kNumPrivate, .hi = kMaxIntid - 1};
+}
+
 auto post_spi(std::size_t vm, std::uint32_t vintid) noexcept -> bool {
   if (vintid < kNumPrivate || vintid >= kMaxIntid || vm >= guest_table().size()) {
     return false;

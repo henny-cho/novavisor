@@ -51,6 +51,29 @@ enum class CpuContractError : std::uint8_t {
   return CpuContractError::kNone;
 }
 
+// The gate against the ID register it reads. The encoder here is the
+// field layout named above: PARange [3:0], TGran4 [31:28], TGran4_2
+// [43:40]; the required PARange is 0b010, the 40-bit VTCR_EL2.PS both
+// boards configure.
+static_assert(
+    [] {
+      const auto mmfr0 = [](std::uint64_t pa_range, std::uint64_t tgran4, std::uint64_t tgran4_2) {
+        return pa_range | (tgran4 << 28U) | (tgran4_2 << 40U);
+      };
+      const std::uint64_t pa40 = 0b010;
+      return validate_cpu_contract(mmfr0(0b010, 0, 0), pa40) == CpuContractError::kNone && // exactly enough
+             validate_cpu_contract(mmfr0(0b101, 0, 0), pa40) == CpuContractError::kNone && // more than enough
+             validate_cpu_contract(mmfr0(0b001, 0, 0), pa40) == CpuContractError::kPaRangeTooSmall &&
+             validate_cpu_contract(mmfr0(0b000, 0, 0), pa40) == CpuContractError::kPaRangeTooSmall &&
+             // TGran4_2 == 0 defers to TGran4, where 0b1111 means the granule is absent.
+             validate_cpu_contract(mmfr0(0b101, 0x0, 0x0), pa40) == CpuContractError::kNone &&
+             validate_cpu_contract(mmfr0(0b101, 0xF, 0x0), pa40) == CpuContractError::kNoStage2Gran4 &&
+             // A non-zero TGran4_2 overrides it in both directions.
+             validate_cpu_contract(mmfr0(0b101, 0x0, 0x1), pa40) == CpuContractError::kNoStage2Gran4 &&
+             validate_cpu_contract(mmfr0(0b101, 0xF, 0x2), pa40) == CpuContractError::kNone;
+    }(),
+    "the boot gate refuses exactly the silicon the hardcoded translation parameters would misprogram");
+
 [[nodiscard]] constexpr auto to_string(CpuContractError error) noexcept -> std::string_view {
   switch (error) {
   case CpuContractError::kPaRangeTooSmall:

@@ -39,9 +39,27 @@ inline constexpr std::uint64_t kUartIcr   = 0x044;
 inline constexpr std::uint64_t kUartDmacr = 0x048;
 inline constexpr std::uint64_t kUartIds   = 0xFE0; // PeriphID0..CellID3, 4 bytes apart
 
+// Line, baud, flow and DMA configuration: the model keeps none of it,
+// because none of it changes what a byte does on the way to the console
+// mux. Both directions ask this one predicate, so a read and a write
+// cannot come to disagree about which registers exist.
+[[nodiscard]] constexpr auto is_config_reg(std::uint64_t off) noexcept -> bool {
+  switch (off) {
+  case kUartRsr:
+  case kUartIbrd:
+  case kUartFbrd:
+  case kUartLcrH:
+  case kUartCr:
+  case kUartIfls:
+  case kUartDmacr:
+    return true;
+  default:
+    return false;
+  }
+}
+
 // FR bits.
 inline constexpr std::uint32_t kFrRxfe = 1U << 4U;
-inline constexpr std::uint32_t kFrTxff = 1U << 5U;
 inline constexpr std::uint32_t kFrTxfe = 1U << 7U;
 
 // Interrupt bit shared by IMSC/RIS/MIS/ICR.
@@ -110,6 +128,9 @@ inline constexpr std::array<std::uint8_t, 8> kUartIdValues{0x11, 0x10, 0x14, 0x0
   if (off >= kUartIds && off < kUartFrameSize && (off % 4U) == 0U) {
     return {.known = true, .value = kUartIdValues[(off - kUartIds) / 4U]};
   }
+  if (is_config_reg(off)) {
+    return {.known = true, .value = 0}; // RAZ
+  }
   switch (off) {
   case kUartDr:
     return {.known = true, .value = rx_pop(u)};
@@ -121,38 +142,43 @@ inline constexpr std::array<std::uint8_t, 8> kUartIdValues{0x11, 0x10, 0x14, 0x0
     return {.known = true, .value = ris(u)};
   case kUartMis:
     return {.known = true, .value = mis(u)};
-  case kUartRsr:
-  case kUartIbrd:
-  case kUartFbrd:
-  case kUartLcrH:
-  case kUartCr:
-  case kUartIfls:
-  case kUartDmacr:
-    return {.known = true, .value = 0}; // line/flow/DMA config is cosmetic here
   default:
     return {};
   }
 }
 
 [[nodiscard]] constexpr auto reg_write(UartState& u, std::uint64_t off, std::uint64_t value) noexcept -> WriteEffect {
+  // ICR joins the ignored set on the write side only: RX is a level the
+  // FIFO asserts, so draining DR is the clear, and the register itself
+  // reads back nothing (write-only in the TRM).
+  if (is_config_reg(off) || off == kUartIcr) {
+    return {.known = true};
+  }
   switch (off) {
   case kUartDr:
     return {.known = true, .tx = true, .tx_byte = static_cast<std::uint8_t>(value)};
   case kUartImsc:
     u.imsc = static_cast<std::uint32_t>(value) & kImscMask;
     return {.known = true};
-  case kUartRsr:
-  case kUartIbrd:
-  case kUartFbrd:
-  case kUartLcrH:
-  case kUartCr:
-  case kUartIfls:
-  case kUartDmacr: // no DMA — accepted, ignored
-  case kUartIcr:   // RX is a level from the FIFO — draining DR is the clear
-    return {.known = true};
   default:
     return {};
   }
 }
+
+// The identification block is one table indexed by its own offset, and
+// an address the model does not cover stays unknown in both directions
+// so the trap handler reports it instead of inventing an answer.
+static_assert(
+    [] {
+      UartState  u{};
+      const auto first = reg_read(u, kUartIds);
+      const auto last  = reg_read(u, kUartIds + ((kUartIdValues.size() - 1) * 4U));
+      return first.known && first.value == kUartIdValues.front() && //
+             last.known && last.value == kUartIdValues.back() &&    //
+             !reg_read(u, kUartIds + 2U).known &&                   // misaligned inside the block
+             !reg_read(u, kUartFrameSize).known &&                  // past the frame
+             !reg_read(u, kUartDmacr + 4U).known && !reg_write(u, kUartDmacr + 4U, 1).known; // past the last register
+    }(),
+    "the identification block reads out of its table, and an unmodeled offset is answered by nobody");
 
 } // namespace nova::vuart

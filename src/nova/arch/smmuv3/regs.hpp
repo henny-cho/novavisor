@@ -48,6 +48,18 @@ inline constexpr std::uint32_t kCr2Protected  = 1U << 2;
 inline constexpr std::uint32_t kGbpaAbort     = 1U << 20;
 inline constexpr std::uint32_t kGbpaUpdate    = 1U << 31;
 
+// CR1 attributes for the device's own walks: an inner/outer cacheability
+// pair and a shareability field per structure, the queues in bits [5:0]
+// and the stream table in [11:6]. Each field is two bits wide.
+inline constexpr std::uint32_t kCr1QueueIcShift   = 0;
+inline constexpr std::uint32_t kCr1QueueOcShift   = 2;
+inline constexpr std::uint32_t kCr1QueueShShift   = 4;
+inline constexpr std::uint32_t kCr1TableIcShift   = 6;
+inline constexpr std::uint32_t kCr1TableOcShift   = 8;
+inline constexpr std::uint32_t kCr1TableShShift   = 10;
+inline constexpr std::uint32_t kCr1WriteBack      = 0b01; // cacheability: write-back
+inline constexpr std::uint32_t kCr1InnerShareable = 0b11; // shareability: inner
+
 inline constexpr std::uint32_t kIrqGerror = 1U << 0;
 inline constexpr std::uint32_t kIrqEvent  = 1U << 2;
 

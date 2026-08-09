@@ -40,6 +40,12 @@ inline constexpr std::size_t   kEventCount       = std::size_t{1} << kEventQueue
 inline constexpr std::size_t   kDmaL3PoolSize    = 2;
 inline constexpr std::uint32_t kPollLimit        = 1'000'000;
 
+// The ring pointers carry one wrap bit above the index; past that depth
+// producer and consumer stop being distinguishable and every queue
+// operation refuses, so a depth this large is refused here instead.
+static_assert(kCommandQueueLog2 <= kMaxQueueLog2Entries && kEventQueueLog2 <= kMaxQueueLog2Entries,
+              "the configured queue depths are representable by the ring pointers");
+
 inline constexpr std::size_t kStreamTableAlign  = kStreamCount * kStreamTableEntryBytes;
 inline constexpr std::size_t kCommandQueueAlign = kCommandCount * sizeof(CommandEntry);
 inline constexpr std::size_t kEventQueueAlign   = kEventCount * sizeof(EventRecord);
@@ -88,9 +94,9 @@ std::uint32_t  g_event_cons    = 0;
 std::uint32_t  g_audit_events  = 0;
 
 CommandRing<HalHw> g_commands{
-    .entries      = g_command_queue,
-    .log2_entries = kCommandQueueLog2,
-    .poll_limit   = kPollLimit,
+    .entries    = g_command_queue,
+    .queue      = {.log2_entries = kCommandQueueLog2},
+    .poll_limit = kPollLimit,
 };
 
 [[noreturn]] void fail_init(RuntimeError error, std::uint32_t idr0, std::uint32_t idr1, std::uint32_t idr5) noexcept {
@@ -392,11 +398,11 @@ void init() noexcept {
   g_stream_table.fill(StreamTableEntry{});
   g_command_queue.fill(CommandEntry{});
   g_event_queue.fill(EventRecord{});
-  g_commands.ready    = false;
-  g_commands.producer = 0;
-  g_enabled           = false;
-  g_event_cons        = 0;
-  g_audit_events      = 0;
+  g_commands.ready          = false;
+  g_commands.queue.producer = 0;
+  g_enabled                 = false;
+  g_event_cons              = 0;
+  g_audit_events            = 0;
   if (!build_dma_contexts(caps)) {
     fail_init("DMA contexts");
   }

@@ -2,8 +2,11 @@
 //
 // Host-side GTest suite for the pure vGICv3 delivery logic
 // (components/vgic/include/vgic_delivery.hpp): pending bitmap →
-// list-register multiplexing. Register emulation is covered by
-// vgic_model_test.cpp.
+// list-register multiplexing, over the multi-step sequences that
+// exposed real delivery losses (a re-asserted timer behind an active
+// copy, a duplicate INTID waiting on an EOI). The single-call encodings
+// it builds on are pinned in vgic_delivery.hpp; register emulation is
+// covered by vgic_model_test.cpp.
 
 #include "vgic/vgic_delivery.hpp"
 
@@ -11,7 +14,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <gtest/gtest.h>
-#include <span>
 
 using namespace nova::vgic;
 
@@ -242,14 +244,6 @@ TEST(VgicSpiRefill, PrioritiesInterleaveWithPrivate) {
   EXPECT_EQ(lr_vintid(c.lr[1]), 27U);
 }
 
-TEST(VgicMakeLr, FieldEncoding) {
-  const std::uint64_t lr = make_lr(27, 0x80);
-  EXPECT_EQ(lr & kLrStateMask, kLrStatePending);
-  EXPECT_NE(lr & kLrGroup1, 0U);
-  EXPECT_EQ((lr >> kLrPriorityShift) & 0xFFU, 0x80U);
-  EXPECT_EQ(lr_vintid(lr), 27U);
-}
-
 TEST(VgicSpiRefill, MovesTrackedLevelTokenIntoEoiMaintenanceLr) {
   CpuState                       c{};
   DistState                      d{};
@@ -271,35 +265,6 @@ TEST(VgicSpiRefill, MovesTrackedLevelTokenIntoEoiMaintenanceLr) {
   EXPECT_EQ(completed.physical_intid, 37U);
   EXPECT_EQ(completed.generation, 4U);
   EXPECT_FALSE(take_eoi_token(c, 0).valid());
-}
-
-// ---------------------------------------------------------------------------
-// Token-protected pending mask
-// ---------------------------------------------------------------------------
-
-TEST(VgicPendingTokenMask, EmptyTokenBankProtectsNothing) {
-  const std::array<EoiToken, kNumSpis> tokens{};
-  EXPECT_EQ(pending_token_mask(tokens), 0U);
-  EXPECT_EQ(pending_token_mask(std::span<const EoiToken>{}), 0U);
-}
-
-TEST(VgicPendingTokenMask, MarksOnlyLiveTokens) {
-  std::array<EoiToken, kNumSpis> tokens{};
-  tokens[0]  = {.virtual_intid = 32, .physical_intid = 32, .generation = 1};
-  tokens[5]  = {.virtual_intid = 37, .physical_intid = 37, .generation = 2};
-  tokens[31] = {.virtual_intid = 63, .physical_intid = 63, .generation = 3};
-  // A zero generation is not a token, whatever the intids say.
-  tokens[7] = {.virtual_intid = 39, .physical_intid = 39, .generation = 0};
-
-  EXPECT_EQ(pending_token_mask(tokens), (1U << 0U) | (1U << 5U) | (1U << 31U));
-}
-
-TEST(VgicPendingTokenMask, FullTokenBankProtectsEveryBit) {
-  std::array<EoiToken, kNumSpis> tokens{};
-  for (std::uint32_t i = 0; i < kNumSpis; ++i) {
-    tokens[i] = {.virtual_intid = kNumPrivate + i, .physical_intid = kNumPrivate + i, .generation = 1};
-  }
-  EXPECT_EQ(pending_token_mask(tokens), ~0U);
 }
 
 // ---------------------------------------------------------------------------

@@ -297,11 +297,10 @@ protected:
   [[nodiscard]] auto make_ring() -> CommandRing<FakeSmmu> {
     FakeSmmu::ring_view = ring_memory;
     return CommandRing<FakeSmmu>{
-        .entries      = ring_memory,
-        .log2_entries = kLog2,
-        .poll_limit   = kPollLimit,
-        .producer     = 0,
-        .ready        = true,
+        .entries    = ring_memory,
+        .queue      = {.log2_entries = kLog2, .producer = 0},
+        .poll_limit = kPollLimit,
+        .ready      = true,
     };
   }
 
@@ -382,7 +381,7 @@ TEST_F(SmmuHwDriver, SubmitAppendsCommandsThenSync) {
   EXPECT_EQ(ring_memory[0], commands[0]);
   EXPECT_EQ(ring_memory[1], commands[1]);
   EXPECT_EQ(ring_memory[2], nova::smmu::make_command_sync());
-  EXPECT_EQ(ring.producer, 3U);
+  EXPECT_EQ(ring.queue.producer, 3U);
   EXPECT_NE(write_index(regs::kCmdqProd, 3U), kMissing);
   // The ring contents must be visible before the producer pointer moves.
   const std::size_t publish = [] {
@@ -409,7 +408,7 @@ TEST_F(SmmuHwDriver, SubmitWrapsAroundTheRingBoundary) {
   }
 
   // 12 slots through an 8-entry ring: the third round starts back at slot 0.
-  EXPECT_EQ(ring.producer, 12U);
+  EXPECT_EQ(ring.queue.producer, 12U);
   EXPECT_EQ(FakeSmmu::consumed, expected);
   EXPECT_EQ(ring_memory[0], nova::smmu::make_cfgi_ste(6));
   EXPECT_EQ(ring_memory[3], nova::smmu::make_command_sync());

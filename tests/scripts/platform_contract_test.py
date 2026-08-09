@@ -11,18 +11,17 @@ sys.path.insert(0, str(REPO / "scripts"))
 from novakit.services import boundaries  # noqa: E402
 
 
+# The repository itself is checked by `nova test`, which calls
+# boundaries.check straight after this suite and prints what it finds.
+# What that run cannot exercise is the checker's own failure modes, so
+# they are staged here against synthetic trees.
 class PlatformBoundaryTests(unittest.TestCase):
-    def test_repository_scan_targets_all_exist(self):
-        # Guards every assertion below: the checker searches fixed paths,
-        # so a renamed tree would empty the scan instead of failing it.
-        self.assertEqual(boundaries.missing_scan_targets(REPO), [])
-
-    def test_repository_has_no_board_reverse_dependency(self):
-        self.assertEqual(boundaries.find_violations(REPO), [])
-
     def _complete_layout(self, root: Path):
         for tree in (*boundaries.GENERIC_TREES, boundaries.COMPONENT_TREE):
             (root / tree).mkdir(parents=True, exist_ok=True)
+        for layer in boundaries.LAYER_DEPTH:
+            if layer:
+                (root / boundaries.PACKAGE / layer).mkdir(parents=True, exist_ok=True)
         board = root / boundaries.BOARD_ROOT / "sample_board"
         board.mkdir(parents=True)
         (board / "board.cmake").write_text("")
@@ -95,6 +94,90 @@ class PlatformBoundaryTests(unittest.TestCase):
             source.write_text('#include "hal/board/active/uart.hpp"\n')
 
             self.assertEqual(boundaries.find_violations(root), [])
+
+
+class AutomationLayerTests(unittest.TestCase):
+    """The same question asked of the automation package itself.
+
+    Which third-party packages a module may import is ruff's half of
+    this, declared as banned-api in ruff.toml. What is left here is the
+    shape of the package: who may import whom, and which module owns a
+    fact the others are handed.
+    """
+
+    def _package(self, root: Path) -> Path:
+        package = root / boundaries.PACKAGE
+        for layer in boundaries.LAYER_DEPTH:
+            if layer:
+                (package / layer).mkdir(parents=True)
+        return package
+
+    def test_an_upward_import_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module = self._package(root) / "core" / "reaching.py"
+            module.write_text("from ..services import cmake\n")
+
+            violations = boundaries.find_layer_violations(root)
+
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0][0], module.relative_to(root))
+        self.assertIn("higher layer services", violations[0][2])
+
+    def test_a_command_importing_a_command_is_rejected(self):
+        # Shared logic between two commands belongs to a service; reaching
+        # sideways leaves it in the top layer with two consumers.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            commands = self._package(root) / "commands"
+            (commands / "one.py").write_text("from . import two\n")
+            (commands / "two.py").write_text("value = 1\n")
+
+            violations = boundaries.find_layer_violations(root)
+
+        self.assertEqual(len(violations), 1)
+        self.assertIn("sibling command", violations[0][2])
+
+    def test_a_downward_import_is_allowed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = self._package(root)
+            (package / "commands" / "one.py").write_text("from ..services import cmake\n")
+            (package / "services" / "cmake.py").write_text("from ..core import proc\n")
+
+            self.assertEqual(boundaries.find_layer_violations(root), [])
+
+    def test_a_second_copy_of_an_owned_fact_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module = self._package(root) / "services" / "rogue.py"
+            module.write_text("summary = 'GITHUB_STEP_SUMMARY'\n")
+
+            violations = boundaries.find_ownership_violations(root)
+
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0][0], module.relative_to(root))
+        self.assertIn("core/actions.py", violations[0][2])
+
+    def test_the_owner_itself_is_not_a_violation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module = self._package(root) / "core" / "actions.py"
+            module.write_text("summary = 'GITHUB_STEP_SUMMARY'\n")
+
+            self.assertEqual(boundaries.find_ownership_violations(root), [])
+
+    def test_a_renamed_layer_is_reported(self):
+        # Every rule above searches fixed paths, so a renamed layer would
+        # empty the scan instead of failing it.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = self._package(root)
+            (package / "services").rename(package / "helpers")
+
+            self.assertIn(
+                str(boundaries.PACKAGE / "services"), boundaries.missing_scan_targets(root)
+            )
 
 
 class PlatformContractTests(unittest.TestCase):

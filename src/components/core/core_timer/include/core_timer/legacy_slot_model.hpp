@@ -38,4 +38,22 @@ constexpr void release(LegacySlot& slot) noexcept {
   slot.armed = false;
 }
 
+// The claim policy as one run through the slot's life. What it pins is
+// the losing case: a denied claim must leave the armed slot exactly as
+// it was, or the owner's pending expiry disappears with no diagnostic.
+static_assert(
+    [] {
+      LegacySlot slot{};
+      const bool fresh   = !slot.armed; // nothing armed before a guest asks
+      const bool claimed = try_claim(slot, 3) && slot.armed && slot.owner == 3U;
+      const bool rearmed = try_claim(slot, 3) && slot.owner == 3U; // the owner moves its own deadline
+      const bool denied  = !try_claim(slot, 5) && slot.armed && slot.owner == 3U;
+      release(slot);
+      const bool reopened = !slot.armed && try_claim(slot, 5) && slot.owner == 5U;
+      release(slot);
+      release(slot); // expiry may free a slot the guest never re-arms
+      return fresh && claimed && rearmed && denied && reopened && !slot.armed && try_claim(slot, 0);
+    }(),
+    "the legacy slot takes any claim it is free for and refuses every other VCPU while armed");
+
 } // namespace nova::core_timer

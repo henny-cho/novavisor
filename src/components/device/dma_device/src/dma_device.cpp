@@ -15,12 +15,16 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 namespace nova::dma_device {
 namespace {
 
-inline constexpr std::size_t   kMaxDevices = 8;
+// The registry's capacity is the ABI's: the image generator refuses an
+// inventory above it, so a board cannot describe more devices than this
+// tracks.
+inline constexpr std::size_t   kMaxDevices = dma::kMaxDevices;
 inline constexpr std::uint64_t kTimeoutMs  = 2'000;
 
 namespace device = hw::device;
@@ -164,22 +168,74 @@ void log_state(std::size_t vm, std::string_view state, std::uint64_t generation 
   console::write("\n");
 }
 
-void fail_vm(std::size_t vm, const char* reason) noexcept {
+// What one walk over a VM's entries found: the devices it collected, and
+// the verdict that stopped it. kSkip means nothing stopped it, so the
+// collected devices are the whole set that walk is responsible for.
+struct ScanOutcome {
   std::array<dma::DeviceId, kMaxDevices> device_ids{};
-  std::size_t                            count = 0;
+  std::size_t                            count   = 0;
+  ScanAction                             verdict = ScanAction::kSkip;
+
+  [[nodiscard]] constexpr auto complete() const noexcept -> bool { return verdict == ScanAction::kSkip; }
+
+  [[nodiscard]] constexpr auto devices() const noexcept -> std::span<const dma::DeviceId> {
+    return {device_ids.data(), count};
+  }
+};
+
+// The one walk over the entries a VM owns: classify each, run `act` on
+// the collected ones, and stop at the first entry the walk cannot act
+// on. Runs under g_lock, so `act` must not touch hardware.
+template <typename Classify, typename Act>
+[[nodiscard]] auto scan_owned(std::size_t vm, Classify classify, Act act) noexcept -> ScanOutcome {
+  ScanOutcome outcome{};
+  for (Entry& entry : g_registry.entries()) {
+    if (entry.owner_vm != vm) {
+      continue;
+    }
+    const ScanAction action = classify(entry);
+    switch (action) {
+    case ScanAction::kSkip:
+      continue;
+    case ScanAction::kFail:
+    case ScanAction::kPending:
+      outcome.verdict = action;
+      return outcome;
+    case ScanAction::kCollect:
+      act(entry);
+      outcome.device_ids[outcome.count++] = entry.device_id;
+    }
+  }
+  return outcome;
+}
+
+// Both quiesce walks ask the same question of an entry.
+[[nodiscard]] auto quiescing_action(const Entry& entry) noexcept -> ScanAction {
+  return classify_quiescing(entry.state, entry.bus_master_blocked);
+}
+
+// A quiesce walk that stopped answers the caller with its verdict.
+[[nodiscard]] constexpr auto quiesce_result(ScanAction verdict) noexcept -> QuiesceResult {
+  return verdict == ScanAction::kFail ? QuiesceResult::kFailed : QuiesceResult::kPending;
+}
+
+void fail_vm(std::size_t vm, const char* reason) noexcept {
+  ScanOutcome scan{};
   {
     sync::Guard guard{g_lock};
-    for (const Entry& entry : g_registry.entries()) {
-      if (entry.owner_vm != vm || entry.state == State::kUnavailable) {
-        continue;
-      }
-      device_ids[count++] = entry.device_id;
-    }
+    // Isolation touches every device the VM still holds, whatever
+    // lifecycle state it is in.
+    scan = scan_owned(
+        vm,
+        [](const Entry& entry) noexcept {
+          return entry.state == State::kUnavailable ? ScanAction::kSkip : ScanAction::kCollect;
+        },
+        [](const Entry&) noexcept {});
     g_registry.fail_owner(vm);
   }
-  for (std::size_t i = 0; i < count; ++i) {
-    reset_interrupt(device_ids[i]);
-    static_cast<void>(backend_quiesce(device_ids[i]));
+  for (const dma::DeviceId device_id : scan.devices()) {
+    reset_interrupt(device_id);
+    static_cast<void>(backend_quiesce(device_id));
   }
   static_cast<void>(smmu::quarantine_vm(vm));
   console::write("[dma] VM ");
@@ -190,60 +246,36 @@ void fail_vm(std::size_t vm, const char* reason) noexcept {
 }
 
 [[nodiscard]] auto complete_quiesce(std::size_t vm) noexcept -> QuiesceResult {
-  std::array<dma::DeviceId, kMaxDevices> device_ids{};
-  std::size_t                            count = 0;
+  ScanOutcome scan{};
   {
     sync::Guard guard{g_lock};
-    for (const Entry& entry : g_registry.entries()) {
-      if (entry.owner_vm != vm) {
-        continue;
-      }
-      switch (classify_quiescing(entry.state, entry.bus_master_blocked)) {
-      case ScanAction::kSkip:
-        continue;
-      case ScanAction::kFail:
-        return QuiesceResult::kFailed;
-      case ScanAction::kPending:
-        return QuiesceResult::kPending;
-      case ScanAction::kCollect:
-        device_ids[count++] = entry.device_id;
-      }
-    }
+    scan = scan_owned(vm, quiescing_action, [](const Entry&) noexcept {});
+  }
+  if (!scan.complete()) {
+    return quiesce_result(scan.verdict);
   }
 
-  for (std::size_t i = 0; i < count; ++i) {
-    if (!backend_drained(device_ids[i])) {
+  for (const dma::DeviceId device_id : scan.devices()) {
+    if (!backend_drained(device_id)) {
       return QuiesceResult::kPending;
     }
   }
-  for (std::size_t i = 0; i < count; ++i) {
-    if (!backend_reset(device_ids[i])) {
+  for (const dma::DeviceId device_id : scan.devices()) {
+    if (!backend_reset(device_id)) {
       fail_vm(vm, "device reset");
       return QuiesceResult::kFailed;
     }
   }
 
-  bool detach_required = false;
+  ScanOutcome detaching{};
   {
     sync::Guard guard{g_lock};
-    for (Entry& entry : g_registry.entries()) {
-      if (entry.owner_vm != vm) {
-        continue;
-      }
-      switch (classify_quiescing(entry.state, entry.bus_master_blocked)) {
-      case ScanAction::kSkip:
-        continue;
-      case ScanAction::kFail:
-        return QuiesceResult::kFailed;
-      case ScanAction::kPending:
-        return QuiesceResult::kPending;
-      case ScanAction::kCollect:
-        entry.state     = State::kDetaching;
-        detach_required = true;
-      }
-    }
+    detaching = scan_owned(vm, quiescing_action, [](Entry& entry) noexcept { entry.state = State::kDetaching; });
   }
-  if (!detach_required) {
+  if (!detaching.complete()) {
+    return quiesce_result(detaching.verdict);
+  }
+  if (detaching.count == 0) {
     return QuiesceResult::kComplete;
   }
   if (!smmu::detach_vm(vm)) {
@@ -312,89 +344,77 @@ void init() noexcept {
 }
 
 auto begin_quiesce(std::size_t vm) noexcept -> QuiesceResult {
-  std::array<dma::DeviceId, kMaxDevices> device_ids{};
-  std::size_t                            count   = 0;
-  bool                                   pending = false;
   for (const dma::Assignment& assignment : dma::assignment_table()) {
     if (assignment.vm == vm) {
       mask_interrupt(assignment.device_id);
     }
   }
+
+  ScanOutcome scan{};
+  bool        pending = false;
   {
     sync::Guard guard{g_lock};
     if (!g_registry_valid) {
       return QuiesceResult::kFailed;
     }
-    for (Entry& entry : g_registry.entries()) {
-      if (entry.owner_vm != vm) {
-        continue;
-      }
-      switch (classify_begin_quiesce(entry.state)) {
-      case ScanAction::kSkip:
-        continue;
-      case ScanAction::kFail:
-        return QuiesceResult::kFailed;
-      case ScanAction::kPending:
-        pending = true; // already mid-quiesce — converge through complete_quiesce
-        continue;
-      case ScanAction::kCollect:
-        break;
-      }
-      entry.state              = State::kQuiescing;
-      entry.deadline           = hyp_timer::deadline_after_ms(kTimeoutMs);
-      entry.bus_master_blocked = false;
-      device_ids[count++]      = entry.device_id;
-      pending                  = true;
-    }
+    scan = scan_owned(
+        vm,
+        [&pending](const Entry& entry) noexcept {
+          const ScanAction action = classify_begin_quiesce(entry.state);
+          if (action != ScanAction::kPending) {
+            return action;
+          }
+          // Already mid-quiesce: not this walk's device, but the VM still
+          // has to converge through complete_quiesce.
+          pending = true;
+          return ScanAction::kSkip;
+        },
+        [](Entry& entry) noexcept {
+          entry.state              = State::kQuiescing;
+          entry.deadline           = hyp_timer::deadline_after_ms(kTimeoutMs);
+          entry.bus_master_blocked = false;
+        });
+  }
+  if (!scan.complete()) {
+    return QuiesceResult::kFailed; // the only verdict left that stops this walk
   }
 
-  for (std::size_t i = 0; i < count; ++i) {
-    reset_interrupt(device_ids[i]);
-    if (!backend_quiesce(device_ids[i])) {
+  for (const dma::DeviceId device_id : scan.devices()) {
+    reset_interrupt(device_id);
+    if (!backend_quiesce(device_id)) {
       fail_vm(vm, "bus-master disable");
       return QuiesceResult::kFailed;
     }
     sync::Guard guard{g_lock};
-    if (Entry* entry = g_registry.find(device_ids[i]); entry != nullptr && entry->state == State::kQuiescing) {
+    if (Entry* entry = g_registry.find(device_id); entry != nullptr && entry->state == State::kQuiescing) {
       entry->bus_master_blocked = true;
     }
   }
-  return pending ? complete_quiesce(vm) : QuiesceResult::kComplete;
+  return pending || scan.count != 0 ? complete_quiesce(vm) : QuiesceResult::kComplete;
 }
 
 auto poll_quiesce(std::size_t vm) noexcept -> QuiesceResult {
-  std::array<dma::DeviceId, kMaxDevices> device_ids{};
-  std::size_t                            count    = 0;
-  std::uint64_t                          deadline = UINT64_MAX;
+  ScanOutcome   scan{};
+  std::uint64_t deadline = UINT64_MAX;
   {
     sync::Guard guard{g_lock};
     if (!g_registry_valid) {
       return QuiesceResult::kFailed;
     }
-    for (const Entry& entry : g_registry.entries()) {
-      if (entry.owner_vm != vm) {
-        continue;
+    scan = scan_owned(vm, quiescing_action, [&deadline](const Entry& entry) noexcept {
+      if (entry.deadline < deadline) {
+        deadline = entry.deadline;
       }
-      switch (classify_quiescing(entry.state, entry.bus_master_blocked)) {
-      case ScanAction::kSkip:
-        continue;
-      case ScanAction::kFail:
-        return QuiesceResult::kFailed;
-      case ScanAction::kPending:
-        return QuiesceResult::kPending;
-      case ScanAction::kCollect:
-        device_ids[count++] = entry.device_id;
-        if (entry.deadline < deadline) {
-          deadline = entry.deadline;
-        }
-      }
-    }
+    });
   }
-  if (count == 0) {
+  if (!scan.complete()) {
+    return quiesce_result(scan.verdict);
+  }
+  if (scan.count == 0) {
     return QuiesceResult::kComplete;
   }
-  for (std::size_t i = 0; i < count; ++i) {
-    if (!backend_drained(device_ids[i])) {
+  for (const dma::DeviceId device_id : scan.devices()) {
+    if (!backend_drained(device_id)) {
       if (hyp_timer::now() < deadline) {
         return QuiesceResult::kPending;
       }
@@ -406,8 +426,7 @@ auto poll_quiesce(std::size_t vm) noexcept -> QuiesceResult {
 }
 
 auto resume_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
-  std::array<dma::DeviceId, kMaxDevices> device_ids{};
-  std::size_t                            count = 0;
+  ScanOutcome scan{};
   {
     sync::Guard guard{g_lock};
     if (!g_registry_valid || generation == 0U || g_registry.owner_failed(vm)) {
@@ -416,23 +435,15 @@ auto resume_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
     if (g_registry.owner_active(vm, generation)) {
       return true;
     }
-    for (Entry& entry : g_registry.entries()) {
-      if (entry.owner_vm != vm) {
-        continue;
-      }
-      switch (classify_resume(entry.state)) {
-      case ScanAction::kSkip:
-        continue;
-      case ScanAction::kFail:
-      case ScanAction::kPending: // resume never defers — a non-quiesced entry fails the request
-        return false;
-      case ScanAction::kCollect:
-        entry.state         = State::kResuming;
-        device_ids[count++] = entry.device_id;
-      }
-    }
+    scan = scan_owned(
+        vm, [](const Entry& entry) noexcept { return classify_resume(entry.state); },
+        [](Entry& entry) noexcept { entry.state = State::kResuming; });
   }
-  if (count == 0) {
+  // Resume never defers: a stopped walk means some entry is not quiesced.
+  if (!scan.complete()) {
+    return false;
+  }
+  if (scan.count == 0) {
     return true;
   }
 
@@ -441,12 +452,12 @@ auto resume_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
     fail_vm(vm, "stream attach");
     return false;
   }
-  for (std::size_t i = 0; i < count; ++i) {
-    if (!prepare_interrupt(device_ids[i], vm)) {
+  for (const dma::DeviceId device_id : scan.devices()) {
+    if (!prepare_interrupt(device_id, vm)) {
       fail_vm(vm, "interrupt prepare");
       return false;
     }
-    if (!backend_resume(device_ids[i])) {
+    if (!backend_resume(device_id)) {
       fail_vm(vm, "bus-master enable");
       return false;
     }
@@ -461,8 +472,8 @@ auto resume_vm(std::size_t vm, std::uint64_t generation) noexcept -> bool {
       }
     }
   }
-  for (std::size_t i = 0; i < count; ++i) {
-    if (const dma::DeviceInterrupt* interrupt = interrupt_for_device(device_ids[i]);
+  for (const dma::DeviceId device_id : scan.devices()) {
+    if (const dma::DeviceInterrupt* interrupt = interrupt_for_device(device_id);
         interrupt != nullptr && !gic::unmask_spi(interrupt->physical_intid)) {
       fail_vm(vm, "interrupt unmask");
       return false;

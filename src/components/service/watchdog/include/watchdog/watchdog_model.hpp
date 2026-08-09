@@ -34,4 +34,29 @@ using DeadlinePlan = arch::DeadlinePlan;
          request_sequence == current_sequence;
 }
 
+// A zero window is the disarm token, not a deadline of zero ticks: it is
+// accepted, and the deadline it plans is the one the caller compares
+// against to mean "nothing armed".
+static_assert(
+    [] {
+      const DeadlinePlan disarm = deadline_after_ms(123, 0, 0);
+      return disarm.accepted && disarm.deadline == 0U;
+    }(),
+    "a zero window disarms the watchdog instead of expiring it immediately");
+
+// What a petting request must carry to be honoured: the live boot
+// generation, from a running boot vCPU, at the sequence the watchdog is
+// waiting on. Generation zero is never live, so a request that arrives
+// before the first arm — or after a reset invalidated it — is refused
+// rather than silently extending someone else's deadline.
+static_assert(
+    [] {
+      return accepts_generation(7, 7, true) && !accepts_generation(6, 7, true) &&         // a stale generation
+             !accepts_generation(7, 7, false) &&                                          // boot vCPU is down
+             !accepts_generation(0, 0, true) &&                                           // zero is never a generation
+             accepts_update(7, 7, 12, 12, true) && !accepts_update(7, 7, 11, 12, true) && // superseded sequence
+             !accepts_update(6, 7, 12, 12, true);
+    }(),
+    "only the current sequence of the live boot generation refreshes the watchdog");
+
 } // namespace nova::watchdog

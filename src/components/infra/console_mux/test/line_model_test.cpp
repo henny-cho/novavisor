@@ -18,12 +18,10 @@ using nova::console_mux::next_focus;
 using nova::console_mux::put_char;
 using nova::console_mux::render_tag;
 
-// What the component would hand the console facade for a completed
-// line: tag + payload + '\n'.
+// The component hands the console exactly what finish_line returns, so
+// the test asks the model rather than restating how a line is framed.
 auto completed_line(LineBuf& l, std::size_t vm) -> std::string {
-  render_tag(l, vm);
-  l.data[kTagLen + l.len] = '\n';
-  return std::string{std::string_view{l.data.data(), kTagLen + l.len + 1}};
+  return std::string{nova::console_mux::finish_line(l, vm)};
 }
 
 // Feed a string; returns how many times the caller would have emitted.
@@ -77,12 +75,6 @@ TEST(ConsoleMuxLine, EarlyFlushAtLineMax) {
 
   // The flush is per line, not per buffer: the next payload starts over.
   EXPECT_EQ(feed(l, std::string(2 * kLineMax, 'y')), 2);
-}
-
-TEST(ConsoleMuxLine, PayloadNeverOverrunsBuffer) {
-  LineBuf l{};
-  // Worst case: a full payload plus the '\n' the emitter appends.
-  EXPECT_EQ(kTagLen + kLineMax + 1, l.data.size());
 }
 
 // ---------------------------------------------------------------------------

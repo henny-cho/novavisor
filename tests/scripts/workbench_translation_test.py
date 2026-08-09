@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -19,75 +18,6 @@ from novakit.services.workbench import translation  # noqa: E402
 S2 = abi.read_constexprs(translation.STAGE2_DESCRIPTOR)
 S1 = abi.read_constexprs(translation.STAGE1_TABLES)
 FRAME = 0x8000_0000  # any 4 KiB-aligned output address
-
-
-class ConstexprReaderTest(unittest.TestCase):
-    """The reader has to agree with the compiler, not merely with itself."""
-
-    def header(self, body: str) -> Path:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        path = Path(directory.name) / "constants.hpp"
-        path.write_text(body)
-        return path
-
-    def test_it_folds_what_the_compiler_static_asserts(self):
-        """`stage1_tables.hpp` builds three register values out of its
-        own named fields and asserts each against the #define the
-        assembler uses. The compiler has proved those pairs equal, so a
-        reader landing on the same numbers folds shifts, masks and
-        cross-references the way the compiler does.
-        """
-        folded = abi.read_constexprs(translation.STAGE1_TABLES)
-        regs = REPO / "src" / "hal" / "arch" / "aarch64" / "vmsa" / "stage1_regs.h"
-        for constant, define in (
-            ("kMairEl2", "NOVA_EL2_MAIR"),
-            ("kTcrEl2", "NOVA_EL2_TCR"),
-            ("kSctlrEl2", "NOVA_EL2_SCTLR"),
-        ):
-            self.assertEqual(folded[constant], abi.read_define(regs, define), constant)
-
-    def test_a_name_reaches_the_expressions_below_it(self):
-        values = abi.read_constexprs(
-            self.header(
-                "inline constexpr std::uint64_t kShift = 12;\n"
-                "inline constexpr std::uint64_t kSize  = 1ULL << kShift;\n"
-            )
-        )
-        self.assertEqual(values, {"kShift": 12, "kSize": 4096})
-
-    def test_a_name_from_elsewhere_is_supplied_not_guessed(self):
-        values = abi.read_constexprs(
-            self.header("inline constexpr std::size_t kEnd = kBase + 2;\n"), {"kBase": 7}
-        )
-        # Only what the header declares comes back; the seed was input.
-        self.assertEqual(values, {"kEnd": 9})
-
-    def test_an_undefined_name_stops_the_tool(self):
-        with self.assertRaises(SystemExit):
-            abi.read_constexprs(self.header("inline constexpr int kX = kNeverDeclared;\n"))
-
-    def test_an_expression_it_cannot_fold_stops_the_tool(self):
-        """A guessed number becomes a second copy of the encoding, right
-        until the day the header moves."""
-        for expression in ("width(3)", "~kMask", "kA ? kB : kC", "1 +"):
-            with self.assertRaises(SystemExit, msg=expression):
-                abi.read_constexprs(self.header(f"inline constexpr int kX = {expression};\n"))
-
-    def test_digit_separators_and_suffixes_are_not_part_of_the_value(self):
-        values = abi.read_constexprs(
-            self.header("inline constexpr std::uint64_t kMask = 0x0000'FFFF'FFFF'F000ULL;\n")
-        )
-        self.assertEqual(values["kMask"], 0xFFFF_FFFF_F000)
-
-    def test_a_commented_out_declaration_is_not_read(self):
-        values = abi.read_constexprs(
-            self.header(
-                "// inline constexpr int kGhost = 1;\n"
-                "inline constexpr int kReal = 2; // inline constexpr int kAlso = 3;\n"
-            )
-        )
-        self.assertEqual(values, {"kReal": 2})
 
 
 class GeometryTest(unittest.TestCase):

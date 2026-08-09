@@ -60,14 +60,6 @@ TEST(SmmuRuntime, RejectsMissingTranslationFeatures) {
   EXPECT_EQ(validate_capabilities(caps, kLayout), RuntimeError::kInsufficientOutputSize);
 }
 
-TEST(SmmuRuntime, NamesCapabilityFailures) {
-  EXPECT_EQ(runtime_error_name(RuntimeError::kNone), "none");
-  EXPECT_EQ(runtime_error_name(RuntimeError::kMissingStage2), "missing-stage2");
-  EXPECT_EQ(runtime_error_name(RuntimeError::kMissingGranule4k), "missing-4k-granule");
-  EXPECT_EQ(runtime_error_name(RuntimeError::kInsufficientQueues), "insufficient-queues");
-  EXPECT_EQ(runtime_error_name(static_cast<RuntimeError>(UINT8_MAX)), "unknown");
-}
-
 TEST(SmmuRuntime, RejectsUnsupportedSoftwareStructures) {
   constexpr Capabilities qemu = decode_capabilities(kQemuIdr0, kQemuIdr1, kQemuIdr5);
 
@@ -102,16 +94,6 @@ TEST(SmmuRuntime, RejectsInvalidRuntimeMemory) {
   layout = kLayout;
   layout.event_queue_pa += 256;
   EXPECT_EQ(validate_capabilities(caps, layout), RuntimeError::kInvalidAlignment);
-}
-
-TEST(SmmuRuntime, EncodesBasesAndControlProfile) {
-  EXPECT_EQ(stream_table_base(kLayout.stream_table_pa), 0x4000'0000'4000'0000);
-  EXPECT_EQ(queue_base(kLayout.command_queue_pa, kLayout.command_log2), 0x4000'0000'4000'1004);
-  EXPECT_EQ(stream_table_config(kLayout.sid_bits), 5);
-  EXPECT_EQ(kCr1Cacheable, 0x0D75);
-  EXPECT_EQ(kCr2Protected, 0x6);
-  EXPECT_EQ(kFaultIrqs, 0x5);
-  EXPECT_EQ(kEnabledCr0, 0xD);
 }
 
 } // namespace

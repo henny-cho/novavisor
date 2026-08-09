@@ -50,4 +50,28 @@ using DecBuf = std::array<char, kMaxDecDigits64>;
   return {buf.data() + (buf.size() - n), n};
 }
 
+// Both formatters over the values a diagnostic line actually carries:
+// the extremes of the range, and the widths in between.
+static_assert(
+    [] {
+      const auto hex_is = [](std::uint64_t v, std::string_view expected) {
+        HexBuf buf{};
+        return to_hex64(v, buf) == expected;
+      };
+      const auto dec_is = [](std::uint64_t v, std::string_view expected) {
+        DecBuf buf{};
+        return to_dec64(v, buf) == expected;
+      };
+      return hex_is(0, "0000000000000000") &&                     // always 16 digits, never empty
+             hex_is(1, "0000000000000001") &&                     //
+             hex_is(0x5000'0000, "0000000050000000") &&           // a load address keeps its leading zeros
+             hex_is(0x0123'4567'89AB'CDEF, "0123456789abcdef") && // every nibble value, lowercase
+             hex_is(~std::uint64_t{0}, "ffffffffffffffff") &&     //
+             dec_is(0, "0") &&                                    // zero is one digit, not none
+             dec_is(1, "1") && dec_is(42, "42") &&                //
+             dec_is(1'000'000, "1000000") &&                      // no leading zeros above the first digit
+             dec_is(~std::uint64_t{0}, "18446744073709551615");   // the widest value the buffer must hold
+    }(),
+    "the formatters render every value a diagnostic can hand them");
+
 } // namespace nova::fmt

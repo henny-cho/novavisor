@@ -43,6 +43,9 @@ struct Record {
 };
 
 static_assert(sizeof(Record) == NOVA_TRACE_REC_SIZE);
+// Indexing is a mask, and a record sized this way never straddles a
+// cache line: emit() writes one line, and a reader copies one.
+static_assert(std::has_single_bit(std::size_t{NOVA_TRACE_REC_SIZE}), "a record size must be a power of two");
 static_assert(offsetof(Record, ts) == NOVA_TRACE_TS_OFF);
 static_assert(offsetof(Record, type) == NOVA_TRACE_TYPE_OFF);
 static_assert(offsetof(Record, cpu) == NOVA_TRACE_CPU_OFF);
@@ -71,6 +74,15 @@ static_assert(offsetof(Header, capacity) == NOVA_TRACE_CAP_OFF);
 static_assert(offsetof(Header, freq_hz) == NOVA_TRACE_FREQ_OFF);
 static_assert(offsetof(Header, early) == NOVA_TRACE_EARLY_OFF);
 static_assert(sizeof(Header) <= NOVA_TRACE_HEADER_SIZE);
+
+// The floor a board is held to stays the rule it was derived from.
+// Respelled as a literal it would build clean while accepting
+// reservations the rule refuses — the drift the derivation replaced.
+// A zero on either side would satisfy the equality and leave the floor
+// vacuous, so the terms are held above zero too.
+static_assert(NOVA_TRACE_PEAK_PER_SEC > 0 && NOVA_TRACE_HORIZON_MS > 0 &&
+                  NOVA_TRACE_MIN_CAPACITY == NOVA_TRACE_PEAK_PER_SEC * NOVA_TRACE_HORIZON_MS / 1000,
+              "the minimum capacity is the declared peak over the declared horizon");
 
 // Bytes one ring occupies, header included.
 [[nodiscard]] constexpr auto ring_stride(std::size_t capacity) noexcept -> std::size_t {

@@ -210,6 +210,12 @@ void reschedule_slice() noexcept {
 // peer picks the new value up at its next ready-set change — the same
 // moment it would have read the old one. Nothing already armed is
 // shortened, so a guest mid-slice keeps the turn it was given.
+auto slice_band() noexcept -> SliceBand {
+  // Narrowing on purpose: these are constant expressions, so a band the
+  // published field cannot hold stops the build here.
+  return {.min_us = kSliceMinUs, .default_us = kSliceUs, .max_us = kSliceMaxUs};
+}
+
 auto set_slice_us(std::uint64_t microseconds) noexcept -> bool {
   if (microseconds < kSliceMinUs || microseconds > kSliceMaxUs) {
     return false;

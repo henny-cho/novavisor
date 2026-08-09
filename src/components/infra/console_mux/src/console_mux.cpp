@@ -24,14 +24,13 @@ std::size_t                    g_focus = 0;       // VM receiving host input
 LivenessProbe                  g_live  = nullptr; // scheduler-injected
 
 void emit(std::size_t slot) noexcept {
-  LineBuf& l = g_line[slot];
-  render_tag(l, vm_of(slot));
-  l.data[kTagLen + l.len] = '\n';
+  LineBuf&               l    = g_line[slot];
+  const std::string_view line = finish_line(l, vm_of(slot));
   // Hooked here and not in guest_putc: a per-byte hook on the console
   // path would amplify itself, tens of thousands of records deep, every
   // time a guest printed its boot log.
   trace_emit(NOVA_TRACE_EV_UART_LINE, static_cast<std::uint32_t>(slot), l.len);
-  console::write(std::string_view{l.data.data(), kTagLen + l.len + 1});
+  console::write(line);
   l.len = 0;
 }
 

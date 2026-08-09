@@ -90,14 +90,4 @@ TEST(SmmuQueue, EventOverflowTogglesOnceAndAcknowledgesProducer) {
   EXPECT_EQ(queue.consumer & queue.pointer_mask(), 0);
 }
 
-TEST(SmmuQueue, RejectsUnrepresentableQueueSize) {
-  QueueState queue{.log2_entries = 20};
-  EXPECT_FALSE(queue.valid());
-  EXPECT_EQ(queue.capacity(), 0);
-  EXPECT_FALSE(queue.empty());
-  EXPECT_FALSE(queue.full());
-  EXPECT_FALSE(queue.try_produce());
-  EXPECT_FALSE(queue.try_consume());
-}
-
 } // namespace

@@ -17,12 +17,10 @@ inline constexpr std::size_t kStreamTableEntryBytes = 64;
 
 namespace ste {
 
-inline constexpr std::uint64_t kValid        = 1ULL << 0U;
-inline constexpr std::uint64_t kConfigShift  = 1;
-inline constexpr std::uint64_t kConfigMask   = 0b111ULL << kConfigShift;
-inline constexpr std::uint64_t kStage1Enable = 0b001ULL;
-inline constexpr std::uint64_t kStage1Only   = 0b101ULL;
-inline constexpr std::uint64_t kStage2Only   = 0b110ULL;
+inline constexpr std::uint64_t kValid       = 1ULL << 0U;
+inline constexpr std::uint64_t kConfigShift = 1;
+inline constexpr std::uint64_t kConfigMask  = 0b111ULL << kConfigShift;
+inline constexpr std::uint64_t kStage2Only  = 0b110ULL;
 
 inline constexpr std::uint64_t kVmidMask           = 0xFFFFULL;
 inline constexpr std::uint64_t kT0szShift          = 32;
@@ -88,20 +86,40 @@ struct SteEncoding {
   return {.entry = entry};
 }
 
-[[nodiscard]] constexpr auto config(const StreamTableEntry& entry) noexcept -> std::uint64_t {
-  return (entry[0] & ste::kConfigMask) >> ste::kConfigShift;
-}
+static_assert(sizeof(StreamTableEntry) == kStreamTableEntryBytes,
+              "a stream table entry is the 64-byte record the SMMU indexes by stream ID");
 
-[[nodiscard]] constexpr auto is_stage2_only(const StreamTableEntry& entry) noexcept -> bool {
-  return (entry[0] & ste::kValid) != 0U && config(entry) == ste::kStage2Only;
-}
+// The entry a configured stream gets, decoded field by field. The
+// geometry fields are the load-bearing ones: the SMMU walks the very
+// tables VTCR_EL2 describes, so they are read from the Stage 2
+// definition and must still be there after the shifts are applied.
+static_assert(
+    [] {
+      const std::uint64_t root    = 0x0000'0000'1234'5000;
+      const std::uint16_t vmid    = 0x1234;
+      const SteEncoding   ste_out = make_stage2_ste(root, vmid);
+      const std::uint64_t cfg     = ste_out.entry[2];
+      return ste_out.ok() && ste_out.entry[0] == 0xDULL && // V = 1, Config = 0b110 (Stage 2 only)
+             (cfg & ste::kVmidMask) == vmid && ((cfg >> ste::kT0szShift) & 0x3FULL) == ste::kT0sz &&
+             ((cfg >> ste::kSl0Shift) & 0x3ULL) == ste::kSl0 &&
+             ((cfg >> ste::kIrgn0Shift) & 0x3ULL) == ste::kWriteBack &&
+             ((cfg >> ste::kOrgn0Shift) & 0x3ULL) == ste::kWriteBack &&
+             ((cfg >> ste::kSh0Shift) & 0x3ULL) == ste::kInnerShareable &&
+             ((cfg >> ste::kTg0Shift) & 0x3ULL) == ste::kGranule4k &&
+             ((cfg >> ste::kPsShift) & 0x7ULL) == ste::kPhysicalSize40 && (cfg & ste::kAa64) != 0U &&
+             (cfg & ste::kProtectedTableWalk) != 0U && // a device walk may not reach hypervisor memory
+             (cfg & ste::kRecordFault) != 0U &&        // a refused transaction leaves a record behind
+             ste_out.entry[3] == root && ste_out.entry[1] == 0U && ste_out.entry[4] == 0U && ste_out.entry[5] == 0U &&
+             ste_out.entry[6] == 0U && ste_out.entry[7] == 0U; // no stage-1 context descriptor
+    }(),
+    "a configured stream translates through its VM's Stage 2 with the CPU's own walk geometry");
 
-[[nodiscard]] constexpr auto uses_context_descriptor(const StreamTableEntry& entry) noexcept -> bool {
-  return (config(entry) & ste::kStage1Enable) != 0U;
-}
-
-[[nodiscard]] constexpr auto is_abort(const StreamTableEntry& entry) noexcept -> bool {
-  return (entry[0] & ste::kValid) != 0U && config(entry) == 0U;
-}
+// A root the entry cannot encode is refused rather than truncated: a
+// silently masked root would point the device at whatever table happens
+// to live at the truncated address.
+static_assert(make_stage2_ste(0x1234, 1).error == SteError::kUnalignedRoot &&
+                  make_stage2_ste(1ULL << 40U, 1).error == SteError::kRootOutOfRange &&
+                  make_abort_ste()[0] == ste::kValid, // valid with Config = 0: every transaction refused
+              "an unencodable root is refused, and the abort entry translates nothing");
 
 } // namespace nova::smmu

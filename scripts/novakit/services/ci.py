@@ -32,6 +32,13 @@ class Lane:
     name: str
     steps: tuple[tuple[str, Callable[[], int]], ...]
 
+    def __post_init__(self) -> None:
+        # Step names key the job summary, so a repeat would report two
+        # outcomes under one heading. Refuse the table, not the report.
+        names = [step for step, _ in self.steps]
+        if len(names) != len(set(names)):
+            raise ValueError(f"lane {self.name}: duplicate step name")
+
 
 # Keep these adapters late-bound so tests and callers can replace a service
 # operation without rebuilding the immutable lane table.

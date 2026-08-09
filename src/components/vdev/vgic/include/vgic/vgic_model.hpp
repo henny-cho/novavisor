@@ -104,6 +104,15 @@ inline constexpr std::uint32_t kGicrTyperLast  = 1U << 4U;   // highest frame of
 inline constexpr std::uint32_t kGicIidrValue   = 0x43B;      // implementer: Arm
 inline constexpr std::uint32_t kPidr2GicV3     = 0x3U << 4U; // ArchRev = GICv3
 
+// What a guest GIC driver learns by probing, decoded the way it reads
+// the fields. Drivers size their INTID range and pick their register
+// view from these two words, and some refuse to bind on a mismatch.
+static_assert((kGicdTyperValue & 0x1FU) == 1U &&              // ITLinesNumber = 1: INTIDs 0..63
+                  ((kGicdTyperValue >> 19U) & 0x1FU) == 9U && // IDbits: 10-bit space, so 1020..1023 encode
+                  (kGicdTyperValue & (1U << 17U)) == 0U &&    // LPIS clear: nothing probes for an ITS
+                  kPidr2GicV3 == 0x30U,
+              "the distributor advertises a 64-INTID GICv3 with no LPI support");
+
 // Which redistributor frame is being emulated: `number` is the vCPU
 // index within the VM (GICR_TYPER.Processor_Number AND the Aff0 of the
 // affinity word — it must equal the vCPU's VMPIDR so the guest's
@@ -118,6 +127,21 @@ struct RedistId {
   return (static_cast<std::uint64_t>(id.number) << 32U) | (static_cast<std::uint64_t>(id.number) << 8U) |
          (id.last ? kGicrTyperLast : 0U);
 }
+
+// The frame identity a guest walks the redistributor space by. The two
+// copies of the vCPU index are not redundant: the driver matches the
+// affinity word against its own MPIDR to find its frame, and stops at
+// the one flagged Last — a walk that never sees Last runs off the end.
+static_assert(
+    [] {
+      const std::uint64_t first = redist_typer({.number = 0, .last = false});
+      const std::uint64_t last  = redist_typer({.number = 1, .last = true});
+      return first == 0U && (first & kGicrTyperLast) == 0U && ((last >> 8U) & 0xFFFFU) == 1U && // Processor_Number
+             (last >> 32U) == 1U &&                                                             // Aff0
+             (last & kGicrTyperLast) != 0U &&
+             redist_typer({}) == kGicrTyperLast; // a single-frame VM's only frame is its last
+    }(),
+    "GICR_TYPER names the vCPU owning the frame and marks the VM's highest one");
 
 struct RedistFrameRef {
   bool          valid  = false;
@@ -140,6 +164,27 @@ struct RedistFrameRef {
       .id     = {.number = static_cast<std::uint32_t>(frame), .last = frame == vcpus - 1U},
   };
 }
+
+// Frame selection by stride, including the SGI_base half — it sits
+// inside the same stride, so an access there must resolve to the same
+// vCPU as the RD_base half rather than to the next frame's registers.
+static_assert(
+    [] {
+      const RedistFrameRef first = decode_redist_frame(0, 4);
+      const RedistFrameRef mid   = decode_redist_frame((2 * kGicrFrameSize) + kGicrIsenabler0, 4);
+      const RedistFrameRef last  = decode_redist_frame((3 * kGicrFrameSize) + kGicrTyper, 4);
+      const RedistFrameRef only  = decode_redist_frame(kGicrWaker, 1);
+      const RedistFrameRef sgi   = decode_redist_frame(kGicrFrameSize + kGicrIspendr0, 2);
+      return first.valid && first.vcpu == 0U && first.offset == 0U && first.id.number == 0U && !first.id.last &&
+             mid.valid && mid.vcpu == 2U && mid.offset == kGicrIsenabler0 && mid.id.number == 2U && !mid.id.last &&
+             last.valid && last.vcpu == 3U && last.offset == kGicrTyper && last.id.last && only.valid &&
+             only.vcpu == 0U && only.id.last && // a single-vCPU VM has one frame, and it is the last
+             sgi.valid && sgi.vcpu == 1U && sgi.offset == kGicrIspendr0 && sgi.offset >= kGicrSgiFrame &&
+             !decode_redist_frame(kGicrFrameSize, 1).valid && !decode_redist_frame(2 * kGicrFrameSize, 2).valid &&
+             !decode_redist_frame((8 * kGicrFrameSize) + kGicrCtlr, 2).valid &&
+             !decode_redist_frame(0, 0).valid; // no vCPU owns any frame
+    }(),
+    "a redistributor access resolves to the vCPU owning its stride, or to nothing");
 
 // GICR_WAKER bits.
 inline constexpr std::uint32_t kWakerProcessorSleep = NOVA_GICR_WAKER_PROCESSOR_SLEEP;
@@ -176,6 +221,24 @@ inline constexpr std::uint64_t kSgi1rRsMask     = 0xFULL << 44U;
   }
   return static_cast<std::uint32_t>(v & kSgi1rTargetMask) & all;
 }
+
+// Who a trapped ICC_SGI1R write reaches. Every path is clamped to the
+// VM's own width: the topology is flat, so a nonzero upper affinity or
+// RangeSelector names a CPU outside this VM and must select nobody
+// rather than wrap onto a sibling.
+static_assert(
+    [] {
+      const std::uint64_t to_sibling = (3ULL << 24U) | 0b10U; // INTID 3 → vCPU 1
+      return sgi1r_intid(to_sibling) == 3U && sgi1r_targets(to_sibling, 0, 2) == 0b10U &&
+             sgi1r_targets(0xFFFF, 0, 2) == 0b11U &&             // slots past the VM's vCPU count are dropped
+             sgi1r_targets(0b01U, 0, 2) == 0b01U &&              // self-targeting is architectural
+             sgi1r_targets(kSgi1rIrm | 0xFFFF, 0, 2) == 0b10U && // IRM: every sibling but the sender
+             sgi1r_targets(kSgi1rIrm, 1, 2) == 0b01U && sgi1r_targets((1ULL << 16U) | 1U, 0, 2) == 0U && // Aff1
+             sgi1r_targets((1ULL << 32U) | 1U, 0, 2) == 0U &&                                            // Aff2
+             sgi1r_targets((1ULL << 48U) | 1U, 0, 2) == 0U &&                                            // Aff3
+             sgi1r_targets((1ULL << 44U) | 1U, 0, 2) == 0U; // RangeSelector
+    }(),
+    "an SGI reaches exactly the sibling vCPUs its target list names, and none outside the VM");
 
 // --- State ------------------------------------------------------------------
 
@@ -215,6 +278,19 @@ struct RedistState {
   std::uint32_t                         pending    = 0; // software pending, not in any LR
   std::array<std::uint8_t, kNumPrivate> prio{};
 };
+
+// Reset state as the guest finds it. The SGI half of the enable word is
+// the one that must already be set: a doorbell SGI sent before the guest
+// has touched its redistributor would otherwise be undeliverable, and
+// nothing re-derives it once the guest enables the bit.
+static_assert(
+    [] {
+      const RedistState reset{};
+      return reset.isenabler0 == 0xFFFFU && // SGIs 0..15 enabled, PPIs off until the guest asks
+             reset.igroupr0 == ~0U &&       // all private interrupts in Group 1
+             reset.pending == 0U && reset.asleep;
+    }(),
+    "a redistributor resets with the SGIs enabled and everything else quiet");
 
 struct MmioRead {
   bool          known = false;
@@ -258,6 +334,24 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
 
 } // namespace detail
 
+// Offsets the guest may touch that this model deliberately does not
+// keep: configuration the DS=1 profile fixes, and active state that
+// lives in the list registers. A read answers zero and a write lands
+// nowhere, so both directions read the one list rather than each
+// carrying a copy that the other can drift from.
+inline constexpr std::array kDistIgnored{kGicdIcfgr2, kGicdIcfgr3, kGicdIgrpmodr1, kGicdIsactiver1, kGicdIcactiver1};
+inline constexpr std::array kRedistIgnored{kGicrIcfgr0, kGicrIcfgr1, kGicrIgrpmodr0, kGicrIsactiver0, kGicrIcactiver0};
+
+[[nodiscard]] constexpr auto is_ignored(const std::array<std::uint64_t, 5>& offsets, std::uint64_t off) noexcept
+    -> bool {
+  for (const std::uint64_t candidate : offsets) {
+    if (candidate == off) {
+      return true;
+    }
+  }
+  return false;
+}
+
 [[nodiscard]] inline auto dist_read(const DistState& d, std::uint64_t off, std::uint32_t size) noexcept -> MmioRead {
   if (off >= kGicdIpriorityrSpi && off + size <= kGicdIpriorityrEnd) {
     return {.known = true, .value = detail::prio_read(d.spi_prio, off - kGicdIpriorityrSpi, size)};
@@ -288,14 +382,8 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
   case kGicdIspendr1:
   case kGicdIcpendr1:
     return {.known = true, .value = d.spi_pending};
-  case kGicdIcfgr2:
-  case kGicdIcfgr3:
-  case kGicdIgrpmodr1: // RAZ/WI with DS = 1 (no group modifier)
-  case kGicdIsactiver1:
-  case kGicdIcactiver1: // active state lives in the LRs, not the model
-    return {.known = true, .value = 0};
   default:
-    return {};
+    return is_ignored(kDistIgnored, off) ? MmioRead{.known = true, .value = 0} : MmioRead{};
   }
 }
 
@@ -336,14 +424,9 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
   case kGicdIcpendr1:
     d.spi_pending = (d.spi_pending & ~word) | keep_pending;
     return {.known = true, .delivery = true};
-  case kGicdIcfgr2:
-  case kGicdIcfgr3:
-  case kGicdIgrpmodr1:
-  case kGicdIsactiver1:
-  case kGicdIcactiver1:
-    return {.known = true}; // accepted, ignored (fixed level/group, active state in LRs)
   default:
-    return {};
+    // Accepted and dropped: fixed level/group, active state in the LRs.
+    return is_ignored(kDistIgnored, off) ? WriteResult{.known = true} : WriteResult{};
   }
 }
 
@@ -375,14 +458,8 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
   case kGicrIspendr0:
   case kGicrIcpendr0:
     return {.known = true, .value = r.pending};
-  case kGicrIcfgr0:
-  case kGicrIcfgr1:
-  case kGicrIgrpmodr0: // RAZ/WI with DS = 1 (no group modifier)
-  case kGicrIsactiver0:
-  case kGicrIcactiver0: // active state lives in the LRs, not the model
-    return {.known = true, .value = 0};
   default:
-    return {};
+    return is_ignored(kRedistIgnored, off) ? MmioRead{.known = true, .value = 0} : MmioRead{};
   }
 }
 
@@ -414,14 +491,9 @@ inline void prio_write(std::array<std::uint8_t, kNumPrivate>& prio, std::uint64_
   case kGicrIcpendr0:
     r.pending &= ~word;
     return {.known = true, .delivery = true};
-  case kGicrIcfgr0:
-  case kGicrIcfgr1:
-  case kGicrIgrpmodr0:
-  case kGicrIsactiver0:
-  case kGicrIcactiver0:
-    return {.known = true}; // accepted, ignored (fixed config/group, active state in LRs)
   default:
-    return {};
+    // Accepted and dropped: fixed config/group, active state in the LRs.
+    return is_ignored(kRedistIgnored, off) ? WriteResult{.known = true} : WriteResult{};
   }
 }
 
