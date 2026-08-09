@@ -1183,6 +1183,10 @@ class Bridge:
                         if stamp is not None:
                             payload["ts"] = stamp
                         self.store.publish(obs.topic, Kind.SNAPSHOT, payload, src=Src.SNAP)
+                        # The one reading the topology defers to: what
+                        # the machine built beats what it was asked to.
+                        if obs.topic == observations.GUEST_TABLE:
+                            self.session.adopt_guest_table(value)
                 except (FileNotFoundError, snapshot.NotPublishedYet):
                     # The backend vanished mid-step, or EL2 has not
                     # opened its region yet. Both are "not now"; retry.

@@ -390,6 +390,57 @@ class Session:
         """
         self._store.set_topology(self._store.topology | {"command": facts})
 
+    def adopt_guest_table(self, entries: list) -> None:
+        """Replace what this run was asked for with what it built.
+
+        The demo manifest is a request and the table the firmware filled
+        is the answer, and where the two differ it is the answer that is
+        true of the machine on screen. So the placement on the topology
+        becomes the machine's; only the name stays from the request,
+        which is the one thing the firmware has none of.
+
+        A difference is worth saying out loud rather than only drawing:
+        a guest that landed somewhere other than where it was asked to
+        is either a generator that rounded or a configuration nobody
+        reloaded, and both are worth noticing before reading anything
+        placed against it.
+        """
+        topology = self._store.topology
+        asked = topology.get("guests")
+        if not isinstance(asked, list) or not entries:
+            return
+        built = {entry["vm"]: entry for entry in entries if isinstance(entry, dict)}
+        merged = []
+        differs = []
+        for index, guest in enumerate(asked):
+            entry = built.get(index)
+            if entry is None:
+                merged.append(guest)
+                continue
+            # kNone -> none: the firmware spells its enumerators in its
+            # own convention and the wire has always used the manifest's.
+            uart = str(entry.get("uart", "")).removeprefix("k").lower()
+            says = {
+                "name": guest.get("name"),
+                "vcpus": entry.get("vcpus"),
+                "pa": entry.get("pa"),
+                "ipa": entry.get("ipa"),
+                "size": entry.get("size"),
+                "uart": uart,
+            }
+            if any(says[key] != guest.get(key) for key in says):
+                differs.append(guest.get("name") or f"vm{index}")
+            merged.append(guest | says)
+        if merged == asked:
+            return
+        self._store.set_topology(topology | {"guests": merged})
+        if differs:
+            self._store.publish(
+                Topic.LIFE,
+                Kind.EVENT,
+                {"phase": "guests-differ", "guests": differs},
+            )
+
     def adopt_memory_map(self, captured: dict) -> None:
         """Publish this run's page tables, once they exist.
 

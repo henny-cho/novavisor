@@ -164,7 +164,7 @@ class ElfRamProviderTest(unittest.TestCase):
     """End-to-end address arithmetic against a synthetic RAM file."""
 
     def test_reads_a_seeded_scheduler_state(self):
-        sched = workbench_image.index().resolve("nova::vcpu::g_sched")
+        sched = workbench_image.view().resolved["sched.cpu"]
 
         with tempfile.TemporaryDirectory() as directory:
             ram_path = Path(directory) / "guest-ram"

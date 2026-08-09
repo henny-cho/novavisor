@@ -148,39 +148,36 @@ class ManifestResolutionTest(unittest.TestCase):
     runs it."""
 
     def test_scheduler_layout_matches_the_firmware(self):
-        index = workbench_image.index()
+        resolved = workbench_image.view().resolved
 
-        sched = index.resolve("nova::vcpu::g_sched")
+        sched = resolved["sched.cpu"]
         self.assertEqual(sched.type.count, observations.MAX_CPUS)
         names = [member.name for member in sched.type.element.fields]
         self.assertEqual(names, ["current", "fp", "fp_trap", "idling"])
 
-        published = index.resolve("nova::vcpu::g_published_state")
+        published = resolved["sched.slots"]
         self.assertEqual(published.type.count, observations.MAX_VCPUS)
         labels = dict(published.type.element.enumerators)
         self.assertEqual(labels, {0: "kOff", 1: "kOnPending", 2: "kOn"})
 
     def test_vgic_state_is_banked_the_way_the_manifest_reads_it(self):
-        index = workbench_image.index()
+        resolved = workbench_image.view().resolved
 
         extents = {
-            "nova::vgic::(anonymous)::g_cpu": observations.MAX_VCPUS,
-            "nova::vgic::(anonymous)::g_dist": observations.MAX_GUESTS,
-            "nova::vgic::(anonymous)::g_resident": observations.MAX_CPUS,
+            "vgic.lr": observations.MAX_VCPUS,
+            "vgic.dist": observations.MAX_GUESTS,
+            "vgic.resident": observations.MAX_CPUS,
         }
-        for symbol, count in extents.items():
-            with self.subTest(symbol=symbol):
-                self.assertEqual(index.resolve(symbol).type.count, count)
+        for topic, count in extents.items():
+            with self.subTest(topic=topic):
+                self.assertEqual(resolved[topic].type.count, count)
 
         # The shadow is sized for the architectural maximum; how many of
         # its entries the machine actually has is what g_lr_count holds,
         # and it cannot exceed the array it indexes.
-        lr = {
-            field.name: field
-            for field in index.resolve("nova::vgic::(anonymous)::g_cpu").type.element.fields
-        }["lr"]
+        lr = {field.name: field for field in resolved["vgic.lr"].type.element.fields}["lr"]
         self.assertEqual(lr.type.element.size, 8)
-        capacity = index.resolve("nova::vgic::(anonymous)::g_lr_count")
+        capacity = resolved["vgic.capacity"]
         self.assertEqual(capacity.type.kind, "uint")
         self.assertGreaterEqual(lr.type.count, 1)
 
@@ -196,20 +193,20 @@ class StopPointTest(unittest.TestCase):
     """
 
     def setUp(self):
-        self.index = workbench_image.index()
+        self.symbols = workbench_image.view().symbols
 
     def test_a_shorter_name_is_not_a_prefix_of_a_longer_one(self):
         """Itanium length prefixes are what make the match safe:
         post_spi and post_spi_tracked encode as 8post_spi and
         16post_spi_tracked, so neither can match the other."""
         self.assertNotEqual(
-            self.index.resolve_function("nova::vgic::post_spi"),
-            self.index.resolve_function("nova::vgic::post_spi_tracked"),
+            self.symbols.address_of("nova::vgic::post_spi"),
+            self.symbols.address_of("nova::vgic::post_spi_tracked"),
         )
 
     def test_an_absent_function_is_refused(self):
         with self.assertRaises(KeyError):
-            self.index.resolve_function("nova::vgic::no_such_entry_point")
+            self.symbols.address_of("nova::vgic::no_such_entry_point")
 
 
 class StopCatalogueTest(unittest.TestCase):

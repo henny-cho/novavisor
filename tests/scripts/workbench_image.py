@@ -1,20 +1,18 @@
-"""The debug image, parsed once for the whole suite.
+"""The image's answers, read once for the whole suite.
 
-Reading the DWARF is seconds of pure Python per parse, and the answer
-cannot change while the tests run — the image is a file on disk that
-nothing here writes. So the parse is shared: `unittest discover` runs
-every test module in one process, which is what lets a cache in this
-module reach across the files that import it.
+The build resolved them and wrote them beside the ELF, so this reads a
+document rather than walking a debug section — milliseconds instead of
+seconds, and the same answers the bridge gets.
 
-Both handles are held for the life of the process on purpose. The index
-keeps the ELF open and memoises the DIEs it has walked, so a caller must
-not close it; closing would leave the next caller reading a closed file
-and pay for the walk again.
+Cached because `unittest discover` runs every module in one process and
+the file does not move while they run. Nothing here opens the image: a
+question this view cannot answer is a question the manifest never asked,
+and asking it here would put a second, slower reader beside the one the
+build already ran.
 """
 
 from __future__ import annotations
 
-import atexit
 import functools
 import sys
 from pathlib import Path
@@ -22,24 +20,13 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit.image import elfsym, observe  # noqa: E402  # noqa: E402
+from novakit.image import observe  # noqa: E402
 
 ELF = REPO / "build" / "aarch64-debug" / "novavisor.elf"
+VIEW = observe.artifact_of(ELF)
 
 
 @functools.cache
 def view() -> observe.View:
-    """Every observation and table symbol resolved against the image."""
-    return observe.resolve(ELF)
-
-
-@functools.cache
-def index() -> elfsym.ElfIndex:
-    """The image's symbols and DWARF, for what the view does not carry.
-
-    Released at exit rather than by a caller: the handle is shared, and
-    whoever finished with it first would close it under the rest.
-    """
-    made = elfsym.ElfIndex(ELF)
-    atexit.register(made.close)
-    return made
+    """Every observation, table symbol and vocabulary this image gives."""
+    return observe.load(VIEW, ELF)

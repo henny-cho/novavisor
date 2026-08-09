@@ -730,6 +730,10 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     stop();
     picked = null;
     marked = null;
+    /* Said, not just done. Whatever was placed against the selected
+       moment — a line naming it, a drawer measuring from it — is now
+       describing a mark nothing is on. */
+    onSelect({ kind: "none" });
   }
 
   const isPlaying = () => playing !== null;

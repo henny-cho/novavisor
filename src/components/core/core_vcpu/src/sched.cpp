@@ -50,6 +50,11 @@ void core_vcpu_component::telemetry(TelemetryCall* call) noexcept {
   call->declare(&vcpu::g_cntvoff, sizeof vcpu::g_cntvoff);
   call->declare(&vcpu::g_vm_generation, sizeof vcpu::g_vm_generation);
   call->declare(&vcpu::g_budget, sizeof vcpu::g_budget);
+  // What the machine was built to run, as it built it. The manifest
+  // that asked for it is one answer and this is the other, and only
+  // this one comes from the machine.
+  const auto guests = guest_table_storage();
+  call->declare(guests.data(), guests.size_bytes());
 }
 
 // Defined in hal/arch/aarch64/guest/vcpu_enter.S. x0_arg is the guest's boot

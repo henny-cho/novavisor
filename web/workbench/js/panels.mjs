@@ -143,7 +143,23 @@ function generic(cursor) {
 const OPEN_KEY = "nv-wb-panels";
 
 export function createPanels({ tabs, host }) {
-  const latest = new Map(); // topic -> {value, ts, src}
+  const latest = new Map(); // topic -> {value, ts, at, src}
+  /* Where a reading sits on the firmware's own clock, and what it is
+     placed against.
+
+     A panel shows a sample, and a sample without an instant cannot be
+     placed against the events around it — which is why the publisher
+     stamps every slot with the counter the trace records carry. The
+     arrival time answers a different question: it is when this process
+     got to the reading, which differs from when the machine took it by
+     however long the poll interval and the decode ran.
+
+     With a mark selected the reference is that mark, so a panel says
+     whether what it shows is from before or after the moment the reader
+     clicked. With none it is the newest reading held, so a panel that
+     is behind the others says so. */
+  let counterHz = 0;
+  let reference = null;
   /* Per topic, the mask of what moved between the last two stops.
      Cleared when the machine resumes: a delta is only true of the pair
      it came from. Beside `latest` because the two are read together and
@@ -581,6 +597,35 @@ export function createPanels({ tabs, host }) {
     }
   }
 
+  /* The newest firmware instant the drawer holds, across every topic. */
+  function newestInstant() {
+    let found = null;
+    for (const reading of latest.values()) {
+      if (reading.at !== undefined && (found === null || reading.at > found)) found = reading.at;
+    }
+    return found;
+  }
+
+  /* How far a panel's newest reading sits from the reference, in the
+     firmware's own units. Null when there is nothing to place it
+     against — no counter rate yet, or a provider that stamps nothing —
+     and the header falls back to saying when the reading arrived. */
+  function placement(topics) {
+    if (!counterHz) return null;
+    let mine = null;
+    for (const topic of topics) {
+      const at = latest.get(topic)?.at;
+      if (at !== undefined && (mine === null || at > mine)) mine = at;
+    }
+    const against = reference ?? newestInstant();
+    if (mine === null || against === null) return null;
+    const micros = ((mine - against) / counterHz) * 1e6;
+    const sign = micros >= 0 ? "+" : "-";
+    const size = Math.abs(micros);
+    const shown = size >= 1000 ? `${(size / 1000).toFixed(1)}ms` : `${Math.round(size)}us`;
+    return `${reference === null ? "최신" : "선택"} ${sign}${shown}`;
+  }
+
   function render(id) {
     const entry = bodies.get(id);
     if (!entry || entry.body.hidden) return;
@@ -598,7 +643,15 @@ export function createPanels({ tabs, host }) {
        the same line so a panel costs one header row, not two. */
     const head = el("div", "phead");
     head.append(el("span", "pt", entry.panel.title));
-    if (newest) head.append(el("span", "pfresh", `src ${newest.src} · ${stamp(newest.ts, 1)}`));
+    if (newest) {
+      /* The instant the machine took it, where there is one: it places
+         the reading against the events on the strip, which the arrival
+         time cannot. */
+      const placed = placement(entry.panel.topics);
+      head.append(
+        el("span", "pfresh", `src ${newest.src} · ${placed ?? stamp(newest.ts, 1)}`),
+      );
+    }
     entry.body.append(head);
     if (!newest) {
       entry.body.append(el("div", "pnote", "실측 대기 중 — 세션이 실행되면 채워집니다"));
@@ -642,7 +695,15 @@ export function createPanels({ tabs, host }) {
       if (frame.kind !== "snapshot") return;
       const data = frame.data && typeof frame.data === "object" ? frame.data : null;
       if (!data || data.values === undefined) return;
-      latest.set(frame.topic, { value: data.values, ts: frame.ts, src: frame.src });
+      latest.set(frame.topic, {
+        value: data.values,
+        ts: frame.ts,
+        /* The publisher's counter for this slot. Absent from a provider
+           with no publisher behind it — a script, a replay, a reader of
+           raw addresses — and absent is not zero. */
+        at: typeof data.ts === "number" ? data.ts : undefined,
+        src: frame.src,
+      });
       /* Absent on the first stop of a run; `false` or `{}` when a stop
          genuinely moved nothing, which is a different answer. */
       if (data.changed !== undefined) moved.set(frame.topic, data.changed);
@@ -666,6 +727,21 @@ export function createPanels({ tabs, host }) {
        drawn as "not yet read", because the alternative is leaving a
        later value on screen at a moment the machine had not produced
        it, which is the one thing a cursor exists to prevent. */
+    /* The counter rate the firmware's stamps are in, which arrives with
+       the trace summary. Without it a stamp is a number, not a moment. */
+    setClock(hz) {
+      if (!hz || hz === counterHz) return;
+      counterHz = hz;
+      renderAll();
+    },
+    /* The mark a reader selected, as the instant to place readings
+       against. Null puts them back against the newest reading held. */
+    setReference(at) {
+      const next = typeof at === "number" ? at : null;
+      if (next === reference) return;
+      reference = next;
+      renderAll();
+    },
     setUnread(topics) {
       unread = new Set(Array.isArray(topics) ? topics : []);
       for (const id of visible) dirty.add(id);
@@ -693,6 +769,7 @@ export function createPanels({ tabs, host }) {
     clearAll() {
       latest.clear();
       moved.clear();
+      reference = null; /* it named a mark in a run that is over */
       ctxSlot = 0; /* the new run may not have the old slot */
       renderAll();
     },

@@ -509,6 +509,66 @@ class InitialTopologyTest(unittest.TestCase):
         self.assertIn("badges", topology["taxonomy"])
 
 
+class GuestTableTest(unittest.TestCase):
+    """The manifest asks and the machine answers; the answer wins.
+
+    A guest drawn at the address a configuration named, when the
+    firmware put it somewhere else, is a picture of a machine that was
+    intended. Everything placed against that address afterwards — a
+    walk, a region, a fault — is placed against a fiction.
+    """
+
+    def session(self, guests):
+        made = Session(store())
+        made._store.set_topology({"demo": "x", "guests": guests})
+        return made
+
+    def frames(self, made):
+        return [frame for frame in made._store.drain()]
+
+    def test_the_placement_becomes_the_machines(self):
+        made = self.session([{"name": "one", "vcpus": 2, "pa": 1, "ipa": 2, "size": 3, "uart": "none"}])
+        made.adopt_guest_table(
+            [{"vm": 0, "vmid": 1, "ipa": 0x4000, "pa": 0x8000, "size": 0x1000, "vcpus": 1, "uart": "kVuart"}]
+        )
+        (guest,) = made._store.topology["guests"]
+        # The name is the request's; everything that places it is the
+        # machine's, in the spelling the wire has always used.
+        self.assertEqual(guest["name"], "one")
+        self.assertEqual((guest["pa"], guest["ipa"], guest["size"]), (0x8000, 0x4000, 0x1000))
+        self.assertEqual((guest["vcpus"], guest["uart"]), (1, "vuart"))
+
+    def test_a_difference_is_said_as_well_as_drawn(self):
+        made = self.session([{"name": "one", "vcpus": 1, "pa": 1, "ipa": 2, "size": 3, "uart": "none"}])
+        made.adopt_guest_table(
+            [{"vm": 0, "vmid": 1, "ipa": 2, "pa": 0x8000, "size": 3, "uart": "kNone", "vcpus": 1}]
+        )
+        said = [
+            frame["data"]
+            for frame in self.frames(made)
+            if frame["data"].get("phase") == "guests-differ"
+        ]
+        self.assertEqual(said, [{"phase": "guests-differ", "guests": ["one"]}])
+
+    def test_agreement_publishes_nothing(self):
+        asked = {"name": "one", "vcpus": 1, "pa": 0x8000, "ipa": 0x4000, "size": 0x1000, "uart": "none"}
+        made = self.session([asked])
+        self.frames(made)  # the topology set above
+        made.adopt_guest_table(
+            [{"vm": 0, "vmid": 1, "ipa": 0x4000, "pa": 0x8000, "size": 0x1000, "vcpus": 1, "uart": "kNone"}]
+        )
+        self.assertEqual(self.frames(made), [])
+        self.assertEqual(made._store.topology["guests"], [asked])
+
+    def test_an_entry_the_machine_never_built_is_left_alone(self):
+        """A VM that has not started yet has no table entry, and drawing
+        it as absent would be a machine that lost a guest."""
+        asked = {"name": "two", "vcpus": 1, "pa": 1, "ipa": 2, "size": 3, "uart": "none"}
+        made = self.session([asked])
+        made.adopt_guest_table([{"vm": 1, "vmid": 2, "ipa": 9, "pa": 9, "size": 9, "vcpus": 1, "uart": "kNone"}])
+        self.assertEqual(made._store.topology["guests"], [asked])
+
+
 class PollLoopTest(Draining):
     """The S-layer loop against scripted providers: faults and restarts
     must end one run's polling, never the loop."""

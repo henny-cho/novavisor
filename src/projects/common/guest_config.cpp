@@ -123,6 +123,10 @@ auto guest_table() noexcept -> std::span<const GuestDescriptor> {
   return {g_table.data(), g_count};
 }
 
+auto guest_table_storage() noexcept -> std::span<const GuestDescriptor> {
+  return g_table;
+}
+
 auto dma::assignment_table() noexcept -> std::span<const dma::Assignment> {
   return generated::kDmaAssignments;
 }

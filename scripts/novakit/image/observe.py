@@ -64,6 +64,10 @@ OBSERVED: tuple[Want, ...] = (
     Want("ctx.trap", "nova::vcpu::g_vcpus", ("ctx",)),
     Want("ctx.syndrome", "nova::vcpu::g_vcpus", ("ctx",)),
     Want("ctx.el1", "nova::vcpu::g_vcpus", ("el1",)),
+    # What the machine was built to run, as the machine built it. The
+    # whole array: the entries in use are told from the rest by a vmid,
+    # which is reserved at zero.
+    Want("vm.table", "nova::(anonymous)::g_table"),
     Want("smp.lifecycle", "nova::smp::g_lifecycle"),
     Want("smp.mode", "nova::smp::g_lifecycle_mode"),
     Want("smp.online", "nova::smp::g_online"),
@@ -158,6 +162,8 @@ def resolve(elf: Path) -> View:
     index = elfsym.ElfIndex(elf)
     try:
         resolved = {want.topic: index.resolve(want.symbol) for want in OBSERVED}
+        for want in OBSERVED:
+            _prove(want, resolved[want.topic])
         return View(
             resolved,
             index.symbols,
@@ -167,6 +173,26 @@ def resolve(elf: Path) -> View:
         )
     finally:
         index.close()
+
+
+def _prove(want: Want, entry: elfsym.ResolvedSymbol) -> None:
+    """Hold one answer to the question that asked for it.
+
+    Resolving proves the name; these two prove the rest of the request.
+    A member that was renamed still resolves — the global is there — and
+    would reach the bridge as a selector that matches nothing, which is
+    a blank panel and no error. Decoding a zero-filled extent is the
+    same question asked of the decoder: a layout it cannot walk is one
+    the bridge would fail on, per reading, at run time.
+    """
+    members = entry.type
+    while members.kind == "array":
+        members = members.element
+    have = {field.name for field in members.fields} if members.kind == "struct" else set()
+    missing = sorted(set(want.fields) - have)
+    if missing:
+        raise KeyError(f"{want.symbol}: no member named {missing}")
+    elfsym.decode(entry.type, bytes(entry.size), fields=want.fields)
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         view = resolve(args.elf)
-    except KeyError as error:
+    except (KeyError, ValueError) as error:
         # KeyError renders its argument as a repr, and the argument here
         # is already a sentence.
         print(

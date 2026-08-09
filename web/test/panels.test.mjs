@@ -200,3 +200,59 @@ describe("panel faults", () => {
     assert.match(host.textContent, /표시할 수 없는 값/);
   });
 });
+
+/* Where a reading sits on the firmware's own clock.
+
+   The publisher stamps every slot with the counter the trace records
+   carry, precisely so a reading can be placed against the events around
+   it. The arrival time answers a different question — when this process
+   got to it — and a drawer that shows only that leaves the reader
+   comparing two different quantities. */
+describe("readings on the machine's clock", () => {
+  const stamped = (topic, at) => ({
+    kind: "snapshot",
+    topic,
+    ts: 1e9,
+    src: "S",
+    data: { values: [{ current: 1, fp: false, fp_trap: false, idling: false }], ts: at },
+  });
+
+  const header = (host) => find(host, "pfresh").textContent;
+
+  it("places a reading against the newest one held", () => {
+    const { panels, host } = harness();
+    panels.setClock(1e6); // a microsecond a tick, so the arithmetic is readable
+    panels.apply(stamped("sched.cpu", 5_000_000));
+    panels.settle();
+    // The only reading held is the newest, so it sits on the reference.
+    assert.match(header(host), /최신 \+0us/);
+  });
+
+  it("places it against the mark a reader selected", () => {
+    const { panels, host } = harness();
+    panels.setClock(1e6);
+    panels.apply(stamped("sched.cpu", 5_000_000));
+    panels.settle();
+    panels.setReference(4_998_000); // the mark is 2ms earlier
+    assert.match(header(host), /선택 \+2\.0ms/);
+    panels.setReference(5_003_500); // and now 3.5ms later
+    assert.match(header(host), /선택 -3\.5ms/);
+  });
+
+  it("falls back to arrival where nothing stamped the reading", () => {
+    const { panels, host } = harness();
+    panels.setClock(1e6);
+    panels.apply(SCHED); // a provider with no publisher behind it
+    panels.settle();
+    assert.doesNotMatch(header(host), /최신|선택/);
+  });
+
+  it("says nothing about a clock it has not been told", () => {
+    const { panels, host } = harness();
+    panels.apply(stamped("sched.cpu", 5_000_000));
+    panels.settle();
+    // A difference between two counter values is not a duration until
+    // the rate arrives with the trace summary.
+    assert.doesNotMatch(header(host), /최신|선택/);
+  });
+})

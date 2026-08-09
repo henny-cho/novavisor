@@ -236,43 +236,30 @@ class ElfIndex:
     # ---------------- DWARF walking ----------------
 
     def _enums(self) -> dict[str, tuple[tuple[int, str], ...]]:
-        if self._enum_dies is not None:
-            return self._enum_dies
-        table: dict[str, tuple[tuple[int, str], ...]] = {}
-
-        def walk(die, scope: str) -> None:
-            for child in die.iter_children():
-                name = _name_of(child)
-                if child.tag == "DW_TAG_enumeration_type":
-                    if not name:
-                        continue  # an unnamed enum has no name to ask for
-                    table.setdefault(
-                        f"{scope}{name}",
-                        tuple(
-                            (member.attributes["DW_AT_const_value"].value, _name_of(member))
-                            for member in child.iter_children()
-                            if member.tag == "DW_TAG_enumerator"
-                        ),
-                    )
-                elif child.tag in ("DW_TAG_namespace", "DW_TAG_structure_type", "DW_TAG_class_type"):
-                    walk(child, f"{scope}{name}::" if name else scope)
-
-        for cu in self._elf.get_dwarf_info().iter_CUs():
-            walk(cu.get_top_DIE(), "")
-        self._enum_dies = table
-        return table
+        if self._enum_dies is None:
+            self._walk()
+        return self._enum_dies
 
     def _variables(self) -> dict[int, object]:
-        """Address -> variable DIE for every namespace-level definition.
+        """Address -> variable DIE for every namespace-level definition."""
+        if self._variable_dies is None:
+            self._walk()
+        return self._variable_dies
 
-        Subprogram bodies are skipped: locals have no fixed address and
-        make up most of the tree.
+    def _walk(self) -> None:
+        """One pass over the tree for both tables it holds.
+
+        Both questions have the same shape — descend namespaces and class
+        scopes, take what is at each level — and the descent is what
+        costs: the whole debug section, twice over, to answer two
+        questions about the same nodes. Subprogram bodies are skipped for
+        both, since a local has no fixed address and no scope a caller
+        can name, and they are most of the tree.
         """
-        if self._variable_dies is not None:
-            return self._variable_dies
-        table: dict[int, object] = {}
+        variables: dict[int, object] = {}
+        enums: dict[str, tuple[tuple[int, str], ...]] = {}
 
-        def walk(die) -> None:
+        def walk(die, scope: str) -> None:
             for child in die.iter_children():
                 tag = child.tag
                 if tag == "DW_TAG_variable":
@@ -282,14 +269,27 @@ class ElfIndex:
                     expression = location.value
                     if expression[0] != _DW_OP_ADDR or len(expression) < 9:
                         continue
-                    table[int.from_bytes(bytes(expression[1:9]), "little")] = child
+                    variables[int.from_bytes(bytes(expression[1:9]), "little")] = child
+                elif tag == "DW_TAG_enumeration_type":
+                    name = _name_of(child)
+                    if not name:
+                        continue  # an unnamed enum has no name to ask for
+                    enums.setdefault(
+                        f"{scope}{name}",
+                        tuple(
+                            (member.attributes["DW_AT_const_value"].value, _name_of(member))
+                            for member in child.iter_children()
+                            if member.tag == "DW_TAG_enumerator"
+                        ),
+                    )
                 elif tag in ("DW_TAG_namespace", "DW_TAG_structure_type", "DW_TAG_class_type"):
-                    walk(child)
+                    name = _name_of(child)
+                    walk(child, f"{scope}{name}::" if name else scope)
 
         for cu in self._elf.get_dwarf_info().iter_CUs():
-            walk(cu.get_top_DIE())
-        self._variable_dies = table
-        return table
+            walk(cu.get_top_DIE(), "")
+        self._variable_dies = variables
+        self._enum_dies = enums
 
     def _type_of(self, die) -> TypeInfo:
         # The two-DIE pattern: the defining DIE holds the location, the

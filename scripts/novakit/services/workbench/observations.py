@@ -89,6 +89,9 @@ POLICY: dict[str, Policy] = {
     # instead of forty.
     "ctx.syndrome": Policy(rate_hz=10, shape=derive.trap_syndrome),
     "ctx.el1": Policy(rate_hz=2, hex=True),
+    # Built once during EL2 init and never again, so the change gate
+    # emits it a single time and the rate only decides how soon.
+    "vm.table": Policy(rate_hz=2, shape=derive.guest_table),
     # PSCI / SMP panel
     "smp.lifecycle": Policy(rate_hz=5),
     "smp.mode": Policy(rate_hz=5),
@@ -169,6 +172,11 @@ def _check_rates() -> None:
 
 _check_rates()
 
+
+# The reading that says what the machine actually built, as against
+# what it was asked to build. Named here because the manifest is where
+# a topic's identity lives; the session is what does something with it.
+GUEST_TABLE = "vm.table"
 
 # The page the host writes commands into. Named here rather than beside
 # the writer that opens it: a renamed global should fail the manifest

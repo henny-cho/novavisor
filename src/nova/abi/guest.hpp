@@ -158,4 +158,11 @@ static_assert(
 // until the guest brings them up through PSCI CPU_ON.
 auto guest_table() noexcept -> std::span<const GuestDescriptor>;
 
+// The storage behind it, whole. guest_table() hands back the prefix in
+// use, and a copy of a prefix cannot say how long the prefix was — so a
+// reader that copies the table takes the array and tells the entries
+// apart by the vmid rule above: zero is reserved, so an entry carrying
+// one is an entry this machine built.
+auto guest_table_storage() noexcept -> std::span<const GuestDescriptor>;
+
 } // namespace nova

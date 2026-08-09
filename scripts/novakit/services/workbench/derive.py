@@ -202,6 +202,37 @@ def syndrome_vocabulary(view: observe.View | None) -> dict[str, dict[int, str]]:
     return {"esr_ec": view.enums[observe.EC_ENUM]}
 
 
+def guest_table(value: object, info: elfsym.TypeInfo) -> object:
+    """The guest table as the entries the machine actually built.
+
+    The array is sized for the configuration ceiling and the machine
+    fills a prefix of it, so most of what travels is zeros. A vmid of
+    zero is reserved — the firmware never issues one — which is what
+    tells a built entry from an unused slot without a second reading for
+    the count.
+
+    Only what places a guest travels. The rest of a descriptor (entry
+    point, stack, the DTB pointer) describes how it starts, not where it
+    is, and nothing on screen asks.
+    """
+    del info
+    return [
+        {
+            "vm": index,
+            "vmid": entry.get("vmid"),
+            "ipa": entry.get("ipa_base"),
+            "pa": entry.get("load_pa"),
+            "size": entry.get("ipa_size"),
+            "vcpus": entry.get("vcpus"),
+            "cpu": entry.get("cpu"),
+            "uart": entry.get("uart"),
+            "auto_start": entry.get("auto_start"),
+        }
+        for index, entry in enumerate(value if isinstance(value, list) else [])
+        if isinstance(entry, dict) and entry.get("vmid")
+    ]
+
+
 def timer_armed(value: object, info: elfsym.TypeInfo) -> object:
     """The soft-timer queue as the deadlines it is actually holding.
 

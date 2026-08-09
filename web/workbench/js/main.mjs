@@ -151,6 +151,15 @@ const timeline = createTimeline({
      board already knows how to focus, and pointing it at the edge the
      catalogue names keeps one focus vocabulary rather than two. */
   onSelect: (choice) => {
+    if (choice.kind === "none") {
+      /* Nothing is selected: the readings go back to being placed
+         against the newest of themselves. */
+      panels.setReference(null);
+      timelineSel.textContent = "";
+      stopHereButton.hidden = true;
+      markedEvent = null;
+      return;
+    }
     if (choice.kind === "delta") {
       const gap = choice.micros === null ? "—" : `${choice.micros}us`;
       timelineSel.textContent = `${choice.from.id} → ${choice.to.id} · Δt ${gap}`;
@@ -168,6 +177,11 @@ const timeline = createTimeline({
     timelineSel.textContent =
       `${record.id}${ahead} · cpu${record.cpu}${gap}${where} · ${traceFields(record)}`;
     if (record.edge) boardView.focusPath(record.edge);
+    /* The drawer's readings against the moment just picked. Both are
+       counter values on the firmware's clock, so the comparison is the
+       machine's own rather than this process's idea of when each
+       arrived. */
+    panels.setReference(record.ts);
     /* One catalogue, two consumers, and this is where that is repaid:
        the moment a reader picked out of the trace is already a stop
        point, so wanting to see the next one is a lookup and not a
@@ -717,6 +731,9 @@ function onFrame(frame) {
       }
       boardView.traced(frame.ts, data);
       timeline.note(data);
+      /* The rate those counter values are in, which the drawer needs
+         before a difference between two of them is a duration. */
+      if (data.span?.freq_hz) panels.setClock(data.span.freq_hz);
       /* The one record that answers rather than reports: it goes back
          to the control that asked for it. */
       drive.answered(data.command);
