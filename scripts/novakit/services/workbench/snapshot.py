@@ -17,7 +17,7 @@ from typing import Protocol
 
 from ...image import abi
 from . import elfsym
-from .observations import OBSERVATIONS, WALK_SYMBOLS, Obs
+from .observations import OBSERVATIONS, PUBLISH_HZ, WALK_SYMBOLS, Obs
 
 _U32 = elfsym.TypeInfo("uint", 4)
 _U64 = elfsym.TypeInfo("uint", 8)
@@ -51,6 +51,35 @@ _IVC_RING = elfsym.TypeInfo(
         elfsym.Field("slots", _IVC["NOVA_IVC_RING_SLOTS_OFF"], _SLOTS),
     ),
 )
+# The published region's geometry, from the header the publisher and
+# this reader share. Nothing here is spelled a second time.
+_TLM = abi.read_defines(
+    abi.TELEMETRY,
+    [
+        "NOVA_TLM_MAGIC",
+        "NOVA_TLM_VERSION",
+        "NOVA_TLM_MAGIC_OFF",
+        "NOVA_TLM_VERSION_OFF",
+        "NOVA_TLM_SLOTS_OFF",
+        "NOVA_TLM_DESCSIZE_OFF",
+        "NOVA_TLM_PERIOD_OFF",
+        "NOVA_TLM_BUDGET_OFF",
+        "NOVA_TLM_BYTES_OFF",
+        "NOVA_TLM_FREQ_OFF",
+        "NOVA_TLM_HEADER_SIZE",
+        "NOVA_TLM_DESC_SIZE",
+        "NOVA_TLM_DESC_SOURCE_OFF",
+        "NOVA_TLM_DESC_SEQ_OFF",
+        "NOVA_TLM_DESC_STAMP_OFF",
+        "NOVA_TLM_DESC_AT_OFF",
+        "NOVA_TLM_DESC_BYTES_OFF",
+    ],
+)
+# The publisher's own storage, named here with the observed globals: a
+# rename should fail the manifest check, not quietly leave the S layer
+# without a region to read.
+TELEMETRY_REGION = "nova::telemetry::g_region"
+
 PAGE_LAYOUTS: dict[str, elfsym.TypeInfo] = {
     "ivc_ring_page": elfsym.TypeInfo(
         "struct",
@@ -64,6 +93,14 @@ PAGE_LAYOUTS: dict[str, elfsym.TypeInfo] = {
 }
 
 
+def _u32(buffer: bytes, offset: int) -> int:
+    return int.from_bytes(buffer[offset : offset + 4], "little")
+
+
+def _u64(buffer: bytes, offset: int) -> int:
+    return int.from_bytes(buffer[offset : offset + 8], "little")
+
+
 def _hexify(value):
     if isinstance(value, int) and not isinstance(value, bool):
         return f"{value:#x}"
@@ -75,7 +112,13 @@ def _hexify(value):
 
 
 class SnapshotProvider(Protocol):
-    def read(self, obs: Obs) -> object: ...
+    # When the firmware says each topic last moved, on its own clock.
+    # Empty for a provider with no publisher to ask — a script, a
+    # replay, a reader of raw addresses — which is a different thing
+    # from a topic that has not moved yet, and reads as one.
+    stamps: dict[str, int]
+
+    def read(self, obs: Obs, *, live: bool = True) -> object: ...
 
     def close(self) -> None: ...
 
@@ -112,6 +155,10 @@ class ImageView:
     resolved: dict[str, elfsym.ResolvedSymbol]
     symbols: elfsym.SymbolTable
     regimes: dict[str, elfsym.ResolvedSymbol] = field(default_factory=dict)
+    # Where each observed global lives, for matching against what the
+    # firmware says it publishes. Keyed by symbol because that is what a
+    # slot names; `resolved` is keyed by topic and four topics share one.
+    addresses: dict[str, int] = field(default_factory=dict)
 
 
 def resolve_image(elf_path: Path) -> ImageView:
@@ -123,10 +170,13 @@ def resolve_image(elf_path: Path) -> ImageView:
     """
     index = elfsym.ElfIndex(elf_path)
     try:
+        resolved = {obs.topic: index.resolve(obs.symbol) for obs in OBSERVATIONS if obs.pa is None}
         return ImageView(
-            {obs.topic: index.resolve(obs.symbol) for obs in OBSERVATIONS if obs.pa is None},
+            resolved,
             index.symbols,
             {symbol: index.resolve(symbol) for symbol in WALK_SYMBOLS},
+            {obs.symbol: resolved[obs.topic].address for obs in OBSERVATIONS if obs.pa is None}
+            | {TELEMETRY_REGION: index.resolve(TELEMETRY_REGION).address},
         )
     finally:
         index.close()
@@ -144,6 +194,8 @@ class ElfRamProvider:
     """
 
     def __init__(self, elf_path: Path, ram_path: Path, ram_base: int, view: ImageView | None = None):
+        # No publisher behind these bytes, so no clock to quote for them.
+        self.stamps: dict[str, int] = {}
         self._base = ram_base
         image = resolve_image(elf_path) if view is None else view
         self._resolved = image.resolved
@@ -164,7 +216,11 @@ class ElfRamProvider:
             self.close()
             raise ValueError("RAM backend is smaller than the observed image")
 
-    def read(self, obs: Obs) -> object:
+    def read(self, obs: Obs, *, live: bool = True) -> object:
+        # This provider reads the address either way: there is no
+        # publisher to ask whether the value moved, and a stopped
+        # machine is what it always assumes it is reading.
+        del live
         if obs.pa is not None:
             info = PAGE_LAYOUTS[obs.layout]
             offset = obs.pa - self._base
@@ -279,6 +335,173 @@ def image_symbols(provider) -> elfsym.SymbolTable | None:
     return getattr(provider, "symbols", None)
 
 
+class TelemetryProvider:
+    """Decode firmware globals out of the region the firmware publishes.
+
+    The same DWARF decode as `ElfRamProvider` over different bytes. What
+    changes is not the layout — the compiler is still the only source of
+    that — but where the bytes come from and what is known about them.
+    They are a copy a core took at one instant, under a sequence that
+    says the copy was whole, stamped with the clock the trace ring uses.
+
+    Everything that is not a published global still goes to the reader
+    underneath: the page-table walk learns its addresses as it reads, and
+    the IVC page is guest memory the firmware does not publish.
+
+    Composed over a `MemoryReader` rather than replacing it, so the day
+    the bytes stop arriving by memory map, only what is underneath
+    changes.
+    """
+
+    def __init__(self, inner, view: ImageView):
+        self._inner = inner
+        self._resolved = view.resolved
+        self._symbols = view.symbols
+        self.regimes = view.regimes
+        self._seen: dict[str, int] = {}
+        # What the firmware last said about each topic, for a caller
+        # placing a reading on the trace timeline.
+        self.stamps: dict[str, int] = {}
+
+        base = view.addresses[TELEMETRY_REGION]
+        header = inner.read_bytes(base, _TLM["NOVA_TLM_HEADER_SIZE"])
+        if _u64(header, _TLM["NOVA_TLM_MAGIC_OFF"]) != _TLM["NOVA_TLM_MAGIC"]:
+            raise NotPublishedYet("the firmware has not opened its region yet")
+        version = _u32(header, _TLM["NOVA_TLM_VERSION_OFF"])
+        if version != _TLM["NOVA_TLM_VERSION"]:
+            raise ValueError(f"telemetry region version {version}, this reader speaks {_TLM['NOVA_TLM_VERSION']}")
+        stride = _u32(header, _TLM["NOVA_TLM_DESCSIZE_OFF"])
+        if stride != _TLM["NOVA_TLM_DESC_SIZE"]:
+            raise ValueError(f"telemetry descriptor stride {stride}, this reader expects {_TLM['NOVA_TLM_DESC_SIZE']}")
+        self.period_us = _u32(header, _TLM["NOVA_TLM_PERIOD_OFF"])
+        # The manifest's rates were checked against the period read from
+        # the source; this is the period the machine actually runs. An
+        # image built before that constant changed would otherwise be
+        # sampled by a manifest describing a different machine.
+        declared = round(1_000_000 / PUBLISH_HZ)
+        if self.period_us != declared:
+            raise ValueError(
+                f"telemetry period {self.period_us} us, the manifest was checked against {declared} us"
+            )
+        self.budget = _u32(header, _TLM["NOVA_TLM_BUDGET_OFF"])
+        self.bytes_published = _u32(header, _TLM["NOVA_TLM_BYTES_OFF"])
+        self.freq = _u32(header, _TLM["NOVA_TLM_FREQ_OFF"])
+
+        slots = _u32(header, _TLM["NOVA_TLM_SLOTS_OFF"])
+        table = inner.read_bytes(base + _TLM["NOVA_TLM_HEADER_SIZE"], slots * stride)
+        by_source: dict[int, int] = {}
+        for index in range(slots):
+            entry = table[index * stride : (index + 1) * stride]
+            by_source[_u64(entry, _TLM["NOVA_TLM_DESC_SOURCE_OFF"])] = index
+        self._descriptor = [base + _TLM["NOVA_TLM_HEADER_SIZE"] + index * stride for index in range(slots)]
+        self._base = base
+
+        # Want must be a subset of publish, checked here rather than
+        # kept in agreement by hand. A symbol the firmware stopped
+        # offering fails at attach, where it names itself, instead of
+        # leaving one panel blank for a reason nothing states.
+        self._slot: dict[str, int] = {}
+        missing = []
+        for obs in OBSERVATIONS:
+            if obs.pa is not None:
+                continue
+            index = by_source.get(view.addresses[obs.symbol])
+            if index is None:
+                missing.append(obs.symbol)
+            else:
+                self._slot[obs.topic] = index
+        if missing:
+            raise ValueError("the firmware publishes no slot for: " + ", ".join(sorted(set(missing))))
+
+    def read(self, obs: Obs, *, live: bool = True) -> object:
+        # Guest memory, which the firmware does not publish and could
+        # not vouch for if it did.
+        if obs.pa is not None:
+            return self._inner.read(obs)
+
+        # A stopped machine is read directly, and that is not a fallback
+        # — it is the exact answer. Publication exists because a running
+        # machine cannot be asked to hold still; a stopped one has no
+        # writer to race, so the address holds the truth and the last
+        # published copy is merely the truth as of the last turn. The
+        # stop path is the one place the S layer is exact, and it stays
+        # that way.
+        if not live:
+            return self._inner.read(obs)
+
+        index = self._slot[obs.topic]
+        at = self._descriptor[index]
+        descriptor = self._inner.read_bytes(at, _TLM["NOVA_TLM_DESC_SIZE"])
+        before = _u64(descriptor, _TLM["NOVA_TLM_DESC_SEQ_OFF"])
+        if before % 2:
+            raise elfsym.TornRead(f"{obs.topic}: the publisher is inside the window")
+        if self._seen.get(obs.topic) == before:
+            raise Unchanged(obs.topic)
+
+        offset = _u32(descriptor, _TLM["NOVA_TLM_DESC_AT_OFF"])
+        size = _u32(descriptor, _TLM["NOVA_TLM_DESC_BYTES_OFF"])
+        payload = self._inner.read_bytes(self._base + offset, size)
+        # Re-read the sequence: a writer that crossed the copy leaves
+        # bytes from two readings, which decode into a value the machine
+        # never held.
+        after = _u64(self._inner.read_bytes(at, _TLM["NOVA_TLM_DESC_SIZE"]), _TLM["NOVA_TLM_DESC_SEQ_OFF"])
+        if after != before:
+            raise elfsym.TornRead(f"{obs.topic}: the publisher crossed the read")
+
+        self._seen[obs.topic] = before
+        self.stamps[obs.topic] = _u64(descriptor, _TLM["NOVA_TLM_DESC_STAMP_OFF"])
+
+        resolved = self._resolved[obs.topic]
+        value = elfsym.decode(resolved.type, payload, fields=obs.fields)
+        if obs.shape is not None:
+            value = obs.shape(value, resolved.type)
+        return _hexify(value) if obs.hex else value
+
+    def read_bytes(self, pa: int, size: int) -> bytes:
+        return self._inner.read_bytes(pa, size)
+
+    @property
+    def symbols(self) -> elfsym.SymbolTable:
+        return self._symbols
+
+    def close(self) -> None:
+        self._inner.close()
+
+
+class NotPublishedYet(Exception):
+    """The firmware has not opened its region yet.
+
+    Not a fault. EL2 opens the region during init, and the bridge starts
+    polling as soon as the RAM backend exists, so on a slow enough host
+    the first attempt lands ahead of it. Told apart from a real fault
+    because the two want opposite things: this one waits, and a fault
+    ends the run's S layer and says so.
+    """
+
+
+def open_provider(elf_path: Path, ram_path: Path, ram_base: int, view: ImageView) -> SnapshotProvider:
+    """The S reader for a live run.
+
+    Published state where the firmware publishes it, raw memory
+    underneath for what it does not: the page-table walk, which learns
+    its addresses as it reads, and the guest's own pages. One name for
+    the pair so callers compose nothing and the layering can change
+    without them.
+    """
+    return TelemetryProvider(ElfRamProvider(elf_path, ram_path, ram_base, view), view)
+
+
+class Unchanged(Exception):
+    """The publisher says this value has not moved since it was last read.
+
+    Distinct from reading it and finding it equal: nothing was decoded,
+    because the firmware answered the question with one word. That is
+    the whole point of the sequence — on a memory map it saves the
+    decode, and on a link narrower than a memory map it is the
+    difference between sending a value and not.
+    """
+
+
 class SnapshotPoller:
     """Rate-limit each observation and report only changed values.
 
@@ -307,12 +530,23 @@ class SnapshotPoller:
             self._due[obs.topic] = now + 1.0 / obs.rate_hz
             try:
                 value = self._provider.read(obs)
-            except elfsym.TornRead:
+            except (elfsym.TornRead, Unchanged):
                 continue
             if self._last.get(obs.topic) != value:
                 self._last[obs.topic] = value
                 changes.append((obs, value))
         return changes
+
+    def stamp(self, topic: str) -> int | None:
+        """When the firmware says this topic last moved, on its own clock.
+
+        None when the provider cannot say — a scripted or replayed one,
+        or a reader of raw addresses, neither of which has a publisher
+        to ask. A caller that cannot get a firmware clock falls back to
+        the envelope's arrival time, which is what it had before.
+        """
+
+        return self._provider.stamps.get(topic)
 
     def sweep(self) -> list[tuple[Obs, object]]:
         """Every observation at once, rate and change gate ignored.
@@ -324,13 +558,18 @@ class SnapshotPoller:
         just arrived at an event wants the whole machine, including every
         field that happens not to have changed since the last poll.
 
+        `live=False` says that, and it is what keeps this exact: a
+        stopped machine publishes nothing more, so the published copy
+        would be as old as the last turn, where the address itself is
+        the instant the machine stopped at.
+
         The cache is updated, so resuming does not replay as changes the
         values this already sent.
         """
         values = []
         for obs in self._observations:
             try:
-                value = self._provider.read(obs)
+                value = self._provider.read(obs, live=False)
             except elfsym.TornRead:
                 continue
             self._last[obs.topic] = value

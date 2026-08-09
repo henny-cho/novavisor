@@ -541,10 +541,13 @@ class PollLoopTest(Draining):
         class GoodProvider:
             def __init__(self):
                 self.closed = False
-                # No image behind it, so no page tables to publish.
+                # No image behind it, so no page tables to publish, and
+                # no publisher behind it, so no firmware clock to quote.
                 self.regimes: dict = {}
+                self.stamps: dict = {}
 
-            def read(self, _obs):
+            def read(self, _obs, *, live=True):
+                del live
                 return {"n": 1}
 
             def close(self):
@@ -564,7 +567,7 @@ class PollLoopTest(Draining):
             # the resolving happens.
             with (
                 mock.patch.object(server_module.snapshot, "resolve_image", _no_image),
-                mock.patch.object(server_module.snapshot, "ElfRamProvider", factory),
+                mock.patch.object(server_module.snapshot, "open_provider", factory),
             ):
                 poll = asyncio.create_task(bridge._poll_loop())
                 try:
@@ -593,10 +596,13 @@ class PollLoopTest(Draining):
         class Provider:
             def __init__(self):
                 self.closed = False
-                # No image behind it, so no page tables to publish.
+                # No image behind it, so no page tables to publish, and
+                # no publisher behind it, so no firmware clock to quote.
                 self.regimes: dict = {}
+                self.stamps: dict = {}
 
-            def read(self, _obs):
+            def read(self, _obs, *, live=True):
+                del live
                 return {"n": 1}
 
             def close(self):
@@ -620,7 +626,7 @@ class PollLoopTest(Draining):
             # the resolving happens.
             with (
                 mock.patch.object(server_module.snapshot, "resolve_image", _no_image),
-                mock.patch.object(server_module.snapshot, "ElfRamProvider", factory),
+                mock.patch.object(server_module.snapshot, "open_provider", factory),
             ):
                 poll = asyncio.create_task(bridge._poll_loop())
                 try:

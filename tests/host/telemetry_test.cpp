@@ -51,14 +51,16 @@ struct Source {
 // publisher.
 struct Fixture {
   Region    region{};
-  Publisher publisher{region.byte.data(), kPeriodUs, kBudget, kFreq};
+  Publisher publisher{};
+
+  Fixture() { publisher.bind(region.byte.data(), kPeriodUs, kBudget, kFreq); }
 
   auto base() noexcept -> void* { return region.byte.data(); }
 
   auto header() noexcept -> Header& { return *reinterpret_cast<Header*>(region.byte.data()); }
 
   auto descriptor(std::size_t index) noexcept -> Descriptor& {
-    return reinterpret_cast<Descriptor*>(region.byte.data() + NOVA_TLM_DESCS_OFF)[index];
+    return reinterpret_cast<Descriptor*>(region.byte.data() + NOVA_TLM_HEADER_SIZE)[index];
   }
 };
 
@@ -195,7 +197,8 @@ TEST(TelemetryRegion, ABudgetSpreadsOneSweepOverSeveralTurns) {
   Region    region{};
   Source    first{};
   Source    second{};
-  Publisher publisher{region.byte.data(), kPeriodUs, sizeof(Source), kFreq};
+  Publisher publisher{};
+  publisher.bind(region.byte.data(), kPeriodUs, sizeof(Source), kFreq);
 
   ASSERT_TRUE(publisher.declare(&first, sizeof first));
   ASSERT_TRUE(publisher.declare(&second, sizeof second));
@@ -219,8 +222,9 @@ TEST(TelemetryRegion, ABudgetSpreadsOneSweepOverSeveralTurns) {
 
 TEST(TelemetryRegion, TheRegionRefusesWhatItCannotHold) {
   Region    region{};
-  Publisher publisher{region.byte.data(), kPeriodUs, kBudget, kFreq};
-  Source    source{};
+  Publisher publisher{};
+  publisher.bind(region.byte.data(), kPeriodUs, kBudget, kFreq);
+  Source source{};
 
   std::vector<Source> filler(NOVA_TLM_MAX_SLOTS);
   std::size_t         accepted = 0;
@@ -286,6 +290,46 @@ TEST(TelemetryRegion, NoAcceptedReadingIsEverAMixOfTwo) {
   // a seqlock that always says "retry" would pass the loop above.
   EXPECT_GT(accepted, 0U);
   EXPECT_EQ(accepted + retried, 200'000U);
+}
+
+// Two writers, which is what a halt makes: the periodic turn runs on
+// the primary and the final turn runs on whichever core found the
+// machine empty. Nothing orders those two, so the publisher has to.
+TEST(TelemetryRegion, TwoWritersDoNotInterleaveIntoOneReading) {
+  Fixture           fixture;
+  Source            source{};
+  std::atomic<bool> running{true};
+
+  ASSERT_TRUE(fixture.publisher.declare(&source, sizeof source));
+  fixture.publisher.open();
+
+  std::thread periodic([&] {
+    for (std::uint64_t generation = 1; running.load(std::memory_order_relaxed); ++generation) {
+      source.set(generation);
+      fixture.publisher.publish(generation);
+    }
+  });
+  std::thread final_turn([&] {
+    while (running.load(std::memory_order_relaxed)) {
+      fixture.publisher.publish_all(0);
+    }
+  });
+
+  std::size_t accepted = 0;
+  for (int attempt = 0; attempt < 100'000; ++attempt) {
+    std::array<std::uint64_t, kWords> out{};
+    if (!nova::telemetry::read_slot(fixture.base(), 0, out.data(), sizeof out).stable) {
+      continue;
+    }
+    ++accepted;
+    for (const auto value : out) {
+      ASSERT_EQ(value, out[0]) << "attempt " << attempt << " read two writers at once";
+    }
+  }
+  running.store(false, std::memory_order_relaxed);
+  periodic.join();
+  final_turn.join();
+  EXPECT_GT(accepted, 0U);
 }
 
 } // namespace

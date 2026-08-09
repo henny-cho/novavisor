@@ -94,12 +94,11 @@
 #define NOVA_TLM_DESC_AT_OFF     0x18 /* u32 payload offset from region base */
 #define NOVA_TLM_DESC_BYTES_OFF  0x1C /* u32 payload bytes */
 
-/* The descriptor table shares the first page with the header; payloads
- * start on the next one. A reader maps the region read-only and a
- * publisher writes nothing outside it, so the boundary is the size
- * rather than a promise. */
+/* The descriptor table starts where the header ends and shares the
+ * first page with it; payloads start on the next one. A reader maps the
+ * region read-only and a publisher writes nothing outside it, so the
+ * boundary is the size rather than a promise. */
 #define NOVA_TLM_MAX_SLOTS   64
-#define NOVA_TLM_DESCS_OFF   NOVA_TLM_HEADER_SIZE
 #define NOVA_TLM_PAYLOAD_OFF 0x1000
 
 /* Room for what is declared today with the same margin the trace region

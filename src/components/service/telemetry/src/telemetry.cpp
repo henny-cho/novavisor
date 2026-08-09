@@ -44,7 +44,7 @@ void start() noexcept {
     return;
   }
   g_period_ticks = plan.ticks;
-  g_publisher = Publisher{g_region.byte.data(), kPeriodUs, kBudgetBytes, static_cast<std::uint32_t>(hyp_timer::freq())};
+  g_publisher.bind(g_region.byte.data(), kPeriodUs, kBudgetBytes, static_cast<std::uint32_t>(hyp_timer::freq()));
 
   TelemetryCall call{.publisher = &g_publisher};
   // soft_timer first and by hand — see the header for why it cannot

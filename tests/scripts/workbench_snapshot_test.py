@@ -34,12 +34,18 @@ class FakeProvider:
     def __init__(self):
         self.values: dict[str, object] = {}
         self.torn: set[str] = set()
+        self.unmoved: set[str] = set()
         self.reads: list[str] = []
 
-    def read(self, obs: Obs) -> object:
+    def read(self, obs: Obs, *, live: bool = True) -> object:
+        # A fake has no publisher to ask whether a value moved, so it
+        # reads every time — like the provider that reads an address.
+        del live
         self.reads.append(obs.topic)
         if obs.topic in self.torn:
             raise elfsym.TornRead(obs.topic)
+        if obs.topic in self.unmoved:
+            raise snapshot.Unchanged(obs.topic)
         return self.values[obs.topic]
 
     def close(self) -> None:
@@ -71,6 +77,29 @@ class PollerTest(unittest.TestCase):
         self.now += 0.05
         changed = self.poller.tick()
         self.assertEqual([(obs.topic, value) for obs, value in changed], [("fast", 2)])
+
+    def test_an_unmoved_value_costs_a_publish_and_nothing_else(self):
+        # The publisher answering "it has not moved" is not the same as
+        # reading it and finding it equal: nothing was decoded. What the
+        # poller must not do is treat the silence as a value -- the
+        # cached reading has to survive it, so the next real change is
+        # still measured against what the UI is showing.
+        first = self.poller.tick()
+        self.assertEqual([obs.topic for obs, _ in first], ["fast", "slow"])
+
+        self.provider.unmoved.add("fast")
+        self.now += 0.05
+        self.assertEqual(self.poller.tick(), [])
+
+        # Still gated, and the cache was not clobbered: re-reading the
+        # value it already published is not a change.
+        self.provider.unmoved.clear()
+        self.now += 0.05
+        self.assertEqual(self.poller.tick(), [])
+
+        self.provider.values["fast"] = 2
+        self.now += 0.05
+        self.assertEqual([(obs.topic, value) for obs, value in self.poller.tick()], [("fast", 2)])
 
     def test_torn_reads_are_retried_not_published(self):
         self.provider.torn.add("fast")

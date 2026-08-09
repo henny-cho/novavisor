@@ -1179,7 +1179,7 @@ class Bridge:
         view = await asyncio.get_running_loop().run_in_executor(
             self._image_pool(), snapshot.resolve_image, elf_path
         )
-        return snapshot.ElfRamProvider(
+        return snapshot.open_provider(
             elf_path, shm_path, self._board_numbers()["NOVA_BOARD_PHYS_RAM_BASE"], view
         )
 
@@ -1206,14 +1206,22 @@ class Bridge:
                         # reads to confirm it.
                         continue
                     for obs, value in poller.tick():
-                        self.store.publish(
-                            obs.topic,
-                            Kind.SNAPSHOT,
-                            {"values": value},
-                            src=Src.SNAP,
-                        )
-                except FileNotFoundError:
-                    continue  # the backend vanished mid-step; retry next tick
+                        # `ts` is the publisher's CNTPCT for this slot,
+                        # on the same clock and in the same units the
+                        # trace records carry. A reading can therefore
+                        # be placed against the events around it instead
+                        # of against the moment this loop got to it,
+                        # which is a different quantity by however long
+                        # the poll interval and the decode took.
+                        payload = {"values": value}
+                        stamp = poller.stamp(obs.topic)
+                        if stamp is not None:
+                            payload["ts"] = stamp
+                        self.store.publish(obs.topic, Kind.SNAPSHOT, payload, src=Src.SNAP)
+                except (FileNotFoundError, snapshot.NotPublishedYet):
+                    # The backend vanished mid-step, or EL2 has not
+                    # opened its region yet. Both are "not now"; retry.
+                    continue
                 except Exception as error:
                     self.store.publish(
                         Topic.LIFE,

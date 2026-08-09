@@ -15,6 +15,7 @@
 // routines reach for SIMD. The copy is written out.
 
 #include "nova/abi/telemetry.h"
+#include "nova/sync.hpp"
 
 #include <array>
 #include <atomic>
@@ -67,7 +68,7 @@ static_assert(sizeof(Header) <= NOVA_TLM_HEADER_SIZE);
 // The table cannot reach the payloads, and the payloads start where a
 // word copy can begin. Checked rather than asserted in prose, so the
 // constants carry their own justification.
-static_assert(NOVA_TLM_DESCS_OFF + (NOVA_TLM_MAX_SLOTS * NOVA_TLM_DESC_SIZE) <= NOVA_TLM_PAYLOAD_OFF,
+static_assert(NOVA_TLM_HEADER_SIZE + (NOVA_TLM_MAX_SLOTS * NOVA_TLM_DESC_SIZE) <= NOVA_TLM_PAYLOAD_OFF,
               "the descriptor table overruns the payload area");
 static_assert(NOVA_TLM_PAYLOAD_OFF % NOVA_TLM_ALIGN == 0);
 static_assert(NOVA_TLM_REGION_SIZE == NOVA_TLM_PAYLOAD_OFF + NOVA_TLM_PAYLOAD_BYTES);
@@ -129,8 +130,16 @@ public:
   // table, and nothing else. Deliberately not the magic — that flag
   // means "everything beside me is now true", and the slots are
   // declared after this.
-  Publisher(void* base, std::uint32_t period_us, std::uint32_t budget, std::uint32_t freq) noexcept
-      : base_(static_cast<unsigned char*>(base)) {
+  //
+  // A method rather than a constructor because this object holds a lock
+  // and so cannot be assigned; binding in place is what the one caller
+  // wanted anyway.
+  void bind(void* base, std::uint32_t period_us, std::uint32_t budget, std::uint32_t freq) noexcept {
+    base_ = static_cast<unsigned char*>(base);
+    // The region is laid out again, so what this object remembers about
+    // it goes too. Only one caller binds once today, and that is why
+    // this has to be here rather than because of it.
+    slots_ = used_ = copied_ = cursor_ = 0;
     // Header and table back to zero. The payloads are not cleared: a
     // slot's first turn writes it whole, and until then no descriptor
     // points at it.
@@ -201,6 +210,7 @@ public:
     if (!placed() || slots_ == 0) {
       return 0;
     }
+    const sync::Guard held{turn_};
     const std::size_t budget = reinterpret_cast<const Header*>(base_)->budget;
     std::size_t       spent  = 0;
     for (std::size_t visited = 0; visited < slots_ && spent < budget; ++visited) {
@@ -221,7 +231,8 @@ public:
     if (!placed()) {
       return 0;
     }
-    std::size_t spent = 0;
+    const sync::Guard held{turn_};
+    std::size_t       spent = 0;
     for (std::size_t index = 0; index < slots_; ++index) {
       spent += publish_slot(index, stamp);
     }
@@ -230,7 +241,7 @@ public:
 
 private:
   [[nodiscard]] auto table() noexcept -> Descriptor* {
-    return reinterpret_cast<Descriptor*>(base_ + NOVA_TLM_DESCS_OFF);
+    return reinterpret_cast<Descriptor*>(base_ + NOVA_TLM_HEADER_SIZE);
   }
 
   // One slot, under the sequence that guards it.
@@ -256,6 +267,15 @@ private:
     return descriptor.bytes;
   }
 
+  // A sequence is single-writer by construction, and there are two
+  // callers on different cores: the periodic turn on the primary, and
+  // the final turn on whichever core finds the machine empty. Two of
+  // them interleaved would leave a sequence even with bytes from both
+  // — the one thing this layer promises cannot happen. The wait is
+  // bounded because a turn calls nothing that can block and no core
+  // ever holds this while entering the scheduler.
+  sync::SpinLock turn_{};
+
   unsigned char* base_   = nullptr;
   std::size_t    slots_  = 0;
   std::size_t    used_   = 0; // payload watermark, padded
@@ -280,7 +300,7 @@ struct Reading {
     -> Reading {
   Reading     reading{};
   auto*       bytes      = static_cast<unsigned char*>(base);
-  Descriptor& descriptor = reinterpret_cast<Descriptor*>(bytes + NOVA_TLM_DESCS_OFF)[index];
+  Descriptor& descriptor = reinterpret_cast<Descriptor*>(bytes + NOVA_TLM_HEADER_SIZE)[index];
 
   const std::uint64_t before = std::atomic_ref{descriptor.seq}.load(std::memory_order_acquire);
   if ((before & 1U) != 0U || descriptor.bytes > capacity) {

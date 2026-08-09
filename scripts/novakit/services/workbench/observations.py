@@ -47,6 +47,13 @@ class Obs:
     shape: derive.Shape | None = None
 
 
+# How often the firmware takes a reading. Sampling faster asks the same
+# slot twice for one answer, so this is the ceiling every entry below is
+# checked against — read from the component that arms the turn rather
+# than restated here.
+PUBLISH_HZ = 1_000_000 / abi.read_constexprs(abi.TELEMETRY_COMPONENT, wanted={"kPeriodUs"})["kPeriodUs"]
+
+
 OBSERVATIONS: tuple[Obs, ...] = (
     # Scheduler panel
     Obs("sched.cpu", "nova::vcpu::g_sched", rate_hz=20, shape=derive.none_if_unset),
@@ -99,13 +106,33 @@ OBSERVATIONS: tuple[Obs, ...] = (
         shape=derive.none_if_unset),
     # What each device stream is allowed to do. Polled rather than read
     # once with the tables it points at: a fault quarantines a stream,
-    # and the entry that changes is this one.
-    Obs("smmu.stream", "nova::smmu::(anonymous)::g_stream_table", rate_hz=5,
+    # and the entry that changes is this one. At the firmware's own rate
+    # because a stream's transit through `translate` is short enough
+    # that 5 Hz never caught it, and an unmoving table now costs a word.
+    Obs("smmu.stream", "nova::smmu::(anonymous)::g_stream_table", rate_hz=PUBLISH_HZ,
         shape=derive.smmu_streams),
     Obs("dev.watchdog", "nova::(anonymous)::g_update_sequence", rate_hz=2),
     # IVC panel — the shared page is guest memory, not an EL2 global.
     Obs("ivc.page", "", pa=_BOARD["NOVA_BOARD_IVC_SHM_PA"], layout="ivc_ring_page", hex=True),
 )
+
+
+
+def _check_rates() -> None:
+    """No entry may be sampled faster than the firmware publishes.
+
+    Checked rather than clamped. A clamp would make a typo behave like a
+    considered number; this names the entry and the ceiling it passed,
+    which is the thing to look at.
+    """
+    too_fast = {obs.topic: obs.rate_hz for obs in OBSERVATIONS if obs.rate_hz > PUBLISH_HZ}
+    if too_fast:
+        raise SystemExit(
+            f"nova workbench: sampled faster than the firmware publishes ({PUBLISH_HZ:g} Hz): {too_fast}"
+        )
+
+
+_check_rates()
 
 
 # Page table storage. Extents come from the DWARF, so a resized pool is
