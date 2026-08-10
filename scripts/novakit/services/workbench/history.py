@@ -159,12 +159,37 @@ class History:
                 high = middle
         return low
 
+    def slice(self, first: int, last: int) -> bytes:
+        """The packed records of this window, copied out of the ring.
+
+        Copied rather than viewed, and in whole runs rather than record
+        by record: the drain writes into this buffer while it works, and
+        a reader unpacking straight from it would decode one record out
+        of two. The copy is two memcpys — the retained run is contiguous
+        unless it crosses the ring's seam, and then it is exactly two
+        pieces.
+
+        This half has to happen where the drain cannot interleave with
+        it. Turning the bytes into records is the other half, costs a
+        hundred times as much, and can happen anywhere.
+        """
+        start, stop = self._bisect(first), self._bisect(last + 1)
+        if start >= stop:
+            return b""
+        head, count = self._slot(start), stop - start
+        ahead = min(count, self.capacity - head)
+        # Through a memoryview so each run is copied once: slicing the
+        # bytearray itself would build a bytearray and then a bytes of it.
+        held = memoryview(self._bytes)
+        out = bytes(held[head * trace.REC_SIZE : (head + ahead) * trace.REC_SIZE])
+        if ahead < count:
+            out += bytes(held[: (count - ahead) * trace.REC_SIZE])
+        return out
+
     def window(self, first: int, last: int) -> list[trace.Record]:
         """Every retained record with `first` <= ts <= `last`.
 
         Both ends inclusive: a caller asking about the instant of a mark
         means to include it.
         """
-        start = self._bisect(first)
-        stop = self._bisect(last + 1)
-        return [self._record(index) for index in range(start, stop)]
+        return trace.unpack_all(self.slice(first, last))

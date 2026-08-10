@@ -284,6 +284,16 @@ class Bridge:
         self._tasks.add(task)
         task.add_done_callback(self._reap)
 
+    async def settled(self) -> None:
+        """Wait for the work this bridge has spawned.
+
+        An answer built on a worker is finished after the call that
+        asked for it returns, so whoever needs the answer itself waits
+        here rather than guessing at a sleep.
+        """
+        while self._tasks:
+            await asyncio.gather(*tuple(self._tasks), return_exceptions=True)
+
     def _reap(self, task: asyncio.Task) -> None:
         self._tasks.discard(task)
         if task.cancelled():
@@ -818,12 +828,39 @@ class Bridge:
         if not captured:
             self._reject("probe: this run has published no page tables")
             return
+        self.spawn(
+            self._answer_off_loop(
+                Topic.PROBE, Src.SNAP, regimes.answer, captured, data, self._provider
+            )
+        )
+
+    async def _answer_off_loop(self, topic: Topic, src: Src, build, *inputs) -> None:
+        """Build one answer on a worker and publish it if its run is still here.
+
+        The heavy answers a client asks for are tens of milliseconds at
+        best and over a second at worst, against a poll every fifty.
+        Built on this loop they delay the poll, the drain and every other
+        client, which is the same fault the drain's own budget exists to
+        prevent.
+
+        A restart while one is being built leaves it describing a machine
+        that no longer exists — a map of addresses nothing holds, or a
+        window of a run whose history has already been thrown away — so
+        the run is checked on the way back, as it is wherever else this
+        bridge builds something across an await.
+        """
+        run = self.session.run_id
+        loop = asyncio.get_running_loop()
         try:
-            answer = regimes.answer(captured, data, live=self._provider)
+            answer = await loop.run_in_executor(None, build, *inputs)
         except (KeyError, ValueError, elfsym.TornRead) as error:
-            self._reject(f"probe: {error}")
+            # A restart closes the mapping under the worker, and the tail
+            # end of that is not a refusal worth showing anyone.
+            if self.session.run_id == run:
+                self._reject(f"{topic.value}: {error}")
             return
-        self.store.publish(Topic.PROBE, Kind.SNAPSHOT, answer, src=Src.SNAP, replay=False)
+        if self.session.run_id == run:
+            self.store.publish(topic, Kind.SNAPSHOT, answer, src=src, replay=False)
 
     @staticmethod
     def _word(value) -> int:
@@ -982,29 +1019,23 @@ class Bridge:
             self._reject("trace: window ends before it starts")
             return
         wanted = {str(name) for name in data.get("events", [])}
-        found = self._history.window(first, last)
-        if wanted:
-            found = [record for record in found if record.event in wanted]
-        payload = {
-            "window": {
-                "from": first,
-                "to": last,
-                "n": len(found),
-                # From the history that holds the records, not the
-                # reader that filled it: a replay has no reader.
-                "freq_hz": self._history.freq_hz,
-            },
-            "span": span.as_dict(),
-        }
-        # The records, or the density standing in for them — never both.
-        # A density is what a window says when its records will not fit
-        # on screen; once they fit they are sent, and a histogram of them
-        # is a loop the client can already run over the data it has.
-        if len(found) <= buckets:
-            payload["cols"] = trace.columns(found, first)
-        else:
-            payload["hist"] = trace.histogram(found, first, last, buckets)
-        self.store.publish(Topic.TRACE, Kind.SNAPSHOT, payload, src=Src.TRACE, replay=False)
+        # Copied here and decoded elsewhere. The copy has to happen where
+        # the drain cannot interleave with it; the decode is a hundred
+        # times the cost and is the part that would hold the loop.
+        self.spawn(
+            self._answer_off_loop(
+                Topic.TRACE,
+                Src.TRACE,
+                _window_payload,
+                self._history.slice(first, last),
+                span.as_dict(),
+                self._history.freq_hz,
+                first,
+                last,
+                buckets,
+                wanted,
+            )
+        )
 
     def _pump_trace(self) -> bool:
         """Drain the firmware's rings and publish what fired.
@@ -1287,6 +1318,43 @@ class Bridge:
                 await asyncio.wait_for(connection.close(code=1011), timeout=1.0)
             except Exception:
                 pass  # the transport is already beyond a clean close
+
+
+def _window_payload(
+    packed: bytes,
+    span: dict,
+    freq_hz: int,
+    first: int,
+    last: int,
+    buckets: int,
+    wanted: set[str],
+) -> dict:
+    """Turn a copied run of records into the answer a window asked for.
+
+    Takes bytes rather than the history, so nothing it touches is being
+    written while it works and it can run anywhere. The request carries
+    how many columns the caller can draw, and that single number settles
+    both halves: the density always covers the whole window, and the
+    records themselves come only when there are few enough to be drawn
+    as marks. No separate cap to pick, and no cliff at which marks
+    vanish — more points than pixels is a density by definition.
+
+    Counted and charted in one pass over the bytes, and the records are
+    built only in the branch that sends them: the wide window, which is
+    the one that costs, is answered without a record ever existing.
+    """
+    count, hist = trace.density(packed, first, last, buckets, wanted)
+    payload = {
+        # `freq_hz` is the history's, not the reader's that filled it:
+        # a replay has no reader.
+        "window": {"from": first, "to": last, "n": count, "freq_hz": freq_hz},
+        "span": span,
+    }
+    if count <= buckets:
+        payload["cols"] = trace.columns(trace.matching(packed, wanted), first)
+    else:
+        payload["hist"] = hist
+    return payload
 
 
 # What a client may send: the topic, what answers it, and what the

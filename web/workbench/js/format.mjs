@@ -31,6 +31,28 @@ export function clockLabel(ns) {
   return stamp(ns, 1);
 }
 
+/* Counter ticks as whole microseconds. The firmware stamps records and
+   published copies with CNTPCT and states CNTFRQ beside them, so every
+   duration on this screen is this one division — a shadow's age, a
+   panel's place against the newest reading, the gap between two marks,
+   how old the root a walk used was.
+
+   Null when the rate is not known yet: ticks shown as a duration would
+   be wrong by whatever the clock turns out to be. Whole microseconds
+   because nothing here is drawn finer, and the alternative is each
+   caller rounding its own way. */
+export function micros(ticks, hz) {
+  return hz ? Math.round((Number(ticks) * 1e6) / hz) : null;
+}
+
+/* A measured duration, at the precision it deserves: past a millisecond
+   the microseconds are noise. Unsigned, because a caller that shows a
+   direction says so in its own words. */
+export function elapsed(us) {
+  const size = Math.abs(us);
+  return size >= 1000 ? `${(size / 1000).toFixed(1)}ms` : `${size}us`;
+}
+
 /* Element factory: text always lands in textContent, so firmware output
    can never be parsed as markup. */
 export function el(tag, className, text) {

@@ -10,7 +10,7 @@
    call, not a fixed cap. Only visible panels render, and only those a
    changed topic actually feeds. */
 
-import { clear, el, stamp } from "./format.mjs";
+import { clear, el, elapsed, micros, stamp } from "./format.mjs";
 
 function fmt(shown) {
   if (typeof shown === "boolean") return shown ? "●" : "·";
@@ -610,17 +610,11 @@ export function createPanels({ tabs, host }) {
     return found;
   }
 
-  /* How far a panel's newest reading sits from the reference. Null when
-     there is nothing to place it against — no counter rate yet, or a
-     provider that stamps nothing — and the header falls back to
-     arrival. */
   /* How old a shadow of hardware registers is, against the copy that
      carried it. Which topic dates which is the manifest's to say, so it
      arrives on the topology rather than being spelled here. Both stamps
      are the firmware's counter, so the difference is the machine's own;
-     zero means the slot has never held a guest. Null when the rate is
-     not known yet — ticks shown as a duration would be wrong by a
-     factor of the clock. */
+     zero means the slot has never held a guest. */
   function shadowAge(topic, slot) {
     const dater = observations[topic]?.as_of;
     if (!dater) return null;
@@ -628,14 +622,17 @@ export function createPanels({ tabs, host }) {
     const stamps = latest.get(dater)?.value;
     const taken = Array.isArray(stamps) ? Number(stamps[slot]?.synced_at ?? 0) : 0;
     if (!taken) return "관측된 적 없음";
-    if (!counterHz || held?.at === undefined) return null;
-    const micros = ((held.at - taken) / counterHz) * 1e6;
-    if (micros < 0) return null; /* the stamp is newer than the copy: mid-turn */
-    return micros >= 1000 ? `${(micros / 1000).toFixed(1)}ms 전` : `${Math.round(micros)}us 전`;
+    if (held?.at === undefined) return null;
+    const us = micros(held.at - taken, counterHz);
+    if (us === null || us < 0) return null; /* the stamp is newer than the copy: mid-turn */
+    return `${elapsed(us)} 전`;
   }
 
+  /* How far a panel's newest reading sits from the reference. Null when
+     there is nothing to place it against — no counter rate yet, or a
+     provider that stamps nothing — and the header falls back to
+     arrival. */
   function placement(topics) {
-    if (!counterHz) return null;
     let mine = null;
     for (const topic of topics) {
       const at = latest.get(topic)?.at;
@@ -643,11 +640,9 @@ export function createPanels({ tabs, host }) {
     }
     const against = reference ?? newestInstant();
     if (mine === null || against === null) return null;
-    const micros = ((mine - against) / counterHz) * 1e6;
-    const sign = micros >= 0 ? "+" : "-";
-    const size = Math.abs(micros);
-    const shown = size >= 1000 ? `${(size / 1000).toFixed(1)}ms` : `${Math.round(size)}us`;
-    return `${reference === null ? "최신" : "선택"} ${sign}${shown}`;
+    const us = micros(mine - against, counterHz);
+    if (us === null) return null;
+    return `${reference === null ? "최신" : "선택"} ${us >= 0 ? "+" : "-"}${elapsed(us)}`;
   }
 
   function render(id) {

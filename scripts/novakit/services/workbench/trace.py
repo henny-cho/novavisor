@@ -210,6 +210,14 @@ def unpack_from(buffer, offset: int) -> Record:
     return Record(ts, code, cpu, a, b, c)
 
 
+def unpack_all(packed: bytes) -> list[Record]:
+    """Every record in a packed run, in the order it was written."""
+    return [
+        Record(ts, code, cpu, a, b, c)
+        for ts, code, cpu, _flags, a, b, c in _RECORD.iter_unpack(packed)
+    ]
+
+
 @dataclass(frozen=True)
 class Geometry:
     rings: int
@@ -708,6 +716,35 @@ def summarise(records: list[Record]) -> dict:
     return summary if answered is None else summary | {"command": answered}
 
 
+def _charted(pairs, first: int, last: int, buckets: int, wanted: set[str]):
+    """How many records a filter admits, and which column each fell in.
+
+    Takes instants and kinds rather than records, because those two
+    fields are all a density needs: building half a million records to
+    produce a few hundred counts is where a window's cost was.
+
+    A record whose code this build does not know is counted and not
+    charted. It happened — that is what the count says — but there is no
+    name to put a lane under.
+    """
+    span = max(1, last - first + 1)
+    out: dict[str, list[int]] = {}
+    total = 0
+    for ts, code in pairs:
+        entry = events.BY_CODE.get(code)
+        if wanted and (entry is None or entry.id not in wanted):
+            continue
+        total += 1
+        if entry is None:
+            continue
+        column = min(buckets - 1, (ts - first) * buckets // span)
+        lane = out.get(entry.id)
+        if lane is None:
+            lane = out[entry.id] = [0] * buckets
+        lane[max(0, column)] += 1
+    return total, out
+
+
 def histogram(records: list[Record], first: int, last: int, buckets: int) -> dict[str, list[int]]:
     """How many of each event fell in each column of a window.
 
@@ -719,18 +756,37 @@ def histogram(records: list[Record], first: int, last: int, buckets: int) -> dic
     edge, and a lane per path would sum them into one column that no
     longer says which fired; the UI has the catalogue and can group.
     """
-    span = max(1, last - first + 1)
-    out: dict[str, list[int]] = {}
-    for record in records:
-        entry = events.BY_CODE.get(record.code)
-        if entry is None:
+    return _charted(((r.ts, r.code) for r in records), first, last, buckets, set())[1]
+
+
+def density(packed: bytes, first: int, last: int, buckets: int, wanted: set[str]):
+    """A window's count and density, straight from the packed records.
+
+    The answer to a wide window is a few hundred numbers, and it is
+    reached without a record ever existing.
+    """
+    return _charted(
+        ((ts, code) for ts, code, *_ in _RECORD.iter_unpack(packed)),
+        first,
+        last,
+        buckets,
+        wanted,
+    )
+
+
+def matching(packed: bytes, wanted: set[str]) -> list[Record]:
+    """The records of a packed run that a filter admits.
+
+    The other half of a window's answer, wanted only once the records
+    are few enough to be drawn as marks.
+    """
+    found = []
+    for ts, code, cpu, _flags, a, b, c in _RECORD.iter_unpack(packed):
+        entry = events.BY_CODE.get(code)
+        if wanted and (entry is None or entry.id not in wanted):
             continue
-        column = min(buckets - 1, (record.ts - first) * buckets // span)
-        lane = out.get(entry.id)
-        if lane is None:
-            lane = out[entry.id] = [0] * buckets
-        lane[max(0, column)] += 1
-    return out
+        found.append(Record(ts, code, cpu, a, b, c))
+    return found
 
 
 def columns(records: list[Record], first: int) -> dict[str, list[int]]:

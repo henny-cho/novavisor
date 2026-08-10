@@ -90,8 +90,14 @@ class WindowRequestTest(unittest.IsolatedAsyncioTestCase):
         bridge.store.drain()
         return bridge
 
-    def answer(self, bridge, **request) -> dict:
+    async def answer(self, bridge, **request) -> dict:
+        """The reply, once the worker that built it is done.
+
+        A window is answered off the loop, so the call that asks for one
+        returns before the answer exists.
+        """
         bridge._handle_uplink(json.dumps({"topic": "trace", "data": {"op": "window", **request}}))
+        await bridge.settled()
         frames = bridge.store.drain()
         replies = [f for f in frames if f["topic"] == "trace" and f["kind"] == "snapshot"]
         self.assertEqual(len(replies), 1, f"expected one reply, got {frames}")
@@ -111,7 +117,7 @@ class WindowRequestTest(unittest.IsolatedAsyncioTestCase):
         """Once the records fit they are sent, and a histogram of them
         is a loop the client already has the data for. Sending both put
         1200 mostly-zero buckets beside four marks."""
-        data = self.answer(self.bridge(), **{"from": 10, "to": 19, "buckets": 100})
+        data = await self.answer(self.bridge(), **{"from": 10, "to": 19, "buckets": 100})
         self.assertEqual(data["window"]["n"], 10)
         self.assertEqual(data["cols"]["ts"], list(range(10)))
         self.assertNotIn("hist", data)
@@ -119,12 +125,12 @@ class WindowRequestTest(unittest.IsolatedAsyncioTestCase):
     async def test_a_wide_window_carries_density_and_no_marks(self):
         """More points than pixels is a density. The reader narrows the
         window to see marks, which is what dragging one is for."""
-        data = self.answer(self.bridge(), **{"from": 0, "to": 99, "buckets": 10})
+        data = await self.answer(self.bridge(), **{"from": 0, "to": 99, "buckets": 10})
         self.assertNotIn("cols", data)
         self.assertEqual(sum(data["hist"]["trap"]), 100, "a wide window still counts all of it")
 
     async def test_the_answer_states_the_horizon_it_was_taken_from(self):
-        data = self.answer(self.bridge(), **{"from": 0, "to": 99})
+        data = await self.answer(self.bridge(), **{"from": 0, "to": 99})
         self.assertEqual(data["span"]["n"], 100)
         self.assertFalse(data["span"]["full"])
 
@@ -132,7 +138,7 @@ class WindowRequestTest(unittest.IsolatedAsyncioTestCase):
         bridge = self.bridge()
         bridge._history.append(records([200], BIND))
         bridge.store.drain()
-        data = self.answer(bridge, **{"from": 0, "to": 500, "events": ["vgic.bind"]})
+        data = await self.answer(bridge, **{"from": 0, "to": 500, "events": ["vgic.bind"]})
         self.assertEqual(data["window"]["n"], 1)
         self.assertEqual(data["cols"]["code"], [BIND])
 
@@ -140,7 +146,7 @@ class WindowRequestTest(unittest.IsolatedAsyncioTestCase):
         bridge = self.bridge()
         bridge._history.append(records([200], BIND))
         bridge.store.drain()
-        data = self.answer(bridge, **{"from": 0, "to": 500, "events": ["trap"], "buckets": 4})
+        data = await self.answer(bridge, **{"from": 0, "to": 500, "events": ["trap"], "buckets": 4})
         self.assertEqual(set(data["hist"]), {"trap"})
         self.assertEqual(sum(data["hist"]["trap"]), 100)
 
@@ -167,7 +173,7 @@ class WindowRequestTest(unittest.IsolatedAsyncioTestCase):
         """A client may ask at any time; an empty history is an answer,
         not a fault."""
         bridge = self.bridge(stamps=[])
-        data = self.answer(bridge, **{"from": 0, "to": 10})
+        data = await self.answer(bridge, **{"from": 0, "to": 10})
         self.assertEqual(data["window"]["n"], 0)
         self.assertEqual(data["cols"]["ts"], [])
 

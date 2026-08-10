@@ -8,6 +8,7 @@ frames when a batch overruns.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -348,7 +349,13 @@ class IdentityTest(Recorded):
 
     def answer(self, bridge, request):
         bridge.store.drain()  # discard whatever setup published
-        bridge._answer_window(request)
+
+        async def asked():
+            # Built on a worker, so the call that asks returns first.
+            bridge._answer_window(request)
+            await bridge.settled()
+
+        asyncio.run(asked())
         for frame in bridge.store.drain():
             if frame["topic"] == "trace" and frame["kind"] == "snapshot":
                 return frame["data"]

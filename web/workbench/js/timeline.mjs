@@ -18,6 +18,8 @@
  * drawn from them.
  */
 
+import { micros } from "./format.mjs";
+
 /* Records held for redrawing, at 32 bytes each across the columns —
    about two megabytes. Beyond it the oldest go, as everywhere else in
    this layer. */
@@ -653,8 +655,8 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
       next: named(rows[at + 1]),
       /* The gap from the previous mark, in real microseconds, whatever
          speed the cursor is being moved at. */
-      dt: at > 0 ? micros(record.ts - rows[at - 1].ts) : null,
-      micros: micros(record.ts - (bounds()?.from ?? record.ts)),
+      dt: at > 0 ? micros(record.ts - rows[at - 1].ts, freq) : null,
+      micros: micros(record.ts - (bounds()?.from ?? record.ts), freq),
     });
     draw();
     return true;
@@ -765,7 +767,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     const hit = nearest(to, laneAt(event), window_, slack);
     if (!hit) return;
     if (event.shiftKey && marked) {
-      onSelect({ kind: "delta", from: marked, to: hit, micros: micros(hit.ts - marked.ts) });
+      onSelect({ kind: "delta", from: marked, to: hit, micros: micros(hit.ts - marked.ts, freq) });
       return;
     }
     /* Through the cursor, not around it: a click is one of the three
@@ -811,8 +813,6 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     request({ op: "window", from: view.from, to: view.to, buckets: ceiling });
     draw();
   });
-
-  const micros = (ticks) => (freq ? Math.round((ticks * 1e6) / freq) : null);
 
   /* ---------------- chrome ---------------- */
 
