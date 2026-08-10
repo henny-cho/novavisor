@@ -50,6 +50,10 @@ class Obs:
     layout: str = ""
     # Turns a firmware encoding into what it means, before the wire.
     shape: derive.Shape | None = None
+    # For a topic that shadows registers living in hardware: the topic
+    # carrying when that shadow last became true. The publish stamp
+    # dates the copy, which is a different question.
+    as_of: str = ""
 
 
 @dataclass(frozen=True)
@@ -59,6 +63,7 @@ class Policy:
     rate_hz: float = 10.0
     hex: bool = False
     shape: derive.Shape | None = None
+    as_of: str = ""
 
 
 # How often the firmware takes a reading. Sampling faster asks the same
@@ -82,12 +87,13 @@ POLICY: dict[str, Policy] = {
     "timer.cntvoff": Policy(rate_hz=2),
     "vm.generation": Policy(rate_hz=2),
     # Context panel — the whole trap frame, twice a second.
-    "ctx.trap": Policy(rate_hz=2, hex=True),
+    "ctx.trap": Policy(rate_hz=2, hex=True, as_of="ctx.synced"),
     # The board — the syndrome only, current. Five times the rate at a
     # fraction of the bytes, because it carries three words per slot
     # instead of forty.
-    "ctx.syndrome": Policy(rate_hz=10, shape=derive.trap_syndrome),
-    "ctx.el1": Policy(rate_hz=2, hex=True),
+    "ctx.syndrome": Policy(rate_hz=10, shape=derive.trap_syndrome, as_of="ctx.synced"),
+    "ctx.el1": Policy(rate_hz=2, hex=True, as_of="ctx.synced"),
+    "ctx.synced": Policy(rate_hz=10),
     # Built once in EL2 init, so the change gate emits it once and the
     # rate only decides how soon.
     "vm.table": Policy(rate_hz=2, shape=derive.guest_table),
@@ -98,7 +104,8 @@ POLICY: dict[str, Policy] = {
     "smp.mail": Policy(rate_hz=5),
     "smp.budget": Policy(rate_hz=2),
     # vGIC panel
-    "vgic.lr": Policy(rate_hz=10, shape=derive.vgic_inflight),
+    "vgic.lr": Policy(rate_hz=10, shape=derive.vgic_inflight, as_of="vgic.synced"),
+    "vgic.synced": Policy(rate_hz=10),
     "vgic.token": Policy(rate_hz=5, shape=derive.vgic_posted),
     "vgic.dist": Policy(rate_hz=5, hex=True),
     "vgic.resident": Policy(rate_hz=5, shape=derive.none_if_unset),
@@ -143,6 +150,7 @@ def _joined() -> tuple[Obs, ...]:
                 rate_hz=POLICY[want.topic].rate_hz,
                 hex=POLICY[want.topic].hex,
                 shape=POLICY[want.topic].shape,
+                as_of=POLICY[want.topic].as_of,
             )
             for want in observe.OBSERVED
         )
@@ -167,7 +175,29 @@ def _check_rates() -> None:
         )
 
 
+def _check_as_of() -> None:
+    """A shadow's age must be readable, and no slower than the shadow.
+
+    Which memory shadows hardware cannot be derived from an ELF, so it
+    is declared. What is checked is that the declaration names a topic
+    that exists and arrives at least as often — a slower stamp would
+    leave a window where a new value wears an old age.
+    """
+    rates = {obs.topic: obs.rate_hz for obs in OBSERVATIONS}
+    for obs in OBSERVATIONS:
+        if not obs.as_of:
+            continue
+        if obs.as_of not in rates:
+            raise SystemExit(f"nova workbench: {obs.topic} dates itself by {obs.as_of}, which nothing observes")
+        if rates[obs.as_of] < obs.rate_hz:
+            raise SystemExit(
+                f"nova workbench: {obs.topic} arrives at {obs.rate_hz:g} Hz "
+                f"but its age {obs.as_of} only at {rates[obs.as_of]:g} Hz"
+            )
+
+
 _check_rates()
+_check_as_of()
 
 
 # The reading the topology defers to. Named here with the rest of the
@@ -200,13 +230,15 @@ def asserted_names() -> set[str]:
 def observation_rates() -> dict[str, dict]:
     """What the UI needs to say about a topic beyond its value.
 
-    How coarse the sample is, and whether a demo holds this run to it.
-    Both are facts the manifests know and the UI cannot; written into
+    How coarse the sample is, whether a demo holds this run to it, and
+    which topic dates it when the memory is a shadow of hardware. All
+    three are facts the manifests know and the UI cannot; written into
     the UI instead, the two drift and the badge lies.
     """
     asserted = asserted_names()
     return {
         obs.topic: {"rate": obs.rate_hz, "asserted": obs.topic in asserted}
+        | ({"as_of": obs.as_of} if obs.as_of else {})
         for obs in OBSERVATIONS
     }
 

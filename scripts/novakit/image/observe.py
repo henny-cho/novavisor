@@ -55,6 +55,9 @@ OBSERVED: tuple[Want, ...] = (
     Want("ctx.trap", "nova::vcpu::g_vcpus", ("ctx",)),
     Want("ctx.syndrome", "nova::vcpu::g_vcpus", ("ctx",)),
     Want("ctx.el1", "nova::vcpu::g_vcpus", ("el1",)),
+    # Both of those shadow registers that live in hardware, so they are
+    # the VCPU's state as of this stamp and no earlier.
+    Want("ctx.synced", "nova::vcpu::g_vcpus", ("synced_at",)),
     # What the machine was built to run, as the machine built it. The
     # whole array: the entries in use are told from the rest by a vmid,
     # which is reserved at zero.
@@ -66,6 +69,7 @@ OBSERVED: tuple[Want, ...] = (
     Want("smp.budget", "nova::vcpu::g_budget"),
     # The only route to injection state: the gdb stub carries no ICH_*.
     Want("vgic.lr", "nova::vgic::(anonymous)::g_cpu", ("lr", "lr_token")),
+    Want("vgic.synced", "nova::vgic::(anonymous)::g_cpu", ("synced_at",)),
     # The hop before that one: posted, not yet refilled. refill() moves
     # the token rather than copying it, so this list and the in-flight
     # one are disjoint — which is what makes one snapshot enough.

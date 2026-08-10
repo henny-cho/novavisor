@@ -32,6 +32,22 @@ enum class State : std::uint8_t {
   return states.size();
 }
 
+// Whether a door may take the resident VCPU's shadow of the registers
+// that live in hardware.
+//
+// Running is the whole guard against writing over state this core does
+// not own: a slot between reseed and re-entry is kOff or kReady (every
+// reseed path demands kOff and leaves kReady), and an idle core's frame
+// is EL2 scratch rather than any guest's.
+//
+// `turn` is the publisher's last one and `taken` the turn this shadow
+// already belongs to, so a shadow is refreshed once per published
+// reading however often doors open — and never before the first turn,
+// when nothing is reading yet.
+[[nodiscard]] inline auto shadow_due(State state, std::uint64_t turn, std::uint64_t taken) noexcept -> bool {
+  return state == State::kRunning && turn != taken;
+}
+
 // True when the resident VCPU has a runnable competitor — the
 // condition for arming the preemption time slice.
 [[nodiscard]] inline auto slice_needed(std::span<const State> states) noexcept -> bool {

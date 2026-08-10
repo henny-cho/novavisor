@@ -73,6 +73,16 @@ inline constexpr std::uint32_t kBudgetBytes = NOVA_TLM_PAYLOAD_BYTES;
 // claimed its PPI.
 void start() noexcept;
 
+// The instant of the last turn taken, or zero before the first.
+//
+// A component whose published memory shadows registers that live in
+// hardware refreshes that memory against this value: it names the
+// cadence rather than approximating it with a period, and reading it
+// costs a load where reading the counter costs an access. Stamped into
+// the shadow it also dates it — one value, so the rate a shadow is
+// taken at and the age it reports cannot disagree.
+[[nodiscard]] auto last_turn() noexcept -> std::uint64_t;
+
 } // namespace telemetry
 
 struct telemetry_component {

@@ -26,6 +26,7 @@
 // scheduler (VCPU 0 on the primary; secondaries start idle). Entries
 // past [0] stay kOff until a guest issues HVC_VM_START.
 
+#include "core_gic/core_gic.hpp"
 #include "core_vcpu/fp_model.hpp"
 #include "core_vcpu/lifecycle_model.hpp"
 #include "core_vcpu/sched_model.hpp"
@@ -37,6 +38,7 @@
 #include "trap_handler/command.hpp"
 #include "trap_handler/fp_simd.hpp"
 #include "trap_handler/hvc.hpp"
+#include "trap_handler/sync_trap.hpp"
 #include "trap_handler/wfx.hpp"
 
 #include <cib/top.hpp>
@@ -46,11 +48,12 @@
 
 namespace nova {
 
-// Per-VCPU runtime state, owned by core_vcpu. `ctx` and `el1` hold the
-// guest's machine state while it is NOT resident; the resident VCPU's
-// state lives in the hardware registers and the live trap frame. The
-// virtual interrupt state (redistributor, pending, LR shadows) is owned
-// by the vgic component, keyed by the same index.
+// Per-VCPU runtime state, owned by core_vcpu. `ctx` and `el1` shadow
+// registers that live in hardware while the VCPU is resident, so they
+// are this VCPU's state as of `synced_at` and no earlier — the writers
+// are switch-out, reseed, and the door refresh below. The virtual
+// interrupt state (redistributor, pending, LR shadows) is owned by the
+// vgic component, keyed by the same index.
 struct Vcpu {
   using State = sched::State;
 
@@ -58,7 +61,13 @@ struct Vcpu {
   TrapContext            ctx{}; // GP regs + SP_EL1 + ELR/SPSR_EL2
   arch::El1SysregBank    el1{}; // EL1 sysregs + SP_EL0 + CNTV
   arch::FpBank           fp{};  // Q0–Q31 + FPSR/FPCR — stale while owner (fp_model.hpp)
-  State                  state = State::kOff;
+  // The publisher turn these two were last made true at — a lower bound
+  // on their age, since the door that took them ran after that turn.
+  // Zero until the first turn: a reader cannot get this from the publish
+  // stamp, which dates the copy of this struct rather than the registers
+  // it shadows.
+  std::uint64_t synced_at = 0;
+  State         state     = State::kOff;
 };
 
 } // namespace nova
@@ -212,6 +221,13 @@ struct core_vcpu_component {
   // owner's live state, restore the caller's, clear the trap.
   static void handle_fp_simd(FpSimdCall* call) noexcept;
 
+  // The two doors a guest returns to EL2 through. Both hand over the
+  // guest's own frame, which is what the resident VCPU's shadow needs;
+  // neither claims anything, so an observation here cannot swallow work
+  // that belongs to another subscriber.
+  static void sync_on_trap(TrapContext* ctx) noexcept;
+  static void sync_on_irq(IrqCall* call) noexcept;
+
   constexpr static auto INIT  = flow::action<"core_vcpu_init">([]() noexcept { vcpu::init(); });
   constexpr static auto ENTER = flow::action<"core_vcpu_enter">([]() noexcept { vcpu::enter_cpu(); });
 
@@ -229,6 +245,8 @@ struct core_vcpu_component {
                   cib::extend<cib::MainLoop>(*ENTER), cib::extend<HvcService>(&core_vcpu_component::handle_hvc),
                   cib::extend<WfxService>(&core_vcpu_component::handle_wfx),
                   cib::extend<FpSimdService>(&core_vcpu_component::handle_fp_simd),
+                  cib::extend<EL2SyncTrapService>(&core_vcpu_component::sync_on_trap),
+                  cib::extend<IrqService>(&core_vcpu_component::sync_on_irq),
                   cib::extend<CommandService>(&core_vcpu_component::commands),
                   cib::extend<TelemetryService>(&core_vcpu_component::telemetry));
 };

@@ -87,6 +87,7 @@ void sync_resident_lrs(std::size_t index) noexcept {
   for (std::size_t i = 0; i < g_lr_count; ++i) {
     cpu.lr[i] = gic_virt::read_lr(i);
   }
+  cpu.synced_at = telemetry::last_turn();
 }
 
 // Push deliverable pending INTIDs of one VCPU into its list registers.
@@ -307,7 +308,8 @@ void init() noexcept {
 void cpu_reset(std::size_t index) noexcept {
   {
     sync::Guard guard{g_vm_lock[vm_of(index)]}; // a sibling can MMIO this redistributor frame
-    g_cpu[index] = CpuState{};
+    g_cpu[index]           = CpuState{};
+    g_cpu[index].synced_at = telemetry::last_turn(); // a reset shadow is this VCPU's state, now
   }
   g_hw[index] = HwBank{.vmcr = g_vmcr_reset, .hcr = gic_virt::kIchHcrBase};
 }
@@ -318,6 +320,7 @@ void cpu_save(std::size_t index) noexcept {
   for (std::size_t i = 0; i < g_lr_count; ++i) {
     cpu.lr[i] = gic_virt::read_lr(i);
   }
+  cpu.synced_at    = telemetry::last_turn();
   g_hw[index].vmcr = gic_virt::read_vmcr();
   g_hw[index].hcr  = gic_virt::read_hcr();
 }

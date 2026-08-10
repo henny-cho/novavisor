@@ -83,6 +83,11 @@ struct CpuState {
     [[nodiscard]] constexpr auto valid() const noexcept -> bool { return generation != 0U; }
   };
   std::array<EoiToken, kMaxLrs> lr_token{};
+  // The publisher turn `lr` was last matched to the hardware list
+  // registers at — a lower bound, since the refresh ran after it. Zero
+  // until this VCPU has been resident: the shadow is only the truth as
+  // of some moment, and a reader has no other way to know which.
+  std::uint64_t synced_at = 0;
 };
 
 using EoiToken = CpuState::EoiToken;

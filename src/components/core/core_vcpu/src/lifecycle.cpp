@@ -67,6 +67,10 @@ void seed_context(std::size_t slot, std::uint64_t entry, std::uint64_t sp, std::
   v.ctx.spsr = kSpsrEl1h;
   v.el1      = arch::El1SysregBank{};
   v.fp       = arch::FpBank{};
+  // The bank is this VCPU's state again, exactly, from here: a reseed
+  // is a write of what the guest will resume with. Leaving the old
+  // stamp would date the fresh bank to the previous life.
+  v.synced_at = telemetry::last_turn();
 }
 
 // Owner-local half of a reseed: FP ownership, the vGIC bank, and this

@@ -167,6 +167,7 @@ export function createPanels({ tabs, host }) {
   const visible = new Set(); // panels switched on; screen order is PANELS order
   const dirty = new Set(); // panels whose topics changed since the last settle
   let timerSlots = [];
+  let observations = {};
   let ctxSlot = 0;
 
   function restore(known) {
@@ -284,11 +285,18 @@ export function createPanels({ tabs, host }) {
     {
       id: "ctx",
       title: "Context",
-      topics: ["ctx.trap", "ctx.el1", "sched.valid"],
+      topics: ["ctx.trap", "ctx.el1", "ctx.synced", "sched.valid"],
       render(body) {
         const valid = at("sched.valid");
         const traps = at("ctx.trap");
         const banks = at("ctx.el1");
+        /* Both shadow registers that live in hardware, so the heading
+           carries when this slot's copy last became true rather than a
+           sentence about when that usually happens. */
+        const aged = (topic) => {
+          const age = shadowAge(topic, ctxSlot);
+          return age ? ` — ${age}` : "";
+        };
         const picker = el("div", "pslots");
         const count = Math.max(traps.rows().length, banks.rows().length);
         for (let slot = 0; slot < count; slot += 1) {
@@ -318,12 +326,12 @@ export function createPanels({ tabs, host }) {
           for (let index = 0; index < named.length; index += 2) {
             rows.push(named.slice(index, index + 2).flat());
           }
-          body.append(section(`s${ctxSlot} TrapContext — 마지막 EL2 진입 시점`));
+          body.append(section(`s${ctxSlot} TrapContext${aged("ctx.trap")}`));
           body.append(table(["reg", "value", "reg", "value"], rows));
         }
         const bank = banks.get(ctxSlot).get("el1");
         if (bank.shown) {
-          body.append(section(`s${ctxSlot} EL1 뱅크 — 마지막 스위치 아웃 시점`));
+          body.append(section(`s${ctxSlot} EL1 뱅크${aged("ctx.el1")}`));
           body.append(
             table(
               ["reg", "value"],
@@ -606,6 +614,26 @@ export function createPanels({ tabs, host }) {
      there is nothing to place it against — no counter rate yet, or a
      provider that stamps nothing — and the header falls back to
      arrival. */
+  /* How old a shadow of hardware registers is, against the copy that
+     carried it. Which topic dates which is the manifest's to say, so it
+     arrives on the topology rather than being spelled here. Both stamps
+     are the firmware's counter, so the difference is the machine's own;
+     zero means the slot has never held a guest. Null when the rate is
+     not known yet — ticks shown as a duration would be wrong by a
+     factor of the clock. */
+  function shadowAge(topic, slot) {
+    const dater = observations[topic]?.as_of;
+    if (!dater) return null;
+    const held = latest.get(topic);
+    const stamps = latest.get(dater)?.value;
+    const taken = Array.isArray(stamps) ? Number(stamps[slot]?.synced_at ?? 0) : 0;
+    if (!taken) return "관측된 적 없음";
+    if (!counterHz || held?.at === undefined) return null;
+    const micros = ((held.at - taken) / counterHz) * 1e6;
+    if (micros < 0) return null; /* the stamp is newer than the copy: mid-turn */
+    return micros >= 1000 ? `${(micros / 1000).toFixed(1)}ms 전` : `${Math.round(micros)}us 전`;
+  }
+
   function placement(topics) {
     if (!counterHz) return null;
     let mine = null;
@@ -749,6 +777,7 @@ export function createPanels({ tabs, host }) {
     },
     setTopology(topo) {
       timerSlots = Array.isArray(topo.timer_slots) ? topo.timer_slots : [];
+      observations = topo.observations || {};
       /* The manifest states what is published; everything a panel above
          does not claim falls to the fallback. */
       const claimed = new Set(

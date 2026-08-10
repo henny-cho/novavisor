@@ -61,6 +61,39 @@ class ManifestJoinTest(unittest.TestCase):
                 )
 
 
+class ShadowAgeTest(unittest.TestCase):
+    """A shadow of hardware must say when it was last true.
+
+    Which memory shadows registers is a declaration — no ELF can answer
+    it — so what the manifest enforces is that the declaration resolves
+    and keeps up. Both failures are silent otherwise: an age nothing
+    publishes draws nothing, and one that lags leaves a window where a
+    fresh value wears an old age.
+    """
+
+    def test_an_age_nobody_publishes_is_refused(self):
+        ghost = observations.Policy(rate_hz=2, as_of="ctx.nowhere")
+        with mock.patch.dict(observations.POLICY, {"ctx.el1": ghost}):
+            with mock.patch.object(observations, "OBSERVATIONS", observations._joined()):
+                with self.assertRaises(SystemExit):
+                    observations._check_as_of()
+
+    def test_an_age_slower_than_its_shadow_is_refused(self):
+        slow = observations.Policy(rate_hz=2)
+        with mock.patch.dict(observations.POLICY, {"ctx.synced": slow}):
+            with mock.patch.object(observations, "OBSERVATIONS", observations._joined()):
+                with self.assertRaises(SystemExit):
+                    observations._check_as_of()
+
+    def test_every_declared_age_reaches_the_ui(self):
+        # The pairing travels with the rate and the predicate, so a panel
+        # never spells it a second time.
+        said = observations.observation_rates()
+        for obs in observations.OBSERVATIONS:
+            with self.subTest(topic=obs.topic):
+                self.assertEqual(said[obs.topic].get("as_of", ""), obs.as_of)
+
+
 class TimerSlotTest(unittest.TestCase):
     """Slot labels follow the header that allocates the slots."""
 

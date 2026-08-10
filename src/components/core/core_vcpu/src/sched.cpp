@@ -167,9 +167,10 @@ void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
   trace_emit(NOVA_TRACE_EV_SCHED_SWITCH, static_cast<std::uint32_t>(next_idx), cs.current);
 
   if (cs.current != kNoVcpu) {
-    Vcpu& cur = g_vcpus[cs.current];
-    cur.ctx   = *live;
-    cur.el1   = arch::read_el1_bank();
+    Vcpu& cur     = g_vcpus[cs.current];
+    cur.ctx       = *live;
+    cur.el1       = arch::read_el1_bank();
+    cur.synced_at = telemetry::last_turn();
     vgic::cpu_save(cs.current);
     if (cur.state == sched::State::kRunning) {
       cur.state = sched::State::kReady;
@@ -271,6 +272,26 @@ void schedule_out(TrapContext* live) noexcept {
 }
 
 } // namespace
+
+// Take the resident VCPU's shadow of the registers that live in
+// hardware, once per published turn. The turn instant is both the gate
+// and the age stamped into the shadow, so what limits the cost and what
+// reports the freshness cannot disagree — and the skip every door but
+// one in fifty takes is a load and a branch.
+void sync_resident(TrapContext* live) noexcept {
+  const std::size_t index = me().current;
+  if (index == kNoVcpu) {
+    return;
+  }
+  Vcpu&               v    = g_vcpus[index];
+  const std::uint64_t turn = telemetry::last_turn();
+  if (!sched::shadow_due(v.state, turn, v.synced_at)) {
+    return;
+  }
+  v.ctx       = *live;
+  v.el1       = arch::read_el1_bank();
+  v.synced_at = turn;
+}
 
 // Keep the preemption slice armed exactly while the resident VCPU has
 // a runnable competitor. Re-evaluated at every ready-set change:
@@ -494,6 +515,17 @@ void core_vcpu_component::handle_hvc(HvcCall* call) noexcept {
   default:
     return; // not ours — VM_START lives in smp (affinity routing)
   }
+}
+
+// The two doors a guest returns through. Neither claims the call: an
+// unclaimed INTID must still reach the dispatcher's report, and a
+// syndrome class must still reach its router.
+void core_vcpu_component::sync_on_trap(TrapContext* ctx) noexcept {
+  vcpu::sync_resident(ctx);
+}
+
+void core_vcpu_component::sync_on_irq(IrqCall* call) noexcept {
+  vcpu::sync_resident(call->ctx);
 }
 
 } // namespace nova

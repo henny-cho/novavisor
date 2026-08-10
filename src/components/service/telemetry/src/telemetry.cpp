@@ -8,6 +8,7 @@
 #include "nova/arch/trap_context.hpp"
 #include "soft_timer/soft_timer.hpp"
 
+#include <atomic>
 #include <cstdint>
 
 namespace nova::telemetry {
@@ -16,6 +17,12 @@ namespace {
 // The period in counter ticks, converted once at init: CNTFRQ is fixed
 // for the machine's life and this slot re-arms fifty times a second.
 std::uint64_t g_period_ticks = 0;
+
+// The instant of the last turn. Written by the primary in the drain,
+// read by every core that keeps a shadow current — relaxed on both
+// sides, because a core seeing the previous turn refreshes one turn
+// later rather than wrongly.
+std::atomic<std::uint64_t> g_last_turn{0};
 
 void on_tick(TrapContext* ctx, std::uint64_t arg) noexcept;
 
@@ -28,11 +35,17 @@ void arm() noexcept {
 // names one instant rather than a spread of them — the spread is
 // between turns, which is what the period already declares.
 void on_tick(TrapContext* /*ctx*/, std::uint64_t /*arg*/) noexcept {
-  static_cast<void>(g_publisher.publish(hyp_timer::now_relaxed()));
+  const std::uint64_t stamp = hyp_timer::now_relaxed();
+  static_cast<void>(g_publisher.publish(stamp));
+  g_last_turn.store(stamp, std::memory_order_relaxed);
   arm();
 }
 
 } // namespace
+
+auto last_turn() noexcept -> std::uint64_t {
+  return g_last_turn.load(std::memory_order_relaxed);
+}
 
 void start() noexcept {
   const auto plan = arch::us_to_ticks(hyp_timer::freq(), kPeriodUs);

@@ -2,12 +2,10 @@
 
 // components/trap_handler/include/trap_handler/trap_handler.hpp
 //
-// EL2SyncTrapService: CIB callback service dispatched on every EL2
-// synchronous exception from a lower EL.  Components register handlers
-// at compile time via cib::extend<EL2SyncTrapService>.
-//
-// Default handler (registered by trap_handler_component itself) routes
-// by ESR_EL2.EC:
+// Routes every synchronous exception from a lower EL. The moment
+// itself is EL2SyncTrapService (include/sync_trap.hpp), which any
+// component may extend; what follows is this component's own handler
+// on it, routing by ESR_EL2.EC:
 //   - HVC_AA64         : dispatch HvcService (include/hvc.hpp)
 //   - WFx              : dispatch WfxService (include/wfx.hpp)
 //   - FP_SIMD          : dispatch FpSimdService (include/fp_simd.hpp),
@@ -23,11 +21,11 @@
 // Beyond the trap routing above, this component also exports
 // DmaFaultService (include/dma_fault.hpp) and CommandService
 // (include/command.hpp) — a device notification and a host request,
-// neither a trap. Both are declared here because a subscriber must
-// compile without its publisher: those headers explain why.
+// neither a trap.
 //
-// Subscribers include only the service header they extend; this header
-// is for the component itself (nexus composition) and the dump helper.
+// Every service has its own header so a subscriber compiles without its
+// publisher; this one is for the component itself (nexus composition)
+// and the dump helper.
 
 #include "nova/arch/trap_context.hpp"
 #include "trap_handler/command.hpp"
@@ -36,6 +34,7 @@
 #include "trap_handler/guest_fault.hpp"
 #include "trap_handler/hvc.hpp"
 #include "trap_handler/mmio.hpp"
+#include "trap_handler/sync_trap.hpp"
 #include "trap_handler/sysreg.hpp"
 #include "trap_handler/wfx.hpp"
 
@@ -43,14 +42,6 @@
 #include <nexus/callback.hpp>
 
 namespace nova {
-
-// ---------------------------------------------------------------------------
-// EL2SyncTrapService
-//
-// Signature: void(TrapContext*)
-// All registered callbacks are invoked in registration order on each trap.
-// ---------------------------------------------------------------------------
-struct EL2SyncTrapService : public callback::service<TrapContext*> {};
 
 // Dump every TrapContext register to the console. Shared by all fatal
 // trap paths (lower-EL default handler, EL2 self-trap, unhandled vector).

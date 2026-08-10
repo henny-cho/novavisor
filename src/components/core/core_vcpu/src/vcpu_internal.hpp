@@ -73,6 +73,9 @@ extern std::size_t                 g_count; // vCPU slots; boot-immutable after 
 extern std::atomic<std::uint64_t>           g_slice_ticks;
 extern std::array<CpuSched, cpu::kMaxCpus>  g_sched;
 extern lifecycle::RestartBudget<kMaxGuests> g_budget; // per-VM — micro-reboot is a VM-level policy
+// Refresh the resident VCPU's shadow of ctx/el1 from this core's
+// hardware, once per published turn. No-op off a running guest.
+void sync_resident(TrapContext* live) noexcept;
 
 static_assert(std::atomic<PowerState>::is_always_lock_free);
 
