@@ -71,7 +71,7 @@ def scenario() -> expect.Scenario:
         phase=1,
         command=("qemu-system-aarch64", "-kernel", "novavisor.elf"),
         timeout_seconds=5,
-        expectations=(),
+        steps=(),
     )
 
 
@@ -213,7 +213,7 @@ class SessionTest(Draining):
             phase=1,
             command=("qemu-system-aarch64", "-machine", "virt", "-m", "1024"),
             timeout_seconds=5,
-            expectations=(),
+            steps=(),
         )
         live = FakeLive()
         self.addCleanup(live.terminate)
@@ -315,7 +315,7 @@ class VerifyStreamTest(unittest.IsolatedAsyncioTestCase):
             phase=1,
             command=("qemu-system-aarch64",),
             timeout_seconds=5,
-            expectations=({"pattern": "a"}, {"pattern": "b"}, {"pattern": "c"}),
+            steps=({"pattern": "a"}, {"pattern": "b"}, {"pattern": "c"}),
         )
 
     def deps_with(self, run_verify) -> Deps:
@@ -326,19 +326,19 @@ class VerifyStreamTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_verify_streams_progress_console_and_outcome(self):
-        # expect.observe_output numbers expectations from 1.
-        matches = tuple(
-            expect.PatternMatch(index, f"p{index}", float(index), 0.5, 4.0)
+        # expect.observe_output numbers steps from 1.
+        carried = tuple(
+            expect.StepResult(index, "pattern", f"p{index}", float(index), 0.5, 4.0)
             for index in range(1, 4)
         )
 
-        def run_verify(_scenario, stream, on_match, _on_spawn) -> spawn.Run:
+        def run_verify(_scenario, stream, on_step, _on_spawn) -> spawn.Run:
             stream.write("[vm0] echo: ping\n[smp] ")
             stream.write("core 1 online\n")
-            for match in matches:
-                on_match(match)
+            for step in carried:
+                on_step(step)
             return spawn.Run(
-                expect.VerificationResult(matches=matches),
+                expect.VerificationResult(results=carried),
                 spawn.OutputCapture(None),
             )
 
@@ -355,7 +355,10 @@ class VerifyStreamTest(unittest.IsolatedAsyncioTestCase):
         )
         progress = [frame["data"] for frame in frames if frame["topic"] == "verify"]
         self.assertEqual(len(progress), 3)
-        self.assertEqual(progress[0], {"index": 1, "total": 3, "pattern": "p1", "elapsed": 1.0})
+        self.assertEqual(
+            progress[0],
+            {"index": 1, "total": 3, "kind": "pattern", "subject": "p1", "elapsed": 1.0},
+        )
         console = [frame["data"] for frame in frames if frame["topic"] == "console"]
         self.assertEqual(console[0], {"vm": 0, "text": "echo: ping"})
         events = [frame["data"] for frame in frames if frame["topic"] == "ev"]
@@ -363,12 +366,13 @@ class VerifyStreamTest(unittest.IsolatedAsyncioTestCase):
         exited = [frame["data"] for frame in frames if frame["data"].get("phase") == "exited"]
         self.assertEqual(exited[0]["code"], 0)
 
-    async def test_verify_failure_reports_kind_and_pattern(self):
-        def run_verify(_scenario, _stream, _on_match, _on_spawn) -> spawn.Run:
+    async def test_verify_failure_reports_kind_and_step(self):
+        def run_verify(_scenario, _stream, _on_step, _on_spawn) -> spawn.Run:
             return spawn.Run(
                 expect.VerificationResult(
                     failure=expect.FailureKind.TIMEOUT,
-                    pattern="echo: ping",
+                    step_kind="pattern",
+                    step_subject="echo: ping",
                 ),
                 spawn.OutputCapture(None),
             )
@@ -386,10 +390,10 @@ class VerifyStreamTest(unittest.IsolatedAsyncioTestCase):
             outcome[0],
             {
                 "phase": "verify-fail",
-                "matched": 0,
+                "carried": 0,
                 "total": 3,
                 "failure": "timeout",
-                "pattern": "echo: ping",
+                "step": "/echo: ping/",
             },
         )
         exited = [frame["data"] for frame in frames if frame["data"].get("phase") == "exited"]
@@ -410,7 +414,7 @@ class VerifyInterruptTest(unittest.IsolatedAsyncioTestCase):
                 killed.set()
                 return True
 
-        def run_verify(_scenario, _stream, _on_match, on_spawn) -> spawn.Run:
+        def run_verify(_scenario, _stream, _on_step, on_spawn) -> spawn.Run:
             on_spawn(Child())
             if not killed.wait(timeout=5):
                 raise AssertionError("verify child was never terminated")
@@ -429,7 +433,7 @@ class VerifyInterruptTest(unittest.IsolatedAsyncioTestCase):
                         phase=1,
                         command=("qemu-system-aarch64",),
                         timeout_seconds=5,
-                        expectations=({"pattern": "a"},),
+                        steps=({"pattern": "a"},),
                     ),
                     {"demo": target.demo},
                 ),

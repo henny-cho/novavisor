@@ -25,7 +25,7 @@ guests:
 # >= 700 ms of wall time after B boots, long after A's quick exit; B's
 # second run follows its reset causally. The final halt line proves
 # SYSTEM_OFF retired B cleanly.
-expect:
+steps:
   - pattern: "A: boot 1"
     within_seconds: 10
   - pattern: "A: boot 2"

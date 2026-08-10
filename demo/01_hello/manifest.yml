@@ -16,7 +16,7 @@ guests:
     memory_size: 0x00100000
     vcpus: 1
 
-expect:
+steps:
   - pattern: "Hello from EL1 guest!"
     within_seconds: 5
   - pattern: "demo_exit code=0"

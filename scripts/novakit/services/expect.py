@@ -1,7 +1,7 @@
 """What a run must show, and the state machine that decides whether it did.
 
 Nothing here spawns a process or names a file: it observes an already-running
-child against a list of expectations and reports the outcome. That keeps the
+child against a list of steps and reports the outcome. That keeps the
 decision logic testable against a fake child, with no pexpect in sight.
 """
 
@@ -12,6 +12,11 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Callable
 
+# How often a handled step is asked whether it is satisfied. Short
+# enough that the console keeps flowing between looks, long enough that
+# a step waiting seconds does not spend the wait in syscalls.
+POLL_SECONDS = 0.2
+
 
 @dataclass(frozen=True)
 class Scenario:
@@ -20,14 +25,59 @@ class Scenario:
     phase: object
     command: tuple[str, ...]
     timeout_seconds: int
-    expectations: tuple[dict, ...]
+    steps: tuple[dict, ...]
     forbidden_patterns: tuple[str, ...] = ()
 
 
+# The manifest names a step by the key it carries, so a step is exactly
+# as self-describing as its own entry. Only `pattern` is carried out
+# here; the rest are handed to injected handlers, so this module never
+# learns what a shared memory region or a command ring is.
+STEP_KINDS: tuple[str, ...] = ("pattern", "observe", "event", "command")
+
+
+def step_kind(step: dict) -> str:
+    for kind in STEP_KINDS:
+        if kind in step:
+            return kind
+    raise KeyError(f"step names no kind: {sorted(step)} (want one of {list(STEP_KINDS)})")
+
+
+def step_subject(step: dict) -> str:
+    return str(step[step_kind(step)])
+
+
+def describe_step(kind: str, subject: str) -> str:
+    """One phrasing of a step, for every place that reports one."""
+    return f"/{subject}/" if kind == "pattern" else f"{kind} {subject}"
+
+
 @dataclass(frozen=True)
-class PatternMatch:
+class StepOutcome:
+    """Where a handled step stands: still waiting, carried out, or failed."""
+    done: bool = False
+    error: str = ""
+
+
+PENDING = StepOutcome()
+CARRIED = StepOutcome(done=True)
+
+
+def step_failed(reason: str) -> StepOutcome:
+    return StepOutcome(done=True, error=reason)
+
+
+# A handler turns one manifest entry into a poll. Polling rather than
+# blocking is what lets this module keep the console drained and the
+# forbidden-output guard live while a step that is not a pattern waits.
+StepHandler = Callable[[dict], Callable[[], StepOutcome]]
+
+
+@dataclass(frozen=True)
+class StepResult:
     index: int
-    pattern: str
+    kind: str
+    subject: str
     elapsed_seconds: float
     waited_seconds: float
     remaining_seconds: float
@@ -51,7 +101,12 @@ class FailureKind(StrEnum):
 @dataclass(frozen=True)
 class VerificationResult:
     failure: FailureKind | None = None
-    pattern: str | None = None
+    # The step the run was on when it failed, and — for output that must
+    # never appear — the pattern that hit instead. Two fields because
+    # they answer different questions: what was owed, and what arrived.
+    step_kind: str = ""
+    step_subject: str = ""
+    offender: str = ""
     wait_seconds: float = 0.0
     elapsed_seconds: float = 0.0
     remaining_seconds: float = 0.0
@@ -59,7 +114,11 @@ class VerificationResult:
     traceback_text: str = ""
     termination_succeeded: bool = True
     termination_error: str = ""
-    matches: tuple[PatternMatch, ...] = ()
+    results: tuple[StepResult, ...] = ()
+
+    @property
+    def step(self) -> str:
+        return describe_step(self.step_kind, self.step_subject)
 
     @property
     def ok(self) -> bool:
@@ -94,20 +153,23 @@ def spawn_failure(exc: BaseException) -> VerificationResult:
 
 def observe_output(
     child,
-    expectations: list[dict],
+    steps: list[dict],
     scenario_timeout: float,
     *,
     clock: Callable[[], float],
     timeout_error: type[BaseException],
     eof_error: type[BaseException],
-    on_match: Callable[[PatternMatch], None] | None = None,
+    on_step: Callable[[StepResult], None] | None = None,
     fatal_patterns: tuple[str, ...] = (),
     forbidden_patterns: tuple[str, ...] = (),
+    handlers: dict[str, StepHandler] | None = None,
+    poll_seconds: float = POLL_SECONDS,
 ) -> VerificationResult:
     """Verify one spawned process and terminate it on every exit path."""
+    handlers = handlers or {}
     started_at = 0.0
     deadline = 0.0
-    matches: list[PatternMatch] = []
+    results: list[StepResult] = []
     result = VerificationResult()
     interrupted: KeyboardInterrupt | None = None
 
@@ -119,14 +181,14 @@ def observe_output(
             return started_at
 
     def make_result(kind: FailureKind | None, at: float, **extra) -> VerificationResult:
-        # started_at/deadline/matches are read at call time, so the timings
+        # started_at/deadline/results are read at call time, so the timings
         # always reflect the scenario window as it stood when the outcome
         # was decided.
         return VerificationResult(
             failure=kind,
             elapsed_seconds=max(0.0, at - started_at),
             remaining_seconds=max(0.0, deadline - at),
-            matches=tuple(matches),
+            results=tuple(results),
             **extra,
         )
 
@@ -134,68 +196,122 @@ def observe_output(
         started_at = clock()
         deadline = started_at + scenario_timeout
 
-        for index, exp in enumerate(expectations, start=1):
-            pattern = exp["pattern"]
-            within = float(exp.get("within_seconds", scenario_timeout))
+        # Output that must never appear is watched the same way whatever
+        # a step is waiting for, so the bands sit at the front of every
+        # monitored list and the awaited thing goes last. One layout,
+        # one classifier: a new kind of step cannot slip past the guard.
+        banned = (*forbidden_patterns, *fatal_patterns)
+
+        def banned_hit(at_index: int, at: float, wait_started: float, owed: dict):
+            if at_index < len(forbidden_patterns):
+                kind_, offender = FailureKind.FORBIDDEN, forbidden_patterns[at_index]
+            elif at_index < len(banned):
+                kind_ = FailureKind.FATAL
+                offender = fatal_patterns[at_index - len(forbidden_patterns)]
+            else:
+                return None
+            return make_result(
+                kind_, at, offender=offender,
+                wait_seconds=max(0.0, at - wait_started), **owed)
+
+        def await_handled(handler, step, wait, wait_started, owed):
+            """Poll a handled step, draining the console between looks.
+
+            Blocking on the handler would leave the pty unread, and a
+            talkative guest then stops on a write while this waits for
+            it. Reading through `expect` on the banned bands keeps the
+            forbidden-output guard live in the same breath.
+            """
+            poll = handler(step)
+            watched = [*banned, eof_error]
+            while True:
+                outcome = poll()
+                if outcome.done:
+                    return (
+                        make_result(FailureKind.EXCEPTION, clock(),
+                                    error=outcome.error, wait_seconds=wait, **owed)
+                        if outcome.error else None
+                    )
+                now = clock()
+                if now >= wait_started + wait:
+                    return make_result(
+                        FailureKind.TIMEOUT, now, wait_seconds=wait, **owed)
+                slice_seconds = min(poll_seconds, wait_started + wait - now)
+                try:
+                    hit = child.expect(watched, timeout=slice_seconds)
+                except timeout_error:
+                    continue  # nothing arrived; the read drained the pty anyway
+                except eof_error:
+                    return make_result(
+                        FailureKind.EOF, clock(), wait_seconds=wait, **owed)
+                at = clock()
+                violation = banned_hit(hit, at, wait_started, owed)
+                if violation is not None:
+                    return violation
+                # The trailing slot is the EOF class: the child is gone.
+                return make_result(FailureKind.EOF, at, wait_seconds=wait, **owed)
+
+        for index, step in enumerate(steps, start=1):
+            kind, subject = step_kind(step), step_subject(step)
+            # Every outcome from here names the step it was on, so the
+            # failure headline never has to be assembled from free text.
+            owed = {"step_kind": kind, "step_subject": subject}
+            within = float(step.get("within_seconds", scenario_timeout))
             wait_started = clock()
             remaining = max(0.0, deadline - wait_started)
             if remaining == 0.0:
-                result = make_result(FailureKind.TIMEOUT, wait_started, pattern=pattern)
+                result = make_result(FailureKind.TIMEOUT, wait_started, **owed)
                 break
             wait = min(within, remaining)
 
-            try:
-                monitored_patterns = (*forbidden_patterns, pattern, *fatal_patterns)
-                patterns = list(monitored_patterns) if forbidden_patterns or fatal_patterns else pattern
-                matched_index = child.expect(patterns, timeout=wait)
-            except timeout_error:
-                result = make_result(
-                    FailureKind.TIMEOUT, clock(), pattern=pattern, wait_seconds=wait)
-                break
-            except eof_error:
-                result = make_result(
-                    FailureKind.EOF, clock(), pattern=pattern, wait_seconds=wait)
-                break
-
-            matched_at = clock()
-            expected_index = len(forbidden_patterns)
-            if forbidden_patterns and matched_index < expected_index:
-                result = make_result(
-                    FailureKind.FORBIDDEN,
-                    matched_at,
-                    pattern=forbidden_patterns[matched_index],
-                    wait_seconds=max(0.0, matched_at - wait_started),
-                    error=f"while waiting for /{pattern}/",
-                )
-                break
-            if fatal_patterns and matched_index > expected_index:
-                fatal_index = matched_index - expected_index - 1
-                result = make_result(
-                    FailureKind.FATAL,
-                    matched_at,
-                    pattern=fatal_patterns[fatal_index],
-                    wait_seconds=max(0.0, matched_at - wait_started),
-                    error=f"while waiting for /{pattern}/",
-                )
-                break
-            if matched_at > wait_started + wait:
-                result = make_result(
-                    FailureKind.TIMEOUT, matched_at, pattern=pattern, wait_seconds=wait)
-                break
-            matched = PatternMatch(
+            if kind == "pattern":
+                try:
+                    patterns = [*banned, subject] if banned else subject
+                    hit = child.expect(patterns, timeout=wait)
+                except timeout_error:
+                    result = make_result(
+                        FailureKind.TIMEOUT, clock(), wait_seconds=wait, **owed)
+                    break
+                except eof_error:
+                    result = make_result(
+                        FailureKind.EOF, clock(), wait_seconds=wait, **owed)
+                    break
+                matched_at = clock()
+                violation = banned_hit(hit, matched_at, wait_started, owed) if banned else None
+                if violation is not None:
+                    result = violation
+                    break
+                if matched_at > wait_started + wait:
+                    result = make_result(
+                        FailureKind.TIMEOUT, matched_at, wait_seconds=wait, **owed)
+                    break
+            else:
+                handler = handlers.get(kind)
+                if handler is None:
+                    result = make_result(
+                        FailureKind.EXCEPTION, clock(),
+                        error=f"no handler for a {kind} step in this run", **owed)
+                    break
+                failure = await_handled(handler, step, wait, wait_started, owed)
+                if failure is not None:
+                    result = failure
+                    break
+                matched_at = clock()
+            carried = StepResult(
                 index=index,
-                pattern=pattern,
+                kind=kind,
+                subject=subject,
                 elapsed_seconds=max(0.0, matched_at - started_at),
                 waited_seconds=max(0.0, matched_at - wait_started),
                 remaining_seconds=max(0.0, deadline - matched_at),
             )
-            matches.append(matched)
-            if on_match is not None:
-                on_match(matched)
+            results.append(carried)
+            if on_step is not None:
+                on_step(carried)
 
             # Input is causally tied to the matching prompt. Never send it
             # before the corresponding output has been observed.
-            send = exp.get("send")
+            send = step.get("send")
             if send is not None:
                 child.send(send)
         else:
@@ -236,8 +352,8 @@ def observe_output(
                     result = make_result(
                         FailureKind.FORBIDDEN,
                         clock(),
-                        pattern=forbidden_patterns[drain_index],
-                        error="after all expected output matched",
+                        offender=forbidden_patterns[drain_index],
+                        error="after every step was carried out",
                     )
             except eof_error:
                 pass

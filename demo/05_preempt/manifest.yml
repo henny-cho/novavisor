@@ -23,7 +23,7 @@ guests:
 # Both guests schedule off the same virtual clock, so this order is
 # deterministic: sleeper tick 2 (0.8 s) precedes busy done (1.0 s) only
 # under preemption; ticks 3-5 (through 2.0 s) need wake-from-EL2-idle.
-expect:
+steps:
   - pattern: "wfi tick 2"
     within_seconds: 10
   - pattern: "preempt: busy done"

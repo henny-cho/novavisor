@@ -23,7 +23,7 @@ guests:
     memory_size: 0x00100000
     vcpus: 1
 
-expect:
+steps:
   - pattern: "pingpong: 1000 rounds ok"
     within_seconds: 10
   - pattern: "demo_exit code=0"

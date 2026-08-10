@@ -27,7 +27,7 @@ guests:
 # core 1 until the fourth run, then retires before ping consumes its
 # final restart attempt. The halt line therefore proves both VMs
 # stopped without a machine-wide panic.
-expect:
+steps:
   - pattern: "core 1 online"
     within_seconds: 10
   - pattern: "pong: ready"

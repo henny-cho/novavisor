@@ -83,7 +83,7 @@ def manifest_variants(manifest: dict) -> list[dict]:
         return variants
     return [{
         "config": manifest.get("config"),
-        "expect": manifest.get("expect", []),
+        "steps": manifest.get("steps", []),
     }]
 
 

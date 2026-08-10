@@ -62,7 +62,8 @@ def write_diagnostics(
         "label": label,
         "failure": {
             "kind": result.failure,
-            "pattern": result.pattern,
+            "step": {"kind": result.step_kind, "subject": result.step_subject},
+            "offender": result.offender,
             "wait_seconds": result.wait_seconds,
             "elapsed_seconds": result.elapsed_seconds,
             "remaining_seconds": result.remaining_seconds,
@@ -74,7 +75,7 @@ def write_diagnostics(
             "succeeded": result.termination_succeeded,
             "error": result.termination_error,
         },
-        "matches": [asdict(match) for match in result.matches],
+        "steps": [asdict(step) for step in result.results],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"{json.dumps(diagnostics, indent=2)}\n", encoding="utf-8")
@@ -86,12 +87,16 @@ def report_failure(
     scope: str = "nova demo",
 ) -> None:
     # Every headline shares the trailing "elapsed .../remaining ..." suffix.
+    # `step` says what was owed and `offender` what arrived instead; a
+    # headline that named only one of the two left the other unsaid.
     headline = {
-        FailureKind.TIMEOUT: lambda: (f"timeout waiting for /{result.pattern}/ "
+        FailureKind.TIMEOUT: lambda: (f"timeout waiting for {result.step} "
                                       f"(wait limit {result.wait_seconds:.1f}s, "),
-        FailureKind.EOF: lambda: f"EOF before /{result.pattern}/ (",
-        FailureKind.FATAL: lambda: f"fatal output /{result.pattern}/ {result.error} (",
-        FailureKind.FORBIDDEN: lambda: f"forbidden output /{result.pattern}/ {result.error} (",
+        FailureKind.EOF: lambda: f"EOF before {result.step} (",
+        FailureKind.FATAL: lambda: f"fatal output /{result.offender}/ "
+                                   f"while waiting for {result.step} (",
+        FailureKind.FORBIDDEN: lambda: f"forbidden output /{result.offender}/ "
+                                       f"{result.error or f'while waiting for {result.step}'} (",
         FailureKind.EXCEPTION: lambda: f"verifier exception: {result.error} (",
         FailureKind.INTERRUPTED: lambda: f"verifier exception: {result.error} (",
         FailureKind.SPAWN: lambda: f"QEMU spawn: {result.error} (",

@@ -8,6 +8,17 @@ const NS_PER_SECOND = 1e9;
    mint tabs or cards. */
 export const MAX_VM_SLOT = 8;
 
+/* One carried verification step as a line. A kind this build does not
+   name still reads as itself rather than as a blank label, so the bridge
+   may add one without the screen going quiet. */
+const STEP_LABEL = { pattern: (subject) => `/${subject}/` };
+
+export function describeStep({ kind, subject } = {}) {
+  const text = subject ?? "";
+  const label = STEP_LABEL[kind];
+  return label ? label(text) : `${kind ?? "?"} ${text}`.trim();
+}
+
 /* Protocol timestamps are session-monotonic nanoseconds. */
 export function stamp(ns, digits = 3) {
   const seconds = Number(ns) / NS_PER_SECOND;

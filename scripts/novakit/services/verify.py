@@ -32,16 +32,17 @@ class Sink:
         return report.diagnostics_path_for_tail(self.tail)
 
 
-def announce(scope: str, scenario: expect.Scenario) -> Callable[[expect.PatternMatch], None]:
-    total = len(scenario.expectations)
+def announce(scope: str, scenario: expect.Scenario) -> Callable[[expect.StepResult], None]:
+    total = len(scenario.steps)
 
-    def matched(match: expect.PatternMatch) -> None:
-        print(f"[{scope}] matched[{match.index}/{total}] /{match.pattern}/ "
-              f"elapsed={match.elapsed_seconds:.1f}s "
-              f"wait={match.waited_seconds:.1f}s "
-              f"remaining={match.remaining_seconds:.1f}s")
+    def carried(step: expect.StepResult) -> None:
+        print(f"[{scope}] step[{step.index}/{total}] "
+              f"{expect.describe_step(step.kind, step.subject)} "
+              f"elapsed={step.elapsed_seconds:.1f}s "
+              f"wait={step.waited_seconds:.1f}s "
+              f"remaining={step.remaining_seconds:.1f}s")
 
-    return matched
+    return carried
 
 
 def run_scenario(scenario: expect.Scenario, sink: Sink, *, scope: str) -> int:
@@ -60,7 +61,7 @@ def run_scenario(scenario: expect.Scenario, sink: Sink, *, scope: str) -> int:
         run = spawn.observe(
             scenario,
             stream=sink.stream,
-            on_match=announce(scope, scenario),
+            on_step=announce(scope, scenario),
         )
     except expect.Interrupted as interrupted:
         persist(interrupted.capture, interrupted.result)

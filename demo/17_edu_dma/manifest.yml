@@ -26,7 +26,7 @@ guests:
     memory_size: 0x00100000
     vcpus: 1
 
-expect:
+steps:
   - pattern: "\\[dma\\] EDU isolation probe passed"
     within_seconds: 10
   - pattern: "\\[dma\\] VM 0 resumed generation 2"

@@ -37,7 +37,10 @@ from .protocol import Topic
 #    carries out, replacing a list of opcode names and two named bands.
 #    A version 2 recording would load and draw no controls at all, so
 #    the gate has to move with the shape it guards.
-VERSION = 3
+# 4: a verify frame carries the step's kind and subject in place of the
+#    pattern it used to assume, so a replayed run describes steps that
+#    are not console patterns.
+VERSION = 4
 META = "meta.json"
 WIRE = "wire.jsonl"
 RECORDS = "trace.bin"

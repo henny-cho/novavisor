@@ -122,11 +122,11 @@ def scenario_for(
     elf_snapshot: Path | None = None,
     preset: str | None = None,
 ) -> expect.Scenario:
-    """Build everything the variant needs and state what its run must print."""
+    """Build everything the variant needs and state what its run must do."""
     forbidden = manifests.manifest_pattern_list(demo_manifest, "forbid")
-    expectations = tuple(variant.get("expect", []))
-    if forbidden and not expectations:
-        raise SystemExit("[nova demo] manifest 'forbid' requires expected patterns")
+    steps = tuple(variant.get("steps", []))
+    if forbidden and not steps:
+        raise SystemExit("[nova demo] manifest 'forbid' requires steps")
 
     if demo_build is None:
         demo_build = build_demos()
@@ -149,6 +149,6 @@ def scenario_for(
         phase=demo_manifest.get("phase"),
         command=tuple(build_qemu_cmd(elf, name, demo_build, demo_manifest)),
         timeout_seconds=int(demo_manifest.get("timeout_seconds", 30)),
-        expectations=expectations,
+        steps=steps,
         forbidden_patterns=forbidden,
     )

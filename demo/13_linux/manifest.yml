@@ -26,7 +26,7 @@ guests:
 # minutes-long in wall clock; budgets reflect that.
 # "aarch64 GNU/Linux" pins the uname output — a bare "aarch64" would
 # already match the compiler triple in the version banner.
-expect:
+steps:
   - pattern: "Booting Linux on physical CPU"
     within_seconds: 120
   - pattern: "Linux version 6\\.12"

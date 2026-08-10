@@ -20,7 +20,7 @@ guests:
     uart: vuart
 
 # The heartbeat never exits and emits one line every five seconds.
-expect:
+steps:
   - pattern: "Booting Zephyr OS build"
     within_seconds: 30
   - pattern: "NOVA ZEPHYR HEARTBEAT 1"

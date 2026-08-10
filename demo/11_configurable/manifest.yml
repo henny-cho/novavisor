@@ -23,7 +23,7 @@ guests:
 variants:
   - name: "small"
     config: "configs/small.yml"
-    expect:
+    steps:
       - pattern: "\\[vm0\\] cfg: memory 2 MiB, cpus 1"
         within_seconds: 15
       - pattern: "demo_exit code=0"
@@ -32,7 +32,7 @@ variants:
         within_seconds: 5
   - name: "large"
     config: "configs/large.yml"
-    expect:
+    steps:
       - pattern: "\\[vm0\\] cfg: memory 8 MiB, cpus 2"
         within_seconds: 15
       - pattern: "\\[vm0\\] cpu1 up"

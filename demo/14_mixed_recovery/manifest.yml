@@ -32,7 +32,7 @@ guests:
 # The verifier focuses Linux after its first shell prompt, starts its
 # load-and-panic helper, then observes an autonomous warm reset.
 # Zephyr heartbeats must continue during the Linux load and recovery.
-expect:
+steps:
   - pattern: "Booting Zephyr OS build"
     within_seconds: 60
   - pattern: "Booting Linux on physical CPU"

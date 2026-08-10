@@ -2,7 +2,7 @@
    the two pieces of UI state the wire does not carry — the theme and how
    much of the stream was lost. */
 
-import { MAX_VM_SLOT, clear, clockLabel, el } from "./format.mjs";
+import { MAX_VM_SLOT, clear, clockLabel, describeStep, el } from "./format.mjs";
 import { connect, send } from "./net.mjs";
 import { createBoard } from "./board.mjs";
 import { createCards } from "./cards.mjs";
@@ -667,12 +667,12 @@ function onLife(ts, data) {
       events.addNotice(ts, "모든 vCPU 정지", { severity: "WARN" });
       break;
     case "verify-pass":
-      events.addNotice(ts, `검증 통과 ${data.matched ?? "?"}/${data.total ?? "?"}`);
+      events.addNotice(ts, `검증 통과 ${data.carried ?? "?"}/${data.total ?? "?"}`);
       break;
     case "verify-fail":
       events.addNotice(
         ts,
-        `검증 실패 (${data.failure || "?"}${data.pattern ? ` — ${data.pattern}` : ""})`,
+        `검증 실패 (${data.failure || "?"}${data.step ? ` — ${data.step}` : ""})`,
         { severity: "CRIT" },
       );
       break;
@@ -768,11 +768,13 @@ function onFrame(frame) {
       panels.setUnread(data.unread);
       boardView.setUnread(data.unread);
       break;
-    /* One matched expectation of a --verify run; index is 1-based. */
+    /* One carried step of a --verify run; index is 1-based. The kind
+       travels with it, so a step this build does not know still reads as
+       itself rather than as a blank label. */
     case "verify":
       events.addNotice(
         frame.ts,
-        `검증 진행 ${data.index ?? "?"}/${data.total ?? "?"} — ${data.pattern ?? ""}`,
+        `검증 ${data.index ?? "?"}/${data.total ?? "?"} — ${describeStep(data)}`,
       );
       break;
     default:

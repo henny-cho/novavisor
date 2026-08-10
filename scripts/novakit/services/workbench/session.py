@@ -189,9 +189,9 @@ def prepare(target: Target) -> Prepared:
     return Prepared(scenario, topology)
 
 
-def _run_verify(scenario: expect.Scenario, stream, on_match, on_spawn) -> spawn.Run:
+def _run_verify(scenario: expect.Scenario, stream, on_step, on_spawn) -> spawn.Run:
     """Blocking: one verification child, its console tee'd into `stream`."""
-    return spawn.observe(scenario, stream=stream, on_match=on_match, on_spawn=on_spawn)
+    return spawn.observe(scenario, stream=stream, on_step=on_step, on_spawn=on_spawn)
 
 
 def _kill(child) -> None:
@@ -491,10 +491,10 @@ class Session:
         loop = asyncio.get_running_loop()
         self._assembler = anchors.LineAssembler()
         writer = _LoopWriter(loop, self._ingest_text)
-        total = len(prepared.scenario.expectations)
+        total = len(prepared.scenario.steps)
 
-        def on_match(match: expect.PatternMatch) -> None:
-            loop.call_soon_threadsafe(self._publish_match, match, total)
+        def on_step(step: expect.StepResult) -> None:
+            loop.call_soon_threadsafe(self._publish_step, step, total)
 
         def on_spawn(child) -> None:
             # The worker owns this child and holds the session lock for
@@ -504,7 +504,7 @@ class Session:
 
         try:
             run = await loop.run_in_executor(
-                None, self._deps.run_verify, prepared.scenario, writer, on_match, on_spawn
+                None, self._deps.run_verify, prepared.scenario, writer, on_step, on_spawn
             )
         except (Exception, SystemExit) as error:
             self._verify_child = None
@@ -514,7 +514,7 @@ class Session:
         # is still inside the scenario, and the handle is the only way
         # stop() can end it before the timeout.
         self._verify_child = None
-        # The worker marshals text and matches with call_soon_threadsafe.
+        # The worker marshals text and step results with call_soon_threadsafe.
         # A fast-finishing child can complete the executor future before
         # it is even awaited, and awaiting a done future never yields —
         # skipping the queued callbacks. One yield lets them land, so
@@ -525,25 +525,29 @@ class Session:
         result = run.result
         data = {
             "phase": "verify-pass" if result.ok else "verify-fail",
-            "matched": len(result.matches),
+            "carried": len(result.results),
             "total": total,
         }
         if not result.ok:
             data["failure"] = result.failure.value if result.failure else "unknown"
-            if result.pattern:
-                data["pattern"] = result.pattern
+            if result.step_kind:
+                data["step"] = result.step
         self._store.publish(Topic.LIFE, Kind.EVENT, data, src=Src.SERIAL)
         self._set_phase(Phase.EXITED, code=0 if result.ok else 1)
 
-    def _publish_match(self, match: expect.PatternMatch, total: int) -> None:
+    def _publish_step(self, step: expect.StepResult, total: int) -> None:
+        # The step's kind travels rather than the pattern it used to be:
+        # a reader that assumes one kind cannot describe the others, and
+        # the screen is the place that assumption becomes a blank label.
         self._store.publish(
             Topic.VERIFY,
             Kind.EVENT,
             {
-                "index": match.index,
+                "index": step.index,
                 "total": total,
-                "pattern": match.pattern,
-                "elapsed": match.elapsed_seconds,
+                "kind": step.kind,
+                "subject": step.subject,
+                "elapsed": step.elapsed_seconds,
             },
             src=Src.SERIAL,
         )

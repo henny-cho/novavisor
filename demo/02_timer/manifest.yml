@@ -15,7 +15,7 @@ guests:
     memory_size: 0x00100000
     vcpus: 1
 
-expect:
+steps:
   - pattern: "timer_fired"
     within_seconds: 10
   - pattern: "demo_exit code=0"

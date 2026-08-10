@@ -22,7 +22,7 @@ guests:
 # first reset marker is followed by a second vCPU1-online line only
 # after the quiesce ACK and pristine restore. The stats line prints
 # after AFFINITY_INFO confirms CPU_OFF; the boot vCPU exits last.
-expect:
+steps:
   - pattern: "core 1 online"
     within_seconds: 10
   - pattern: "vcpu1 online"

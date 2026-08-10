@@ -90,7 +90,7 @@ class ScenarioHarness(unittest.TestCase):
     is one thing to read and the tests are their own subject.
     """
 
-    def observe(self, child=None, *, label, launch=None, expectations=None,
+    def observe(self, child=None, *, label, launch=None, steps=None,
                 interrupt=False, clock=False) -> Ran:
         """Run one scenario and hand back what it wrote.
 
@@ -114,7 +114,7 @@ class ScenarioHarness(unittest.TestCase):
             phase=0,
             command=("fake-qemu",),
             timeout_seconds=10,
-            expectations=tuple(expectations or ({"pattern": "ready"},)),
+            steps=tuple(steps or ({"pattern": "ready"},)),
         )
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -147,10 +147,10 @@ class ScenarioHarness(unittest.TestCase):
 
 
 class DemoRunnerVerificationTest(ScenarioHarness):
-    def verify(self, child, expectations, timeout=10):
+    def verify(self, child, steps, timeout=10):
         return expect.observe_output(
             child,
-            expectations,
+            steps,
             timeout,
             clock=child.clock,
             timeout_error=FakeTimeout,
@@ -263,7 +263,7 @@ class DemoRunnerVerificationTest(ScenarioHarness):
         ])
 
         self.assertEqual(result.failure, "timeout")
-        self.assertEqual(result.pattern, "late-but-buffered")
+        self.assertEqual(result.step, "/late-but-buffered/")
         self.assertEqual(child.events, [("expect", "boot", 10.0)])
 
     def test_pattern_returned_after_its_deadline_is_timeout(self):
@@ -275,18 +275,25 @@ class DemoRunnerVerificationTest(ScenarioHarness):
         ])
 
         self.assertEqual(result.failure, "timeout")
-        self.assertEqual(result.pattern, "late")
+        self.assertEqual(result.step, "/late/")
         self.assertEqual(result.elapsed_seconds, 7.0)
         self.assertEqual(result.remaining_seconds, 3.0)
-        self.assertEqual(result.matches, ())
+        self.assertEqual(result.results, ())
         self.assertFalse(any(event[0] == "send" for event in child.events))
 
     def test_fatal_output_stops_waiting_and_terminates_qemu(self):
         class FatalChild(FakeChild):
+            """Answers with the fatal line, found by name.
+
+            Returning a fixed index would assert where the bands sit in
+            the monitored list, which is the caller's business and not
+            this test's.
+            """
+
             def expect(self, patterns, timeout):
                 self.events.append(("expect", patterns, timeout))
                 self.clock.advance(0.5)
-                return 1
+                return list(patterns).index(board.FATAL_PATTERNS[0])
 
         clock = FakeClock()
         child = FatalChild(clock)
@@ -301,8 +308,8 @@ class DemoRunnerVerificationTest(ScenarioHarness):
         )
 
         self.assertEqual(result.failure, "fatal")
-        self.assertEqual(result.pattern, board.FATAL_PATTERNS[0])
-        self.assertEqual(result.error, "while waiting for /guest-ready/")
+        self.assertEqual(result.offender, board.FATAL_PATTERNS[0])
+        self.assertEqual(result.step, "/guest-ready/")
         self.assertEqual(result.elapsed_seconds, 0.5)
         self.assertEqual(child.terminate_calls, [True])
 
@@ -328,8 +335,8 @@ class DemoRunnerVerificationTest(ScenarioHarness):
         )
 
         self.assertEqual(result.failure, "forbidden")
-        self.assertEqual(result.pattern, forbidden[0])
-        self.assertEqual(result.error, "while waiting for /dma lifecycle boot 3/")
+        self.assertEqual(result.offender, forbidden[0])
+        self.assertEqual(result.step, "/dma lifecycle boot 3/")
         self.assertEqual(result.elapsed_seconds, 0.25)
         self.assertEqual(child.terminate_calls, [True])
 
@@ -371,8 +378,8 @@ class DemoRunnerVerificationTest(ScenarioHarness):
         )
 
         self.assertEqual(result.failure, "forbidden")
-        self.assertEqual(result.pattern, forbidden[0])
-        self.assertEqual(result.error, "after all expected output matched")
+        self.assertEqual(result.offender, forbidden[0])
+        self.assertEqual(result.error, "after every step was carried out")
         self.assertEqual(child.terminate_calls, [True])
 
     def test_clean_eof_after_last_expected_preserves_success(self):
@@ -448,10 +455,10 @@ class DemoRunnerVerificationTest(ScenarioHarness):
         self.assertEqual(result.error, "RuntimeError: clock failed")
         self.assertEqual(child.terminate_calls, [True])
 
-    def test_match_diagnostics_record_pattern_timing(self):
+    def test_step_diagnostics_record_timing(self):
         clock = FakeClock()
         child = FakeChild(clock, actions=[2.0, 3.0])
-        matches = []
+        carried = []
 
         result = expect.observe_output(
             child,
@@ -460,13 +467,13 @@ class DemoRunnerVerificationTest(ScenarioHarness):
             clock=clock,
             timeout_error=FakeTimeout,
             eof_error=FakeEof,
-            on_match=matches.append,
+            on_step=carried.append,
         )
 
         self.assertTrue(result.ok)
-        self.assertEqual(matches, list(result.matches))
-        self.assertEqual(matches[0], expect.PatternMatch(1, "boot", 2.0, 2.0, 8.0))
-        self.assertEqual(matches[1], expect.PatternMatch(2, "ready", 5.0, 3.0, 5.0))
+        self.assertEqual(carried, list(result.results))
+        self.assertEqual(carried[0], expect.StepResult(1, "pattern", "boot", 2.0, 2.0, 8.0))
+        self.assertEqual(carried[1], expect.StepResult(2, "pattern", "ready", 5.0, 3.0, 5.0))
 
     def test_timeout_diagnostics_include_elapsed_and_scenario_remaining(self):
         class TimedTimeoutChild(FakeChild):
@@ -484,7 +491,7 @@ class DemoRunnerVerificationTest(ScenarioHarness):
         )
 
         self.assertEqual(result.failure, "timeout")
-        self.assertEqual(result.pattern, "load-done")
+        self.assertEqual(result.step, "/load-done/")
         self.assertEqual(result.wait_seconds, 6.0)
         self.assertEqual(result.elapsed_seconds, 6.0)
         self.assertEqual(result.remaining_seconds, 4.0)
@@ -627,7 +634,7 @@ class DemoRunnerVerificationTest(ScenarioHarness):
         ran = self.observe(
             child,
             label="timeout",
-            expectations=({"pattern": "ready", "within_seconds": 6},),
+            steps=({"pattern": "ready", "within_seconds": 6},),
             interrupt=True,
             clock=True,
         )
@@ -635,7 +642,9 @@ class DemoRunnerVerificationTest(ScenarioHarness):
         self.assertIn("timeout waiting for /ready/", ran.console)
         self.assertIn("QEMU cleanup: KeyboardInterrupt", ran.console)
         self.assertEqual(ran.diagnostics["failure"]["kind"], "timeout")
-        self.assertEqual(ran.diagnostics["failure"]["pattern"], "ready")
+        self.assertEqual(
+            ran.diagnostics["failure"]["step"], {"kind": "pattern", "subject": "ready"}
+        )
         self.assertEqual(ran.diagnostics["failure"]["elapsed_seconds"], 6.0)
         self.assertEqual(ran.diagnostics["failure"]["remaining_seconds"], 4.0)
         self.assertEqual(ran.diagnostics["termination"], {
@@ -673,7 +682,7 @@ class InvalidOutputBytesTest(unittest.TestCase):
             phase=1,
             command=("/bin/sh", "-c", "printf 'ok\\nabc\\342zz\\n'; sleep 5"),
             timeout_seconds=5,
-            expectations=({"pattern": "ok"},),
+            steps=({"pattern": "ok"},),
             forbidden_patterns=("NEVER",),
         )
 
@@ -684,3 +693,152 @@ class InvalidOutputBytesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QuietChild(FakeChild):
+    """A console that never prints during a wait.
+
+    `expect` burns the timeout it was handed and raises, which is what a
+    real child does when nothing arrives — and what makes a poll loop
+    driven by a fake clock terminate.
+    """
+
+    def expect(self, patterns, timeout):
+        self.events.append(("expect", patterns, timeout))
+        self.clock.advance(timeout)
+        raise FakeTimeout()
+
+
+def satisfied_after(polls: int):
+    """A handler carried out on the n-th look."""
+
+    def handler(_step):
+        looks = {"n": 0}
+
+        def poll():
+            looks["n"] += 1
+            return expect.CARRIED if looks["n"] >= polls else expect.PENDING
+
+        return poll
+
+    return handler
+
+
+class HandledStepTest(unittest.TestCase):
+    """Steps that are not console patterns: dispatch, guard, and reporting."""
+
+    def carry(self, child, steps, handlers, **kwargs):
+        return expect.observe_output(
+            child,
+            steps,
+            kwargs.pop("timeout", 10),
+            clock=child.clock,
+            timeout_error=FakeTimeout,
+            eof_error=FakeEof,
+            handlers=handlers,
+            poll_seconds=0.5,
+            **kwargs,
+        )
+
+    def test_every_kind_is_dispatched_by_its_key(self):
+        clock = FakeClock()
+        child = QuietChild(clock)
+        seen = []
+
+        def record(kind):
+            def handler(step):
+                seen.append((kind, step[kind]))
+                return lambda: expect.CARRIED
+
+            return handler
+
+        result = self.carry(
+            child,
+            [
+                {"observe": "smmu.stream"},
+                {"event": "smmu.attach"},
+                {"command": "stop 0"},
+            ],
+            {kind: record(kind) for kind in ("observe", "event", "command")},
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            seen, [("observe", "smmu.stream"), ("event", "smmu.attach"), ("command", "stop 0")]
+        )
+        self.assertEqual(
+            [(step.kind, step.subject) for step in result.results],
+            [("observe", "smmu.stream"), ("event", "smmu.attach"), ("command", "stop 0")],
+        )
+
+    def test_a_step_with_no_handler_fails_loudly(self):
+        clock = FakeClock()
+        result = self.carry(QuietChild(clock), [{"observe": "smmu.stream"}], {})
+
+        self.assertEqual(result.failure, "exception")
+        self.assertEqual(result.step, "observe smmu.stream")
+        self.assertIn("no handler for a observe step", result.error)
+
+    def test_a_step_that_never_settles_times_out_naming_itself(self):
+        clock = FakeClock()
+        child = QuietChild(clock)
+
+        result = self.carry(
+            child,
+            [{"observe": "smmu.stream", "within_seconds": 2}],
+            {"observe": lambda _step: lambda: expect.PENDING},
+        )
+
+        self.assertEqual(result.failure, "timeout")
+        self.assertEqual(result.step, "observe smmu.stream")
+        self.assertEqual(result.wait_seconds, 2.0)
+
+    def test_a_handler_reporting_a_reason_carries_it_into_the_failure(self):
+        clock = FakeClock()
+        result = self.carry(
+            QuietChild(clock),
+            [{"observe": "smmu.stream"}],
+            {"observe": lambda _step: lambda: expect.step_failed("state=abort, wanted translate")},
+        )
+
+        self.assertEqual(result.failure, "exception")
+        self.assertEqual(result.step, "observe smmu.stream")
+        self.assertEqual(result.error, "state=abort, wanted translate")
+
+    def test_forbidden_output_during_a_handled_wait_still_stops_the_run(self):
+        """The guard is why the drain exists, not a side effect of it."""
+
+        class ForbiddenDuringWait(QuietChild):
+            def expect(self, patterns, timeout):
+                self.events.append(("expect", patterns, timeout))
+                self.clock.advance(timeout)
+                return list(patterns).index(forbidden[0])
+
+        clock = FakeClock()
+        forbidden = (r"\[dma\] VM 0 resumed generation 4",)
+        child = ForbiddenDuringWait(clock)
+
+        result = self.carry(
+            child,
+            [{"observe": "smmu.stream", "within_seconds": 5}],
+            {"observe": satisfied_after(3)},
+            forbidden_patterns=forbidden,
+        )
+
+        self.assertEqual(result.failure, "forbidden")
+        self.assertEqual(result.offender, forbidden[0])
+        self.assertEqual(result.step, "observe smmu.stream")
+
+    def test_the_console_is_read_while_a_handled_step_waits(self):
+        """An unread pty stops a talkative guest on its next write."""
+        clock = FakeClock()
+        child = QuietChild(clock)
+
+        result = self.carry(
+            child,
+            [{"observe": "smmu.stream", "within_seconds": 5}],
+            {"observe": satisfied_after(4)},
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(len([e for e in child.events if e[0] == "expect"]), 3)

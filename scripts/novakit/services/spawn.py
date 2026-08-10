@@ -130,7 +130,7 @@ def observe(
     *,
     stream,
     clock: Callable[[], float] | None = None,
-    on_match: Callable[[expect.PatternMatch], None] | None = None,
+    on_step: Callable[[expect.StepResult], None] | None = None,
     on_spawn: Callable[[object], None] | None = None,
 ) -> Run:
     """Run one scenario to its outcome, capturing everything the child prints.
@@ -163,12 +163,12 @@ def observe(
     try:
         result = expect.observe_output(
             child,
-            list(scenario.expectations),
+            list(scenario.steps),
             scenario.timeout_seconds,
             clock=clock or time.monotonic,
             timeout_error=pexpect.TIMEOUT,
             eof_error=pexpect.EOF,
-            on_match=on_match,
+            on_step=on_step,
             fatal_patterns=board.FATAL_PATTERNS,
             forbidden_patterns=scenario.forbidden_patterns,
         )

@@ -24,7 +24,7 @@ guests:
 # A's FP workload, so A finishes first under any fair slicing. Both
 # series values are IEEE-exact — a single leaked FP register between
 # the time-shared guests corrupts an accumulator and fails the compare.
-expect:
+steps:
   - pattern: "mmu: on vaddr ok"
     within_seconds: 10
   - pattern: "fp: A ok"

@@ -82,7 +82,7 @@ the standard virt address (`pl011_el1.h` driver helpers) — TX by DR
 polling, RX by the UART SPI (33): enable it at the distributor
 (`gicd_enable_spi()`) and unmask IMSC. Host input goes to the focused
 VM; Ctrl-T (0x14) cycles focus across live vuart VMs. A manifest
-`expect` entry may carry `send:` — bytes written to the guest console
+`pattern:` step may carry `send:` — bytes written to the guest console
 after that pattern matches. Guests also each get a private virtual
 counter (per-VM CNTVOFF): CNTVCT restarts near zero on every (re)boot.
 
@@ -92,7 +92,7 @@ config YAML (`configs/*.yml`, selected with `scripts/nova build --config`;
 the default reproduces the classic four-slot table). Each boot vCPU
 receives its DTB's IPA in x0 — parse it with `fdt_el1.h` to learn the
 window size and vCPU count. A manifest may name a `config:` it needs,
-or a `variants:` list ({name, config, expect}, sharing the guests) to
+or a `variants:` list ({name, config, steps}, sharing the guests) to
 verify the same guest under several configs in one demo.
 
 Guest SMP (Phase 13): the boot slot's VM carries two vCPUs (cores 0
@@ -149,21 +149,21 @@ guests:
 # (`scripts/nova build --config`). Omitted = configs/default.yml.
 config: "configs/small.yml"
 
-# Ordered list of output patterns the harness must observe. An entry
-# may carry `send:` — bytes written to the guest console only after
-# its pattern matched (deterministic stdin-driven demos).
-expect:
+# Ordered list of steps the harness must carry out. A `pattern:` step
+# waits for console output and may carry `send:` — bytes written to the
+# guest console only after its pattern matched.
+steps:
   - pattern: "Hello from EL1 guest!"
     within_seconds: 5
   - pattern: "demo_exit code=0"
     within_seconds: 10
 
-# Alternative to a single config/expect: run the demo once per
-# variant (each a full build + QEMU + expect run, sharing `guests`).
+# Alternative to a single config/steps: run the demo once per
+# variant (each a full build + QEMU + verify run, sharing `guests`).
 # variants:
 #   - name: "small"
 #     config: "configs/small.yml"
-#     expect: [...]
+#     steps: [...]
 ```
 
 ### Patterns
@@ -207,7 +207,7 @@ For Phases 8+ that reference real OSes (Zephyr, Linux), add a `fetch.sh` in the 
 1. Build the hypervisor by driving the CMake preset directly, after content-syncing the manifest's `config`/payload selection into the preset's `active_config.yml` / `active_payloads.yml`.
 2. Build all custom demo guests (`cmake --build build/demo`).
 3. Construct a QEMU command with the hypervisor ELF as `-kernel` and each manifest guest as a separate `-device loader,file=...,addr=...,force-raw=on` (skipped in `payload_mode: embedded`, where the guests travel inside the ELF).
-4. Spawn QEMU via `pexpect`, stream stdout to the console, and assert each `expect.pattern` appears within `within_seconds`.
-5. Terminate QEMU on success (all patterns matched) or failure (timeout / EOF).
+4. Spawn QEMU via `pexpect`, stream stdout to the console, and carry out each manifest step within its `within_seconds`.
+5. Terminate QEMU on success (every step carried out) or failure (timeout / EOF).
 
 The harness exits 0 on PASS and non-zero on any failure, which CI uses as the gate.

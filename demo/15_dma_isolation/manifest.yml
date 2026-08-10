@@ -22,7 +22,7 @@ guests:
     memory_size: 0x00100000
     vcpus: 1
 
-expect:
+steps:
   - pattern: "\\[dma\\] EDU round-trip ok"
     within_seconds: 10
   - pattern: "\\[smmu\\] fault type=0x0*10 sid=16 iova=0x0*50100000"

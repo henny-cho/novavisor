@@ -31,7 +31,7 @@ guests:
 # pattern before it matched: "ping" goes to the initial focus (vm0),
 # whose echo+exit precedes the focus switch (Ctrl-T = \x14) — the
 # cycle skips retired VMs, landing on vm2 — and "pong" echoes there.
-expect:
+steps:
   # No SMMU marker here: DMA isolation is demos 15-17's subject, and
   # asserting it pinned this demo to a composition that happens to
   # include an IOMMU.

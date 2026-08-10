@@ -14,7 +14,7 @@ guests:
     memory_size: 0x00100000
     vcpus: 1
 
-expect:
+steps:
   - pattern: "panic smoke: triggering an EL2 fault"
     within_seconds: 5
   - pattern: "\\[NOVA PANIC\\] EL2 fatal exception: vector el2h_sync"

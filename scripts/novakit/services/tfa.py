@@ -244,7 +244,7 @@ def _chain_scenario(flash: Path) -> expect.Scenario:
         phase="firmware",
         command=tuple(board.command(bios=flash, secure=True)),
         timeout_seconds=CHAIN_TIMEOUT,
-        expectations=tuple(
+        steps=tuple(
             {"pattern": marker, "within_seconds": CHAIN_TIMEOUT}
             for marker in CHAIN_MARKERS
         ),
