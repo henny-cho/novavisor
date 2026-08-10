@@ -181,6 +181,37 @@ class DemoRunnerVerificationTest(ScenarioHarness):
         self.assertIn("none", command)
         self.assertIn("edu,bus=pcie.0,addr=2.0,dma_mask=0xffffffffff", command)
 
+    def test_a_variant_may_run_the_same_guest_on_different_hardware(self):
+        manifest_with_variants = {
+            "qemu_devices": ["edu,bus=pcie.0,addr=2.0"],
+            "variants": [
+                {"name": "plain", "qemu_devices": []},
+                {"name": "dma"},
+            ],
+            "guests": [],
+        }
+
+        plain = artifacts.build_qemu_cmd(
+            Path("/tmp/novavisor.elf"), "demo", Path("/tmp/demo"),
+            manifest_with_variants, {"name": "plain", "qemu_devices": []},
+        )
+        inherited = artifacts.build_qemu_cmd(
+            Path("/tmp/novavisor.elf"), "demo", Path("/tmp/demo"),
+            manifest_with_variants, {"name": "dma"},
+        )
+
+        self.assertNotIn("edu,bus=pcie.0,addr=2.0", plain)
+        self.assertIn("edu,bus=pcie.0,addr=2.0", inherited)
+
+    def test_a_variant_device_list_is_checked_like_any_other(self):
+        with self.assertRaisesRegex(SystemExit, "qemu_devices"):
+            artifacts.build_qemu_cmd(
+                Path("/tmp/novavisor.elf"),
+                "invalid",
+                Path("/tmp/demo"),
+                {"variants": [{"name": "bad", "qemu_devices": "edu"}], "guests": []},
+            )
+
     def test_qemu_command_rejects_invalid_device_list(self):
         with self.assertRaisesRegex(SystemExit, "qemu_devices"):
             artifacts.build_qemu_cmd(
@@ -918,3 +949,98 @@ class RunSurfacesTest(ScenarioHarness):
             verify.run_scenario(self.observing(), verify.Sink(), scope="test")
 
         self.assertFalse(surface.directory.exists())
+
+
+class StepAnchorTest(unittest.TestCase):
+    """Where a scenario draws the line between what has happened and
+    what it is still waiting for.
+
+    Only records can settle that: console output and trace records reach
+    this process by different routes, so a console line cannot place a
+    record in time.
+    """
+
+    class FakeMachine:
+        """Enough of a machine to exercise the anchor.
+
+        The real one reads a mapped ring; what a step does with what it
+        finds there is the same either way.
+        """
+
+        def __init__(self, decoded):
+            self._decoded = list(decoded)
+            self._anchor = 0
+            self.issued = []
+
+        def after_anchor(self):
+            for index in range(self._anchor, len(self._decoded)):
+                yield index, self._decoded[index]
+
+        def anchor_at(self, index):
+            self._anchor = max(self._anchor, index)
+
+        def records(self):
+            return self._decoded
+
+        def writer(self):
+            machine = self
+
+            class Writer:
+                @staticmethod
+                def as_dict():
+                    return {"ops": [{"name": "start"}]}
+
+                @staticmethod
+                def issue(op, *args):
+                    machine.issued.append((op, args))
+
+            return Writer
+
+    def test_a_second_event_step_looks_past_the_first(self):
+        from novakit.services.workbench import steps
+
+        machine = self.FakeMachine([
+            {"event": "smmu.attach", "stream": 16},   # at boot
+            {"event": "smmu.attach", "stream": 16},   # after recovery
+        ])
+        handler = steps.event_handler(machine)
+
+        self.assertEqual(handler({"event": "smmu.attach"})(), expect.CARRIED)
+        self.assertEqual(handler({"event": "smmu.attach"})(), expect.CARRIED)
+        # Two in the run, two claimed, nothing left to claim a third.
+        self.assertEqual(handler({"event": "smmu.attach"})(), expect.PENDING)
+
+    def test_the_fault_first_makes_the_attach_mean_recovery(self):
+        from novakit.services.workbench import steps
+
+        machine = self.FakeMachine([
+            {"event": "smmu.attach", "stream": 16},
+            {"event": "smmu.fault", "stream": 16},
+            {"event": "smmu.attach", "stream": 16},
+        ])
+        handler = steps.event_handler(machine)
+
+        self.assertEqual(handler({"event": "smmu.fault"})(), expect.CARRIED)
+        # The one left is the re-attach, not the one the run booted with.
+        self.assertEqual(handler({"event": "smmu.attach"})(), expect.CARRIED)
+        self.assertEqual(handler({"event": "smmu.attach"})(), expect.PENDING)
+
+    def test_a_command_anchors_where_it_was_issued_not_where_it_answered(self):
+        """EL2 emits a verdict after carrying the command out, so the
+        records a command caused are older than its answer."""
+        from novakit.services.workbench import steps
+
+        machine = self.FakeMachine([
+            {"event": "smmu.attach", "stream": 16},   # at boot
+        ])
+        poll = steps.command_handler(machine)({"command": "start 0"})
+
+        self.assertEqual(poll(), expect.PENDING)  # issues, anchors here
+        machine._decoded += [
+            {"event": "smmu.attach", "stream": 16},                   # the effect
+            {"event": "command", "op": "start", "result": "ok"},      # the answer
+        ]
+        self.assertEqual(poll(), expect.CARRIED)
+
+        attach = steps.event_handler(machine)({"event": "smmu.attach"})
+        self.assertEqual(attach(), expect.CARRIED)

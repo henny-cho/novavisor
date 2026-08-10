@@ -77,6 +77,17 @@ def manifest_config(manifest: dict) -> str | None:
     return manifest.get("config")
 
 
+def manifest_devices(manifest: dict, variant: dict) -> list[str]:
+    """The QEMU devices one variant runs with.
+
+    Overridden the way `config` is: what hardware a run has is as much
+    a property of the variant as which guest table it boots, and a
+    manifest that could vary one but not the other could not express
+    "the same guest, different hardware" at all.
+    """
+    return variant.get("qemu_devices", manifest.get("qemu_devices", []))
+
+
 def manifest_variants(manifest: dict) -> list[dict]:
     variants = manifest.get("variants")
     if variants is not None:
@@ -110,11 +121,16 @@ def payload_mode(manifest: dict) -> str:
 
 def validate(demo_name: str, manifest: dict) -> None:
     """Reject manifests the board model or the guest ABI cannot honour."""
-    devices = manifest.get("qemu_devices", [])
-    if not isinstance(devices, list) or not all(isinstance(device, str) and device for device in devices):
-        raise SystemExit(
-            f"[nova demo] {demo_name}: qemu_devices must be a list of non-empty strings"
-        )
+    # Every place a device list may be written is checked by the same
+    # rule, or a variant becomes the way to smuggle one past it.
+    for source in (manifest, *manifest_variants(manifest)):
+        devices = source.get("qemu_devices", [])
+        if not isinstance(devices, list) or not all(
+            isinstance(device, str) and device for device in devices
+        ):
+            raise SystemExit(
+                f"[nova demo] {demo_name}: qemu_devices must be a list of non-empty strings"
+            )
     for guest in manifest.get("guests", []):
         abi.validate_guest(
             f"[nova demo] {demo_name}: guest '{guest.get('name')}'", guest

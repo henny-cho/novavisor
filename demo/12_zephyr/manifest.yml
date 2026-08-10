@@ -19,13 +19,50 @@ guests:
     vcpus: 1
     uart: vuart
 
-# The heartbeat never exits and emits one line every five seconds.
-steps:
-  - pattern: "Booting Zephyr OS build"
-    within_seconds: 30
-  - pattern: "NOVA ZEPHYR HEARTBEAT 1"
-    within_seconds: 10
-  - pattern: "NOVA ZEPHYR HEARTBEAT 2"
-    within_seconds: 10
-  - pattern: "NOVA ZEPHYR HEARTBEAT 3"
-    within_seconds: 10
+# A guest that never exits is the only place a stream stands still long
+# enough to be stopped and started on purpose, so this demo runs twice:
+# once as the heartbeat it has always been, and once with a stream of
+# its own for the power commands to move.
+variants:
+  - name: "heartbeat"
+    config: "configs/zephyr.yml"
+    steps:
+      - pattern: "Booting Zephyr OS build"
+        within_seconds: 30
+      - pattern: "NOVA ZEPHYR HEARTBEAT 1"
+        within_seconds: 10
+      - pattern: "NOVA ZEPHYR HEARTBEAT 2"
+        within_seconds: 10
+      - pattern: "NOVA ZEPHYR HEARTBEAT 3"
+        within_seconds: 10
+
+  - name: "dma"
+    config: "configs/zephyr-dma.yml"
+    qemu_devices:
+      - "edu,bus=pcie.0,addr=2.0,dma_mask=0xffffffffff"
+    steps:
+      - pattern: "NOVA ZEPHYR HEARTBEAT 1"
+        within_seconds: 40
+      # The guest is up and nothing has faulted, so the stream is bound
+      # to its VM's tables — the state a stop has to take it out of.
+      - observe: "smmu.stream"
+        where: { stream: 16 }
+        equals: { state: "translate" }
+        within_seconds: 5
+      - command: "stop 0"
+        within_seconds: 10
+      # No fault happened, so EL2's own recovery never ran: the only
+      # thing that could have moved this entry is the command above.
+      - observe: "smmu.stream"
+        where: { stream: 16 }
+        equals: { state: "abort" }
+        within_seconds: 10
+      - command: "start 0"
+        within_seconds: 10
+      - event: "smmu.attach"
+        where: { stream: 16 }
+        within_seconds: 15
+      - observe: "smmu.stream"
+        where: { stream: 16 }
+        equals: { state: "translate" }
+        within_seconds: 10

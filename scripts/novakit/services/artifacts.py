@@ -99,10 +99,16 @@ def write_payload_manifest(path: Path, records: list[dict]) -> None:
         path.write_text(content)
 
 
-def build_qemu_cmd(elf: Path, demo_name: str, demo_build: Path, manifest: dict) -> list[str]:
+def build_qemu_cmd(
+    elf: Path,
+    demo_name: str,
+    demo_build: Path,
+    manifest: dict,
+    variant: dict | None = None,
+) -> list[str]:
     manifests.validate(demo_name, manifest)
     cmd = board.command(kernel=elf)
-    for device in manifest.get("qemu_devices", []):
+    for device in manifests.manifest_devices(manifest, variant or {}):
         cmd += ["-device", device]
     if manifests.payload_mode(manifest) == "embedded":
         # The payloads travel inside the ELF; QEMU loads nothing extra.
@@ -147,7 +153,7 @@ def scenario_for(
     return expect.Scenario(
         label=name if "name" not in variant else f"{name}[{variant['name']}]",
         phase=demo_manifest.get("phase"),
-        command=tuple(build_qemu_cmd(elf, name, demo_build, demo_manifest)),
+        command=tuple(build_qemu_cmd(elf, name, demo_build, demo_manifest, variant)),
         timeout_seconds=int(demo_manifest.get("timeout_seconds", 30)),
         steps=steps,
         forbidden_patterns=forbidden,

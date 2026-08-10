@@ -22,7 +22,7 @@ from ...image import observe
 from .. import expect
 from . import commands, hardware, trace
 from .observations import COMMAND_PAGE, OBSERVATIONS
-from .snapshot import image_symbols, open_provider
+from .snapshot import Unchanged, image_symbols, open_provider
 
 
 class Machine:
@@ -41,6 +41,7 @@ class Machine:
         self._tracer: trace.TraceReader | None = None
         self._writer: commands.Writer | None = None
         self._records: list[trace.Record] = []
+        self._anchor = 0
 
     @property
     def board(self) -> dict[str, int]:
@@ -65,8 +66,10 @@ class Machine:
     def records(self) -> list[trace.Record]:
         """Everything the rings have produced so far in this run.
 
-        Drained cumulatively: a step asks whether something happened,
-        not whether it happened since the last look.
+        Drained cumulatively rather than per look: a step may be
+        satisfied by a record that arrived while an earlier step was
+        still waiting, and a reader that only returned the newest batch
+        would drop it between two polls.
         """
         if self._tracer is None:
             self._tracer = trace.TraceReader(
@@ -77,6 +80,30 @@ class Machine:
             )
         self._records += self._tracer.drain()
         return self._records
+
+    def after_anchor(self):
+        """Decoded records the scenario has not yet moved past, with
+        their index.
+
+        A step list is a narrative, and the ring is where its order can
+        actually be settled: console output and trace records reach this
+        process by different routes, so only records can be placed
+        against records.
+        """
+        for index in range(self._anchor, len(self.records())):
+            yield index, trace.decode(self._records[index])
+
+    def anchor_at(self, index: int) -> None:
+        """Move the line between what is past and what this run is still
+        waiting for.
+
+        An observation moves it to what was seen; an action moves it to
+        the moment it was issued, because EL2 emits a command's verdict
+        *after* carrying it out — so the effects of a command are older
+        records than its answer, and anchoring on the answer would put
+        them out of reach.
+        """
+        self._anchor = max(self._anchor, index)
 
     def writer(self) -> commands.Writer:
         if self._writer is None:
@@ -123,21 +150,30 @@ def observe_handler(machine: Machine) -> expect.StepHandler:
         topic = step["observe"]
         where = step.get("where", {})
         wanted = step.get("equals", {})
+        last: dict[str, object] = {}
 
         def poll() -> expect.StepOutcome:
             try:
-                entry = _select(machine.reading(topic), where)
-            except (FileNotFoundError, observe.Stale, KeyError) as error:
-                # A region that is not there yet is ordinary during boot;
-                # a manifest naming a topic this build lacks is not, and
-                # the deadline turns it into a failure that says so.
-                return expect.step_failed(str(error)) if isinstance(error, KeyError) \
-                    else expect.PENDING
+                last["value"] = machine.reading(topic)
+            except KeyError as error:
+                # A topic this build does not publish is a manifest that
+                # cannot be satisfied by any run, not a slow boot.
+                return expect.step_failed(str(error))
+            except Unchanged:
+                # The publisher answered "not since you last looked", so
+                # the reading this step has is still the current one.
+                if "value" not in last:
+                    return expect.PENDING
+            except (FileNotFoundError, observe.Stale):
+                return expect.PENDING  # ordinary during boot
+            entry = _select(last.get("value"), where)
             if entry is None:
-                return expect.PENDING
+                return expect.step_pending(
+                    f"nothing in {topic} matches {where}")
             if _matches(entry, wanted):
                 return expect.CARRIED
-            return expect.PENDING
+            seen = {name: entry.get(name) for name in wanted}
+            return expect.step_pending(f"{topic} reads {seen}, wanted {wanted}")
 
         return poll
 
@@ -157,20 +193,19 @@ def event_handler(machine: Machine) -> expect.StepHandler:
         where = step.get("where", {})
 
         def poll() -> expect.StepOutcome:
+            lost = 0
             try:
-                records = machine.records()
+                for index, fields in machine.after_anchor():
+                    if fields["event"] == wanted_event and _matches(fields, where):
+                        machine.anchor_at(index + 1)
+                        return expect.CARRIED
+                    if fields["event"] == "trace.gap":
+                        lost += int(fields.get("count", 0))
             except (FileNotFoundError, trace.NotFormatted):
                 return expect.PENDING
-            lost = 0
-            for record in records:
-                fields = trace.decode(record)
-                if fields["event"] == wanted_event and _matches(fields, where):
-                    return expect.CARRIED
-                if fields["event"] == "trace.gap":
-                    lost += int(fields.get("count", 0))
             if lost:
                 return expect.step_pending(
-                    f"{lost} records were lost to a full ring during this run, "
+                    f"{lost} records were lost to a full ring while this step waited, "
                     f"so {wanted_event} may have happened unseen"
                 )
             return expect.PENDING
@@ -208,11 +243,15 @@ def command_handler(machine: Machine) -> expect.StepHandler:
                         f"this run offers no {name} command "
                         f"(it offers {', '.join(sorted(offered)) or 'none'})"
                     )
+                # Before issuing: everything already in the ring belongs
+                # to the run so far, and everything this command causes
+                # comes after — including the records it causes before
+                # EL2 gets round to answering.
+                machine.anchor_at(len(machine.records()))
                 writer.issue(commands.OPS[name], *args)
                 state["issued"] = True
                 return expect.PENDING
-            for record in machine.records():
-                fields = trace.decode(record)
+            for _index, fields in machine.after_anchor():
                 if fields["event"] != "command" or fields["op"] != words[0]:
                     continue
                 if fields["result"] == wanted:

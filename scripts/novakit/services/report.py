@@ -90,7 +90,10 @@ def report_failure(
     # `step` says what was owed and `offender` what arrived instead; a
     # headline that named only one of the two left the other unsaid.
     headline = {
-        FailureKind.TIMEOUT: lambda: (f"timeout waiting for {result.step} "
+        # A step that waited may have learned why it was still waiting;
+        # printing the limit without it says only that time ran out.
+        FailureKind.TIMEOUT: lambda: (f"timeout waiting for {result.step}"
+                                      f"{f' — {result.error}' if result.error else ''} "
                                       f"(wait limit {result.wait_seconds:.1f}s, "),
         FailureKind.EOF: lambda: f"EOF before {result.step} (",
         FailureKind.FATAL: lambda: f"fatal output /{result.offender}/ "

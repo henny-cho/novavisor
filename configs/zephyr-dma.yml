@@ -1,0 +1,9 @@
+# Zephyr with a stream of its own: the same guest as `zephyr.yml`, plus
+# an EDU device owned by VM 0. The guest never touches it — what the
+# stream is here for is to exist, so the entry the hypervisor writes for
+# it can be watched across a stop and a start.
+guests:
+  - { name: zephyr, memory_size: 0x00800000, vcpus: 1, uart: vuart }
+
+devices:
+  - { id: edu0, owner: 0, guest_ipa: 0x10000000, virtual_intid: 37 }

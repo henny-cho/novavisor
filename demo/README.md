@@ -92,7 +92,8 @@ config YAML (`configs/*.yml`, selected with `scripts/nova build --config`;
 the default reproduces the classic four-slot table). Each boot vCPU
 receives its DTB's IPA in x0 — parse it with `fdt_el1.h` to learn the
 window size and vCPU count. A manifest may name a `config:` it needs,
-or a `variants:` list ({name, config, steps}, sharing the guests) to
+or a `variants:` list ({name, config, steps, qemu_devices}, sharing the
+guests) to
 verify the same guest under several configs in one demo.
 
 Guest SMP (Phase 13): the boot slot's VM carries two vCPUs (cores 0
@@ -160,6 +161,8 @@ steps:
 
 # Alternative to a single config/steps: run the demo once per
 # variant (each a full build + QEMU + verify run, sharing `guests`).
+# A variant may also name its own `qemu_devices`, for the same guest on
+# different hardware; omitting it inherits the list above.
 # variants:
 #   - name: "small"
 #     config: "configs/small.yml"
