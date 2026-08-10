@@ -63,7 +63,6 @@ _TLM = abi.read_defines(
         "NOVA_TLM_PERIOD_OFF",
         "NOVA_TLM_BUDGET_OFF",
         "NOVA_TLM_BYTES_OFF",
-        "NOVA_TLM_FREQ_OFF",
         "NOVA_TLM_HEADER_SIZE",
         "NOVA_TLM_DESC_SIZE",
         "NOVA_TLM_DESC_SOURCE_OFF",
@@ -224,9 +223,9 @@ def changed_mask(before, after):
     value itself.
 
     What a stop is *for* is seeing what moved, and a stop publishes the
-    whole machine — twenty-eight topics of it. Between two consecutive
-    binds three or four values actually changed, and finding them by eye
-    across every panel is the work this removes.
+    whole manifest. Between two consecutive binds three or four values
+    actually changed, and finding them by eye across every panel is the
+    work this removes.
 
     Leaves, not containers: "the scheduler changed" is true of almost
     every stop and says nothing, where the one cell holding `current` is
@@ -338,8 +337,19 @@ class TelemetryProvider:
                 f"telemetry period {self.period_us} us, the manifest was checked against {declared} us"
             )
         self.budget = _u32(header, _TLM["NOVA_TLM_BUDGET_OFF"])
+        if not self.budget:
+            raise ValueError("telemetry budget is zero; the publisher would never advance")
         self.bytes_published = _u32(header, _TLM["NOVA_TLM_BYTES_OFF"])
-        self.freq = _u32(header, _TLM["NOVA_TLM_FREQ_OFF"])
+        # How old a published value can be. A turn copies until the
+        # budget is spent, so a round takes as many turns as the payload
+        # divides into it, and past one round every slot has been
+        # revisited. Derived rather than written down: both terms move
+        # with the firmware, and a bound stated in prose would not.
+        turns_per_round = -(-self.bytes_published // self.budget)
+        self.staleness_us = self.period_us * turns_per_round
+        # Stated where it is derived, beside the publisher's own line,
+        # so every path that opens a reader reports the same bound.
+        print(f"[workbench] S: at most {self.staleness_us / 1000:g} ms stale")
 
         slots = _u32(header, _TLM["NOVA_TLM_SLOTS_OFF"])
         table = inner.read_bytes(base + _TLM["NOVA_TLM_HEADER_SIZE"], slots * stride)
@@ -373,13 +383,12 @@ class TelemetryProvider:
         if obs.pa is not None:
             return self._inner.read(obs)
 
-        # A stopped machine is read directly, and that is not a fallback
-        # — it is the exact answer. Publication exists because a running
-        # machine cannot be asked to hold still; a stopped one has no
-        # writer to race, so the address holds the truth and the last
-        # published copy is merely the truth as of the last turn. The
-        # stop path is the one place the S layer is exact, and it stays
-        # that way.
+        # Read the address itself. Safe only where nothing is writing —
+        # a stopped machine, or a structure built once — because this
+        # path has no sequence to check and cannot tell a torn value
+        # from a whole one. What it adds over the published copy is
+        # `staleness_us` worth of motion: a stopped machine takes no
+        # further turn, so its last turn is as far as publication got.
         if not live:
             return self._inner.read(obs)
 
@@ -507,17 +516,15 @@ class SnapshotPoller:
     def sweep(self) -> list[tuple[Obs, object]]:
         """Every observation at once, rate and change gate ignored.
 
-        Only meaningful while the machine is stopped. Then nothing is
-        moving, so these reads are all of one instant — no torn value, no
-        writer racing the reader — and the point is the complete picture
-        rather than the delta the gate exists to find. A reader who has
-        just arrived at an event wants the whole machine, including every
-        field that happens not to have changed since the last poll.
+        For a machine that has stopped. A reader who has just arrived at
+        an event wants the whole picture, including the fields that
+        happen not to have changed since the last poll, which is the
+        opposite of the delta the gate exists to find.
 
-        `live=False` says that, and it is what keeps this exact: a
-        stopped machine publishes nothing more, so the published copy
-        would be as old as the last turn, where the address itself is
-        the instant the machine stopped at.
+        `live=False` because a stopped machine takes no further turn:
+        the published copy stays as old as its last one, where the
+        address is the instant the machine stopped at. Direct reads are
+        safe here for the same reason — nothing is writing.
 
         The cache is updated, so resuming does not replay as changes the
         values this already sent.

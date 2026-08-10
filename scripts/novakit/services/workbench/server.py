@@ -490,12 +490,12 @@ class Bridge:
         """Everything the machine knows about the instant it stopped.
 
         Registers come from the stub; the rest is the whole observation
-        manifest read from a machine that is not moving. Polling has to
-        sample and can only report what changed since last time; a
-        stopped machine can be read exhaustively, with no torn value and
-        no writer racing the reader, so this is the one place the S layer
-        is exact. It goes out as H for that reason — same reading, a
-        different claim about how much it can be trusted.
+        manifest, read from the addresses rather than from the published
+        copy. What that adds is the machine's last `staleness_us` worth
+        of motion — the publisher makes the copy whole and torn-free on
+        its own, but a stopped machine takes no further turn, so its
+        last one is as far as publication got. It goes out as H because
+        it is read a different way, not because it is a different fact.
         """
         loop = asyncio.get_running_loop()
         data = await loop.run_in_executor(None, inspector.pause)

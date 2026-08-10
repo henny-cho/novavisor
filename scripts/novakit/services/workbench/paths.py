@@ -37,7 +37,7 @@ CHIPS = ("trap", "sched", "timer", "vgic", "vuart", "ivc")
 # Anchors on the address strip.
 SEGMENTS = ("mem", "pa:shared")
 
-GRADE_DIRECT = "direct"  # the machine stopped on it — measured, exact
+GRADE_DIRECT = "direct"  # a record or a stop witnessed it — the moment itself
 GRADE_CONSOLE = "console"  # a classified log line — exact in time
 GRADE_POLL = "poll"  # a snapshot delta — quantised to the sample
 GRADE_NONE = "none"  # structure, with nothing watching it
