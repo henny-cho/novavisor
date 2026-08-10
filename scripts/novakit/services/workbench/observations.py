@@ -225,8 +225,14 @@ def asserted_names() -> set[str]:
     for _name, demo in manifest.iter_demos():
         for variant in manifest.manifest_variants(demo):
             for step in variant.get("steps", []):
-                if expect.step_kind(step) in ("observe", "event"):
+                kind = expect.step_kind(step)
+                if kind in ("observe", "event"):
                     named.add(expect.step_subject(step))
+                elif kind == "walk":
+                    # A walk names a regime, which is not an observable.
+                    # What it holds a run to is the bank it roots itself
+                    # in: the walk reads that and follows what it says.
+                    named.add(EL1_BANKS)
     return named
 
 

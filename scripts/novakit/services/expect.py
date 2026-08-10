@@ -40,7 +40,13 @@ class Scenario:
 # as self-describing as its own entry. Only `pattern` is carried out
 # here; the rest are handed to injected handlers, so this module never
 # learns what a shared memory region or a command ring is.
-STEP_KINDS: tuple[str, ...] = ("pattern", "observe", "event", "command")
+#
+# `command` and `walk` are both things the host does, and they are two
+# words because they are two different acts: a command is executed by
+# the machine and answered on the trace ring, where a walk is a question
+# an observer asks and an observer answers. One word for both would
+# leave a demo unable to say which of them a run did.
+STEP_KINDS: tuple[str, ...] = ("pattern", "observe", "event", "command", "walk")
 
 
 def step_kind(step: dict) -> str:

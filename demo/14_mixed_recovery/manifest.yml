@@ -42,6 +42,16 @@ steps:
   - pattern: "~ #"
     within_seconds: 30
     send: "\u0014"
+  # Linux is up and its own MMU is on, so its high half is a regime to
+  # walk. The kernel image is pinned, so this VA holds still: the walk
+  # answers the IPA the guest's own tables give it, and the translation
+  # beneath answers where that IPA physically is. PA = IPA + 0x800000
+  # here, which is this VM's load address minus its IPA base — the whole
+  # chain, in one line, before the load starts moving anything.
+  - walk: "vm1.v0.el1.high"
+    address: "0xffff8000807c12a4"
+    equals: { output: "0x507c12a4", through: "0x50fc12a4", fault: "" }
+    within_seconds: 20
   - pattern: "\\[mux\\] focus vm1"
     within_seconds: 5
     send: "nova-mixed\n"

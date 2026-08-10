@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import struct
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -198,18 +200,32 @@ class Published:
 
     period_us = round(1_000_000 / observations.PUBLISH_HZ)
 
-    def __init__(self, tables, *looks: list[dict], stamp: int | None = None, tears: int = 0):
+    def __init__(
+        self,
+        tables,
+        *looks: list[dict],
+        stamp: int | None = None,
+        tears: int = 0,
+        hold: threading.Event | None = None,
+    ):
         self._tables = tables
         self._looks = looks
         self._taken = 0
         self._stamp = stamp
         self.tears = tears
+        # A reader stopped mid-walk, for putting a restart in the middle
+        # of one. `reading` says it has arrived; `hold` lets it out.
+        self._hold = hold
+        self.reading = threading.Event()
 
     def read_bytes(self, pa: int, size: int) -> bytes:
         return self._tables.read_bytes(pa, size)
 
     def read(self, obs, *, live: bool = True, since: int | None = None):
         del live, since
+        self.reading.set()
+        if self._hold is not None:
+            self._hold.wait(timeout=5)
         if self.tears:
             self.tears -= 1
             raise elfsym.TornRead(f"{obs.topic}: the publisher is inside the window")
@@ -218,8 +234,15 @@ class Published:
         return snapshot.Reading(banks, stamp=self._stamp)
 
 
-class AnswerTest(unittest.TestCase):
-    """What a client is handed back, built without an image."""
+class Walkable:
+    """One VM's two Stage 2 translations and one guest's own, as a
+    topology a walk can be asked about.
+
+    A mixin rather than a base test case: the same fixture answers what
+    the walk returns and what the bridge does with it, and two copies of
+    a page table geometry would be two chances to describe different
+    machines.
+    """
 
     GIB = translation.STAGE2.span(0)
     MIB2 = translation.STAGE2.span(1)
@@ -306,16 +329,29 @@ class AnswerTest(unittest.TestCase):
             }
         ]
 
+    def topology(self, *, high: bool = False) -> dict:
+        """The captured tables plus one of the guest's halves, listed.
+
+        The low half is the one this guest has enabled; the high one is
+        listed to ask what happens when a regime exists on the topology
+        and the register behind it says the guest turned it off.
+        """
+        return self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=high)]}
+
     def live(self, *looks: list[dict], **held) -> Published:
         """This VM's memory and the banks rooting it, from one reader."""
         return Published(regimes.Tables.of(self.captured), *(looks or (self.BANK,)), **held)
+
+
+class AnswerTest(Walkable, unittest.TestCase):
+    """What a client is handed back, built without an image."""
 
     def test_a_live_regime_is_rooted_when_the_walk_is_asked_for(self):
         """Its root is TTBR_EL1, which follows whatever process the vCPU
         is running. On the topology it would be a value that was true
         once, and the topology would be republished every time a guest
         switched process."""
-        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        topology = self.topology()
         self.assertNotIn("root", self._guest(high=False))
         answer = regimes.answer(topology, {"regime": "vm0.v0.el1.low"}, live=self.live())
         self.assertEqual(answer["root"], f"{self.ipa_of(self.GUEST_L1):#x}")
@@ -323,7 +359,7 @@ class AnswerTest(unittest.TestCase):
 
     def test_a_live_regime_carries_no_map(self):
         # Thousands of tables, and the question is about one address.
-        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        topology = self.topology()
         answer = regimes.answer(topology, {"regime": "vm0.v0.el1.low"}, live=self.live())
         self.assertNotIn("tree", answer)
         self.assertNotIn("isolation", answer)
@@ -332,7 +368,7 @@ class AnswerTest(unittest.TestCase):
         """Where a guest is rooted is a register the firmware shadows and
         publishes, read at the moment a walk asks. A replay has neither
         the publisher nor the memory, and the refusal says which."""
-        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        topology = self.topology()
         with self.assertRaises(ValueError) as caught:
             regimes.answer(topology, {"regime": "vm0.v0.el1.low"})
         self.assertIn("no publisher", str(caught.exception))
@@ -341,7 +377,7 @@ class AnswerTest(unittest.TestCase):
         """A tear is a moment: the publisher opens its window on every
         visit and closes it inside the same turn. Refusing at the first
         one would throw away a walk for a reason gone in a period."""
-        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        topology = self.topology()
         answer = regimes.answer(
             topology, {"regime": "vm0.v0.el1.low"}, live=self.live(tears=3)
         )
@@ -352,7 +388,7 @@ class AnswerTest(unittest.TestCase):
         of the publisher's clock, and a copy still torn after one is not
         a moment. The refusal is an observation's limit, not a fault the
         machine answered with."""
-        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        topology = self.topology()
         with self.assertRaises(elfsym.TornRead):
             regimes.answer(
                 topology, {"regime": "vm0.v0.el1.low"}, live=self.live(tears=1 << 30)
@@ -362,7 +398,7 @@ class AnswerTest(unittest.TestCase):
         """What the recheck is for. The guest switched process across the
         two walks, so the second one started somewhere else -- which the
         walk can only see because it reads the root itself."""
-        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        topology = self.topology()
         moved = [{"el1": self.BANK[0]["el1"] | {"ttbr0": f"{self.ipa_of(self.GUEST_L2):#x}"}}]
         answer = regimes.answer(
             topology,
@@ -377,7 +413,7 @@ class AnswerTest(unittest.TestCase):
         the clock of the copy and the topic that dates it -- so the age
         of a derived answer is read by the rule readings already follow.
         """
-        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        topology = self.topology()
         answer = regimes.answer(
             topology, {"regime": "vm0.v0.el1.low"}, live=self.live(stamp=4242)
         )
@@ -387,7 +423,7 @@ class AnswerTest(unittest.TestCase):
     def test_a_root_with_no_publisher_behind_it_carries_no_age(self):
         """A made-up clock cannot be told from a real one, and the UI
         would subtract it."""
-        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        topology = self.topology()
         answer = regimes.answer(topology, {"regime": "vm0.v0.el1.low"}, live=self.live())
         self.assertNotIn("rooted", answer)
 
@@ -396,7 +432,7 @@ class AnswerTest(unittest.TestCase):
         self.assertNotIn("rooted", regimes.answer(self.captured, {"regime": "vm0.cpu"}))
 
     def test_a_half_the_guest_turned_off_cannot_be_walked(self):
-        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=True)]}
+        topology = self.topology(high=True)
         with self.assertRaises(ValueError):
             regimes.answer(topology, {"regime": "vm0.v0.el1.high"}, live=self.live())
 
@@ -405,7 +441,7 @@ class AnswerTest(unittest.TestCase):
         translation beneath, and a reader holding the two halves apart is
         a reader doing the walk. The recheck is reported rather than
         retried — how many tries would settle it is not a known number."""
-        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        topology = self.topology()
         answer = regimes.answer(
             topology, {"regime": "vm0.v0.el1.low", "address": "0x1000"}, live=self.live()
         )
@@ -427,7 +463,7 @@ class AnswerTest(unittest.TestCase):
         """The same number in a VA regime and an IPA regime is two
         questions. Answered together it reads as one, and the second
         answer looks like a fact about the address that was asked."""
-        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        topology = self.topology()
         answer = regimes.answer(
             topology, {"regime": "vm0.cpu", "address": "0x201000"}, live=self.live()
         )
@@ -551,6 +587,108 @@ class TablesTest(unittest.TestCase):
     def test_a_read_between_descriptors_fails_rather_than_reading_empty(self):
         with self.assertRaises(ValueError):
             self.copy.read_bytes(0x4000_1004, 8)
+
+
+class BridgeProbeTest(Walkable, unittest.IsolatedAsyncioTestCase):
+    """The walk, reached the way a client reaches it.
+
+    Everything under this seam is checked above. This is the seam
+    itself, and nothing ran it: the probe is the one uplink with no
+    precondition, and the dispatch test walks only the handlers that
+    have one.
+
+    Not restaged here: that a second reader does not starve the first,
+    and that a stamp stays with the reading it came from. Those are
+    facts about the published region, checked against a real one where a
+    stand-in could not fail them.
+    """
+
+    def bridge(self, live=None, topology: dict | None = None):
+        from novakit.services.workbench.server import Bridge
+
+        bridge = Bridge(ui_root=Path("/nonexistent"))
+        if topology is not None:
+            bridge.session.adopt_memory_map(topology)
+        bridge._provider = live
+        bridge.store.drain()
+        return bridge
+
+    @staticmethod
+    def _ask(bridge, **data) -> None:
+        bridge._handle_uplink(json.dumps({"topic": "probe", "data": data}))
+
+    async def answered(self, bridge, **data) -> dict:
+        self._ask(bridge, **data)
+        await bridge.settled()
+        found = [f["data"] for f in bridge.store.drain() if f["topic"] == "probe"]
+        self.assertEqual(len(found), 1, f"expected one answer, got {found}")
+        return found[0]
+
+    async def refused(self, bridge, **data) -> str:
+        self._ask(bridge, **data)
+        await bridge.settled()
+        said = [
+            f["data"]["reason"]
+            for f in bridge.store.drain()
+            if f["data"].get("phase") == "uplink-rejected"
+        ]
+        self.assertEqual(len(said), 1, f"expected one refusal, got {said}")
+        self.assertTrue(said[0].startswith("probe: "), said[0])
+        return said[0]
+
+    async def test_the_bridge_closes_a_guest_address_to_a_physical_one(self):
+        """The whole chain in one answer: the guest's own tables give an
+        IPA, and the translation beneath says where that physically is.
+        Held apart, the reader would be doing the second walk."""
+        bridge = self.bridge(self.live(), self.topology())
+        answer = await self.answered(bridge, regime="vm0.v0.el1.low", address="0x1000")
+        self.assertEqual(answer["probe"]["output"], "0x400000")
+        self.assertEqual(answer["through"]["regime"], "vm0.cpu")
+        self.assertEqual(answer["through"]["probe"]["output"], f"{self.GUEST_BLOCK + 0x400000:#x}")
+
+    async def test_the_answer_says_how_old_the_root_it_walked_from_was(self):
+        bridge = self.bridge(self.live(stamp=7000), self.topology())
+        answer = await self.answered(bridge, regime="vm0.v0.el1.low")
+        self.assertEqual(answer["rooted"]["at"], 7000)
+
+    async def test_a_run_with_no_tables_published_is_refused(self):
+        reason = await self.refused(self.bridge(self.live()), regime="vm0.cpu")
+        self.assertIn("no page tables", reason)
+
+    async def test_a_replay_is_told_which_half_it_is_missing(self):
+        """A recording holds the tables EL2 built. It does not hold the
+        register a guest's own walk starts from, because that moves."""
+        bridge = self.bridge(None, self.topology())
+        self.assertIn("no publisher", await self.refused(bridge, regime="vm0.v0.el1.low"))
+
+    async def test_a_half_the_guest_turned_off_is_refused_by_name(self):
+        bridge = self.bridge(self.live(), self.topology(high=True))
+        reason = await self.refused(bridge, regime="vm0.v0.el1.high")
+        self.assertIn("not translating now", reason)
+
+    async def test_a_bank_torn_past_a_whole_turn_is_refused_not_answered(self):
+        """An observation's limit, said as one. A fault is the machine's
+        answer and travels inside the probe; this is the bridge saying
+        it could not take a reading."""
+        bridge = self.bridge(self.live(tears=1 << 30), self.topology())
+        reason = await self.refused(bridge, regime="vm0.v0.el1.low")
+        self.assertIn("publisher is inside the window", reason)
+
+    async def test_an_answer_for_a_run_that_has_ended_is_dropped(self):
+        """The map is of addresses that machine held. Published after a
+        restart it describes one that no longer exists, and nothing on
+        the screen would say so."""
+        hold = threading.Event()
+        live = self.live(hold=hold)
+        bridge = self.bridge(live, self.topology())
+        bridge.session.run_id = 1
+        self._ask(bridge, regime="vm0.v0.el1.low", address="0x1000")
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, live.reading.wait, 5)
+        bridge.session.run_id = 2
+        hold.set()
+        await bridge.settled()
+        self.assertEqual([f for f in bridge.store.drain() if f["topic"] == "probe"], [])
 
 
 if __name__ == "__main__":

@@ -18,9 +18,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ...image import observe
+from ...image import elfsym, observe
 from .. import expect
-from . import commands, hardware, trace
+from . import commands, hardware, regimes, snapshot, trace
 from .observations import COMMAND_PAGE, OBSERVATIONS
 from .snapshot import image_symbols, open_provider
 
@@ -45,6 +45,7 @@ class Machine:
         # value from the one that was judged would be a second reader.
         self._on_reading = on_reading
         self._provider = None
+        self._capture: regimes.Capture | None = None
         self._tracer: trace.TraceReader | None = None
         self._writer: commands.Writer | None = None
         self._records: list[trace.Record] = []
@@ -79,6 +80,30 @@ class Machine:
                     self._on_reading(topic, value)
                 return value
         raise KeyError(f"this build publishes no observation named {topic}")
+
+    def walk(self, regime: str, address: str) -> dict | None:
+        """Where one address in one regime lands, and what it lands on.
+
+        None while EL2 has not published its tables, which is ordinary
+        during a boot.
+
+        Assembled where every caller assembles it: the capture holds the
+        topology at the two rates its halves move at, and the provider
+        is the one reader both the tables and the bank rooting them come
+        from. Refreshed on every look because a guest's own regimes
+        appear when it turns its MMU on, which is usually after the step
+        before this one carried.
+        """
+        if self._capture is None:
+            self._capture = regimes.Capture(self.provider(), self.provider().regimes)
+        self._capture.refresh()
+        if self._capture.topology is None:
+            return None
+        return regimes.answer(
+            self._capture.topology,
+            {"regime": regime, "address": address},
+            live=self.provider(),
+        )
 
     def records(self) -> list[trace.Record]:
         """Everything the rings have produced so far in this run.
@@ -212,6 +237,70 @@ def observe_handler(machine: Machine) -> expect.StepHandler:
     return handler
 
 
+def _walked(answer: dict) -> dict:
+    """A walk's answer as a step names it: one line, VA to PA.
+
+    Four names, and they are the ones a person reads off the screen —
+    where this regime's walk ended, where the translation beneath took
+    that output, whether it faulted, and whether the chain moved under
+    the walk. The answer nests them, because that is the shape a map is
+    drawn from; a step is a sentence about whether the chain closed.
+    """
+    probe = answer.get("probe", {})
+    beneath = answer.get("through", {}).get("probe", {})
+    return {
+        "output": probe.get("output"),
+        "through": beneath.get("output"),
+        "fault": probe.get("fault"),
+        "moving": answer.get("moving"),
+    }
+
+
+def walk_handler(machine: Machine) -> expect.StepHandler:
+    """One address, walked in one regime, closing to a physical address.
+
+    A question this process asks and answers, where a `command` is one
+    the machine carries out — so the two are separate words rather than
+    one that would leave a demo unable to say which happened.
+
+    Everything a run is not ready for yet waits: a guest that has not
+    turned its MMU on has no regime to name, and a bank caught mid-copy
+    is a moment. Only an address that is not an address fails outright,
+    since no run can satisfy it.
+    """
+
+    def handler(step: dict):
+        regime = str(step["walk"])
+        wanted = step.get("equals", {})
+        address = str(step.get("address", ""))
+        try:
+            regimes.address_of(address)
+        except ValueError as error:
+            refusal = str(error)
+            return lambda: expect.step_failed(refusal)
+
+        def poll() -> expect.StepOutcome:
+            try:
+                answer = machine.walk(regime, address)
+            except (FileNotFoundError, observe.Stale, snapshot.NotPublishedYet):
+                return expect.PENDING  # ordinary during boot
+            except (KeyError, ValueError, elfsym.TornRead) as error:
+                # No such regime yet, a half the guest has not enabled,
+                # or a copy the publisher was inside of.
+                return expect.step_pending(str(error))
+            if answer is None:
+                return expect.step_pending("this run has published no page tables")
+            walked = _walked(answer)
+            if _matches(walked, wanted):
+                return expect.CARRIED
+            seen = {name: walked.get(name) for name in wanted}
+            return expect.step_pending(f"{regime} walks {address} to {seen}, wanted {wanted}")
+
+        return poll
+
+    return handler
+
+
 def event_handler(machine: Machine) -> expect.StepHandler:
     """A record this run produced, matched by its named fields.
 
@@ -316,6 +405,7 @@ def handlers_for(machine: Machine) -> dict[str, expect.StepHandler]:
         "observe": observe_handler(machine),
         "event": event_handler(machine),
         "command": command_handler(machine),
+        "walk": walk_handler(machine),
     }
 
 

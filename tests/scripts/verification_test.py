@@ -929,7 +929,7 @@ class RunSurfacesTest(ScenarioHarness):
         joined = " ".join(seen["command"])
         self.assertIn("memory-backend-file", joined)
         self.assertIn("memory-backend=wbram", joined)
-        self.assertEqual(sorted(seen["handlers"]), ["command", "event", "observe"])
+        self.assertEqual(sorted(seen["handlers"]), ["command", "event", "observe", "walk"])
 
     def test_observing_without_a_built_image_stops_the_run(self):
         """A step that reads the machine needs the image that describes

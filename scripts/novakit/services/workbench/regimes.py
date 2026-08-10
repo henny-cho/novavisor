@@ -274,6 +274,9 @@ class Capture:
         self._resolved = resolved
         self._copied: dict | None = None
         self._listed: list[dict] = []
+        # The latest one built, for a caller that wants to walk it rather
+        # than publish it. None until EL2 has built its tables.
+        self.topology: dict | None = None
 
     def refresh(self) -> dict | None:
         """This run's topology, when it reads differently than last look.
@@ -295,7 +298,8 @@ class Capture:
         if listed == self._listed:
             return None
         self._listed = listed
-        return {**self._copied, "regimes": listed}
+        self.topology = {**self._copied, "regimes": listed}
+        return self.topology
 
 
 @dataclass(frozen=True)
@@ -340,7 +344,7 @@ class Tables:
 # --- Answering a client -----------------------------------------------------
 
 
-def _address(value) -> int:
+def address_of(value) -> int:
     """A probe target, from whatever the client typed.
 
     Always hex, prefix or not: reading a bare string as decimal would
@@ -576,7 +580,7 @@ def answer(topology: dict, request: dict, live=None) -> dict:
             data["rooted"] = rooted
     if request.get("address") in (None, ""):
         return data
-    at = _address(request["address"])
+    at = address_of(request["address"])
     found = walks.probe(regime, at)
     data["probe"] = _probe_wire(found, fmt)
     if regime["ground"] == LIVE:

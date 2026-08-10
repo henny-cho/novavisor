@@ -1066,7 +1066,7 @@ class VerifyObservationTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIn("memory-backend=wbram", " ".join(seen["command"]))
-        self.assertEqual(seen["handlers"], ["command", "event", "observe"])
+        self.assertEqual(seen["handlers"], ["command", "event", "observe", "walk"])
 
     async def test_a_console_only_scenario_is_launched_as_it_always_was(self):
         seen = await self._served(
