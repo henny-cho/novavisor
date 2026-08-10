@@ -22,6 +22,7 @@
 #include "hal/timer.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/hvc_abi.h"
+#include "nova/command.hpp"
 #include "nova/panic.hpp"
 #include "nova/telemetry.hpp"
 #include "soft_timer/soft_timer.hpp"
@@ -34,9 +35,53 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 
 namespace nova {
+
+namespace {
+
+// Injecting an SPI needs the VM to be on, which is this component's
+// state, so the command lands here rather than in the vGIC. The wider
+// argument is checked before it is narrowed: an INTID of 2^32 + 30
+// passes a range test on the truncated value and posts an interrupt
+// nobody asked for.
+auto command_spi(const command::Record& c, TrapContext* /*ctx*/) noexcept -> std::uint64_t {
+  if (c.a >= guest_table().size() || c.b > std::numeric_limits<std::uint32_t>::max()) {
+    return NOVA_CMD_RESULT_RANGE;
+  }
+  if (!vcpu::vm_on(c.a)) {
+    // Well formed, nothing to deliver it to. Posting anyway leaves a
+    // pending bit for whatever boots into that slot next.
+    return NOVA_CMD_RESULT_STATE;
+  }
+  return vgic::post_spi(c.a, static_cast<std::uint32_t>(c.b)) ? NOVA_CMD_RESULT_OK : NOVA_CMD_RESULT_RANGE;
+}
+
+auto command_slice(const command::Record& c, TrapContext* /*ctx*/) noexcept -> std::uint64_t {
+  return vcpu::set_slice_us(c.a) ? NOVA_CMD_RESULT_OK : NOVA_CMD_RESULT_RANGE;
+}
+
+} // namespace
+
+// The bands come from the same accessors the handlers enforce with, so
+// what the page advertises and what a command is refused for cannot
+// drift apart.
+void core_vcpu_component::commands(CommandCall* call) noexcept {
+  const auto slice = vcpu::slice_band();
+  const auto spi   = vgic::spi_band();
+  const auto vms   = static_cast<std::uint32_t>(guest_table().size());
+  call->declare({.op    = NOVA_CMD_OP_SPI,
+                 .words = 2,
+                 .a     = {.kind = NOVA_CMD_ARG_VM, .lo = 0, .hi = vms - 1},
+                 .b     = {.kind = NOVA_CMD_ARG_PLAIN, .lo = spi.lo, .hi = spi.hi, .def = spi.lo},
+                 .run   = &command_spi});
+  call->declare({.op    = NOVA_CMD_OP_SLICE,
+                 .words = 1,
+                 .a   = {.kind = NOVA_CMD_ARG_MICROS, .lo = slice.min_us, .hi = slice.max_us, .def = slice.default_us},
+                 .run = &command_slice});
+}
 
 // Who runs where, what they are allowed to run for, and the trap frame
 // each one last came out of.
@@ -185,8 +230,18 @@ void schedule_out(TrapContext* live) noexcept {
       return;
     }
 
+    // Halting is irreversible, so it takes more than "no guest is
+    // running": it also takes nobody left who could start one. Only the
+    // guests can, until a host writes a command — then stopping the
+    // last VM would take the drain down with it and the machine could
+    // never be raised again. Asked of the ring's own index through the
+    // foundation storage, like the publish below: a profile without the
+    // ring leaves it unplaced and this reads false, so a run nothing
+    // ever drove halts exactly as it did before.
+    //
+    // Ordered before the exchange, which is a claim and not a question.
     if (g_alive.load(std::memory_order_acquire) == 0 && g_lifecycle_transitions.load(std::memory_order_acquire) == 0 &&
-        !g_halt_announced.exchange(true)) {
+        !command::g_ring.spoken_to() && !g_halt_announced.exchange(true)) {
       console::write("[core_vcpu] all VCPUs off — halting\n");
       // Leave the last reading behind. A published value is only as
       // fresh as the next turn, and there is no next turn past here —
@@ -337,6 +392,17 @@ void wake(std::size_t index) noexcept {
 void schedule_after_retire(TrapContext* live) noexcept {
   if (me().idling) {
     return; // already inside the idle loop — its own re-check takes over (no nested scheduler)
+  }
+  if (core_gic::defer_if_dispatching(&schedule_after_retire)) {
+    return; // mid-dispatch: core_gic runs this again at its own switch point
+  }
+  // Past here the switch happens now, so a frame is required. Callers
+  // that have none (VM-owner callbacks) reach this only through the
+  // branch above, which supplies the drain's own. Arriving here without
+  // one means that rule broke: report it rather than switch into null.
+  if (live == nullptr) {
+    console::write("[core_vcpu] retire needs a frame outside interrupt dispatch\n");
+    halt();
   }
   schedule_out(live);
 }

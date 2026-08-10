@@ -22,17 +22,31 @@ from novakit.services.workbench import commands, events, trace  # noqa: E402
 
 _OFFSETS = abi.read_defines(
     abi.COMMAND_RING,
-    ["NOVA_CMD_WIDX_OFF", "NOVA_CMD_RIDX_OFF", "NOVA_CMD_RECORDS_OFF"],
+    ["NOVA_CMD_WIDX_OFF", "NOVA_CMD_RIDX_OFF", "NOVA_CMD_RECORDS_OFF", "NOVA_CMD_NROWS_OFF"],
 )
 WIDX_OFF = _OFFSETS["NOVA_CMD_WIDX_OFF"]
 RIDX_OFF = _OFFSETS["NOVA_CMD_RIDX_OFF"]
 RECORDS_OFF = _OFFSETS["NOVA_CMD_RECORDS_OFF"]
+NROWS_OFF = _OFFSETS["NOVA_CMD_NROWS_OFF"]
 RAM_BASE = 0x4000_0000
 PERIOD_US = 10_000
-# Bands a stand-in machine publishes. Arbitrary here: what matters is
-# that a reader hands back what the page said, not what this side knows.
-SLICE_US = (500, 5_000, 50_000)
-SPI_INTIDS = (32, 63)
+# What a machine of this shape would publish: one op with two bounded
+# arguments, one with a bounded duration, one with a free tag. Built
+# from the header's vocabulary so a renamed opcode fails here.
+OPS = (
+    commands.Op(
+        code=commands.OPS["spi"],
+        words=2,
+        a=commands.Band(kind=commands.ARGS["vm"], lo=0, hi=1),
+        b=commands.Band(kind=commands.ARGS["plain"], lo=32, hi=63, default=32),
+    ),
+    commands.Op(
+        code=commands.OPS["slice"],
+        words=1,
+        a=commands.Band(kind=commands.ARGS["micros"], lo=500, hi=50_000, default=5_000),
+    ),
+    commands.Op(code=commands.OPS["mark"], words=1),
+)
 
 
 class VocabularyTest(unittest.TestCase):
@@ -43,10 +57,14 @@ class VocabularyTest(unittest.TestCase):
             with self.subTest(op=name):
                 self.assertEqual(commands.op_name(code), name)
 
-    def test_the_first_command_set_is_the_three_that_are_reversible(self):
-        # Named rather than counted: the set is a design decision, and a
-        # destructive opcode arriving in it should have to say so here.
-        self.assertEqual(set(commands.OPS), {"mark", "spi", "slice"})
+    def test_the_vocabulary_is_named_so_a_destructive_op_has_to_say_so(self):
+        # Named rather than counted: the set is a design decision. The
+        # three power ops stop a running guest, which is the point of
+        # them — a host that cannot stop one cannot raise it either, and
+        # each runs the path its guest-facing twin already runs.
+        self.assertEqual(
+            set(commands.OPS), {"mark", "spi", "slice", "stop", "reset", "start"}
+        )
 
     def test_a_refusal_reads_as_a_reason_not_a_number(self):
         for name in ("ok", "unknown", "range", "state", "full"):
@@ -105,7 +123,14 @@ class Machine:
     in spelling — only in the values a reader has to judge.
     """
 
-    def __init__(self, directory: str, *, version: int = commands.VERSION, placed: bool = True):
+    def __init__(
+        self,
+        directory: str,
+        *,
+        version: int = commands.VERSION,
+        placed: bool = True,
+        ops=OPS,
+    ):
         self.path = Path(directory) / "guest-ram"
         # Two pages of slack after it, so a writer that mapped more than
         # it should would find room rather than an error.
@@ -117,8 +142,7 @@ class Machine:
                 commands.PAGE,
                 version=version,
                 period_us=PERIOD_US,
-                slice_us=SLICE_US,
-                spi_intids=SPI_INTIDS,
+                ops=ops,
             )
         self.path.write_bytes(raw)
 
@@ -187,12 +211,41 @@ class WriterTest(unittest.TestCase):
             self.assertEqual(writer.geometry.period_us, PERIOD_US)
             facts = writer.as_dict()
             self.assertEqual(facts["period_us"], PERIOD_US)
-            self.assertEqual(facts["ops"], sorted(commands.OPS))
-            # The bands travel the same way: a panel offers what this
-            # machine said it takes, never what this side was built with.
-            self.assertEqual(writer.geometry.slice_us, SLICE_US)
-            self.assertEqual(facts["slice_us"], list(SLICE_US))
-            self.assertEqual(facts["spi_intids"], list(SPI_INTIDS))
+            self.assertEqual([op["name"] for op in facts["ops"]], ["spi", "slice", "mark"])
+            # Each op carries as many arguments as it reads, and each
+            # one says what it means and what it takes. A panel offers
+            # what this machine said, never what this side was built with.
+            spi, quantum, mark = facts["ops"]
+            self.assertEqual([arg["kind"] for arg in spi["args"]], ["vm", "plain"])
+            self.assertEqual((spi["args"][1]["lo"], spi["args"][1]["hi"]), (32, 63))
+            self.assertEqual(quantum["args"][0], {
+                "kind": "micros", "lo": 500, "hi": 50_000, "default": 5_000, "free": False,
+            })
+            # A free tag is not a band of nothing: lo > hi says so, and
+            # a reader has to be able to tell those apart.
+            self.assertTrue(mark["args"][0]["free"])
+
+    def test_an_op_this_build_does_not_carry_out_is_not_offered(self):
+        # The header names every opcode the two sides can spell; the
+        # rows are what this firmware answers to. A machine that
+        # published no row for an op must not have it offered.
+        with tempfile.TemporaryDirectory() as directory:
+            writer = Machine(directory, ops=OPS[:1]).writer()
+            self.addCleanup(writer.close)
+            offered = {op["name"] for op in writer.as_dict()["ops"]}
+            self.assertEqual(offered, {"spi"})
+            self.assertIn("slice", commands.OPS)  # nameable, and still not offered
+
+    def test_more_rows_than_the_page_holds_is_refused(self):
+        # The count is the producer's, and this reader trusts none of
+        # its numbers: reading past the rows would walk into records.
+        with tempfile.TemporaryDirectory() as directory:
+            machine = Machine(directory)
+            raw = bytearray(machine.path.read_bytes())
+            struct.pack_into("<I", raw, commands.PAGE + NROWS_OFF, commands.OPS_CAP + 1)
+            machine.path.write_bytes(raw)
+            with self.assertRaises(commands.NotFormatted):
+                machine.writer()
 
     def test_a_command_lands_in_its_slot_before_the_index_moves(self):
         with tempfile.TemporaryDirectory() as directory:

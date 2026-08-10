@@ -34,6 +34,7 @@
 #include "nova/abi/guest.hpp"
 #include "nova/arch/trap_context.hpp"
 #include "telemetry/telemetry.hpp"
+#include "trap_handler/command.hpp"
 #include "trap_handler/fp_simd.hpp"
 #include "trap_handler/hvc.hpp"
 #include "trap_handler/wfx.hpp"
@@ -217,11 +218,18 @@ struct core_vcpu_component {
   // What this component offers the S layer.
   static void telemetry(TelemetryCall* call) noexcept;
 
+  // The host commands this component carries out: the scheduler slice,
+  // and virtual SPI injection — which is already routed here, because
+  // the VM-state gate an injection needs is this component's and the
+  // vGIC cannot ask for it without depending back on us.
+  static void commands(CommandCall* call) noexcept;
+
   constexpr static auto config =
       cib::config(cib::exports<VmResetService>, cib::extend<cib::RuntimeStart>(*INIT),
                   cib::extend<cib::MainLoop>(*ENTER), cib::extend<HvcService>(&core_vcpu_component::handle_hvc),
                   cib::extend<WfxService>(&core_vcpu_component::handle_wfx),
                   cib::extend<FpSimdService>(&core_vcpu_component::handle_fp_simd),
+                  cib::extend<CommandService>(&core_vcpu_component::commands),
                   cib::extend<TelemetryService>(&core_vcpu_component::telemetry));
 };
 

@@ -1,8 +1,9 @@
 /* Drive: asking the machine for an event instead of waiting for one.
 
-   Every value these controls offer comes from the run — the opcodes, the
-   quantum's band, the INTID range, the wait. Offering anything else
-   would teach a reader what gets refused.
+   The controls are built from what the machine published: one row per
+   op it carries out, saying how many arguments it reads and what each
+   one means and accepts. Nothing here holds a list of opcodes, so an op
+   added to the firmware arrives as a control without this file moving.
 
    Nothing here confirms a command. The bridge reports only what could
    not be sent; what could is answered by EL2 with a trace record, which
@@ -27,13 +28,20 @@ export function createDrive({ root, note, send }) {
     return control;
   }
 
+  /* Korean where a name is known, the machine's own word otherwise. A
+     missing entry degrades to the truth, so this list going stale
+     cannot make a control lie about what it sends. */
+  const LABEL = { mark: "표식", spi: "SPI", slice: "슬라이스" };
+  const ACTION = { mark: "남기기", spi: "주입", slice: "적용" };
+
   /* A select rather than a number: EL2 refuses a VM that is not
      running, and being refused for typing 9 is a poor way to learn the
      machine has two. */
-  function vmPicker(guests) {
+  function vmPicker(arg, guests) {
     const pick = el("select", "pick sm");
-    pick.setAttribute("aria-label", "SPI를 받을 VM");
+    pick.setAttribute("aria-label", "대상 VM");
     guests.forEach((guest, index) => {
+      if (index < arg.lo || index > arg.hi) return;
       const option = el("option", "", `vm${index}${guest?.name ? ` · ${guest.name}` : ""}`);
       option.value = String(index);
       pick.append(option);
@@ -41,57 +49,52 @@ export function createDrive({ root, note, send }) {
     return pick;
   }
 
-  function renderMark(into) {
+  /* A bounded number wears its band; a free one is a tag, which is what
+     a bracket around a stretch of timeline needs — so it counts up on
+     its own rather than making a reader invent distinct values. */
+  function numberInput(arg) {
+    const input = el("input", "dnum");
+    input.type = "number";
+    if (!arg.free) {
+      input.min = String(arg.lo);
+      input.max = String(arg.hi);
+    }
+    input.value = String(arg.free ? (counter += 1) : arg.default || arg.lo);
+    input.setAttribute("aria-label", arg.kind === "micros" ? "마이크로초" : "값");
+    return input;
+  }
+
+  /* One control per row: as many inputs as the op reads, each dressed
+     by what its argument means. Nothing here knows an opcode — an op
+     this build added arrives as a row and gets a control for free. */
+  function renderOp(into, op, guests) {
     const row = el("div", "drow");
-    row.append(el("span", "dlabel", "표식"));
+    row.append(el("span", "dlabel", LABEL[op.name] || op.name));
+    const fields = op.args.map((arg) =>
+      arg.kind === "vm" ? vmPicker(arg, guests) : numberInput(arg),
+    );
+    row.append(...fields);
+    const bounds = op.args
+      .filter((arg) => !arg.free && arg.kind !== "vm")
+      .map((arg) => (arg.kind === "micros" ? `${usText(arg.lo)}–${usText(arg.hi)}` : `${arg.lo}–${arg.hi}`))
+      .join(" ");
     row.append(
-      button("남기기", "시간 축에 표식을 남긴다 — 구간을 묶는 용도", () => {
-        counter += 1;
-        issue("mark", counter);
+      button(ACTION[op.name] || op.name, bounds ? `${op.name} · ${bounds}` : op.name, () => {
+        const [a = 0, b = 0] = fields.map((field) => Number(field.value));
+        issue(op.name, a, b);
+        /* A free tag is spent once it is sent. */
+        fields.forEach((field, index) => {
+          if (op.args[index].free) field.value = String((counter += 1));
+        });
       }),
     );
-    into.append(row);
-  }
-
-  /* The bounds are the range EL2's vGIC model declares an SPI to be. */
-  function renderSpi(into, guests, [low, high]) {
-    const row = el("div", "drow");
-    row.append(el("span", "dlabel", "SPI"));
-    const vm = vmPicker(guests);
-    const intid = el("input", "dnum");
-    intid.type = "number";
-    intid.min = String(low);
-    intid.max = String(high);
-    intid.value = String(low);
-    intid.setAttribute("aria-label", "가상 INTID");
-    row.append(vm, intid);
-    row.append(
-      button("주입", "이 VM에 가상 SPI를 걸어 주입 경로를 점등시킨다", () =>
-        issue("spi", Number(vm.value), Number(intid.value)),
-      ),
-    );
-    into.append(row);
-  }
-
-  /* The ends of the band EL2 will take, and the value it booted with. */
-  function renderSlice(into, choices) {
-    const row = el("div", "drow");
-    row.append(el("span", "dlabel", "슬라이스"));
-    for (const us of choices) {
-      const label = usText(us);
-      row.append(button(label, `선점 슬라이스를 ${label}로 바꾼다`, () => issue("slice", us)));
-    }
     into.append(row);
   }
 
   function render() {
     clear(root);
     if (!world) return;
-    if (world.ops.includes("mark")) renderMark(root);
-    if (world.ops.includes("spi") && world.intids.length === 2) {
-      renderSpi(root, world.guests, world.intids);
-    }
-    if (world.ops.includes("slice") && world.slice.length) renderSlice(root, world.slice);
+    for (const op of world.ops) renderOp(root, op, world.guests);
   }
 
   return {
@@ -110,8 +113,6 @@ export function createDrive({ root, note, send }) {
         ? {
             ops,
             guests: topology.guests || [],
-            slice: Array.isArray(command.slice_us) ? command.slice_us : [],
-            intids: Array.isArray(command.spi_intids) ? command.spi_intids : [],
             /* Compared because it is drawn: a run that changed only its
                drain period would otherwise return early here and leave
                the previous wait on screen for the rest of the session. */

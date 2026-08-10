@@ -462,16 +462,19 @@ class DriveViewTest(unittest.TestCase):
     firmware's opcode vocabulary, and the stylesheet.
     """
 
-    def test_the_panel_names_no_op_the_firmware_does_not_have(self):
-        # The names come from the ABI header through the topology. One
-        # spelled here that the firmware dropped would draw a control
-        # whose every press is refused.
+    def test_the_panel_holds_no_opcode_at_all(self):
+        # Stronger than "names none the firmware dropped": the controls
+        # are built from the rows the machine published, so an opcode
+        # spelled here would be a second list to go stale against. Only
+        # the Korean labels may name one, and a missing label degrades
+        # to the machine's own word rather than to a wrong control.
         from novakit.services.workbench.commands import OPS
 
         source = (UI / "js" / "drive.mjs").read_text()
-        named = set(re.findall(r'issue\("(\w+)"', source))
-        self.assertTrue(named)
-        self.assertLessEqual(named, set(OPS))
+        self.assertEqual(set(re.findall(r'issue\("(\w+)"', source)), set())
+        labels = re.search(r"const LABEL = \{([^}]*)\}", source)
+        self.assertIsNotNone(labels)
+        self.assertLessEqual(set(re.findall(r"(\w+):", labels.group(1))), set(OPS))
 
     def test_the_verdict_reaches_the_panel_and_can_be_read_as_one(self):
         # EL2 answers with a trace record like everything else it says;

@@ -33,7 +33,11 @@ from . import trace
 from .protocol import Topic
 
 # 2: meta gained `complete` and dropped the frame and record totals.
-VERSION = 2
+# 3: the topology's command contract became one row per op the machine
+#    carries out, replacing a list of opcode names and two named bands.
+#    A version 2 recording would load and draw no controls at all, so
+#    the gate has to move with the shape it guards.
+VERSION = 3
 META = "meta.json"
 WIRE = "wire.jsonl"
 RECORDS = "trace.bin"

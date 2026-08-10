@@ -17,6 +17,7 @@ from __future__ import annotations
 import mmap
 import struct
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,18 +25,26 @@ from ...image import abi
 
 _OP_PREFIX = "NOVA_CMD_OP_"
 _RESULT_PREFIX = "NOVA_CMD_RESULT_"
+_ARG_PREFIX = "NOVA_CMD_ARG_"
 
-OPS: dict[str, int] = {
-    name[len(_OP_PREFIX) :].lower(): code
-    for name, code in abi.read_define_family(abi.COMMAND_RING, _OP_PREFIX).items()
-}
-RESULTS: dict[str, int] = {
-    name[len(_RESULT_PREFIX) :].lower(): code
-    for name, code in abi.read_define_family(abi.COMMAND_RING, _RESULT_PREFIX).items()
-}
+
+def _family(prefix: str) -> dict[str, int]:
+    return {
+        name[len(prefix) :].lower(): code
+        for name, code in abi.read_define_family(abi.COMMAND_RING, prefix).items()
+    }
+
+
+# Three vocabularies, all read the same way. A name added to the header
+# arrives here as a name rather than a number nothing can spell — which
+# is also why nothing else in the header may carry these prefixes.
+OPS: dict[str, int] = _family(_OP_PREFIX)
+RESULTS: dict[str, int] = _family(_RESULT_PREFIX)
+ARGS: dict[str, int] = _family(_ARG_PREFIX)
 
 _OP_BY_CODE = {code: name for name, code in OPS.items()}
 _RESULT_BY_CODE = {code: name for name, code in RESULTS.items()}
+_ARG_BY_CODE = {code: name for name, code in ARGS.items()}
 
 
 def op_name(code: int) -> str:
@@ -50,6 +59,15 @@ def op_name(code: int) -> str:
 
 def result_name(code: int) -> str:
     return _RESULT_BY_CODE.get(code, str(code))
+
+
+def arg_name(code: int) -> str:
+    """What an argument means, or the number when this build has no name.
+
+    An unnamed kind renders as a plain number rather than stopping the
+    session: a reader that cannot dress an argument can still send it.
+    """
+    return _ARG_BY_CODE.get(code, str(code))
 
 
 _LAYOUT = abi.read_defines(
@@ -70,11 +88,11 @@ _LAYOUT = abi.read_defines(
         "NOVA_CMD_RECSIZE_OFF",
         "NOVA_CMD_SLOTS_OFF",
         "NOVA_CMD_PERIOD_OFF",
-        "NOVA_CMD_SLICE_MIN_OFF",
-        "NOVA_CMD_SLICE_DEF_OFF",
-        "NOVA_CMD_SLICE_MAX_OFF",
-        "NOVA_CMD_SPI_LO_OFF",
-        "NOVA_CMD_SPI_HI_OFF",
+        "NOVA_CMD_NROWS_OFF",
+        "NOVA_CMD_ROWSZ_OFF",
+        "NOVA_CMD_OPS_OFF",
+        "NOVA_CMD_OPS_CAP",
+        "NOVA_CMD_OPS_ROW",
     ],
 )
 MAGIC = _LAYOUT["NOVA_CMD_MAGIC"]
@@ -91,11 +109,15 @@ REC_SIZE = _LAYOUT["NOVA_CMD_REC_SIZE"]
 _WIDX_OFF = _LAYOUT["NOVA_CMD_WIDX_OFF"]
 _RIDX_OFF = _LAYOUT["NOVA_CMD_RIDX_OFF"]
 _RECORDS_OFF = _LAYOUT["NOVA_CMD_RECORDS_OFF"]
+_OPS_OFF = _LAYOUT["NOVA_CMD_OPS_OFF"]
+OPS_CAP = _LAYOUT["NOVA_CMD_OPS_CAP"]
+OPS_ROW = _LAYOUT["NOVA_CMD_OPS_ROW"]
 
-# Page header, then one command. Both fixed by the ABI header the
+# Page header, one op row, one command. All fixed by the ABI header the
 # firmware compiles against; these strings only spell its fields.
 _WORD = "Q"  # one command word, at the width the record declares
-_HEADER = struct.Struct("<QIIIIIIIII")
+_HEADER = struct.Struct("<QIIIIII")
+_ROW = struct.Struct("<HBBB3x6I")
 _RECORD = struct.Struct("<" + _WORD * 3)
 _INDEX = struct.Struct("<" + _WORD)
 # The spellings above and the layout the ABI declares are two statements
@@ -105,20 +127,21 @@ _INDEX = struct.Struct("<" + _WORD)
 # inserted upstream would shift every field this reader takes after it.
 if _RECORD.size != REC_SIZE:
     raise SystemExit(f"command record is {REC_SIZE} bytes; this packs {_RECORD.size}")
+if _ROW.size != OPS_ROW:
+    raise SystemExit(f"command op row is {OPS_ROW} bytes; this packs {_ROW.size}")
+if _OPS_OFF + OPS_CAP * OPS_ROW != _RECORDS_OFF:
+    raise SystemExit("command page: the op rows do not end where the records begin")
 _HEADER_FIELDS = (
     "NOVA_CMD_MAGIC_OFF",
     "NOVA_CMD_VERSION_OFF",
     "NOVA_CMD_RECSIZE_OFF",
     "NOVA_CMD_SLOTS_OFF",
     "NOVA_CMD_PERIOD_OFF",
-    "NOVA_CMD_SLICE_MIN_OFF",
-    "NOVA_CMD_SLICE_DEF_OFF",
-    "NOVA_CMD_SLICE_MAX_OFF",
-    "NOVA_CMD_SPI_LO_OFF",
-    "NOVA_CMD_SPI_HI_OFF",
+    "NOVA_CMD_NROWS_OFF",
+    "NOVA_CMD_ROWSZ_OFF",
 )
 _packed = 0
-for _name, _size in zip(_HEADER_FIELDS, (8, *(4,) * 9), strict=True):
+for _name, _size in zip(_HEADER_FIELDS, (8, *(4,) * 6), strict=True):
     if _LAYOUT[_name] != _packed:
         raise SystemExit(
             f"command header: {_name} is {_LAYOUT[_name]:#x}; this reader has it at {_packed:#x}"
@@ -129,28 +152,89 @@ if _packed != _HEADER.size:
 _WORD_MAX = (1 << (8 * struct.calcsize(_WORD))) - 1
 
 
+@dataclass(frozen=True)
+class Band:
+    """What one argument word means and what it accepts.
+
+    `lo > hi` is a free argument: any value the op takes. The defaults
+    say exactly that, so a row that declares nothing about a word is
+    not claiming the word is bounded to nothing.
+    """
+
+    kind: int = 0
+    lo: int = 1
+    hi: int = 0
+    default: int = 0
+
+    @property
+    def free(self) -> bool:
+        return self.lo > self.hi
+
+    @property
+    def kind_name(self) -> str:
+        return arg_name(self.kind)
+
+
+@dataclass(frozen=True)
+class Op:
+    """One opcode this build carries out, as the page advertises it.
+
+    Named by the header's vocabulary, bounded by the machine's own
+    answer. A build that does not implement an opcode publishes no row
+    for it, which is the whole reason the rows exist.
+    """
+
+    code: int
+    words: int = 0
+    a: Band = Band()
+    b: Band = Band()
+
+    @property
+    def name(self) -> str:
+        return op_name(self.code)
+
+    @property
+    def args(self) -> tuple[Band, ...]:
+        return (self.a, self.b)[: self.words]
+
+
 def format_page(
     buffer,
     offset: int = 0,
     *,
     period_us: int,
-    slice_us: tuple[int, int, int],
-    spi_intids: tuple[int, int],
+    ops: Sequence[Op] = (),
     magic: int = MAGIC,
     version: int = VERSION,
     record_size: int = REC_SIZE,
     slots: int = SLOTS,
+    row_size: int = OPS_ROW,
 ) -> None:
     """Lay out a command page the way EL2 lays one out.
 
-    The reader above is the only other place this header is spelled, so
+    The reader below is the only other place this layout is spelled, so
     anything standing in for a machine builds its page here rather than
     packing the fields a second time. The overridable arguments are what
     a page can be wrong about, which is what a reader has to refuse.
     """
     _HEADER.pack_into(
-        buffer, offset, magic, version, record_size, slots, period_us, *slice_us, *spi_intids
+        buffer, offset, magic, version, record_size, slots, period_us, len(ops), row_size
     )
+    for index, op in enumerate(ops):
+        _ROW.pack_into(
+            buffer,
+            offset + _OPS_OFF + index * OPS_ROW,
+            op.code,
+            op.words,
+            op.a.kind,
+            op.b.kind,
+            op.a.lo,
+            op.a.hi,
+            op.a.default,
+            op.b.lo,
+            op.b.hi,
+            op.b.default,
+        )
 
 class NotFormatted(RuntimeError):
     """The page carries no ring this writer understands.
@@ -192,12 +276,11 @@ class Geometry:
     # How long a command may wait, declared by the side that drains.
     # Read rather than assumed: a copy here would survive a change to it.
     period_us: int
-    # The bands EL2 checks an argument against, in the page it placed.
-    # A panel offering anything else would be offering what this machine
-    # refuses; asking it is the only way to be sure of the firmware in
-    # front of us rather than the sources it might have been built from.
-    slice_us: tuple[int, int, int]
-    spi_intids: tuple[int, int]
+    # What this build carries out, and what each op accepts. Asked of
+    # the page rather than taken from the header's vocabulary: the
+    # names are what an opcode could be called, the rows are what this
+    # firmware answers to.
+    ops: tuple[Op, ...]
 
 
 _ORDER = threading.Lock()
@@ -248,8 +331,9 @@ class Writer:
             raise
 
     def _read_geometry(self) -> Geometry:
-        (magic, version, record_size, slots, period_us, slice_min, slice_def, slice_max, spi_lo,
-         spi_hi) = _HEADER.unpack_from(self._window, 0)
+        magic, version, record_size, slots, period_us, rows, row_size = _HEADER.unpack_from(
+            self._window, 0
+        )
         if magic != MAGIC:
             # The magic is written last, so its absence says only that
             # nobody has finished placing a ring here.
@@ -260,12 +344,29 @@ class Writer:
             raise NotFormatted(f"command record is {record_size} bytes, expected {REC_SIZE}")
         if slots != SLOTS:
             raise NotFormatted(f"command ring has {slots} slots, expected {SLOTS}")
-        return Geometry(
-            slots=slots,
-            period_us=period_us,
-            slice_us=(slice_min, slice_def, slice_max),
-            spi_intids=(spi_lo, spi_hi),
-        )
+        if row_size != OPS_ROW:
+            raise NotFormatted(f"command op row is {row_size} bytes, expected {OPS_ROW}")
+        if rows > OPS_CAP:
+            raise NotFormatted(f"command page claims {rows} op rows over {OPS_CAP}")
+        return Geometry(slots=slots, period_us=period_us, ops=self._read_ops(rows))
+
+    def _read_ops(self, rows: int) -> tuple[Op, ...]:
+        out = []
+        for index in range(rows):
+            code, words, a_kind, b_kind, a_lo, a_hi, a_def, b_lo, b_hi, b_def = _ROW.unpack_from(
+                self._window, _OPS_OFF + index * OPS_ROW
+            )
+            out.append(
+                Op(
+                    code=code,
+                    # Clamped rather than trusted: the page says how many
+                    # words it described, and a row is two.
+                    words=min(words, 2),
+                    a=Band(kind=a_kind, lo=a_lo, hi=a_hi, default=a_def),
+                    b=Band(kind=b_kind, lo=b_lo, hi=b_hi, default=b_def),
+                )
+            )
+        return tuple(out)
 
     def _index(self, offset: int) -> int:
         return _INDEX.unpack_from(self._window, offset)[0]
@@ -297,17 +398,34 @@ class Writer:
     def as_dict(self) -> dict:
         """What a reader needs to offer this run's controls.
 
-        The opcodes are named by the ABI header both sides compile
-        against; everything else comes from the page this run placed.
-        Copied nowhere: the machine is the authority on what it accepts
-        and how long it takes to answer.
+        One op per row the machine published, each carrying the number
+        of arguments it reads and what each one means and accepts — so
+        a panel builds a control from the answer rather than from a
+        list of opcodes it was written against.
+
+        The names come from the ABI header both sides compile against;
+        everything else comes from the page this run placed.
         """
         return {
-            "ops": sorted(OPS),
+            "ops": [
+                {
+                    "name": op.name,
+                    "code": op.code,
+                    "args": [
+                        {
+                            "kind": arg.kind_name,
+                            "lo": arg.lo,
+                            "hi": arg.hi,
+                            "default": arg.default,
+                            "free": arg.free,
+                        }
+                        for arg in op.args
+                    ],
+                }
+                for op in self.geometry.ops
+            ],
             "slots": self.geometry.slots,
             "period_us": self.geometry.period_us,
-            "slice_us": list(self.geometry.slice_us),
-            "spi_intids": list(self.geometry.spi_intids),
         }
 
     def close(self) -> None:

@@ -90,6 +90,8 @@ _TAG_PREFIX = re.compile(r"^\[([a-z_]+)\] ")
 # scans src/ so a new or renamed tag fails here before it fails a panel.
 TAG_BADGES: dict[str, Badge] = {
     "boot": Badge.BOOT,
+    # What the host may ask for, said once at init when an op did not fit.
+    "command": Badge.BOOT,
     "core_gic": Badge.GIC,
     "core_vcpu": Badge.SCHED,
     "demo_hvc": Badge.TRAP,

@@ -2,17 +2,16 @@
 
 #include "command/command.hpp"
 
-#include "core_vcpu/core_vcpu.hpp"
+#include "hal/console.hpp"
 #include "hal/timer.hpp"
 #include "nova/abi/trace_ring.h"
 #include "nova/arch/timebase.hpp"
 #include "nova/arch/trap_context.hpp"
 #include "soft_timer/soft_timer.hpp"
 #include "trace/trace.hpp"
-#include "vgic/vgic.hpp"
 
+#include <cib/top.hpp>
 #include <cstdint>
-#include <limits>
 
 namespace nova::command {
 namespace {
@@ -21,32 +20,16 @@ namespace {
 // for the machine's life and this slot re-arms a hundred times a second.
 std::uint64_t g_period_ticks = 0;
 
-// Carry out one command. Every argument is checked here, before it is
-// narrowed to the width the callee takes: an INTID of 2^32 + 30 passes
-// a range test on the truncated value and posts an interrupt nobody
-// asked for.
-auto run(const Record& command) noexcept -> std::uint64_t {
-  switch (command.op) {
-  case NOVA_CMD_OP_MARK:
-    // No effect by design: the record is the whole of it — proof the
-    // ring runs end to end, and a bracket around a stretch of timeline.
-    return NOVA_CMD_RESULT_OK;
-  case NOVA_CMD_OP_SPI:
-    if (command.b > std::numeric_limits<std::uint32_t>::max()) {
-      return NOVA_CMD_RESULT_RANGE;
-    }
-    if (!vcpu::vm_on(command.a)) {
-      // Well formed, nothing to deliver it to. Posting anyway leaves a
-      // pending bit for whatever boots into that slot next.
-      return NOVA_CMD_RESULT_STATE;
-    }
-    return vgic::post_spi(command.a, static_cast<std::uint32_t>(command.b)) ? NOVA_CMD_RESULT_OK
-                                                                            : NOVA_CMD_RESULT_RANGE;
-  case NOVA_CMD_OP_SLICE:
-    return vcpu::set_slice_us(command.a) ? NOVA_CMD_RESULT_OK : NOVA_CMD_RESULT_RANGE;
-  default:
-    return NOVA_CMD_RESULT_UNKNOWN;
-  }
+// What this build carries out, collected once at init. Storage lives
+// here rather than beside the ring, so a profile composing no command
+// component holds no table.
+OpTable g_ops{};
+
+// The ring's own opcode: no effect by design. The record is the whole
+// of it — proof the ring runs end to end, and a bracket around a
+// stretch of timeline.
+auto mark(const Record& /*command*/, TrapContext* /*ctx*/) noexcept -> std::uint64_t {
+  return NOVA_CMD_RESULT_OK;
 }
 
 void on_tick(TrapContext* ctx, std::uint64_t arg) noexcept;
@@ -59,21 +42,27 @@ void arm() noexcept {
 // this ring's protocol assumes. Re-arms unconditionally: an empty ring
 // is the ordinary case, and a slot that stopped on finding nothing
 // would make the declared wait true only once commands were arriving.
-void on_tick(TrapContext* /*ctx*/, std::uint64_t /*arg*/) noexcept {
-  // By address, not through a lambda: taking it keeps the stop-point
-  // symbol from being inlined away and collected with --gc-sections.
+void on_tick(TrapContext* ctx, std::uint64_t /*arg*/) noexcept {
+  // The frame rides in the closure. Not because a handler is known to
+  // need it, but because no layer here should have to know whether one
+  // does — core_gic answers that once, for everybody.
+  //
+  // execute is still reached through its address: taking it keeps the
+  // stop-point symbol from being inlined away and collected with
+  // --gc-sections, which a bare call inside the closure would not.
   //
   // The tally is dropped on purpose: execute() emits a trace record per
   // command, so how many arrived is already on the timeline and a second
   // count here would be the same fact from a worse vantage point.
-  static_cast<void>(g_ring.drain(&execute));
+  static void (*const kExecute)(const Record&, TrapContext*) noexcept = &execute;
+  static_cast<void>(g_ring.drain([ctx](const Record& command) { kExecute(command, ctx); }));
   arm();
 }
 
 } // namespace
 
-void execute(const Record& command) noexcept {
-  const std::uint64_t result = run(command);
+void execute(const Record& command, TrapContext* ctx) noexcept {
+  const std::uint64_t result = g_ops.dispatch(command, ctx);
   // A trace record rather than a channel of its own, so a command and
   // the effects it caused land on one axis in one clock. The two
   // argument words travel unchanged; the opcode and the verdict share
@@ -94,16 +83,26 @@ void start() noexcept {
     return;
   }
   g_period_ticks = plan.ticks;
-  // The bands come from the components that enforce them, so what the
-  // page advertises and what run() accepts cannot drift apart.
-  const auto slice = vcpu::slice_band();
-  const auto spi   = vgic::spi_band();
-  place(kPeriodUs, {.slice_min_us = slice.min_us,
-                    .slice_def_us = slice.default_us,
-                    .slice_max_us = slice.max_us,
-                    .spi_lo       = spi.lo,
-                    .spi_hi       = spi.hi});
+
+  // Collect, then publish. The page's rows are this table projected, so
+  // a row arriving after placement could not be advertised; doing both
+  // here makes that order structural rather than a rule about the order
+  // component inits run in.
+  CommandCall call{.table = &g_ops};
+  cib::service<CommandService>(&call);
+  if (call.refused != 0) {
+    console::line("[command] ", console::Dec{call.refused}, " ops did not fit and are not offered\n");
+  }
+  place(kPeriodUs, g_ops);
   arm();
 }
 
 } // namespace nova::command
+
+namespace nova {
+
+void command_component::commands(CommandCall* call) noexcept {
+  call->declare({.op = NOVA_CMD_OP_MARK, .words = 1, .run = &command::mark});
+}
+
+} // namespace nova

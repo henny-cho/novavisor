@@ -36,10 +36,12 @@
 
 /* 'NVCMD\0\0\0' little-endian, and the version of everything below it. */
 #define NOVA_CMD_MAGIC 0x000000444D43564E
-/* 2 added the accepted bands below. A page placed by an older EL2 has
- * zeros where they now sit and would read as a machine that accepts
- * nothing, so the version is what refuses it rather than the values. */
-#define NOVA_CMD_VERSION 2
+/* 3 replaced version 2's five named band fields with the op rows below.
+ * Named fields could only describe the two opcodes they were named
+ * after, so what this build carries out and what a host offers were two
+ * lists. A page placed by an older EL2 has records where rows now sit,
+ * so the version is what refuses it rather than the values. */
+#define NOVA_CMD_VERSION 3
 
 /* Header (one cache line), then the two indices on lines of their own:
  * they are the only fields both sides touch, and from opposite
@@ -54,20 +56,43 @@
 #define NOVA_CMD_RECSIZE_OFF 0x0C
 #define NOVA_CMD_SLOTS_OFF   0x10
 #define NOVA_CMD_PERIOD_OFF  0x14 /* u32 microseconds between drains */
+/* How many rows follow and how wide one is, checked like the record
+ * size is: a build that changed either is not the build this reader
+ * was compiled against. */
+#define NOVA_CMD_NROWS_OFF 0x18 /* u32, rows this build filled */
+#define NOVA_CMD_ROWSZ_OFF 0x1C /* u32, bytes per row */
 
-/* What EL2 will accept, alongside how long it will make you wait. A
- * host that reads the bands here offers only values the machine takes;
- * anywhere else they would be a copy of whatever EL2 was built from,
- * true until the firmware changed without the host. */
-#define NOVA_CMD_SLICE_MIN_OFF 0x18 /* u32 microseconds, narrowest quantum */
-#define NOVA_CMD_SLICE_DEF_OFF 0x1C /* u32 microseconds, the boot value */
-#define NOVA_CMD_SLICE_MAX_OFF 0x20 /* u32 microseconds, widest quantum */
-#define NOVA_CMD_SPI_LO_OFF    0x24 /* u32, lowest virtual INTID accepted */
-#define NOVA_CMD_SPI_HI_OFF    0x28 /* u32, highest, inclusive */
+#define NOVA_CMD_WIDX_OFF 0x40 /* u64, producer-owned: commands written */
+#define NOVA_CMD_RIDX_OFF 0x80 /* u64, consumer-owned: commands taken */
 
-#define NOVA_CMD_WIDX_OFF    0x40 /* u64, producer-owned: commands written */
-#define NOVA_CMD_RIDX_OFF    0x80 /* u64, consumer-owned: commands taken */
-#define NOVA_CMD_RECORDS_OFF 0xC0
+/* One row per opcode this build carries out, written by whoever
+ * implements it. The rows are what a host reads to know what this
+ * machine accepts — the opcode names below are a vocabulary, not a
+ * claim that any given build implements them.
+ *
+ * A row has the record's shape: an opcode and two argument words. Its
+ * offsets carry ROW_ and the region carries OPS_, for the reason REC_
+ * exists — an offset named NOVA_CMD_OP_ROW would be read as an opcode
+ * "row" by a host that takes the opcodes as a name family. */
+#define NOVA_CMD_OPS_OFF 0xC0
+#define NOVA_CMD_OPS_CAP 16
+#define NOVA_CMD_OPS_ROW 32
+
+#define NOVA_CMD_ROW_OP_OFF    0x00 /* u16, the opcode this row describes */
+#define NOVA_CMD_ROW_WORDS_OFF 0x02 /* u8, how many of a, b this op reads */
+#define NOVA_CMD_ROW_AKIND_OFF 0x03 /* u8 NOVA_CMD_ARG_* */
+#define NOVA_CMD_ROW_BKIND_OFF 0x04 /* u8 NOVA_CMD_ARG_* */
+#define NOVA_CMD_ROW_A_OFF     0x08 /* u32 lo, hi, def */
+#define NOVA_CMD_ROW_B_OFF     0x14 /* u32 lo, hi, def */
+
+/* What an argument means, so a reader offers it as what it is rather
+ * than as a number it recognises by opcode. lo > hi in a row's band
+ * means the argument is free: any value the op accepts. */
+#define NOVA_CMD_ARG_PLAIN  0
+#define NOVA_CMD_ARG_VM     1 /* an index into this machine's guest table */
+#define NOVA_CMD_ARG_MICROS 2 /* a duration */
+
+#define NOVA_CMD_RECORDS_OFF 0x2C0
 
 /* One command: an opcode and two argument words, all at one width.
  *
@@ -93,12 +118,22 @@
 #define NOVA_CMD_PAGE  4096
 #define NOVA_CMD_SLOTS 128
 
-/* What the host may ask for. Every opcode runs code in EL2 even when
- * the effect is a single store: one entry point is one place that
- * validates, and the write window stays the only way in. */
-#define NOVA_CMD_OP_MARK  1 /* a, b: free tags — records the moment and nothing else */
+/* The vocabulary. Every opcode runs code in EL2 even when the effect is
+ * a single store: one entry point is one place that validates, and the
+ * write window stays the only way in.
+ *
+ * Naming one here does not mean a build carries it out — the rows do.
+ * Opcodes stay small and dense because the answering record packs one
+ * into 16 bits and a row spells one at that width. */
+#define NOVA_CMD_OP_MARK  1 /* a: free tag — records the moment and nothing else */
 #define NOVA_CMD_OP_SPI   2 /* a: VM index, b: virtual INTID */
 #define NOVA_CMD_OP_SLICE 3 /* a: scheduler slice, in microseconds */
+/* VM power. Each runs the path its guest-facing twin already runs —
+ * PSCI SYSTEM_OFF, SYSTEM_RESET, HVC_VM_START — so a reset the host
+ * asks for and one a guest asks for are the same reset. */
+#define NOVA_CMD_OP_STOP  4 /* a: VM index */
+#define NOVA_CMD_OP_RESET 5 /* a: VM index */
+#define NOVA_CMD_OP_START 6 /* a: VM index */
 
 /* How the answering trace record carries both: the opcode in the low
  * half of its first word, the result in the high half, both being

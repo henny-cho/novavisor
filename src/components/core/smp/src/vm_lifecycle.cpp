@@ -202,7 +202,7 @@ void recover_dma_fault(std::size_t vm, std::uint64_t stream_id, std::uint64_t ge
   console::write(" generation ");
   console::write_dec64(generation);
   console::write(" — resetting\n");
-  if (!reset_vm(vm, nullptr, true)) {
+  if (!reset_vm(vm, nullptr)) {
     console::write("[smp] DMA fault recovery already covered by lifecycle\n");
   }
 }
@@ -211,13 +211,19 @@ void recover_dma_fault(std::size_t vm, std::uint64_t stream_id, std::uint64_t ge
 // caller arrives with every vCPU already published off, and the empty
 // live mask drives the same quiesce machinery (DMA detach, tracker
 // bookkeeping) straight to completion.
-void request_stop(std::size_t vm, TrapContext* live, bool self_retired) noexcept {
+//
+// Reports acceptance for the same reason reset_vm does: both run the
+// one quiesce protocol, so a caller that can be told "a lifecycle
+// already owns this VM" for one must be told it for the other.
+// Retiring the caller's own vCPU is separate from that verdict, which
+// is why a refusal can still schedule away.
+auto request_stop(std::size_t vm, TrapContext* live, bool self_retired) noexcept -> bool {
   std::uint64_t expected = kLifecycleInactive;
   if (!g_lifecycle_token[vm].compare_exchange_strong(expected, kLifecycleReserved, std::memory_order_acq_rel)) {
     if (self_retired) {
       vcpu::schedule_after_retire(live); // a concurrent lifecycle owns the VM; we still gave up our frame
     }
-    return;
+    return false;
   }
   vcpu::begin_lifecycle_transition();
 
@@ -228,7 +234,7 @@ void request_stop(std::size_t vm, TrapContext* live, bool self_retired) noexcept
     if (result.schedule_required || self_retired) {
       vcpu::schedule_after_retire(live);
     }
-    return;
+    return result.accepted;
   }
 
   if (!enqueue(slot_cpu(boot), {.op = Op::kBeginStop, .idx = static_cast<std::uint32_t>(vm), .a = 0, .b = 0}, true)) {
@@ -237,11 +243,12 @@ void request_stop(std::size_t vm, TrapContext* live, bool self_retired) noexcept
     if (self_retired) {
       vcpu::schedule_after_retire(live);
     }
-    return;
+    return false;
   }
   if (self_retired || (self < kMaxVcpus && vm_of(self) == vm && vcpu::retire_vcpu(self))) {
     vcpu::schedule_after_retire(live);
   }
+  return true;
 }
 
 } // namespace
@@ -439,11 +446,11 @@ auto cpu_on(std::size_t slot, std::uint64_t entry, std::uint64_t context_id) noe
   return PSCI_SUCCESS;
 }
 
-void stop_vm(std::size_t vm, TrapContext* live) noexcept {
+auto stop_vm(std::size_t vm, TrapContext* live) noexcept -> bool {
   if (vm >= guest_table().size() || !vcpu::vm_on(vm)) {
-    return;
+    return false;
   }
-  request_stop(vm, live, /*self_retired=*/false);
+  return request_stop(vm, live, /*self_retired=*/false);
 }
 
 void cpu_off(std::size_t slot, TrapContext* live) noexcept {
@@ -459,7 +466,9 @@ void cpu_off(std::size_t slot, TrapContext* live) noexcept {
   const std::size_t vm      = vm_of(slot);
   const bool        retired = vcpu::retire_vcpu(slot);
   if (!vcpu::vm_on(vm)) {
-    request_stop(vm, live, retired);
+    // A concurrent sibling may own the stop already; either way this
+    // caller's vCPU is off, which is all CPU_OFF promises.
+    static_cast<void>(request_stop(vm, live, retired));
     return;
   }
   if (retired) {
@@ -467,7 +476,7 @@ void cpu_off(std::size_t slot, TrapContext* live) noexcept {
   }
 }
 
-auto reset_vm(std::size_t vm, TrapContext* live, bool from_irq) noexcept -> bool {
+auto reset_vm(std::size_t vm, TrapContext* live) noexcept -> bool {
   if (vm >= guest_table().size() || !vcpu::vm_on(vm)) {
     return false;
   }
@@ -482,11 +491,7 @@ auto reset_vm(std::size_t vm, TrapContext* live, bool from_irq) noexcept -> bool
   if (slot_cpu(boot) == cpu::id()) {
     const BeginLifecycleResult result = begin_lifecycle_local(vm, LifecycleMode::kReset);
     if (result.schedule_required) {
-      if (from_irq) {
-        core_gic::defer_epilogue(&vcpu::schedule_after_retire);
-      } else {
-        vcpu::schedule_after_retire(live);
-      }
+      vcpu::schedule_after_retire(live);
     }
     return result.accepted;
   }
@@ -502,11 +507,7 @@ auto reset_vm(std::size_t vm, TrapContext* live, bool from_irq) noexcept -> bool
   // visible; the coordinator's live mask will then exclude it.
   const std::size_t self = vcpu::current_index();
   if (self < kMaxVcpus && vm_of(self) == vm && vcpu::retire_vcpu(self)) {
-    if (from_irq) {
-      core_gic::defer_epilogue(&vcpu::schedule_after_retire);
-    } else {
-      vcpu::schedule_after_retire(live);
-    }
+    vcpu::schedule_after_retire(live);
   }
   return true;
 }
@@ -514,6 +515,48 @@ auto reset_vm(std::size_t vm, TrapContext* live, bool from_irq) noexcept -> bool
 } // namespace nova::smp
 
 namespace nova {
+
+namespace {
+
+// The three power operations, offered to the host. Each is the function
+// its guest-facing twin already calls, so nothing new happens in EL2 —
+// only a second caller reaches it. Out of range is told apart from
+// refused: the row advertises the VM band, and an advertised band the
+// handler answered STATE for would be a band it did not really enforce.
+auto command_stop(const command::Record& c, TrapContext* ctx) noexcept -> std::uint64_t {
+  if (c.a >= guest_table().size()) {
+    return NOVA_CMD_RESULT_RANGE;
+  }
+  return smp::stop_vm(static_cast<std::size_t>(c.a), ctx) ? NOVA_CMD_RESULT_OK : NOVA_CMD_RESULT_STATE;
+}
+
+auto command_reset(const command::Record& c, TrapContext* ctx) noexcept -> std::uint64_t {
+  if (c.a >= guest_table().size()) {
+    return NOVA_CMD_RESULT_RANGE;
+  }
+  return smp::reset_vm(static_cast<std::size_t>(c.a), ctx) ? NOVA_CMD_RESULT_OK : NOVA_CMD_RESULT_STATE;
+}
+
+auto command_start(const command::Record& c, TrapContext* /*ctx*/) noexcept -> std::uint64_t {
+  if (c.a >= guest_table().size()) {
+    return NOVA_CMD_RESULT_RANGE;
+  }
+  // No frame: starting a VM does not retire the caller.
+  return smp::start_vm(static_cast<std::size_t>(c.a)) ? NOVA_CMD_RESULT_OK : NOVA_CMD_RESULT_STATE;
+}
+
+} // namespace
+
+// The band is the same expression the handlers check against, one line
+// apart, so what the page offers and what a command is refused for
+// cannot drift.
+void smp_component::commands(CommandCall* call) noexcept {
+  const auto         last = static_cast<std::uint32_t>(guest_table().size() - 1);
+  const command::Arg vm{.kind = NOVA_CMD_ARG_VM, .lo = 0, .hi = last};
+  call->declare({.op = NOVA_CMD_OP_STOP, .words = 1, .a = vm, .run = &command_stop});
+  call->declare({.op = NOVA_CMD_OP_RESET, .words = 1, .a = vm, .run = &command_reset});
+  call->declare({.op = NOVA_CMD_OP_START, .words = 1, .a = vm, .run = &command_start});
+}
 
 void smp_component::handle_hvc(HvcCall* call) noexcept {
   if (call->func_id != NOVA_HVC_FN_VM_START) {
@@ -533,8 +576,10 @@ void smp_component::handle_guest_fault(GuestFaultCall* call) noexcept {
   console::write_dec64(vcpu_of(slot));
   console::write(" — resetting\n");
   if (!smp::reset_vm(vm, call->ctx)) {
+    // Both refused means a lifecycle already owns the VM, which is the
+    // recovery this fault wanted.
     console::write("[smp] guest fault recovery unavailable — stopping VM\n");
-    smp::stop_vm(vm, call->ctx);
+    static_cast<void>(smp::stop_vm(vm, call->ctx));
   }
 }
 

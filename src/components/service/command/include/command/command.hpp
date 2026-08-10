@@ -12,11 +12,18 @@
 // which makes the wait a number this component declares and publishes
 // in the page rather than a property of how busy the machine is.
 //
-// Everything the host can ask for runs through execute(), including the
-// opcodes whose effect is a single store: one entry point is one place
-// that validates, and it keeps the page the only way in.
+// What the opcodes mean is not this component's business. Whoever
+// implements one declares it through CommandService, and this drains,
+// looks it up, and records the verdict — so the ring is a transport and
+// its dependencies are the timer it runs on and the timeline it answers
+// through, not the list of things a host can ask for.
+//
+// Everything the host can ask for still runs through execute(): one
+// entry point is one place that records, and it keeps the page the only
+// way in.
 
 #include "nova/command.hpp"
+#include "trap_handler/command.hpp"
 
 #include <cib/top.hpp>
 #include <cstdint>
@@ -30,15 +37,15 @@ namespace nova::command {
 // a reader notices and far above anything the machine does.
 inline constexpr std::uint32_t kPeriodUs = 10'000;
 
-// Place the page and arm the drain. Primary core, RuntimeStart, after
-// soft_timer has claimed its PPI.
+// Collect the ops, place the page, arm the drain. Primary core,
+// RuntimeStart, after soft_timer has claimed its PPI.
 void start() noexcept;
 
 // Carry out one command and record what became of it. External so the
 // symbol survives: the event catalogue offers it as a stop point, and a
 // reader breaking here holds the machine at the instant one takes
 // effect.
-void execute(const Record& command) noexcept;
+void execute(const Record& command, TrapContext* ctx) noexcept;
 
 } // namespace nova::command
 
@@ -47,7 +54,12 @@ namespace nova {
 struct command_component {
   constexpr static auto INIT = flow::action<"command_init">([]() noexcept { command::start(); });
 
-  constexpr static auto config = cib::config(cib::extend<cib::RuntimeStart>(*INIT));
+  // The ring's own opcode. Being the dispatcher does not exempt it from
+  // declaring what it carries out the way everyone else does.
+  static void commands(CommandCall* call) noexcept;
+
+  constexpr static auto config =
+      cib::config(cib::extend<cib::RuntimeStart>(*INIT), cib::extend<CommandService>(&command_component::commands));
 };
 
 } // namespace nova

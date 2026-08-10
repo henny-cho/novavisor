@@ -50,7 +50,9 @@ void psci_component::handle_hvc(HvcCall* call) noexcept {
     // Does not return to the caller — the whole VM retires here (the
     // caller's own vCPU last; foreign siblings via cross-call).
     log_power_event(" system_off\n");
-    smp::stop_vm(vm_of(vcpu::current_index()), call->ctx);
+    // SYSTEM_OFF has no return value: a guest that asked to be powered
+    // off while a reset already owned the VM still ends up off.
+    static_cast<void>(smp::stop_vm(vm_of(vcpu::current_index()), call->ctx));
     return;
   case psci::Action::kSystemReset:
     // Accepted resets do not return: the live frame is replaced by the

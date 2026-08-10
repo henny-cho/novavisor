@@ -15,7 +15,9 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
-PROTOCOL_VERSION = 1
+# 2: the topology's command contract carries one row per op the machine
+#    carries out instead of a list of opcode names and two named bands.
+PROTOCOL_VERSION = 2
 
 # Columns a window request may ask to be answered in. A limit on a
 # request field is part of the contract, not an implementation detail of

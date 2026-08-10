@@ -24,6 +24,7 @@
 #include "core_vcpu/core_vcpu.hpp"
 #include "smp/dma_quiesce.hpp"
 #include "telemetry/telemetry.hpp"
+#include "trap_handler/command.hpp"
 #include "trap_handler/dma_fault.hpp"
 #include "trap_handler/guest_fault.hpp"
 #include "trap_handler/hvc.hpp"
@@ -71,9 +72,15 @@ void reevaluate_virq(std::size_t slot) noexcept;
 // becomes runnable — through DmaQuiesceService (smp/dma_quiesce.hpp),
 // which this component exports and a device stack subscribes to, so
 // VM power does not require one to exist.
-void               stop_vm(std::size_t vm, TrapContext* live) noexcept;
+//
+// `live` is the frame to switch away from if the operation retires the
+// caller's vCPU. Whether that switch happens now or after the current
+// interrupt is not the caller's to say — core_gic answers it.
+// stop and reset both report acceptance: false means the VM is out of
+// range, already off, or owned by a lifecycle already in flight.
+[[nodiscard]] auto stop_vm(std::size_t vm, TrapContext* live) noexcept -> bool;
 void               cpu_off(std::size_t slot, TrapContext* live) noexcept;
-[[nodiscard]] auto reset_vm(std::size_t vm, TrapContext* live, bool from_irq = false) noexcept -> bool;
+[[nodiscard]] auto reset_vm(std::size_t vm, TrapContext* live) noexcept -> bool;
 
 } // namespace nova::smp
 
@@ -113,14 +120,18 @@ struct smp_component {
   // What this component offers the S layer.
   static void telemetry(TelemetryCall* call) noexcept;
 
-  constexpr static auto config = cib::config(cib::exports<DmaQuiesceService>, cib::extend<cib::RuntimeStart>(*INIT),
-                                             cib::extend<HvcService>(&smp_component::handle_hvc),
-                                             cib::extend<GuestFaultService>(&smp_component::handle_guest_fault),
-                                             cib::extend<DmaFaultService>(&smp_component::handle_dma_fault),
-                                             cib::extend<IrqService>(&smp_component::handle_irq),
-                                             cib::extend<SysregService>(&smp_component::handle_sysreg),
-                                             cib::extend<VirqReevaluateService>(&smp_component::handle_virq_reevaluate),
-                                             cib::extend<TelemetryService>(&smp_component::telemetry));
+  // VM power, offered to the host. The same three functions the guest
+  // reaches through PSCI and HVC_VM_START.
+  static void commands(CommandCall* call) noexcept;
+
+  constexpr static auto config = cib::config(
+      cib::exports<DmaQuiesceService>, cib::extend<cib::RuntimeStart>(*INIT),
+      cib::extend<HvcService>(&smp_component::handle_hvc),
+      cib::extend<GuestFaultService>(&smp_component::handle_guest_fault),
+      cib::extend<DmaFaultService>(&smp_component::handle_dma_fault),
+      cib::extend<IrqService>(&smp_component::handle_irq), cib::extend<SysregService>(&smp_component::handle_sysreg),
+      cib::extend<VirqReevaluateService>(&smp_component::handle_virq_reevaluate),
+      cib::extend<CommandService>(&smp_component::commands), cib::extend<TelemetryService>(&smp_component::telemetry));
 };
 
 } // namespace nova

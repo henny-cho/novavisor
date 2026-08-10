@@ -39,11 +39,16 @@ struct IrqService : public callback::service<IrqCall*> {};
 
 namespace core_gic {
 
-// Request work that must run only after the current physical interrupt
-// has been EOI'd. Used when an IRQ retires the resident vCPU: entering
-// an idle scheduler from the callback itself would leave the INTID
-// active and prevent another interrupt with the same ID from arriving.
-void defer_epilogue(IrqEpilogue epilogue) noexcept;
+// Take `epilogue` if a context switch is not allowed right now, and say
+// so. Between ack and EOI it is not: switching away from the callback
+// would leave the INTID active and prevent another interrupt with the
+// same ID from arriving, so the work runs after the EOI instead, on
+// this loop's frame.
+//
+// Asked rather than told. Whether that window is open is this file's
+// own state; a caller that declared it instead would be spelling a
+// second copy of a fact only the dispatcher has.
+[[nodiscard]] auto defer_if_dispatching(IrqEpilogue epilogue) noexcept -> bool;
 
 // Ack → IrqService → EOI until no INTID is pending. `ctx` is the live
 // trap frame handed to every subscriber.

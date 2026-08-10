@@ -70,7 +70,7 @@ void handle_exit(TrapContext* ctx) noexcept {
   // One atomic line: the verification harness greps for it, so another
   // core's log must never splice into it.
   console::line("demo_exit code=", console::Dec{ctx->x[1]}, "\n");
-  smp::stop_vm(vm_of(vcpu::current_index()), ctx);
+  static_cast<void>(smp::stop_vm(vm_of(vcpu::current_index()), ctx));
 }
 
 // kHvcDiagEl2Fault: fault EL2 on purpose — a store into EL2's own

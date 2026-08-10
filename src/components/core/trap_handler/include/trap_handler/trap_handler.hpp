@@ -21,14 +21,16 @@
 //   - inconsistent ECs : dump TrapContext and halt.
 //
 // Beyond the trap routing above, this component also exports
-// DmaFaultService (include/dma_fault.hpp) — a notification, not a
-// trap. It is declared here because a subscriber must compile
-// without its publisher: the header explains why.
+// DmaFaultService (include/dma_fault.hpp) and CommandService
+// (include/command.hpp) — a device notification and a host request,
+// neither a trap. Both are declared here because a subscriber must
+// compile without its publisher: those headers explain why.
 //
 // Subscribers include only the service header they extend; this header
 // is for the component itself (nexus composition) and the dump helper.
 
 #include "nova/arch/trap_context.hpp"
+#include "trap_handler/command.hpp"
 #include "trap_handler/dma_fault.hpp"
 #include "trap_handler/fp_simd.hpp"
 #include "trap_handler/guest_fault.hpp"
@@ -65,7 +67,7 @@ struct trap_handler_component {
   // extend them as needed.
   constexpr static auto config =
       cib::config(cib::exports<EL2SyncTrapService, HvcService, WfxService, FpSimdService, SysregService, MmioService,
-                               GuestFaultService, DmaFaultService>,
+                               GuestFaultService, DmaFaultService, CommandService>,
                   cib::extend<EL2SyncTrapService>(&trap_handler_component::handle_lower_sync));
 };
 

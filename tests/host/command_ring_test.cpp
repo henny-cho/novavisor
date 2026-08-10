@@ -10,6 +10,7 @@
 
 #include "nova/command.hpp"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <gtest/gtest.h>
@@ -64,7 +65,7 @@ auto command(std::uint64_t op, std::uint64_t a = 0, std::uint64_t b = 0) -> Reco
 
 TEST(CommandRingFormat, GeometryIsPublishedAndTheMagicComesLast) {
   Page page{};
-  nova::command::format(page.byte.data(), kPeriodUs, {});
+  nova::command::format(page.byte.data(), kPeriodUs, nova::command::OpTable{});
 
   auto* header = reinterpret_cast<nova::command::Header*>(page.byte.data());
   EXPECT_EQ(header->version, NOVA_CMD_VERSION);
@@ -80,29 +81,100 @@ TEST(CommandRingFormat, GeometryIsPublishedAndTheMagicComesLast) {
   EXPECT_EQ(header->magic, NOVA_CMD_MAGIC);
 }
 
-TEST(CommandRingFormat, TheAcceptedBandsReachThePageWhereTheHostReadsThem) {
-  Page page{};
-  // Five distinct non-zero values: a band written from the wrong member,
-  // or not written at all, shows up as a different number rather than as
-  // the same default every other field already has.
-  constexpr nova::command::Limits kBands{
-      .slice_min_us = 200, .slice_def_us = 10'000, .slice_max_us = 100'000, .spi_lo = 32, .spi_hi = 991};
-  nova::command::format(page.byte.data(), kPeriodUs, kBands);
+// One op with distinct non-zero values in every field: a member written
+// from the wrong source, or not written at all, shows up as a different
+// number rather than as the same default the rest of the page has.
+auto stub(const Record&, nova::TrapContext*) noexcept -> std::uint64_t {
+  return NOVA_CMD_RESULT_OK;
+}
 
-  // Read at the ABI offsets rather than through Header, because what the
-  // Python producer parses is the page and not this struct.
-  const auto word = [&page](std::size_t offset) {
-    return *reinterpret_cast<const std::uint32_t*>(page.byte.data() + offset);
+constexpr nova::command::Op kSpi{.op    = NOVA_CMD_OP_SPI,
+                                 .words = 2,
+                                 .a     = {.kind = NOVA_CMD_ARG_VM, .lo = 0, .hi = 3, .def = 1},
+                                 .b     = {.kind = NOVA_CMD_ARG_PLAIN, .lo = 32, .hi = 991, .def = 33},
+                                 .run   = &stub};
+
+TEST(CommandRingFormat, WhatThisBuildCarriesOutReachesThePageAsRows) {
+  nova::command::OpTable ops;
+  ASSERT_TRUE(ops.declare(kSpi));
+
+  Page page{};
+  nova::command::format(page.byte.data(), kPeriodUs, ops);
+
+  // Read at the ABI offsets rather than through the mirror structs,
+  // because what the Python producer parses is the page and not these.
+  const auto* bytes = page.byte.data();
+  const auto  u32   = [bytes](std::size_t offset) { return *reinterpret_cast<const std::uint32_t*>(bytes + offset); };
+  EXPECT_EQ(u32(NOVA_CMD_NROWS_OFF), 1U);
+  EXPECT_EQ(u32(NOVA_CMD_ROWSZ_OFF), std::uint32_t{NOVA_CMD_OPS_ROW});
+
+  const auto* row = bytes + NOVA_CMD_OPS_OFF;
+  EXPECT_EQ(*reinterpret_cast<const std::uint16_t*>(row + NOVA_CMD_ROW_OP_OFF), NOVA_CMD_OP_SPI);
+  EXPECT_EQ(row[NOVA_CMD_ROW_WORDS_OFF], 2);
+  EXPECT_EQ(row[NOVA_CMD_ROW_AKIND_OFF], NOVA_CMD_ARG_VM);
+  EXPECT_EQ(row[NOVA_CMD_ROW_BKIND_OFF], NOVA_CMD_ARG_PLAIN);
+  const auto band = [row](std::size_t at) {
+    return std::array{*reinterpret_cast<const std::uint32_t*>(row + at),
+                      *reinterpret_cast<const std::uint32_t*>(row + at + 4),
+                      *reinterpret_cast<const std::uint32_t*>(row + at + 8)};
   };
-  EXPECT_EQ(word(NOVA_CMD_SLICE_MIN_OFF), kBands.slice_min_us);
-  EXPECT_EQ(word(NOVA_CMD_SLICE_DEF_OFF), kBands.slice_def_us);
-  EXPECT_EQ(word(NOVA_CMD_SLICE_MAX_OFF), kBands.slice_max_us);
-  EXPECT_EQ(word(NOVA_CMD_SPI_LO_OFF), kBands.spi_lo);
-  EXPECT_EQ(word(NOVA_CMD_SPI_HI_OFF), kBands.spi_hi);
-  // The version these fields were added for. A host that trusted the
-  // zeros an older page has here would offer a machine that accepts
-  // nothing, so the version is what has to refuse it.
-  EXPECT_EQ(word(NOVA_CMD_VERSION_OFF), std::uint32_t{NOVA_CMD_VERSION});
+  EXPECT_EQ(band(NOVA_CMD_ROW_A_OFF), (std::array<std::uint32_t, 3>{0, 3, 1}));
+  EXPECT_EQ(band(NOVA_CMD_ROW_B_OFF), (std::array<std::uint32_t, 3>{32, 991, 33}));
+  // The version the rows arrived in. A host that read an older page's
+  // records as rows would offer whatever those bytes happened to be, so
+  // the version is what has to refuse it.
+  EXPECT_EQ(u32(NOVA_CMD_VERSION_OFF), std::uint32_t{NOVA_CMD_VERSION});
+}
+
+TEST(CommandOpTable, AnOpNobodyClaimedIsUnknownRatherThanCarriedOut) {
+  nova::command::OpTable ops;
+  ASSERT_TRUE(ops.declare(kSpi));
+
+  EXPECT_EQ(ops.dispatch(command(NOVA_CMD_OP_SPI), nullptr), NOVA_CMD_RESULT_OK);
+  EXPECT_EQ(ops.dispatch(command(NOVA_CMD_OP_SLICE), nullptr), NOVA_CMD_RESULT_UNKNOWN);
+  // Too wide to name in the answering record, so it cannot be claimed
+  // either — otherwise the answer would carry some other op's name.
+  EXPECT_EQ(ops.dispatch(command(NOVA_CMD_ANSWER_MASK + 1), nullptr), NOVA_CMD_RESULT_UNKNOWN);
+}
+
+TEST(CommandOpTable, OneOpHasOneOwnerAndTheTableIsBoundedByThePage) {
+  nova::command::OpTable ops;
+  ASSERT_TRUE(ops.declare(kSpi));
+  // A second claimant would make which handler runs depend on init
+  // order; the first keeps it and the loser is counted by its caller.
+  EXPECT_FALSE(ops.declare(kSpi));
+  // Nothing to run and nothing to name are both nothing to publish.
+  EXPECT_FALSE(ops.declare({.op = NOVA_CMD_OP_SLICE, .run = nullptr}));
+  EXPECT_FALSE(ops.declare({.op = 0, .run = &stub}));
+
+  nova::command::Op filler{.op = 100, .run = &stub};
+  for (std::uint16_t seat = 1; seat < NOVA_CMD_OPS_CAP; ++seat) {
+    filler.op = static_cast<std::uint16_t>(100 + seat);
+    EXPECT_TRUE(ops.declare(filler));
+  }
+  filler.op = 999;
+  EXPECT_FALSE(ops.declare(filler)) << "the table outgrew the rows the page holds";
+}
+
+TEST(CommandRing, WhetherAnythingOutsideTheGuestsHasDrivenThisMachine) {
+  // What the halt decision asks. Halting is irreversible and takes the
+  // drain with it, so a machine a host has spoken to must not end just
+  // because no guest is running — and one nothing ever drove must end
+  // exactly as it did before.
+  Ring unplaced;
+  EXPECT_FALSE(unplaced.spoken_to()) << "a profile without the ring must read false";
+
+  Fixture fixture;
+  Ring    ring = fixture.ring();
+  EXPECT_FALSE(ring.spoken_to()) << "placed is not spoken to";
+
+  ASSERT_TRUE(ring.push(command(NOVA_CMD_OP_MARK)));
+  EXPECT_TRUE(ring.spoken_to());
+
+  // Still true once drained: the question is whether anyone ever
+  // spoke, not whether anything is waiting.
+  static_cast<void>(take(ring));
+  EXPECT_TRUE(ring.spoken_to());
 }
 
 TEST(CommandRing, AnUnplacedRingRefusesRatherThanFaults) {

@@ -217,7 +217,7 @@ void smp_component::handle_irq(IrqCall* call) noexcept {
     }
   }
   if (schedule_required) {
-    core_gic::defer_epilogue(&vcpu::schedule_after_retire);
+    vcpu::schedule_after_retire(call->ctx);
   }
 }
 
