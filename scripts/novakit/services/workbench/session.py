@@ -9,11 +9,7 @@ default executor so the event loop keeps serving connections.
 from __future__ import annotations
 
 import asyncio  # noqa: TID251 — the event loop lives here
-import shutil
-import socket
 import sys
-import tempfile
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -22,6 +18,7 @@ from pathlib import Path
 from ...core import board
 from ...image import observe
 from .. import artifacts, cmake, expect, manifest, spawn
+from ..surfaces import Surfaces
 from . import anchors, derive, events, hardware, paths
 from .observations import observation_rates, timer_slot_labels
 from .protocol import MAX_BUCKETS, Kind, Src, Topic
@@ -84,11 +81,8 @@ def image_answers(elf: Path | None = None) -> observe.View | None:
     path = _debug_image() if elf is None else Path(elf)
     if not path.is_file():
         return None
-    artifact = observe.artifact_of(path)
     try:
-        if not artifact.is_file():
-            raise observe.Stale(f"{path.name} has no observation view beside it: rebuild")
-        return observe.load(artifact, path)
+        return observe.view_of(path)
     except (observe.Stale, OSError) as error:
         _say_once(str(error))
         return None
@@ -133,13 +127,6 @@ def initial_topology() -> dict:
         "observations": observation_rates(),
         "limits": {"buckets": MAX_BUCKETS},
     }
-
-
-def _kernel_of(command: list[str]) -> Path | None:
-    try:
-        return Path(command[command.index("-kernel") + 1])
-    except (ValueError, IndexError):
-        return None
 
 
 def _select_variant(demo_manifest: dict, name: str | None) -> dict:
@@ -199,97 +186,6 @@ def _kill(child) -> None:
         child.terminate(force=True)
     except Exception:
         pass  # already gone
-
-
-@dataclass(frozen=True)
-class Surfaces:
-    """Filesystem endpoints of one bridge's observation surfaces.
-
-    The owner (the server) creates and releases them; the session only
-    attaches them to the QEMU command and resets them between runs so a
-    restart never reads the previous run's RAM.
-    """
-
-    directory: Path
-
-    @property
-    def shm_path(self) -> Path:
-        return self.directory / "guest-ram"
-
-    @property
-    def qmp_path(self) -> Path:
-        return self.directory / "qmp.sock"
-
-    @property
-    def gdb_path(self) -> Path:
-        return self.directory / "gdb.sock"
-
-    @property
-    def port_path(self) -> Path:
-        """Where the bridge says which port it answers on.
-
-        The observation surfaces are already how a second process finds
-        a session — the CLI twin globs for them — and the bridge's own
-        history is reachable only over its socket. A port beside the
-        sockets is the same discovery answering one more question,
-        rather than a second convention for finding the same session.
-        """
-        return self.directory / "port"
-
-    def reset(self) -> None:
-        # The port outlives a target change: it belongs to the bridge,
-        # not to the machine the bridge happens to be running.
-        self.shm_path.unlink(missing_ok=True)
-        self.qmp_path.unlink(missing_ok=True)
-        self.gdb_path.unlink(missing_ok=True)
-
-    def release(self) -> None:
-        self.reset()
-        self.port_path.unlink(missing_ok=True)
-        try:
-            self.directory.rmdir()
-        except OSError:
-            pass
-
-
-def sweep_stale_surfaces(base: Path, min_age_seconds: float = 60.0) -> None:
-    """Remove observation directories whose bridge died without cleanup.
-
-    A killed bridge (SIGKILL, a crashed terminal) leaves its RAM backend
-    pinned in tmpfs — a gigabyte per Linux guest — until /dev/shm fills
-    and every later QEMU launch fails. A directory is dead when its RAM
-    file exists but nothing answers on its QMP socket; young directories
-    are skipped so a bridge that is still starting is never swept.
-    """
-    now = time.time()
-    for directory in base.glob("nova-wb-*"):
-        try:
-            if not (directory / "guest-ram").exists():
-                continue
-            if now - directory.stat().st_mtime < min_age_seconds:
-                continue
-            probe = directory / "qmp.sock"
-            if probe.exists():
-                with socket.socket(socket.AF_UNIX) as sock:
-                    sock.settimeout(0.2)
-                    try:
-                        sock.connect(str(probe))
-                        continue  # a live QEMU still answers here
-                    except OSError:
-                        pass
-            shutil.rmtree(directory, ignore_errors=True)
-        except OSError:
-            continue
-
-
-def make_surfaces() -> Surfaces:
-    """tmpfs keeps the RAM file's dirtied pages off the disk; fall back
-    to the default temp directory where /dev/shm is unavailable."""
-    base = Path("/dev/shm")
-    if base.is_dir():
-        sweep_stale_surfaces(base)
-    root = tempfile.mkdtemp(prefix="nova-wb-", dir=base if base.is_dir() else None)
-    return Surfaces(Path(root))
 
 
 @dataclass(frozen=True)
@@ -463,7 +359,7 @@ class Session:
                     qmp_path=self.surfaces.qmp_path,
                     gdb_path=self.surfaces.gdb_path,
                 )
-            self.elf_path = _kernel_of(command)
+            self.elf_path = Path(prepared.scenario.elf) if prepared.scenario.elf else None
             # Before the machine starts: the answers are a file, so the
             # observer stands by for the first instruction instead of
             # arriving seconds into the boot it was meant to watch.

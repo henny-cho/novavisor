@@ -151,4 +151,5 @@ def scenario_for(
         timeout_seconds=int(demo_manifest.get("timeout_seconds", 30)),
         steps=steps,
         forbidden_patterns=forbidden,
+        elf=elf,
     )

@@ -37,12 +37,8 @@ def _read(what: str, elf: Path | None) -> observe.View | None:
     if not path.is_file():
         print(f"[workbench] {what}: missing ELF {path}", file=sys.stderr)
         return None
-    view = observe.artifact_of(path)
-    if not view.is_file():
-        print(f"[workbench] {what}: {path.name} has no observation view beside it", file=sys.stderr)
-        return None
     try:
-        return observe.load(view, path)
+        return observe.view_of(path)
     except observe.Stale as error:
         print(f"[workbench] {what}: {error}", file=sys.stderr)
         return None

@@ -6,11 +6,13 @@ and had already drifted apart on where the failure tail goes.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-from . import expect, report, spawn
+from ..core import board
+from . import expect, report, spawn, surfaces
+from .workbench import steps
 
 
 @dataclass(frozen=True)
@@ -57,15 +59,42 @@ def run_scenario(scenario: expect.Scenario, sink: Sink, *, scope: str) -> int:
         if diagnostics is not None:
             report.write_diagnostics(diagnostics, scenario.label, result)
 
+    # One run's lifetime is this function, so its observation surfaces
+    # open and close here. The scenario builder cannot hold them: the
+    # soak path builds every variant's scenario before running any, and
+    # a surface made there would pin a guest's RAM in tmpfs for the
+    # whole soak.
+    opened = surfaces.make_surfaces() if expect.needs_observation(scenario.steps) else None
+    machine = None
+    if opened is not None:
+        if scenario.elf is None:
+            raise SystemExit(
+                f"[{scope}] {scenario.label}: steps that observe need the image "
+                "that was built, and this scenario carries none"
+            )
+        scenario = replace(scenario, command=tuple(board.attach_workbench(
+            list(scenario.command),
+            shm_path=opened.shm_path,
+            qmp_path=opened.qmp_path,
+            gdb_path=opened.gdb_path,
+        )))
+        machine = steps.Machine(scenario.elf, opened.shm_path)
+
     try:
         run = spawn.observe(
             scenario,
             stream=sink.stream,
             on_step=announce(scope, scenario),
+            handlers=None if machine is None else steps.handlers_for(machine),
         )
     except expect.Interrupted as interrupted:
         persist(interrupted.capture, interrupted.result)
         raise interrupted.cause.with_traceback(interrupted.cause.__traceback__) from None
+    finally:
+        if machine is not None:
+            machine.close()
+        if opened is not None:
+            opened.release()
 
     if not run.result.ok:
         persist(run.capture, run.result)

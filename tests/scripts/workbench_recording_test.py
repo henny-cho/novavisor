@@ -579,8 +579,8 @@ class DrainJoinTest(Recorded):
         return bytes(buffer)
 
     def test_the_span_a_drain_publishes_is_what_the_seek_index_reads(self):
+        from novakit.services.surfaces import Surfaces
         from novakit.services.workbench.server import Bridge
-        from novakit.services.workbench.session import Surfaces
 
         surfaces = Surfaces(self.directory)
         surfaces.shm_path.write_bytes(self.region(8))

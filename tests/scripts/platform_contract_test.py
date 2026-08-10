@@ -334,3 +334,32 @@ class PlatformContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SeamBoundaryTests(unittest.TestCase):
+    """The scenario state machine is handed its non-console steps as
+    callables so that adding a kind grows a handler, not that module.
+    Nothing else would notice the seam giving way."""
+
+    def _staged(self, root: Path, body: str) -> None:
+        target = root / boundaries.PACKAGE / boundaries.BLIND_TO_WORKBENCH[0]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body)
+
+    def test_reaching_into_the_workbench_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._staged(root, "from .workbench import steps\n")
+
+            reasons = [reason for _p, _n, reason, kind in
+                       boundaries.find_seam_violations(root) if kind == "seam"]
+
+            self.assertEqual(len(reasons), 1)
+            self.assertIn("must not know how a machine is read", reasons[0])
+
+    def test_naming_the_workbench_in_prose_is_not_reaching_into_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._staged(root, '"""Handlers come from the workbench."""\n')
+
+            self.assertEqual(boundaries.find_seam_violations(root), [])

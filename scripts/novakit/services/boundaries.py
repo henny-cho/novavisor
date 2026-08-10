@@ -77,6 +77,13 @@ def _layer_of(path: Path, base: Path) -> str:
 # the top layer, where the next consumer has to depend on an adapter.
 COMMANDS_MAY_REACH = {"commands", "services"}
 
+# Modules that decide what a run must do, and must not learn how the
+# machine is read to do it. The scenario state machine is handed its
+# non-console steps as callables precisely so that a new kind of step
+# grows a handler and not this module; an import here is that seam
+# giving way, and nothing else would notice.
+BLIND_TO_WORKBENCH = ("services/expect.py",)
+
 
 def find_layer_violations(root: Path) -> list[tuple[Path, int, str, str]]:
     """Report package-relative imports that leave the layer they may reach."""
@@ -124,6 +131,22 @@ def find_ownership_violations(root: Path) -> list[tuple[Path, int, str, str]]:
                     violations.append(
                         (path.relative_to(root), line_number, f"{marker} belongs to {owners}", "ownership")
                     )
+    return violations
+
+
+def find_seam_violations(root: Path) -> list[tuple[Path, int, str, str]]:
+    """Report a module reaching through a seam it exists to keep shut."""
+    violations: list[tuple[Path, int, str, str]] = []
+    for name in BLIND_TO_WORKBENCH:
+        path = root / PACKAGE / name
+        if not path.is_file():
+            continue
+        for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+            if "workbench" in line and line.lstrip().startswith(("import ", "from ")):
+                violations.append(
+                    (path.relative_to(root), line_number,
+                     f"{name} must not know how a machine is read", "seam")
+                )
     return violations
 
 
@@ -198,6 +221,7 @@ def find_violations(root: Path) -> list[tuple[Path, int, str, str]]:
     if (root / PACKAGE).is_dir():
         violations.extend(find_layer_violations(root))
         violations.extend(find_ownership_violations(root))
+        violations.extend(find_seam_violations(root))
     return violations
 
 

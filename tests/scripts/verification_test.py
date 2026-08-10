@@ -21,6 +21,7 @@ from novakit.services import (  # noqa: E402
     manifest,
     report,
     spawn,
+    surfaces,
     verify,
 )
 
@@ -842,3 +843,78 @@ class HandledStepTest(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual(len([e for e in child.events if e[0] == "expect"]), 3)
+
+
+class RunSurfacesTest(ScenarioHarness):
+    """A run is made observable only when its steps ask a question the
+    console cannot answer, and the surfaces close with the run."""
+
+    def run_with(self, steps):
+        opened = []
+
+        def make():
+            surface = surfaces.make_surfaces()
+            opened.append(surface)
+            return surface
+
+        with mock.patch.object(verify.surfaces, "make_surfaces", side_effect=make):
+            ran = self.observe(
+                FakeChild(FakeClock(), actions=[0.0] * len(steps)),
+                label="surfaces",
+                steps=steps,
+            )
+        return ran, opened
+
+    def test_a_console_only_run_opens_no_surfaces(self):
+        _ran, opened = self.run_with([{"pattern": "ready"}])
+
+        self.assertEqual(opened, [])
+
+    @staticmethod
+    def observing(elf=Path("/built/novavisor.elf")) -> expect.Scenario:
+        return expect.Scenario(
+            label="observing",
+            phase=0,
+            command=("qemu", "-machine", "virt", "-m", "512"),
+            timeout_seconds=10,
+            steps=({"observe": "smmu.stream"},),
+            elf=elf,
+        )
+
+    def test_a_run_that_observes_is_launched_with_the_surfaces_attached(self):
+        seen = {}
+
+        def remember(scenario, **kwargs):
+            seen["command"] = scenario.command
+            seen["handlers"] = kwargs.get("handlers")
+            raise RuntimeError("stop here: the launch is what this test wants")
+
+        with (
+            mock.patch.object(spawn, "observe", side_effect=remember),
+            self.assertRaises(RuntimeError),
+        ):
+            verify.run_scenario(self.observing(), verify.Sink(), scope="test")
+
+        joined = " ".join(seen["command"])
+        self.assertIn("memory-backend-file", joined)
+        self.assertIn("memory-backend=wbram", joined)
+        self.assertEqual(sorted(seen["handlers"]), ["command", "event", "observe"])
+
+    def test_observing_without_a_built_image_stops_the_run(self):
+        """A step that reads the machine needs the image that describes
+        it; a run that quietly skipped the reading would pass on nothing."""
+        with self.assertRaisesRegex(SystemExit, "carries none"):
+            verify.run_scenario(
+                self.observing(elf=None), verify.Sink(), scope="test"
+            )
+
+    def test_the_surfaces_close_even_when_the_run_raises(self):
+        surface = surfaces.make_surfaces()
+        with (
+            mock.patch.object(verify.surfaces, "make_surfaces", return_value=surface),
+            mock.patch.object(spawn, "observe", side_effect=RuntimeError("boom")),
+            self.assertRaises(RuntimeError),
+        ):
+            verify.run_scenario(self.observing(), verify.Sink(), scope="test")
+
+        self.assertFalse(surface.directory.exists())

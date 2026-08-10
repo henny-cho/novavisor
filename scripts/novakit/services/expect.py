@@ -20,13 +20,20 @@ POLL_SECONDS = 0.2
 
 @dataclass(frozen=True)
 class Scenario:
-    """One verifiable run: what to launch and what its output must show."""
+    """One verifiable run: what to launch and what it must do.
+
+    `elf` is the image the command boots. Carried rather than read back
+    out of the command line: whoever built the command already had it,
+    and a reader deriving it again is a second answer to a question that
+    was asked once.
+    """
     label: str
     phase: object
     command: tuple[str, ...]
     timeout_seconds: int
     steps: tuple[dict, ...]
     forbidden_patterns: tuple[str, ...] = ()
+    elf: object | None = None
 
 
 # The manifest names a step by the key it carries, so a step is exactly
@@ -52,15 +59,37 @@ def describe_step(kind: str, subject: str) -> str:
     return f"/{subject}/" if kind == "pattern" else f"{kind} {subject}"
 
 
+def needs_observation(steps) -> bool:
+    """Whether this run has to be observable, asked of the steps alone.
+
+    Derived rather than declared: the manifest already says what it
+    wants by the steps it lists, and a second field saying "and observe
+    me" is the same fact twice.
+    """
+    return any(step_kind(step) != "pattern" for step in steps)
+
+
 @dataclass(frozen=True)
 class StepOutcome:
-    """Where a handled step stands: still waiting, carried out, or failed."""
+    """Where a handled step stands: still waiting, carried out, or failed.
+
+    A pending outcome may carry a note — something the handler learned
+    while waiting that does not settle the step but explains it if the
+    wait runs out. A hole in a ring is the case this exists for: it does
+    not mean the event never happened, and a timeout that did not
+    mention it would report a defect the machine may not have.
+    """
     done: bool = False
     error: str = ""
+    note: str = ""
 
 
 PENDING = StepOutcome()
 CARRIED = StepOutcome(done=True)
+
+
+def step_pending(note: str) -> StepOutcome:
+    return StepOutcome(note=note)
 
 
 def step_failed(reason: str) -> StepOutcome:
@@ -224,6 +253,7 @@ def observe_output(
             """
             poll = handler(step)
             watched = [*banned, eof_error]
+            note = ""
             while True:
                 outcome = poll()
                 if outcome.done:
@@ -232,10 +262,11 @@ def observe_output(
                                     error=outcome.error, wait_seconds=wait, **owed)
                         if outcome.error else None
                     )
+                note = outcome.note or note
                 now = clock()
                 if now >= wait_started + wait:
                     return make_result(
-                        FailureKind.TIMEOUT, now, wait_seconds=wait, **owed)
+                        FailureKind.TIMEOUT, now, wait_seconds=wait, error=note, **owed)
                 slice_seconds = min(poll_seconds, wait_started + wait - now)
                 try:
                     hit = child.expect(watched, timeout=slice_seconds)

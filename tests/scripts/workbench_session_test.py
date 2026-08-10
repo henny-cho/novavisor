@@ -15,6 +15,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
 from novakit.services import expect, spawn  # noqa: E402
+from novakit.services.surfaces import Surfaces  # noqa: E402
 from novakit.services.workbench import trace  # noqa: E402
 from novakit.services.workbench.protocol import Clock, Envelopes  # noqa: E402
 from novakit.services.workbench.session import (  # noqa: E402
@@ -22,7 +23,6 @@ from novakit.services.workbench.session import (  # noqa: E402
     Phase,
     Prepared,
     Session,
-    Surfaces,
     Target,
 )
 from novakit.services.workbench.store import StateStore  # noqa: E402
@@ -238,6 +238,29 @@ class SessionTest(Draining):
             self.assertIn(str(surfaces.shm_path), joined)
             self.assertIn(f"unix:{surfaces.qmp_path},server=on,wait=off", joined)
             self.assertIn("virt,memory-backend=wbram", joined)
+
+    async def test_the_run_takes_its_image_from_the_scenario(self):
+        """Not from the command line it just built: that would be a
+        second answer to a question the builder already answered."""
+        live = FakeLive()
+        self.addCleanup(live.terminate)
+        carried = expect.Scenario(
+            label="demo",
+            phase=1,
+            command=("qemu-system-aarch64", "-kernel", "/elsewhere/other.elf"),
+            timeout_seconds=5,
+            steps=(),
+            elf=Path("/built/here/novavisor.elf"),
+        )
+        deps = Deps(
+            prepare=lambda target: Prepared(carried, {"demo": target.demo}),
+            launch=lambda _command: live,
+        )
+        session = Session(store(), deps)
+
+        await session.select(Target(demo="10_console_mux"))
+
+        self.assertEqual(session.elf_path, Path("/built/here/novavisor.elf"))
 
     async def test_without_surfaces_the_command_is_untouched(self):
         live = FakeLive()
@@ -461,7 +484,7 @@ class SurfaceSweepTest(unittest.TestCase):
     def test_sweep_removes_only_dead_surfaces(self):
         import os
 
-        from novakit.services.workbench.session import sweep_stale_surfaces
+        from novakit.services.surfaces import sweep_stale_surfaces
 
         with tempfile.TemporaryDirectory() as base_name:
             base = Path(base_name)

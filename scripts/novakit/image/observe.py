@@ -238,6 +238,19 @@ def dumps(view: View, elf: Path) -> str:
     )
 
 
+def view_of(elf: Path) -> View:
+    """The view beside an image, or why there is none to believe.
+
+    The three readers of a view differ only in how they say a view is
+    missing — once, to stderr, or as a failed run — so finding and
+    checking it is one function and saying so is each caller's own.
+    """
+    artifact = artifact_of(elf)
+    if not artifact.is_file():
+        raise Stale(f"{Path(elf).name} has no observation view beside it: rebuild")
+    return load(artifact, elf)
+
+
 def load(path: Path, elf: Path) -> View:
     """Read a view back, or say why it cannot be believed.
 

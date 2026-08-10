@@ -20,6 +20,7 @@ from pathlib import Path
 
 from ...core import config
 from ...image import observe
+from ..surfaces import Surfaces, make_surfaces
 from . import (
     commands,
     halt,
@@ -44,15 +45,7 @@ from .protocol import (
     encode,
     parse_uplink,
 )
-from .session import (
-    Deps,
-    Phase,
-    Session,
-    Surfaces,
-    Target,
-    initial_topology,
-    make_surfaces,
-)
+from .session import Deps, Phase, Session, Target, initial_topology
 from .store import StateStore
 
 FLUSH_INTERVAL_SECONDS = 0.05
