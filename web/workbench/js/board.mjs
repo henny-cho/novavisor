@@ -166,11 +166,19 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
 
   const value = (topic) => latest.get(topic);
   const folded = () => view.classList.contains("folded");
-  /* How coarse a sample is belongs to the manifest that takes it. */
-  const rate = (topic) => topology?.observations?.[topic];
+  /* How coarse a sample is, and whether anything holds a run to it,
+     both belong to the manifests that know. A value on screen with no
+     demo checking it is a claim; one with a predicate is a guarantee,
+     and a reader cannot tell them apart from the number alone. */
+  const about = (topic) => topology?.observations?.[topic];
   const sampled = (topic) => {
-    const hz = rate(topic);
-    return evidence("s", hz ? `S ${hz}Hz` : "S");
+    const said = about(topic);
+    const badge = evidence("s", said?.rate ? `S ${said.rate}Hz` : "S");
+    if (said?.asserted) {
+      badge.classList.add("held");
+      badge.title = "a demo checks this reading";
+    }
+    return badge;
   };
   /* Firmware identifiers with the k trimmed: kHvcAa64 reads as HvcAa64.
      Trimming a prefix is a rule; a table of prettier names would be a
@@ -639,7 +647,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     if (edge.grade === "direct") return `${name} — 정지 가능 · 실측${seen}`;
     if (edge.grade === "console") return `${name} — 콘솔 이벤트 · 시각 정확${seen}`;
     if (edge.grade === "poll") {
-      const hz = rate(edge.topic);
+      const hz = about(edge.topic)?.rate;
       return `${name} — ${edge.topic} 표본${hz ? ` · S ${hz}Hz` : ""}${seen}`;
     }
     return `${name} — 관측 없음 · 구조만 표시`;
@@ -1149,7 +1157,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
       link.title =
         cpu === undefined
           ? ""
-          : `s${link.slot} 거주 @ pCPU${cpu} — sched.cpu[${cpu}].current (S ${rate("sched.cpu")}Hz)`;
+          : `s${link.slot} 거주 @ pCPU${cpu} — sched.cpu[${cpu}].current (S ${about("sched.cpu")?.rate}Hz)`;
     }
   }
 

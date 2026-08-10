@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from typing import Annotated
 
 import typer  # noqa: TID251 — typer stops at this layer
 
-from ..services import manifest
-from ..services.workbench import client, hardware, history, server, session, trace
+from ..services import cmake, manifest
+from ..services.workbench import (
+    client,
+    commands,
+    hardware,
+    history,
+    server,
+    session,
+    steps,
+    trace,
+)
 
 app = typer.Typer(
     help="Observe and drive the firmware under QEMU.",
@@ -180,6 +190,60 @@ def show_trace(limit: Limit = 40, follow: Follow = False, since: Since = 5.0) ->
         raise typer.Exit(code)
 
 
-def _no_session(message: str) -> int:
-    print(f"[workbench] trace: {message}", file=sys.stderr)
+Op = Annotated[
+    str,
+    typer.Argument(
+        metavar="OP [ARG...]",
+        help=(
+            "One command as the run advertises it, arguments included: "
+            "`stop 0`. The vocabulary comes from the page the machine "
+            "published, so a build that carries no such op says so."
+        ),
+    ),
+]
+Wait = Annotated[
+    float,
+    typer.Option("--wait", metavar="SECONDS", min=0.1,
+                 help="How long to wait for the verdict."),
+]
+
+
+@app.command("command")
+def issue_command(op: Op, wait: Wait = 10.0) -> None:
+    """Drive a running machine from the terminal.
+
+    The hand-driven twin of a scenario's `command` step, and the way a
+    CI failure is reproduced without a browser. It shares the step's
+    handler, so the wait for the ring to be advertised and the reading
+    of the verdict are the same code.
+
+    Refused while a bridge is running. The ring has one write cursor and
+    a bridge holds it for the UI; a second writer would not queue behind
+    it, it would race it.
+    """
+    if sorted(Path("/dev/shm").glob("nova-wb-*/port")):
+        raise typer.Exit(code=_no_session(
+            "a bridge is running and holds the ring's write cursor; "
+            "drive it from the workbench UI instead", scope="command"))
+    surfaces = sorted(Path("/dev/shm").glob("nova-wb-*/guest-ram"))
+    if not surfaces:
+        raise typer.Exit(code=_no_session(
+            "no machine is running (nova demo run ...)", scope="command"))
+
+    machine = steps.Machine(cmake.default_image(), surfaces[-1])
+    try:
+        answer, said = steps.carry_out(machine, op, wait, time.sleep)
+    finally:
+        machine.close()
+    # The exit status is the machine's own result code, so a script
+    # reading it and a person reading the line are told the same thing
+    # and no second numbering has to be kept in step with the header.
+    code = commands.RESULTS.get(answer, 1)
+    print(f"[command] {said}", file=sys.stderr if code else sys.stdout)
+    if code:
+        raise typer.Exit(code)
+
+
+def _no_session(message: str, *, scope: str = "trace") -> int:
+    print(f"[workbench] {scope}: {message}", file=sys.stderr)
     return 1

@@ -73,6 +73,14 @@ def preset_dir(preset: str) -> Path:
     return config.BUILD_ROOT / preset
 
 
+
+def default_image() -> Path:
+    """The image a tool reads when nobody named one.
+
+    It carries the firmware's own enums and layouts, so anything asking
+    a running machine what it is doing starts here.
+    """
+    return preset_dir(selected_preset()) / "novavisor.elf"
 def sync_active(source: Path, destination: Path) -> None:
     if not source.is_file():
         raise SystemExit(f"input not found: {source}")

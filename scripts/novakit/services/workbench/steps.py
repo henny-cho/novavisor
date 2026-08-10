@@ -24,6 +24,9 @@ from . import commands, hardware, trace
 from .observations import COMMAND_PAGE, OBSERVATIONS
 from .snapshot import Unchanged, image_symbols, open_provider
 
+# A terminal waits at the same cadence a scenario does.
+_POLL_SECONDS = expect.POLL_SECONDS
+
 
 class Machine:
     """One run's readable surfaces, opened on first use.
@@ -34,9 +37,13 @@ class Machine:
     the whole ring.
     """
 
-    def __init__(self, elf: Path, shm: Path):
+    def __init__(self, elf: Path, shm: Path, *, on_reading=None):
         self._elf = Path(elf)
         self._shm = Path(shm)
+        # What a predicate read, offered to whoever else is watching this
+        # run. One read, two audiences: a screen showing a different
+        # value from the one that was judged would be a second reader.
+        self._on_reading = on_reading
         self._provider = None
         self._tracer: trace.TraceReader | None = None
         self._writer: commands.Writer | None = None
@@ -60,7 +67,10 @@ class Machine:
     def reading(self, topic: str) -> object:
         for obs in OBSERVATIONS:
             if obs.topic == topic:
-                return self.provider().read(obs)
+                value = self.provider().read(obs)
+                if self._on_reading is not None:
+                    self._on_reading(topic, value)
+                return value
         raise KeyError(f"this build publishes no observation named {topic}")
 
     def records(self) -> list[trace.Record]:
@@ -128,9 +138,14 @@ def _matches(fields: dict, wanted: dict) -> bool:
 
 
 def _select(value: object, where: dict) -> dict | None:
-    """The one entry a `where` names, out of a topic that reads as a list."""
-    if not where:
-        return value if isinstance(value, dict) else {"value": value}
+    """The entry a step is talking about, or None while there is none.
+
+    A topic that reads as a list needs a `where` to say which entry; one
+    that reads as a record is itself. Equality is over named fields, so
+    a topic that reads as neither cannot be the subject of one.
+    """
+    if isinstance(value, dict):
+        return value if _matches(value, where) else None
     if not isinstance(value, list):
         return None
     for entry in value:
@@ -215,51 +230,64 @@ def event_handler(machine: Machine) -> expect.StepHandler:
     return handler
 
 
+def issue(machine: Machine, text: str) -> str:
+    """Put one command in the ring. Empty when it went, else why not.
+
+    Anchors before writing: EL2 emits a verdict after carrying a command
+    out, so everything the command causes is an older record than its
+    answer, and a reader that anchored on the answer could not reach
+    them.
+    """
+    words = text.split()
+    writer = machine.writer()
+    offered = {op["name"]: op for op in writer.as_dict()["ops"]}
+    if words[0] not in offered:
+        return (f"this run offers no {words[0]} command "
+                f"(it offers {', '.join(sorted(offered)) or 'none'})")
+    machine.anchor_at(len(machine.records()))
+    writer.issue(commands.OPS[words[0]], *(int(word, 0) for word in words[1:]))
+    return ""
+
+
+def verdict(machine: Machine, op_name: str) -> str:
+    """What the machine answered this command, or empty while it has not."""
+    for _index, fields in machine.after_anchor():
+        if fields["event"] == "command" and fields["op"] == op_name:
+            return fields["result"]
+    return ""
+
+
 def command_handler(machine: Machine) -> expect.StepHandler:
     """Issue one command, then wait for the verdict it caused.
 
-    The verdict is a trace record rather than a return value, so the
-    ring is read for it the same way an `event` step reads for anything
-    else — and the wait for the page to be advertised is the same wait.
+    The verdict is a trace record rather than a return value, so the ring
+    answers this step the same way it answers an `event` one.
     """
 
     def handler(step: dict):
-        words = str(step["command"]).split()
+        text = str(step["command"])
+        op_name = text.split()[0]
         wanted = step.get("expect_result", "ok")
         state = {"issued": False}
 
         def poll() -> expect.StepOutcome:
             if not state["issued"]:
                 try:
-                    writer = machine.writer()
+                    refusal = issue(machine, text)
                 except (FileNotFoundError, commands.NotYetFormatted):
                     return expect.PENDING  # EL2 has not published it yet
                 except commands.NotFormatted as error:
                     return expect.step_failed(str(error))
-                offered = {op["name"]: op for op in writer.as_dict()["ops"]}
-                name, args = words[0], [int(word, 0) for word in words[1:]]
-                if name not in offered:
-                    return expect.step_failed(
-                        f"this run offers no {name} command "
-                        f"(it offers {', '.join(sorted(offered)) or 'none'})"
-                    )
-                # Before issuing: everything already in the ring belongs
-                # to the run so far, and everything this command causes
-                # comes after — including the records it causes before
-                # EL2 gets round to answering.
-                machine.anchor_at(len(machine.records()))
-                writer.issue(commands.OPS[name], *args)
+                if refusal:
+                    return expect.step_failed(refusal)
                 state["issued"] = True
                 return expect.PENDING
-            for _index, fields in machine.after_anchor():
-                if fields["event"] != "command" or fields["op"] != words[0]:
-                    continue
-                if fields["result"] == wanted:
-                    return expect.CARRIED
-                return expect.step_failed(
-                    f"{words[0]} answered {fields['result']}, wanted {wanted}"
-                )
-            return expect.PENDING
+            answer = verdict(machine, op_name)
+            if not answer:
+                return expect.PENDING
+            if answer == wanted:
+                return expect.CARRIED
+            return expect.step_failed(f"{op_name} answered {answer}, wanted {wanted}")
 
         return poll
 
@@ -272,3 +300,46 @@ def handlers_for(machine: Machine) -> dict[str, expect.StepHandler]:
         "event": event_handler(machine),
         "command": command_handler(machine),
     }
+
+
+def carry_out(machine: Machine, text: str, seconds: float, sleep) -> tuple[str, str]:
+    """Issue one command from a terminal and wait for its verdict.
+
+    Returns the machine's own result name and a line to print. Shares
+    `issue` and `verdict` with the scenario step, so the wait for the
+    page to be advertised and the reading of the answer have one
+    implementation and two callers.
+    """
+    op_name = text.split()[0]
+    waited = 0.0
+
+    def out_of_time(what: str) -> tuple[str, str]:
+        return "", f"{text}: {what} within {seconds:g}s"
+
+    while True:
+        try:
+            refusal = issue(machine, text)
+        except commands.NotFormatted as error:
+            # NotYetFormatted is the ordinary case during a boot: EL2
+            # publishes the page in its last init action.
+            if not isinstance(error, commands.NotYetFormatted):
+                return "", str(error)
+        except FileNotFoundError:
+            pass  # the backing file is not there yet either
+        else:
+            if refusal:
+                return "", refusal
+            break
+        if waited >= seconds:
+            return out_of_time("no command ring was advertised")
+        sleep(_POLL_SECONDS)
+        waited += _POLL_SECONDS
+
+    while True:
+        answer = verdict(machine, op_name)
+        if answer:
+            return answer, f"{text} -> {answer}"
+        if waited >= seconds:
+            return out_of_time("no verdict")
+        sleep(_POLL_SECONDS)
+        waited += _POLL_SECONDS

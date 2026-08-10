@@ -47,6 +47,33 @@ def announce(scope: str, scenario: expect.Scenario) -> Callable[[expect.StepResu
     return carried
 
 
+def observable(
+    scenario: expect.Scenario,
+    opened: surfaces.Surfaces,
+    *,
+    scope: str,
+    on_reading: Callable[[str, object], None] | None = None,
+) -> tuple[expect.Scenario, steps.Machine]:
+    """Attach a run's surfaces and open the machine behind them.
+
+    Shared with the bridge, which serves verify runs of its own: a
+    scenario made observable one way there and another way here would be
+    two machines under one name.
+    """
+    if scenario.elf is None:
+        raise SystemExit(
+            f"[{scope}] {scenario.label}: steps that observe need the image "
+            "that was built, and this scenario carries none"
+        )
+    attached = replace(scenario, command=tuple(board.attach_workbench(
+        list(scenario.command),
+        shm_path=opened.shm_path,
+        qmp_path=opened.qmp_path,
+        gdb_path=opened.gdb_path,
+    )))
+    return attached, steps.Machine(attached.elf, opened.shm_path, on_reading=on_reading)
+
+
 def run_scenario(scenario: expect.Scenario, sink: Sink, *, scope: str) -> int:
     """0 when the run showed everything it promised, 1 otherwise."""
     print(f"[{scope}] --- {scenario.label} (phase {scenario.phase}) "
@@ -67,18 +94,7 @@ def run_scenario(scenario: expect.Scenario, sink: Sink, *, scope: str) -> int:
     opened = surfaces.make_surfaces() if expect.needs_observation(scenario.steps) else None
     machine = None
     if opened is not None:
-        if scenario.elf is None:
-            raise SystemExit(
-                f"[{scope}] {scenario.label}: steps that observe need the image "
-                "that was built, and this scenario carries none"
-            )
-        scenario = replace(scenario, command=tuple(board.attach_workbench(
-            list(scenario.command),
-            shm_path=opened.shm_path,
-            qmp_path=opened.qmp_path,
-            gdb_path=opened.gdb_path,
-        )))
-        machine = steps.Machine(scenario.elf, opened.shm_path)
+        scenario, machine = observable(scenario, opened, scope=scope)
 
     try:
         run = spawn.observe(

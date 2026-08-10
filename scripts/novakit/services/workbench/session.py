@@ -17,9 +17,9 @@ from pathlib import Path
 
 from ...core import board
 from ...image import observe
-from .. import artifacts, cmake, expect, manifest, spawn
+from .. import artifacts, cmake, expect, manifest, spawn, verify
 from ..surfaces import Surfaces
-from . import anchors, derive, events, hardware, paths
+from . import anchors, derive, events, hardware, paths, steps
 from .observations import observation_rates, timer_slot_labels
 from .protocol import MAX_BUCKETS, Kind, Src, Topic
 from .store import StateStore
@@ -61,12 +61,6 @@ def _catalog() -> list[dict]:
     ]
 
 
-def _debug_image() -> Path:
-    """The image the S layer reads. It carries the firmware's own enums,
-    which is where the UI's names for a syndrome class come from."""
-    return cmake.preset_dir(cmake.selected_preset()) / "novavisor.elf"
-
-
 def image_answers(elf: Path | None = None) -> observe.View | None:
     """What the build answered about an image, or nothing and why.
 
@@ -78,7 +72,7 @@ def image_answers(elf: Path | None = None) -> observe.View | None:
     is missing or answers another question is refused with the reason
     said once, and the client still gets a board and a catalogue.
     """
-    path = _debug_image() if elf is None else Path(elf)
+    path = cmake.default_image() if elf is None else Path(elf)
     if not path.is_file():
         return None
     try:
@@ -176,9 +170,11 @@ def prepare(target: Target) -> Prepared:
     return Prepared(scenario, topology)
 
 
-def _run_verify(scenario: expect.Scenario, stream, on_step, on_spawn) -> spawn.Run:
+def _run_verify(scenario: expect.Scenario, stream, on_step, on_spawn, handlers=None) -> spawn.Run:
     """Blocking: one verification child, its console tee'd into `stream`."""
-    return spawn.observe(scenario, stream=stream, on_step=on_step, on_spawn=on_spawn)
+    return spawn.observe(
+        scenario, stream=stream, on_step=on_step, on_spawn=on_spawn, handlers=handlers
+    )
 
 
 def _kill(child) -> None:
@@ -398,14 +394,36 @@ class Session:
             # stop() reach in and end the run early.
             loop.call_soon_threadsafe(setattr, self, "_verify_child", child)
 
+        # A verify run whose steps read the machine needs the machine to
+        # be readable, and the bridge's own loops rest while it runs — so
+        # the scenario's reader is the only one, and what it reads is
+        # published here so the panels show the values that were judged.
+        scenario, machine = prepared.scenario, None
+        if expect.needs_observation(scenario.steps) and self.surfaces is not None:
+            self.surfaces.reset()
+            try:
+                scenario, machine = verify.observable(
+                    scenario, self.surfaces, scope="workbench",
+                    on_reading=lambda topic, value: loop.call_soon_threadsafe(
+                        self._publish_reading, topic, value
+                    ),
+                )
+            except SystemExit as error:
+                self._set_phase(Phase.FAILED, error=str(error))
+                return
+
         try:
             run = await loop.run_in_executor(
-                None, self._deps.run_verify, prepared.scenario, writer, on_step, on_spawn
+                None, self._deps.run_verify, scenario, writer, on_step, on_spawn,
+                None if machine is None else steps.handlers_for(machine),
             )
         except (Exception, SystemExit) as error:
             self._verify_child = None
             self._set_phase(Phase.FAILED, error=str(error))
             return
+        finally:
+            if machine is not None:
+                machine.close()
         # Deliberately not a finally: on cancellation the worker thread
         # is still inside the scenario, and the handle is the only way
         # stop() can end it before the timeout.
@@ -430,6 +448,16 @@ class Session:
                 data["step"] = result.step
         self._store.publish(Topic.LIFE, Kind.EVENT, data, src=Src.SERIAL)
         self._set_phase(Phase.EXITED, code=0 if result.ok else 1)
+
+    def _publish_reading(self, topic: str, value: object) -> None:
+        """A value a step read, on the topic the panels already know.
+
+        The same frame the poller would send, because it is the same
+        reading — the scenario's reader is the only one during a verify
+        run, so a panel drawn from anywhere else would be drawn from
+        nothing.
+        """
+        self._store.publish(topic, Kind.SNAPSHOT, {"values": value}, src=Src.SNAP)
 
     def _publish_step(self, step: expect.StepResult, total: int) -> None:
         # The step's kind travels rather than the pattern it used to be:

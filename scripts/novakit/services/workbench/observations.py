@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 from ...core import config
 from ...image import abi, observe
+from .. import expect, manifest
 from . import derive, hardware
 
 # Board facts the labels below derive from, read from the headers that
@@ -179,14 +180,35 @@ GUEST_TABLE = "vm.table"
 COMMAND_PAGE = "nova::command::g_page"
 
 
-def observation_rates() -> dict[str, float]:
-    """How often each topic is sampled, for the UI to say so.
+def asserted_names() -> set[str]:
+    """Every observable a demo's steps name.
 
-    A screen showing a sampled value has to be able to state how coarse
-    the sample is, and the manifest is the only place that knows. Written
-    into the UI instead, the two drift and the badge lies.
+    The observation manifest says what the firmware publishes; this says
+    which of it any run is ever held to. A screen that shows a value
+    without saying whether anything checks it presents a claim and a
+    guarantee as the same thing.
     """
-    return {obs.topic: obs.rate_hz for obs in OBSERVATIONS}
+    named: set[str] = set()
+    for _name, demo in manifest.iter_demos():
+        for variant in manifest.manifest_variants(demo):
+            for step in variant.get("steps", []):
+                if expect.step_kind(step) in ("observe", "event"):
+                    named.add(expect.step_subject(step))
+    return named
+
+
+def observation_rates() -> dict[str, dict]:
+    """What the UI needs to say about a topic beyond its value.
+
+    How coarse the sample is, and whether a demo holds this run to it.
+    Both are facts the manifests know and the UI cannot; written into
+    the UI instead, the two drift and the badge lies.
+    """
+    asserted = asserted_names()
+    return {
+        obs.topic: {"rate": obs.rate_hz, "asserted": obs.topic in asserted}
+        for obs in OBSERVATIONS
+    }
 
 
 SLOT_HEADER = (

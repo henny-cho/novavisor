@@ -6,9 +6,9 @@ import sys
 import time
 from pathlib import Path
 
-from ..core import config, proc
+from ..core import board, config, proc
 from ..image import abi
-from . import artifacts, cmake, expect, manifest, report, suite, verify
+from . import artifacts, cmake, expect, manifest, report, suite, surfaces, verify
 
 
 def _launch(name: str) -> tuple[Path, dict, list[str]]:
@@ -90,8 +90,23 @@ def run(name: str, *, debug: bool = False) -> int:
     if debug:
         return _debug(name)
     *_, command = _launch(name)
+    # A run somebody is sitting in front of is a run being watched, so
+    # it gets the surfaces that make it readable — the same ones a
+    # scenario asks for when its steps do the watching. Without them
+    # there is no machine for `nova workbench command` to drive, and
+    # reproducing a CI failure by hand would need a second way to start.
+    opened = surfaces.make_surfaces()
+    command = board.attach_workbench(
+        list(command),
+        shm_path=opened.shm_path,
+        qmp_path=opened.qmp_path,
+        gdb_path=opened.gdb_path,
+    )
     print(f"[{suite.SCOPE}] Press Ctrl-A x to exit QEMU.")
-    return proc.call(command)
+    try:
+        return proc.call(command)
+    finally:
+        opened.release()
 
 
 def verify_one(name: str, artifact_dir: Path | None = None) -> int:

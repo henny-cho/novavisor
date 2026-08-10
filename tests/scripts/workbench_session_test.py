@@ -355,7 +355,7 @@ class VerifyStreamTest(unittest.IsolatedAsyncioTestCase):
             for index in range(1, 4)
         )
 
-        def run_verify(_scenario, stream, on_step, _on_spawn) -> spawn.Run:
+        def run_verify(_scenario, stream, on_step, _on_spawn, _handlers=None) -> spawn.Run:
             stream.write("[vm0] echo: ping\n[smp] ")
             stream.write("core 1 online\n")
             for step in carried:
@@ -390,7 +390,7 @@ class VerifyStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(exited[0]["code"], 0)
 
     async def test_verify_failure_reports_kind_and_step(self):
-        def run_verify(_scenario, _stream, _on_step, _on_spawn) -> spawn.Run:
+        def run_verify(_scenario, _stream, _on_step, _on_spawn, _handlers=None) -> spawn.Run:
             return spawn.Run(
                 expect.VerificationResult(
                     failure=expect.FailureKind.TIMEOUT,
@@ -437,7 +437,7 @@ class VerifyInterruptTest(unittest.IsolatedAsyncioTestCase):
                 killed.set()
                 return True
 
-        def run_verify(_scenario, _stream, _on_step, on_spawn) -> spawn.Run:
+        def run_verify(_scenario, _stream, _on_step, on_spawn, _handlers=None) -> spawn.Run:
             on_spawn(Child())
             if not killed.wait(timeout=5):
                 raise AssertionError("verify child was never terminated")
@@ -1025,3 +1025,71 @@ class ServerSmokeTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VerifyObservationTest(unittest.IsolatedAsyncioTestCase):
+    """A verify run the bridge serves is made readable the same way one
+    the demo runner serves is, and what its steps read reaches the
+    panels — the bridge's own loops rest while it runs, so a panel drawn
+    from anywhere else would be drawn from nothing."""
+
+    @staticmethod
+    def _run_verify(seen):
+        def run_verify(scenario, _stream, _on_step, _on_spawn, handlers=None) -> spawn.Run:
+            seen["command"] = scenario.command
+            seen["handlers"] = None if handlers is None else sorted(handlers)
+            return spawn.Run(expect.VerificationResult(), spawn.OutputCapture(None))
+
+        return run_verify
+
+    async def _served(self, scenario, demo):
+        seen: dict = {}
+        with tempfile.TemporaryDirectory() as directory:
+            deps = Deps(
+                prepare=lambda target: Prepared(scenario, {"demo": target.demo}),
+                launch=lambda _command: None,
+                run_verify=self._run_verify(seen),
+            )
+            session = Session(store(), deps, Surfaces(Path(directory)))
+            await session.select(Target(demo=demo, verify=True))
+        return seen
+
+    async def test_a_scenario_that_observes_gets_surfaces_and_handlers(self):
+        seen = await self._served(
+            expect.Scenario(
+                label="demo",
+                phase=1,
+                command=("qemu-system-aarch64", "-machine", "virt", "-m", "1024"),
+                timeout_seconds=5,
+                steps=({"observe": "smmu.stream"},),
+                elf=Path("/built/novavisor.elf"),
+            ),
+            "15_dma_isolation",
+        )
+
+        self.assertIn("memory-backend=wbram", " ".join(seen["command"]))
+        self.assertEqual(seen["handlers"], ["command", "event", "observe"])
+
+    async def test_a_console_only_scenario_is_launched_as_it_always_was(self):
+        seen = await self._served(
+            expect.Scenario(
+                label="demo",
+                phase=1,
+                command=("qemu-system-aarch64", "-machine", "virt", "-m", "1024"),
+                timeout_seconds=5,
+                steps=({"pattern": "ready"},),
+            ),
+            "01_hello",
+        )
+
+        self.assertNotIn("wbram", " ".join(seen["command"]))
+        self.assertIsNone(seen["handlers"])
+
+    async def test_a_reading_a_step_made_reaches_the_panels(self):
+        state = store()
+        session = Session(state, Deps(prepare=lambda _t: None, launch=lambda _c: None))
+
+        session._publish_reading("smmu.stream", [{"stream": 16, "state": "abort"}])
+
+        frames = [f for f in state.drain() if f["topic"] == "smmu.stream"]
+        self.assertEqual(frames[0]["data"], {"values": [{"stream": 16, "state": "abort"}]})

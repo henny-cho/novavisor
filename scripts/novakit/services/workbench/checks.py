@@ -16,7 +16,7 @@ from ...core import config
 from ...image import elfsym, observe
 from . import snapshot
 from .events import EVENTS, STOPS
-from .observations import MAX_CPUS, OBSERVATIONS, timer_slot_labels
+from .observations import MAX_CPUS, OBSERVATIONS, asserted_names, timer_slot_labels
 from .paths import EDGES
 
 
@@ -128,4 +128,28 @@ def verify_manifest(elf: Path | None = None) -> int:
             f"[workbench] manifest check: {len(OBSERVATIONS)} observations and "
             f"{len(observe.WALK)} table symbols answered, {len(STOPS)} stop points resolve"
         )
+        _report_census()
     return 1 if failures else 0
+
+
+def _report_census() -> None:
+    """How much of what this can see, anything is ever held to.
+
+    A dial, not a gate. Requiring a predicate per observable would only
+    produce predicates written to pass, and a number nobody can read is
+    how the gap between what the workbench watches and what CI re-asks
+    grew unnoticed in the first place.
+
+    Both layers, always. Counting only the one this repository has
+    started asserting would make the fraction look like progress.
+    """
+    asserted = asserted_names()
+    for layer, names in (
+        ("S", [obs.topic for obs in OBSERVATIONS]),
+        ("T", [event.id for event in EVENTS]),
+    ):
+        held = sum(1 for name in names if name in asserted)
+        print(
+            f"[workbench] {layer}: {len(names)} observable, {held} asserted by a demo, "
+            f"{len(names) - held} unasserted"
+        )

@@ -1044,3 +1044,78 @@ class StepAnchorTest(unittest.TestCase):
 
         attach = steps.event_handler(machine)({"event": "smmu.attach"})
         self.assertEqual(attach(), expect.CARRIED)
+
+
+class TerminalCommandTest(unittest.TestCase):
+    """The hand-driven twin of a `command` step. It shares the step's
+    issuing and verdict reading, so what is tested here is the loop and
+    what it hands back to a shell."""
+
+    def machine_with(self, ops, records):
+        anchor = {"at": 0}
+
+        class Writer:
+            @staticmethod
+            def as_dict():
+                return {"ops": [{"name": name} for name in ops]}
+
+            @staticmethod
+            def issue(*_args):
+                records.append({"event": "command", "op": ops[0], "result": "range"})
+
+        class Machine:
+            @staticmethod
+            def writer():
+                return Writer
+
+            @staticmethod
+            def records():
+                return records
+
+            @staticmethod
+            def anchor_at(index):
+                anchor["at"] = index
+
+            @staticmethod
+            def after_anchor():
+                for index in range(anchor["at"], len(records)):
+                    yield index, records[index]
+
+        return Machine
+
+    def test_the_verdict_comes_back_as_the_machines_own_result_name(self):
+        from novakit.services.workbench import steps
+
+        machine = self.machine_with(["stop"], [])
+
+        answer, said = steps.carry_out(machine, "stop 7", 1.0, lambda _s: None)
+
+        self.assertEqual(answer, "range")
+        self.assertEqual(said, "stop 7 -> range")
+
+    def test_an_op_this_run_does_not_offer_is_named_with_what_it_does(self):
+        from novakit.services.workbench import steps
+
+        machine = self.machine_with(["stop", "start"], [])
+
+        answer, said = steps.carry_out(machine, "bogus 0", 1.0, lambda _s: None)
+
+        self.assertEqual(answer, "")
+        self.assertIn("offers no bogus command", said)
+        self.assertIn("start, stop", said)
+
+    def test_waiting_out_a_ring_that_never_appears_says_so(self):
+        from novakit.services.workbench import commands as ring
+        from novakit.services.workbench import steps
+
+        class Silent:
+            @staticmethod
+            def writer():
+                raise ring.NotYetFormatted("no command ring on this page")
+
+        slept = []
+        answer, said = steps.carry_out(Silent, "stop 0", 0.4, slept.append)
+
+        self.assertEqual(answer, "")
+        self.assertIn("no command ring was advertised", said)
+        self.assertTrue(slept)
