@@ -4,11 +4,13 @@ Bit layouts are read from the headers the hypervisor compiles rather
 than restated here, so a field that moves moves here too and a header
 this cannot parse stops the tool instead of decoding into nonsense.
 
-Two regimes, two encodings: a guest's Stage 2 (IPA to PA) puts the
-memory type in the descriptor, EL2's Stage 1 indexes it through MAIR_EL2
-and carries a single privilege level's AP field. A guest's own Stage 1
-is not here — those tables live in guest RAM and change under the guest,
-where everything this reads is built once at boot.
+Two encodings: a guest's Stage 2 (IPA to PA) puts the memory type in the
+descriptor, while a Stage 1 regime indexes it through a MAIR and carries
+a single privilege level's AP field. A guest's own Stage 1 shares that
+encoding and differs in geometry, which it takes from its own TCR_EL1,
+and in where its tables live: guest IPA space, so every table read is
+itself a Stage 2 translation. `GuestReader` is that second walk, put
+where the hardware puts it.
 """
 
 from __future__ import annotations
@@ -39,6 +41,9 @@ STE = abi.read_constexprs(STE_MODEL, _S2)
 
 # A descriptor is one 64-bit word at every level of both regimes.
 DESCRIPTOR_BYTES = 8
+# What TBI takes out of an input address: the architecture's top byte.
+_TAG_BITS = 8
+_ADDRESS_BITS = 64
 # The level whose entries are one granule; coarser levels count down.
 _GRANULE_LEVEL = 3
 # ARM ARM DDI0487 §D8.2.6: for a 4 KiB granule VTCR_EL2.SL0 names the
@@ -56,6 +61,12 @@ class Geometry:
     those levels. Both are derived: a level number from how far its
     index sits above the granule, the starting level from the input
     width.
+
+    `fill` is what the bits above `address_bits` must be for the address
+    to belong to this regime — zero for a low half or a Stage 2 input,
+    all ones for a high half, where the rule is a pattern rather than a
+    magnitude. `tagged` drops the top byte first, which is what a regime
+    with TBI set tells the hardware to do.
     """
 
     name: str
@@ -63,6 +74,22 @@ class Geometry:
     levels: tuple[int, ...]
     entries: int
     address_bits: int
+    fill: int = 0
+    tagged: bool = False
+
+    @property
+    def top(self) -> int:
+        """How many bits of the input this regime reads at all."""
+        return _ADDRESS_BITS - (_TAG_BITS if self.tagged else 0)
+
+    def holds(self, address: int) -> bool:
+        """Is this address in this regime's half?"""
+        above = (address & ((1 << self.top) - 1)) >> self.address_bits
+        return above == (((1 << (self.top - self.address_bits)) - 1) if self.fill else 0)
+
+    def within(self, address: int) -> int:
+        """The part of the address a walk indexes with."""
+        return address & ((1 << self.address_bits) - 1)
 
     @property
     def table_bytes(self) -> int:
@@ -87,6 +114,8 @@ def _geometry(
     entries: int,
     address_bits: int,
     starts_at: int | None = None,
+    fill: int = 0,
+    tagged: bool = False,
 ) -> Geometry:
     """Build one regime's geometry, checking its declarations agree.
 
@@ -109,7 +138,12 @@ def _geometry(
             f"nova workbench: {name} is configured to walk from L{starts_at}, "
             f"but a {address_bits}-bit input starts at L{levels[0]}"
         )
-    return Geometry(name, shifts, levels, entries, address_bits)
+    built = Geometry(name, shifts, levels, entries, address_bits, fill, tagged)
+    # The bits above the input are what says which half an address is in,
+    # so a regime that reads none of them can answer neither half.
+    if built.top <= address_bits:
+        raise SystemExit(f"nova workbench: {name} reads {built.top} bits but indexes {address_bits} of them")
+    return built
 
 
 STAGE2 = _geometry(
@@ -130,6 +164,50 @@ STAGE1 = _geometry(
     _S1["kEntries"],
     _S1["kVaLimit"].bit_length() - 1,
 )
+
+
+# TCR_EL1.TG0 and TG1 encode the same three granules differently, so
+# each half reads its own table. ARM ARM DDI0487 §D8.2.9.
+_TG0_GRANULE = {0b00: 12, 0b01: 16, 0b10: 14}
+_TG1_GRANULE = {0b01: 14, 0b10: 12, 0b11: 16}
+
+
+def guest_geometry(tcr: int, high: bool) -> Geometry:
+    """One half of a guest's Stage 1, from the register that defines it.
+
+    A guest picks its own granule and input width while EL2's are build
+    constants, so this is the same construction over a live value rather
+    than a second kind of geometry. What half it is decides where every
+    field sits and what the bits above the input must be.
+
+    Whether the half exists at all is not answered here: EPD disables
+    one, SCTLR_EL1.M disables both, and an unpublished bank means the
+    regime is unknown — three different things that a single "no
+    geometry" would flatten into one.
+    """
+    table = _TG1_GRANULE if high else _TG0_GRANULE
+    field = (tcr >> (30 if high else 14)) & 0b11
+    if field not in table:
+        # A guest writes TCR_EL1, so a reserved granule is a thing that
+        # happens rather than a build fault. Named, because the caller
+        # turns it into "this regime cannot be walked".
+        raise ValueError(f"TCR_EL1.TG{int(high)} = {field:#04b} is reserved")
+    granule = table[field]
+    address_bits = _ADDRESS_BITS - (((tcr >> 16) if high else tcr) & 0b111111)
+    index_bits = granule - 3
+    return _geometry(
+        f"guest-stage1-{'high' if high else 'low'}",
+        tuple(range(granule, address_bits, index_bits))[::-1],
+        1 << index_bits,
+        address_bits,
+        fill=1 if high else 0,
+        tagged=bool(tcr & (1 << (38 if high else 37))),  # TBI1 / TBI0
+    )
+
+
+def guest_half_enabled(tcr: int, high: bool) -> bool:
+    """Has the guest left this half translating? TCR_EL1.EPD1 / EPD0."""
+    return not tcr & (1 << (23 if high else 7))
 
 
 @dataclass(frozen=True)
@@ -260,6 +338,40 @@ STAGE1_FORMAT = _format(
 )
 
 
+class Stage2Fault(ValueError):
+    """A guest table read the guest's Stage 2 refused.
+
+    Its own type because the two failures a walk can meet here are fixed
+    in different places: an address the guest never mapped is the guest's
+    business, and a guest table the host never mapped is ours. A reader
+    error alone cannot tell them apart, and the architecture does not —
+    it reports S1PTW beside the fault.
+    """
+
+    def __init__(self, ipa: int, found: "Probe"):
+        super().__init__(f"stage-2 {found.fault or 'fault'} at L{found.level} for {ipa:#x}")
+
+
+@dataclass(frozen=True)
+class GuestReader:
+    """A guest's IPA space, read through the guest's own Stage 2.
+
+    The walk takes a reader and a reader answers `read_bytes`, so a
+    regime whose tables live one translation further down needs nothing
+    else: this is what the hardware does to every level of a guest's
+    Stage 1 walk, in the shape the walk already accepts.
+    """
+
+    reader: object
+    root: int
+
+    def read_bytes(self, ipa: int, size: int) -> bytes:
+        found = probe(self.reader, STAGE2_FORMAT, self.root, ipa)
+        if found.output is None:
+            raise Stage2Fault(ipa, found)
+        return self.reader.read_bytes(found.output, size)
+
+
 # --- The walk ---------------------------------------------------------------
 #
 # Pure functions over a `MemoryReader` and a `Format`. The bytes come
@@ -353,6 +465,8 @@ class _Walk:
         try:
             raw = self.reader.read_bytes(pa, geometry.table_bytes)
         except ValueError:
+            # Whichever layer refused it: a tree names the table rather
+            # than the reason, and `read` says how far it got.
             self.unreadable.append(pa)
             return None
         return struct.unpack(f"<{geometry.entries}Q", raw)
@@ -365,14 +479,19 @@ def probe(reader, fmt: Format, root: int, address: int) -> Probe:
     and the rest of each table is not on it.
     """
     geometry = fmt.geometry
-    if address >= 1 << geometry.address_bits:
+    if not geometry.holds(address):
         return Probe(address, (), geometry.levels[0], fault="address-size")
+    inside = geometry.within(address)
     steps: list[Step] = []
     table = root
     for depth in range(geometry.depth):
-        index = geometry.index(address, depth)
+        index = geometry.index(inside, depth)
         try:
             raw = reader.read_bytes(table + index * DESCRIPTOR_BYTES, DESCRIPTOR_BYTES)
+        except Stage2Fault:
+            # This regime's table is itself an address that needs
+            # translating, and that translation is the one that failed.
+            return Probe(address, tuple(steps), geometry.levels[depth], fault="s1ptw")
         except ValueError:
             return Probe(address, tuple(steps), geometry.levels[depth], fault="unreadable")
         descriptor = fmt.decode(int.from_bytes(raw, "little"), depth)
@@ -382,7 +501,7 @@ def probe(reader, fmt: Format, root: int, address: int) -> Probe:
         if descriptor.maps:
             # The output is already aligned to what it maps; the offset
             # into it comes from the address being translated.
-            offset = address & (geometry.span(depth) - 1)
+            offset = inside & (geometry.span(depth) - 1)
             return Probe(
                 address, tuple(steps), geometry.levels[depth], output=descriptor.output | offset
             )

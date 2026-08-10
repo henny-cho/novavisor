@@ -57,6 +57,82 @@ class GeometryTest(unittest.TestCase):
             translation._geometry("bad", (30, 21, 12), 512, 48)
 
 
+# TCR_EL1 as two real guests programmed it, read off the hardware while
+# each was running. Derivation is only interesting against values a guest
+# actually chose — a hand-made TCR would test the arithmetic against
+# itself.
+LINUX_TCR = 0x0050_0074_B550_3510  # 4K, 48-bit both halves, TBI0|TBI1
+BAREMETAL_TCR = 0x0080_3520  # 4K, 32-bit low half, high half disabled
+KERNEL_VA = 0xFFFF_8000_807C_12A4
+
+
+class GuestGeometryTest(unittest.TestCase):
+    """A guest's Stage 1 is whatever its own TCR_EL1 says.
+
+    EL2's geometry is a build constant and a guest's is not, so the two
+    cannot share one. What they do share is the construction: the same
+    checks run over a live register.
+    """
+
+    def test_a_linux_guest_walks_four_levels_in_both_halves(self):
+        for high in (False, True):
+            geometry = translation.guest_geometry(LINUX_TCR, high)
+            with self.subTest(high=high):
+                self.assertEqual(geometry.shifts, (39, 30, 21, 12))
+                self.assertEqual(geometry.levels, (0, 1, 2, 3))
+                self.assertEqual(geometry.address_bits, 48)
+                self.assertTrue(geometry.tagged)  # TBI0 and TBI1 are both set
+                self.assertTrue(translation.guest_half_enabled(LINUX_TCR, high))
+
+    def test_a_narrow_guest_walks_three_levels_and_owns_no_high_half(self):
+        low = translation.guest_geometry(BAREMETAL_TCR, high=False)
+        self.assertEqual(low.levels, (1, 2, 3))
+        self.assertEqual(low.address_bits, 32)
+        self.assertFalse(low.tagged)
+        self.assertTrue(translation.guest_half_enabled(BAREMETAL_TCR, high=False))
+        # Not "no geometry": the half is described and switched off, and
+        # a caller that conflated the two would offer a regime the guest
+        # has told the hardware to fault on.
+        self.assertFalse(translation.guest_half_enabled(BAREMETAL_TCR, high=True))
+
+    def test_the_granule_tables_of_the_two_halves_differ(self):
+        # TG0 and TG1 encode the same granules with different values. One
+        # table for both reads 4K as 64K in one half.
+        both_4k = LINUX_TCR
+        self.assertEqual((both_4k >> 14) & 0b11, 0b00)
+        self.assertEqual((both_4k >> 30) & 0b11, 0b10)
+        for high in (False, True):
+            self.assertEqual(translation.guest_geometry(both_4k, high).shifts[-1], 12)
+
+    def test_a_kernel_address_belongs_to_the_high_half_only(self):
+        # The rule above the input width is a pattern, not a magnitude:
+        # comparing sizes puts every kernel address out of range.
+        high = translation.guest_geometry(LINUX_TCR, high=True)
+        low = translation.guest_geometry(LINUX_TCR, high=False)
+        self.assertTrue(high.holds(KERNEL_VA))
+        self.assertFalse(low.holds(KERNEL_VA))
+        self.assertEqual(high.within(KERNEL_VA), 0x8000_807C_12A4)
+        self.assertEqual([high.index(high.within(KERNEL_VA), d) for d in range(4)], [256, 2, 3, 449])
+
+    def test_a_tagged_pointer_lands_where_its_untagged_one_does(self):
+        high = translation.guest_geometry(LINUX_TCR, high=True)
+        tagged = KERNEL_VA | (0x5A << 56)
+        self.assertTrue(high.holds(tagged))
+        self.assertEqual(high.within(tagged), high.within(KERNEL_VA))
+
+    def test_a_regime_without_tbi_refuses_a_tagged_pointer(self):
+        low = translation.guest_geometry(BAREMETAL_TCR, high=False)
+        self.assertTrue(low.holds(0x5000_2B20))
+        self.assertFalse(low.holds(0x5000_2B20 | (0x5A << 56)))
+
+    def test_a_reserved_granule_is_named_rather_than_decoded(self):
+        # TCR_EL1 is the guest's register, so this is an input and not a
+        # build fault: TG0 = 0b11 has no meaning to decode into.
+        reserved = LINUX_TCR | (0b11 << 14)
+        with self.assertRaises(ValueError):
+            translation.guest_geometry(reserved, high=False)
+
+
 class DescriptorTest(unittest.TestCase):
     """The firmware's own presets, decoded back into what they mean."""
 
@@ -163,8 +239,90 @@ def points_to(table: int) -> int:
     return table | S2["kTypeTable"]
 
 
+# A guest names its tables by IPA. Offsetting the window by one 2 MiB
+# block keeps the fake memory small while making the second walk visible:
+# an answer that skipped Stage 2 would be off by exactly this much.
+GUEST_IPA_OFFSET = MIB2
+
+
+def ipa_of(pa: int) -> int:
+    return pa + GUEST_IPA_OFFSET
+
+
+def guest_window(memory: "Memory") -> int:
+    """A Stage 2 root mapping this memory's IPA window onto it."""
+    leaf = memory.table({(memory.base + GUEST_IPA_OFFSET) // MIB2 % 512: block(memory.base)})
+    return memory.table({(memory.base + GUEST_IPA_OFFSET) // GIB: points_to(leaf)})
+
+
 class ProbeTest(unittest.TestCase):
     """One address, followed down the way the hardware would."""
+
+    def test_a_kernel_address_walks_its_guest_geometry(self):
+        """The whole point of the high half: an address whose top bits are
+        all ones is in range, and the walk indexes with what is under
+        them. Comparing magnitudes refused this address before it read a
+        single descriptor."""
+        memory = Memory()
+        geometry = translation.guest_geometry(LINUX_TCR, high=True)
+        fmt = translation.replace(translation.STAGE1_FORMAT, geometry=geometry, wxn=False)
+        # The type encoding is architectural, so the helpers above serve
+        # both regimes; only the attribute bits are the regime's own.
+        l3 = memory.table({449: page(0x507C_1000, S1["kAttrNormalRx"])})
+        l2 = memory.table({3: points_to(l3)})
+        l1 = memory.table({2: points_to(l2)})
+        root = memory.table({256: points_to(l1)})
+        found = translation.probe(memory, fmt, root, KERNEL_VA)
+        self.assertEqual((found.fault, found.level), ("", 3))
+        self.assertEqual(found.output, 0x507C_12A4)
+        self.assertEqual([step.index for step in found.steps], [256, 2, 3, 449])
+
+    def test_a_guest_table_is_itself_translated(self):
+        """A guest's Stage 1 tables sit in its IPA space, so every level
+        of the walk goes through Stage 2 first — the walk the hardware
+        performs, in the shape the reader contract already takes."""
+        memory = Memory()
+        geometry = translation.guest_geometry(LINUX_TCR, high=True)
+        fmt = translation.replace(translation.STAGE1_FORMAT, geometry=geometry, wxn=False)
+        l3 = memory.table({449: page(0x507C_1000, S1["kAttrNormalRx"])})
+        l2 = memory.table({3: points_to(ipa_of(l3))})
+        l1 = memory.table({2: points_to(ipa_of(l2))})
+        root = memory.table({256: points_to(ipa_of(l1))})
+        guest = translation.GuestReader(memory, guest_window(memory))
+        found = translation.probe(guest, fmt, ipa_of(root), KERNEL_VA)
+        self.assertEqual((found.fault, found.level), ("", 3))
+        self.assertEqual(found.output, 0x507C_12A4)
+        # Every table was named by IPA and read at its physical address,
+        # so an answer that skipped the second walk would differ.
+        self.assertEqual(
+            [step.table for step in found.steps],
+            [ipa_of(root), ipa_of(l1), ipa_of(l2), ipa_of(l3)],
+        )
+
+    def test_a_guest_table_the_host_never_mapped_is_not_an_unmapped_page(self):
+        """Two failures with different owners: the guest not mapping an
+        address, and the host not mapping the guest's table. The
+        architecture reports S1PTW beside the second, and so does this."""
+        memory = Memory()
+        geometry = translation.guest_geometry(LINUX_TCR, high=True)
+        fmt = translation.replace(translation.STAGE1_FORMAT, geometry=geometry, wxn=False)
+        root = memory.table({})
+        unmapped = translation.GuestReader(memory, memory.table({}))
+        found = translation.probe(unmapped, fmt, ipa_of(root), KERNEL_VA)
+        self.assertEqual(found.fault, "s1ptw")
+        self.assertEqual(found.level, geometry.levels[0])
+
+        # The guest's own missing mapping still reads as a translation
+        # fault, so the two are told apart rather than merged.
+        walkable = translation.GuestReader(memory, guest_window(memory))
+        self.assertEqual(translation.probe(walkable, fmt, ipa_of(root), KERNEL_VA).fault, "translation")
+
+    def test_the_other_half_refuses_the_same_address(self):
+        memory = Memory()
+        low = translation.guest_geometry(LINUX_TCR, high=False)
+        fmt = translation.replace(translation.STAGE1_FORMAT, geometry=low, wxn=False)
+        found = translation.probe(memory, fmt, memory.table({}), KERNEL_VA)
+        self.assertEqual((found.fault, found.steps), ("address-size", ()))
 
     def test_a_gigabyte_block_answers_at_the_first_level(self):
         memory = Memory()
