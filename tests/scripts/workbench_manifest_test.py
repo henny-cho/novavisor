@@ -25,6 +25,7 @@ from novakit.services.workbench import (  # noqa: E402
     hardware,
     observations,
     snapshot,
+    steps,
 )
 
 ELF = workbench_image.ELF
@@ -59,6 +60,26 @@ class ManifestJoinTest(unittest.TestCase):
                 self.assertEqual(
                     merged[want.topic].rate_hz, observations.POLICY[want.topic].rate_hz
                 )
+
+
+class StepFieldTest(unittest.TestCase):
+    """A step names a reading's field, however deep the struct is."""
+
+    READING = [{"el1": {"tcr": "0x1234", "sctlr": "0x1"}}, {"el1": {"tcr": "0x0"}}]
+
+    def test_a_path_descends_where_the_reading_does(self):
+        found = steps._select(self.READING, {"el1.tcr": "0x1234"})
+        self.assertEqual(found["el1"]["sctlr"], "0x1")
+
+    def test_a_flat_name_still_names_a_flat_field(self):
+        self.assertTrue(steps._matches({"state": "translate"}, {"state": "translate"}))
+
+    def test_a_path_through_something_that_is_not_a_record_matches_nothing(self):
+        # Absent rather than raising: a step whose subject has not arrived
+        # yet is pending, and a step whose subject cannot exist is refused
+        # by the manifest join rather than here.
+        self.assertFalse(steps._matches({"el1": "0x0"}, {"el1.tcr": "0x1234"}))
+        self.assertFalse(steps._matches({}, {"el1.tcr": "0x1234"}))
 
 
 class ShadowAgeTest(unittest.TestCase):

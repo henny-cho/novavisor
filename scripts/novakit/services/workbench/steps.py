@@ -133,8 +133,24 @@ class Machine:
                 close()
 
 
+def _at(fields: dict, name: str) -> object:
+    """One field, named by path: `el1.tcr` descends where the value does.
+
+    A reading is shaped like the firmware struct it came from, so some of
+    what a step wants to name is a member of a member. A flat name would
+    stringify the whole inner record and compare that, which passes and
+    fails for reasons nobody wrote down.
+    """
+    held: object = fields
+    for part in name.split("."):
+        if not isinstance(held, dict):
+            return ""
+        held = held.get(part, "")
+    return held
+
+
 def _matches(fields: dict, wanted: dict) -> bool:
-    return all(str(fields.get(name, "")) == str(value) for name, value in wanted.items())
+    return all(str(_at(fields, name)) == str(value) for name, value in wanted.items())
 
 
 def _select(value: object, where: dict) -> dict | None:
@@ -187,7 +203,7 @@ def observe_handler(machine: Machine) -> expect.StepHandler:
                     f"nothing in {topic} matches {where}")
             if _matches(entry, wanted):
                 return expect.CARRIED
-            seen = {name: entry.get(name) for name in wanted}
+            seen = {name: _at(entry, name) for name in wanted}
             return expect.step_pending(f"{topic} reads {seen}, wanted {wanted}")
 
         return poll

@@ -1,4 +1,4 @@
-"""The page tables a run has, copied once and walked from the copy."""
+"""The regimes a run has: a roster read every poll, a copy read once."""
 
 from __future__ import annotations
 
@@ -68,6 +68,14 @@ class CaptureTest(unittest.TestCase):
         self.addCleanup(made.close)
         return made
 
+    def capture(self, reader) -> dict:
+        """Roster and copy together, the way the bridge publishes them.
+
+        Two calls because their answers change at different times; one
+        topology entry because a walk needs both.
+        """
+        return {**regimes.copy_tables(reader, self.symbols), "regimes": regimes.roster(reader, self.symbols)}
+
     def field(self, symbol: str, name: str) -> int:
         entry = self.symbols[symbol]
         info = entry.type.element if entry.type.kind == "array" else entry.type
@@ -91,18 +99,18 @@ class CaptureTest(unittest.TestCase):
         """The RAM backend exists from the moment QEMU starts. A read
         before the build would copy a page of zeros and publish it as the
         machine's whole address map."""
-        self.assertIsNone(regimes.capture(self.provider(), self.symbols))
+        self.assertEqual(regimes.roster(self.provider(), self.symbols), [])
 
     def test_a_built_guest_becomes_a_regime_rooted_where_vttbr_points(self):
         l1, _ = self.build_guest_tables()
-        captured = regimes.capture(self.provider(), self.symbols)
+        captured = self.capture(self.provider())
         cpu = next(entry for entry in captured["regimes"] if entry["id"] == "vm0.cpu")
         self.assertEqual(int(cpu["root"], 16), l1)
         self.assertEqual((cpu["kind"], cpu["vm"], cpu["role"]), ("stage2", 0, "cpu"))
 
     def test_the_walk_budget_is_the_pool_the_tables_were_built_from(self):
         self.build_guest_tables()
-        captured = regimes.capture(self.provider(), self.symbols)
+        captured = self.capture(self.provider())
         found = {entry["id"]: entry["tables"] for entry in captured["regimes"]}
         sets = self.symbols[observe.STAGE2_SETS].type.element
         el2 = self.symbols[observe.EL2_ROOT].size + self.symbols[observe.EL2_POOL].size
@@ -119,7 +127,7 @@ class CaptureTest(unittest.TestCase):
         self.poke(entry + self.field(observe.DMA_CONTEXTS, "root_pa"), root)
         self.poke(self.symbols[observe.DMA_CONTEXT_COUNT].address, 1)
 
-        captured = regimes.capture(self.provider(), self.symbols)
+        captured = self.capture(self.provider())
         dma = next(entry for entry in captured["regimes"] if entry["id"] == "vm0.dma")
         self.assertEqual(int(dma["root"], 16), root)
         # Two stage-2 translations of one VM, side by side rather than one
@@ -129,7 +137,7 @@ class CaptureTest(unittest.TestCase):
 
     def test_a_run_with_no_smmu_has_no_dma_regimes(self):
         self.build_guest_tables()
-        captured = regimes.capture(self.provider(), self.symbols)
+        captured = self.capture(self.provider())
         self.assertEqual([entry for entry in captured["regimes"] if entry["role"] == "dma"], [])
 
     def test_the_copy_answers_exactly_what_ram_did(self):
@@ -137,7 +145,7 @@ class CaptureTest(unittest.TestCase):
         differently would make a replay a second program."""
         l1, _ = self.build_guest_tables()
         live = self.provider()
-        captured = regimes.capture(live, self.symbols)
+        captured = self.capture(live)
         copy = regimes.Tables.of(captured)
 
         from_ram = translation.tree(live, S2, l1, limit=6)
@@ -152,7 +160,7 @@ class CaptureTest(unittest.TestCase):
         """A table is almost entirely invalid descriptors, and the extents
         say where the zeros were."""
         self.build_guest_tables()
-        captured = regimes.capture(self.provider(), self.symbols)
+        captured = self.capture(self.provider())
         copied = sum(size for _, size in captured["extents"])
         self.assertLess(len(captured["words"]) * 8, copied // 100)
 
@@ -161,7 +169,7 @@ class CaptureTest(unittest.TestCase):
         the walk would call an address unmapped when the copy is short.
         """
         self.build_guest_tables()
-        captured = regimes.capture(self.provider(), self.symbols)
+        captured = self.capture(self.provider())
         copy = regimes.Tables.of(captured)
         with self.assertRaises(ValueError):
             copy.read_bytes(RAM_BASE, translation.STAGE2.table_bytes)
@@ -176,6 +184,14 @@ class AnswerTest(unittest.TestCase):
     LEAF = 0x4000_1000
     DMA_ROOT = 0x4000_2000
     DMA_LEAF = 0x4000_3000
+    # A guest's own Stage 1 tables. They live where the CPU's Stage 2
+    # already maps the guest's first block — IPA 0 onto PA 0x80000000 —
+    # so a walk that skipped the second translation would read the wrong
+    # gigabyte and no mapping has to be added for them.
+    GUEST_BLOCK = 0x8000_0000
+    GUEST_L1 = 0x8010_0000
+    GUEST_L2 = 0x8010_1000
+    GUEST_L3 = 0x8010_2000
 
     def _regime(self, role: str, root: int) -> dict:
         return {
@@ -186,6 +202,8 @@ class AnswerTest(unittest.TestCase):
             "kind": "stage2",
             "root": f"{root:#x}",
             "tables": 6,
+            "ground": regimes.CAPTURED,
+            "space": "vm0.ipa",
         }
 
     def setUp(self):
@@ -201,11 +219,125 @@ class AnswerTest(unittest.TestCase):
             words[f"{self.LEAF + slot * 8:#x}"] = f"{block + slot * self.MIB2:#x}"
         for slot in (0, 1, 8):
             words[f"{self.DMA_LEAF + slot * 8:#x}"] = f"{block + slot * self.MIB2:#x}"
+        # The guest's three levels, pointing at each other by IPA.
+        words[f"{self.GUEST_L1:#x}"] = f"{self.ipa_of(self.GUEST_L2) | 0b11:#x}"
+        words[f"{self.GUEST_L2:#x}"] = f"{self.ipa_of(self.GUEST_L3) | 0b11:#x}"
+        words[f"{self.GUEST_L3 + 8:#x}"] = f"{0x0040_0000 | 0x7C0 | 0b11:#x}"  # VA 0x1000 -> IPA 0x400000
         self.captured = {
             "regimes": [self._regime("cpu", self.ROOT), self._regime("dma", self.DMA_ROOT)],
-            "extents": [[f"{self.ROOT:#x}", 16384]],
+            "extents": [[f"{self.ROOT:#x}", 16384], [f"{self.GUEST_BLOCK:#x}", self.MIB2]],
             "words": words,
         }
+
+    @classmethod
+    def ipa_of(cls, pa: int) -> int:
+        """The IPA the CPU's Stage 2 maps onto this address."""
+        return pa - cls.GUEST_BLOCK
+
+    def _guest(self, high: bool) -> dict:
+        return {
+            "id": f"vm0.v0.el1.{'high' if high else 'low'}",
+            "label": "VM 0 · vCPU 0 · EL1",
+            "role": f"el1.{'high' if high else 'low'}",
+            "vm": 0,
+            "vcpu": 0,
+            "kind": f"guest-stage1-{'high' if high else 'low'}",
+            "tables": 0,
+            "ground": regimes.LIVE,
+            "space": "vm0.v0.va",
+        }
+
+    # A bank as the S layer publishes one: hex words, MMU on, 4K over 32
+    # bits so the fake memory can hold the tables.
+    @property
+    def BANK(self) -> list[dict]:  # noqa: N802 — a published bank, spelled as the wire does
+        return [
+            {
+                "el1": {
+                    "sctlr": "0x1",  # MMU on
+                    "tcr": "0x803520",  # 4K over 32 bits, high half disabled
+                    "ttbr0": f"{self.ipa_of(self.GUEST_L1):#x}",
+                    "ttbr1": "0x0",
+                    "mair": "0x0",
+                }
+            }
+        ]
+
+    def test_a_live_regime_is_rooted_when_the_walk_is_asked_for(self):
+        """Its root is TTBR_EL1, which follows whatever process the vCPU
+        is running. On the topology it would be a value that was true
+        once, and the topology would be republished every time a guest
+        switched process."""
+        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        self.assertNotIn("root", self._guest(high=False))
+        answer = regimes.answer(
+            topology, {"regime": "vm0.v0.el1.low"}, live=regimes.Tables.of(self.captured), banks=self.BANK
+        )
+        self.assertEqual(answer["root"], f"{self.ipa_of(self.GUEST_L1):#x}")
+        self.assertEqual(answer["ground"], regimes.LIVE)
+
+    def test_a_live_regime_carries_no_map(self):
+        # Thousands of tables, and the question is about one address.
+        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        answer = regimes.answer(
+            topology, {"regime": "vm0.v0.el1.low"}, live=regimes.Tables.of(self.captured), banks=self.BANK
+        )
+        self.assertNotIn("tree", answer)
+        self.assertNotIn("isolation", answer)
+
+    def test_a_replay_can_root_a_live_regime_but_not_walk_it(self):
+        """The recording holds the bank, so where the regime was rooted is
+        a recorded fact. The tables it pointed at are not: their ground
+        moved under the run, so there was never a copy to record."""
+        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        rooted = regimes.answer(topology, {"regime": "vm0.v0.el1.low"}, banks=self.BANK)
+        self.assertEqual(rooted["root"], f"{self.ipa_of(self.GUEST_L1):#x}")
+        with self.assertRaises(ValueError):
+            regimes.answer(topology, {"regime": "vm0.v0.el1.low", "address": "0x1000"}, banks=self.BANK)
+
+    def test_a_half_the_guest_turned_off_cannot_be_walked(self):
+        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=True)]}
+        with self.assertRaises(ValueError):
+            regimes.answer(
+                topology, {"regime": "vm0.v0.el1.high"}, live=regimes.Tables.of(self.captured), banks=self.BANK
+            )
+
+    def test_a_live_answer_closes_the_chain_and_says_if_it_moved(self):
+        """VA to IPA is half an answer: the output is an input to the
+        translation beneath, and a reader holding the two halves apart is
+        a reader doing the walk. The recheck is reported rather than
+        retried — how many tries would settle it is not a known number."""
+        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        copy = regimes.Tables.of(self.captured)
+        answer = regimes.answer(
+            topology, {"regime": "vm0.v0.el1.low", "address": "0x1000"}, live=copy, banks=self.BANK
+        )
+        self.assertIn("moving", answer)
+        self.assertFalse(answer["moving"])  # this copy cannot change under the walk
+        self.assertEqual(answer["through"]["regime"], "vm0.cpu")
+        # The chain: the guest's own walk answered an IPA, and Stage 2
+        # answered that IPA rather than the address that was asked.
+        self.assertEqual(answer["through"]["probe"]["address"], answer["probe"]["output"])
+
+    def test_a_captured_answer_is_not_rechecked(self):
+        # Its ground does not move, so a second walk would be two reads
+        # of one fact.
+        answer = regimes.answer(self.captured, {"regime": "vm0.cpu", "address": "0x201000"})
+        self.assertNotIn("moving", answer)
+        self.assertNotIn("through", answer)
+
+    def test_beside_stays_inside_one_address_space(self):
+        """The same number in a VA regime and an IPA regime is two
+        questions. Answered together it reads as one, and the second
+        answer looks like a fact about the address that was asked."""
+        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        answer = regimes.answer(
+            topology,
+            {"regime": "vm0.cpu", "address": "0x201000"},
+            live=regimes.Tables.of(self.captured),
+            banks=self.BANK,
+        )
+        self.assertEqual([beside["regime"] for beside in answer["beside"]], ["vm0.dma"])
 
     def test_a_row_carries_the_span_it_covers(self):
         """The client must not compute it. Deriving a span needs the

@@ -170,6 +170,40 @@ export function createMemory({ pick, form, input, note, body, request }) {
     }
   }
 
+  /* The hop after this one. A guest's Stage 1 answers an IPA, which is
+     the input to the translation beneath it, so the two together are the
+     whole address and either alone reads like the whole address. */
+  function renderThrough(through, probe, into) {
+    if (!through) return;
+    const next = through.probe || {};
+    const line = el("div", next.fault ? "mbeside bad" : "mbeside");
+    line.append(el("span", "mbeside-h", `↳ ${through.label}`));
+    line.append(
+      el(
+        "span",
+        "",
+        next.fault
+          ? `${probe.output} ✕ L${next.level} ${next.fault}`
+          : `${probe.output} → ${next.output} ${rights(next)} ${next.memory || ""}`,
+      ),
+    );
+    into.append(line);
+  }
+
+  /* A regime whose tables the guest rewrites as it runs. Walked twice:
+     the same answer means the chain held still, and a different one means
+     the address is moving — which is the reading, not a retry. */
+  function renderMoving(moving, into) {
+    if (moving === undefined) return;
+    into.append(
+      el(
+        "div",
+        moving ? "mwarn" : "mnote",
+        moving ? "걷는 동안 테이블이 바뀌었다 — 이 답은 두 순간이 섞였다" : "두 번 걸어 같은 답",
+      ),
+    );
+  }
+
   function renderAnswer() {
     clear(body);
     if (!shown) return;
@@ -179,10 +213,24 @@ export function createMemory({ pick, form, input, note, body, request }) {
     const regime = regimes.find((entry) => entry.id === chosen);
     input.placeholder = firstMapped(rows);
     renderBeside(shown.beside, body);
+    renderThrough(shown.through, shown.probe || {}, body);
+    renderMoving(shown.moving, body);
     renderIsolation(shown.isolation, body);
     renderStreams(regime, body);
     if (!rows.length) {
-      body.append(el("div", "mempty", "매핑된 구간이 없다"));
+      /* "No mappings" is an answer about the tables; a regime that is
+         walked as it is asked has no map to answer it with, and saying
+         the first about the second is the kind of claim this whole path
+         exists to prevent. */
+      body.append(
+        el(
+          "div",
+          "mempty",
+          shown.ground === "live"
+            ? "이 regime 은 물어본 주소만 답한다 — 지도는 없다"
+            : "매핑된 구간이 없다",
+        ),
+      );
     }
     /* The whole map against the one question this regime's control
        register asks. A count above zero here is a map disagreeing with

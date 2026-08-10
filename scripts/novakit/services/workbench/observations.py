@@ -200,9 +200,12 @@ _check_rates()
 _check_as_of()
 
 
-# The reading the topology defers to. Named here with the rest of the
-# manifest; the session is what does something with it.
+# The readings the topology defers to. Named here with the rest of the
+# manifest; the session is what does something with them.
 GUEST_TABLE = "vm.table"
+# A guest's Stage 1 roots and geometry, which the regime roster is built
+# from — the same bank the Context panel draws.
+EL1_BANKS = "ctx.el1"
 
 # The page the host writes commands into. Named here rather than beside
 # the writer, so a rename fails the manifest check instead of a control

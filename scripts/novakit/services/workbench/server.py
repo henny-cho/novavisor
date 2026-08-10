@@ -173,6 +173,11 @@ class Bridge:
         # Which run's tables have been published. Built once and never
         # rewritten, so one capture per run is all of them.
         self._mapped_run: int | None = None
+        # The roster is rebuilt every poll and the copy once, so they are
+        # held apart and published together.
+        self._listed: list[dict] = []
+        self._copied: dict = {}
+        self._el1_banks: list[dict] = []
         # The one writable view of the machine: the command ring's page,
         # and nothing else this process can reach. Per run, like every
         # other mapping of a RAM file that a restart replaces.
@@ -814,7 +819,7 @@ class Bridge:
             self._reject("probe: this run has published no page tables")
             return
         try:
-            answer = regimes.answer(captured, data)
+            answer = regimes.answer(captured, data, live=self._provider, banks=self._el1_banks)
         except (KeyError, ValueError) as error:
             self._reject(f"probe: {error}")
             return
@@ -1074,6 +1079,9 @@ class Bridge:
         self._poller = None
         self._provider_run = None
         self._mapped_run = None
+        self._listed = []
+        self._copied = {}
+        self._el1_banks = []
         self._writer_run = None
         if provider is not None:
             provider.close()
@@ -1083,21 +1091,31 @@ class Bridge:
         if writer is not None:
             writer.close()
 
-    def _capture_memory_map(self) -> None:
-        """Copy this run's page tables, once EL2 has built them.
+    def _refresh_memory_map(self) -> None:
+        """Which regimes exist, and — once — the tables behind them.
 
-        Once is all of them: they are written during EL2 init and never
-        again. Attempted every poll until it lands, because the RAM
-        backend exists from the moment QEMU starts and a read before the
-        build would copy a page of zeros.
+        The roster is read every poll: EL2's regimes are there from init,
+        but a guest's own appear when it enables its MMU, and go when it
+        turns it off. The copy is read once, because the regimes it
+        covers are written during EL2 init and never again; attempted
+        every poll until it lands, since the RAM backend exists from the
+        moment QEMU starts and a read before the build would copy zeros.
         """
-        if self._mapped_run == self.session.run_id or self._provider is None:
+        if self._provider is None:
             return
-        captured = regimes.capture(self._provider, self._provider.regimes)
-        if captured is None:
+        listed = regimes.roster(self._provider, self._provider.regimes, self._el1_banks)
+        if not listed:
+            return  # EL2 has not built its tables yet
+        if self._mapped_run != self.session.run_id:
+            copied = regimes.copy_tables(self._provider, self._provider.regimes)
+            if copied is None:
+                return
+            self._mapped_run = self.session.run_id
+            self._copied = copied
+        if listed == self._listed:
             return
-        self._mapped_run = self.session.run_id
-        self.session.adopt_memory_map(captured)
+        self._listed = listed
+        self.session.adopt_memory_map({**self._copied, "regimes": listed})
 
     async def _ensure_poller(self) -> snapshot.SnapshotPoller | None:
         """The S reader for this run, built once and shared.
@@ -1163,7 +1181,7 @@ class Bridge:
                     poller = await self._ensure_poller()
                     if poller is None:
                         continue
-                    self._capture_memory_map()
+                    self._refresh_memory_map()
                     self._ensure_writer()
                     if self.session.paused:
                         # Nothing can change while the machine is
@@ -1187,6 +1205,10 @@ class Bridge:
                         # The one reading the topology defers to.
                         if obs.topic == observations.GUEST_TABLE:
                             self.session.adopt_guest_table(value)
+                        # A guest's Stage 1 roots and geometry live in
+                        # this bank, so the roster is built from it.
+                        if obs.topic == observations.EL1_BANKS:
+                            self._el1_banks = value
                 except (FileNotFoundError, snapshot.NotPublishedYet):
                     # The backend vanished mid-step, or EL2 has not
                     # opened its region yet. Both are "not now"; retry.

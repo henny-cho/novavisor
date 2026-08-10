@@ -49,6 +49,14 @@ variants:
         where: { stream: 16 }
         equals: { state: "translate" }
         within_seconds: 5
+      # The guest's own Stage 1 geometry, read while it runs: a 4 KiB
+      # granule over 32 bits, with the high half switched off. This guest
+      # is alone on its core and so never switches out, so a bank only
+      # switch-out wrote would still read as the reset value here — and
+      # no address of this guest's could be translated at all.
+      - observe: "ctx.el1"
+        equals: { "el1.tcr": "0x80803520" }
+        within_seconds: 10
       - command: "stop 0"
         within_seconds: 10
       # No fault happened, so EL2's own recovery never ran: the only
