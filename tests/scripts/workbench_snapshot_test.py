@@ -14,12 +14,25 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
 import workbench_image  # noqa: E402
-from novakit.image import elfsym  # noqa: E402
+from novakit.image import abi, elfsym  # noqa: E402
 from novakit.services.workbench import hardware, snapshot  # noqa: E402
-from novakit.services.workbench.observations import OBSERVATIONS, Obs  # noqa: E402
+from novakit.services.workbench.observations import (  # noqa: E402
+    OBSERVATIONS,
+    PUBLISH_HZ,
+    Obs,
+)
 
 ELF = workbench_image.ELF
 RAM_BASE = hardware.platform()["NOVA_BOARD_PHYS_RAM_BASE"]
+# The reader's own parse of the published format, so the fixture below
+# writes what the reader reads rather than a second description of it.
+# Where payloads go is the publisher's half of that format, which the
+# reader learns per slot and so does not parse.
+_TLM = snapshot._TLM  # noqa: SLF001
+_PLACE = abi.read_defines(
+    abi.TELEMETRY,
+    ["NOVA_TLM_PAYLOAD_OFF", "NOVA_TLM_PAYLOAD_BYTES", "NOVA_TLM_ALIGN"],
+)
 
 
 def _observed_top() -> int:
@@ -32,22 +45,42 @@ def _observed_top() -> int:
 
 
 class FakeProvider:
+    """A publisher whose answers the test dictates.
+
+    `seq` and `stamp` count up per read so the poller's cursor is a
+    moving thing rather than a constant, which is what makes "did this
+    reader keep its own" a question with an answer.
+    """
+
     def __init__(self):
         self.values: dict[str, object] = {}
         self.torn: set[str] = set()
         self.unmoved: set[str] = set()
         self.reads: list[str] = []
+        self.since: list[int | None] = []
+        self.ticket = 0
 
-    def read(self, obs: Obs, *, live: bool = True) -> object:
-        # A fake has no publisher to ask whether a value moved, so it
-        # reads every time — like the provider that reads an address.
+    def read(self, obs: Obs, *, live: bool = True, since: int | None = None):
         del live
         self.reads.append(obs.topic)
+        self.since.append(since)
         if obs.topic in self.torn:
             raise elfsym.TornRead(obs.topic)
         if obs.topic in self.unmoved:
             raise snapshot.Unchanged(obs.topic)
-        return self.values[obs.topic]
+        self.ticket += 1
+        return snapshot.Reading(self.values[obs.topic], seq=self.ticket, stamp=100 + self.ticket)
+
+    def close(self) -> None:
+        pass
+
+
+class _StamplessProvider:
+    """A reader with no publisher behind it: values, no clock."""
+
+    def read(self, obs: Obs, *, live: bool = True, since: int | None = None):
+        del live, since
+        return snapshot.Reading({"n": obs.topic})
 
     def close(self) -> None:
         pass
@@ -110,6 +143,38 @@ class PollerTest(unittest.TestCase):
         self.now += 0.05
         recovered = self.poller.tick()
         self.assertEqual([obs.topic for obs, _ in recovered], ["fast"])
+
+    def test_the_poller_brings_its_own_cursor(self):
+        """The decode saving survives the cursor moving out of the
+        provider: the poller asks "since the sequence I took", which is
+        the question the provider used to answer for whoever read last.
+        """
+        self.poller.tick()
+        taken = dict(zip(self.provider.reads, self.provider.since))
+        self.assertEqual(taken, {"fast": None, "slow": None})  # nothing seen yet
+
+        self.now += 0.05
+        self.poller.tick()
+        self.assertEqual(self.provider.since[-1], 1)  # the sequence it took
+
+    def test_the_stamp_published_belongs_to_the_value_published(self):
+        self.poller.tick()
+        self.assertEqual(self.poller.stamp("fast"), 101)
+        self.assertEqual(self.poller.stamp("slow"), 102)
+
+        # Another reader takes a look. It moves the publisher's ticket,
+        # and must move nothing this poller is holding.
+        self.provider.read(self.observations[0])
+        self.assertEqual(self.poller.stamp("fast"), 101)
+
+    def test_a_topic_with_no_publisher_behind_it_has_no_stamp(self):
+        """A scripted or replayed reading is placed by its arrival, and
+        a made-up clock would be indistinguishable from a real one."""
+        poller = snapshot.SnapshotPoller(
+            _StamplessProvider(), self.observations, monotonic=lambda: self.now
+        )
+        poller.tick()
+        self.assertIsNone(poller.stamp("fast"))
 
 
 class SweepTest(unittest.TestCase):
@@ -185,7 +250,7 @@ class ElfRamProviderTest(unittest.TestCase):
             provider = snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE)
             self.addCleanup(provider.close)
             observed = {obs.topic: obs for obs in OBSERVATIONS}
-            cpus = provider.read(observed["sched.cpu"])
+            cpus = provider.read(observed["sched.cpu"]).value
 
         # kNoOwner reaches the wire as null, not as a number a JSON
         # reader would have to recognise.
@@ -238,6 +303,169 @@ class ElfRamProviderTest(unittest.TestCase):
                 provider.read_bytes(top - 8, 4096)
             with self.assertRaises(ValueError):
                 provider.read_bytes(RAM_BASE - 4096, 4096)
+
+
+class Publisher:
+    """As much of the firmware's publisher as a reader can tell apart.
+
+    A header the reader checks, one descriptor per observed global, and
+    payloads behind them. Turns are taken by hand, so a test can put one
+    read on each side of one — which is the only way to ask whether two
+    readers of one region interfere.
+
+    The layout comes from the same header the reader parses, so this
+    fixture cannot drift from the format it is standing in for.
+    """
+
+    def __init__(self, view, ram_path: Path):
+        self._path = ram_path
+        self.base = view.symbols.extent_of(snapshot.TELEMETRY_REGION)[0]
+        self._region = bytearray(_PLACE["NOVA_TLM_PAYLOAD_OFF"] + _PLACE["NOVA_TLM_PAYLOAD_BYTES"])
+        self._slot: dict[str, int] = {}
+        self._at: dict[str, int] = {}
+
+        topics = [obs for obs in OBSERVATIONS if obs.pa is None]
+        at = _PLACE["NOVA_TLM_PAYLOAD_OFF"]
+        align = _PLACE["NOVA_TLM_ALIGN"]
+        for index, obs in enumerate(topics):
+            size = view.resolved[obs.topic].size
+            self._slot[obs.topic], self._at[obs.topic] = index, at
+            self._descriptor(
+                index,
+                source=view.addresses[obs.symbol],
+                seq=2,
+                stamp=1000,
+                at=at,
+                size=size,
+            )
+            at += -(-size // align) * align
+
+        header = _TLM["NOVA_TLM_HEADER_SIZE"]
+        self._put(_TLM["NOVA_TLM_MAGIC_OFF"], 8, _TLM["NOVA_TLM_MAGIC"])
+        self._put(_TLM["NOVA_TLM_VERSION_OFF"], 4, _TLM["NOVA_TLM_VERSION"])
+        self._put(_TLM["NOVA_TLM_SLOTS_OFF"], 4, len(topics))
+        self._put(_TLM["NOVA_TLM_DESCSIZE_OFF"], 4, _TLM["NOVA_TLM_DESC_SIZE"])
+        self._put(_TLM["NOVA_TLM_PERIOD_OFF"], 4, round(1_000_000 / PUBLISH_HZ))
+        self._put(_TLM["NOVA_TLM_BUDGET_OFF"], 4, at - header)
+        self._put(_TLM["NOVA_TLM_BYTES_OFF"], 4, at - header)
+        self.flush()
+
+    def _put(self, offset: int, width: int, value: int) -> None:
+        self._region[offset : offset + width] = value.to_bytes(width, "little")
+
+    def _descriptor(self, index: int, *, source: int, seq: int, stamp: int, at: int, size: int):
+        base = _TLM["NOVA_TLM_HEADER_SIZE"] + index * _TLM["NOVA_TLM_DESC_SIZE"]
+        self._put(base + _TLM["NOVA_TLM_DESC_SOURCE_OFF"], 8, source)
+        self._put(base + _TLM["NOVA_TLM_DESC_SEQ_OFF"], 8, seq)
+        self._put(base + _TLM["NOVA_TLM_DESC_STAMP_OFF"], 8, stamp)
+        self._put(base + _TLM["NOVA_TLM_DESC_AT_OFF"], 4, at)
+        self._put(base + _TLM["NOVA_TLM_DESC_BYTES_OFF"], 4, size)
+
+    def _field(self, topic: str, offset: int) -> int:
+        """Where one descriptor field of one slot sits in the region."""
+        base = _TLM["NOVA_TLM_HEADER_SIZE"] + self._slot[topic] * _TLM["NOVA_TLM_DESC_SIZE"]
+        return base + offset
+
+    def _seq(self, topic: str) -> int:
+        at = self._field(topic, _TLM["NOVA_TLM_DESC_SEQ_OFF"])
+        return int.from_bytes(self._region[at : at + 8], "little")
+
+    def turn(self, topic: str, payload: bytes, *, stamp: int) -> None:
+        """One publish turn for one slot: new bytes, new clock, sequence on."""
+        at = self._at[topic]
+        self._region[at : at + len(payload)] = payload
+        self._put(self._field(topic, _TLM["NOVA_TLM_DESC_SEQ_OFF"]), 8, self._seq(topic) + 2)
+        self._put(self._field(topic, _TLM["NOVA_TLM_DESC_STAMP_OFF"]), 8, stamp)
+        self.flush()
+
+    def open_window(self, topic: str) -> None:
+        """Stop inside the copy: an odd sequence is a writer at work."""
+        self._put(self._field(topic, _TLM["NOVA_TLM_DESC_SEQ_OFF"]), 8, self._seq(topic) + 1)
+        self.flush()
+
+    def flush(self) -> None:
+        with self._path.open("r+b") as ram:
+            ram.seek(self.base - RAM_BASE)
+            ram.write(self._region)
+
+
+@unittest.skipUnless(ELF.is_file(), "debug ELF not built")
+@unittest.skipUnless(importlib.util.find_spec("elftools"), "pyelftools is not installed")
+class TelemetryProviderTest(unittest.TestCase):
+    """A published region has more than one reader, and must.
+
+    The poller draws the panels, a walk asks where a guest is rooted,
+    a scenario's predicate checks a field. What each of them last saw,
+    and when the copy it saw was made, is a fact about that reader —
+    so neither can be kept beside the bytes without one reader
+    answering for another.
+    """
+
+    def setUp(self):
+        self.view = workbench_image.view()
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        ram_path = Path(directory.name) / "guest-ram"
+        with ram_path.open("wb") as ram:
+            ram.truncate(_observed_top() - RAM_BASE)  # sparse
+        self.publisher = Publisher(self.view, ram_path)
+        self.provider = snapshot.TelemetryProvider(
+            snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE, self.view), self.view
+        )
+        self.addCleanup(self.provider.close)
+        self.obs = next(obs for obs in OBSERVATIONS if obs.topic == "sched.cpu")
+
+    @staticmethod
+    def _cpu(current: int) -> bytes:
+        # CpuSched: current, fp=kNoOwner, fp_trap, idling
+        return struct.pack("<QQ??6x", current, (1 << 64) - 1, True, False)
+
+    def test_a_reader_without_a_cursor_always_gets_the_value(self):
+        """The measured failure: a second reader asking about a topic
+        used to be told "unchanged" on the strength of the first one's
+        copy, which left the first one's panel frozen and nothing to
+        connect the two."""
+        first = self.provider.read(self.obs)
+        second = self.provider.read(self.obs)
+        self.assertEqual(first.value, second.value)
+        self.assertEqual(first.seq, second.seq)
+
+    def test_the_saving_is_the_cursor_the_caller_brings(self):
+        taken = self.provider.read(self.obs)
+        with self.assertRaises(snapshot.Unchanged):
+            self.provider.read(self.obs, since=taken.seq)
+
+        self.publisher.turn("sched.cpu", self._cpu(1), stamp=2000)
+        moved = self.provider.read(self.obs, since=taken.seq)
+        self.assertEqual(moved.value[0]["current"], 1)
+
+    def test_one_reader_cannot_move_another_reader_s_clock(self):
+        """The stamp is what the shadow age and the timeline placement
+        are measured from. Kept on the provider, a read landing across a
+        publish turn dated the other reader's value one turn late."""
+        poller = snapshot.SnapshotPoller(self.provider, (self.obs,))
+        poller.tick()
+        self.assertEqual(poller.stamp("sched.cpu"), 1000)
+
+        self.publisher.turn("sched.cpu", self._cpu(1), stamp=2000)
+        walked = self.provider.read(self.obs)
+        self.assertEqual(walked.stamp, 2000)
+        self.assertEqual(poller.stamp("sched.cpu"), 1000, "the poller still holds its own copy")
+
+    def test_a_poller_reading_after_a_turn_takes_both_halves(self):
+        now = [0.0]
+        poller = snapshot.SnapshotPoller(self.provider, (self.obs,), monotonic=lambda: now[0])
+        poller.tick()
+        self.publisher.turn("sched.cpu", self._cpu(1), stamp=2000)
+        now[0] += 1.0
+        changed = poller.tick()
+        self.assertEqual([value[0]["current"] for _obs, value in changed], [1])
+        self.assertEqual(poller.stamp("sched.cpu"), 2000)
+
+    def test_a_read_inside_the_publisher_s_window_is_torn(self):
+        self.publisher.open_window("sched.cpu")
+        with self.assertRaises(elfsym.TornRead):
+            self.provider.read(self.obs)
 
 
 class ChangedMaskTest(unittest.TestCase):

@@ -11,6 +11,7 @@ from __future__ import annotations
 import mmap
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -108,14 +109,28 @@ def _hexify(value):
     return value
 
 
-class SnapshotProvider(Protocol):
-    # When the firmware says each topic last moved, on its own clock.
-    # Empty for a provider with no publisher to ask — a script, a
-    # replay, a reader of raw addresses — which is a different thing
-    # from a topic that has not moved yet, and reads as one.
-    stamps: dict[str, int]
+@dataclass(frozen=True)
+class Reading:
+    """One look at one topic, and everything known about that look.
 
-    def read(self, obs: Obs, *, live: bool = True) -> object: ...
+    The sequence and the stamp travel with the value because they
+    describe it. Held on the provider they would describe whichever
+    caller read last, and a run has more readers than one: the poller
+    publishing panels, a walk asking where a guest is rooted, a
+    scenario's predicate. Both are None where the read had no publisher
+    to ask — an address read, a script, a replay — which is a different
+    thing from a topic that has not moved yet and must not read as one.
+    """
+
+    value: object
+    seq: int | None = None
+    stamp: int | None = None
+
+
+class SnapshotProvider(Protocol):
+    def read(
+        self, obs: Obs, *, live: bool = True, since: int | None = None
+    ) -> Reading: ...
 
     def close(self) -> None: ...
 
@@ -147,8 +162,6 @@ class ElfRamProvider:
     def __init__(
         self, elf_path: Path, ram_path: Path, ram_base: int, view: observe.View | None = None
     ):
-        # No publisher behind these bytes, so no clock to quote for them.
-        self.stamps: dict[str, int] = {}
         self._base = ram_base
         image = observe.resolve(elf_path) if view is None else view
         self._resolved = image.resolved
@@ -169,11 +182,12 @@ class ElfRamProvider:
             self.close()
             raise ValueError("RAM backend is smaller than the observed image")
 
-    def read(self, obs: Obs, *, live: bool = True) -> object:
+    def read(self, obs: Obs, *, live: bool = True, since: int | None = None) -> Reading:
         # This provider reads the address either way: there is no
-        # publisher to ask whether the value moved, and a stopped
-        # machine is what it always assumes it is reading.
-        del live
+        # publisher to ask whether the value moved or when it last did,
+        # so a cursor has nothing to compare against and the reading
+        # carries no sequence and no clock.
+        del live, since
         if obs.pa is not None:
             info = PAGE_LAYOUTS[obs.layout]
             offset = obs.pa - self._base
@@ -189,7 +203,7 @@ class ElfRamProvider:
         # know the width of a "none" or the layout of a packed word.
         if obs.shape is not None:
             value = obs.shape(value, info)
-        return _hexify(value) if obs.hex else value
+        return Reading(_hexify(value) if obs.hex else value)
 
     def read_bytes(self, pa: int, size: int) -> bytes:
         """Raw memory, for readers that learn their addresses as they go.
@@ -311,10 +325,6 @@ class TelemetryProvider:
         self._resolved = view.resolved
         self._symbols = view.symbols
         self.regimes = view.walk
-        self._seen: dict[str, int] = {}
-        # What the firmware last said about each topic, for a caller
-        # placing a reading on the trace timeline.
-        self.stamps: dict[str, int] = {}
 
         base = view.symbols.extent_of(TELEMETRY_REGION)[0]
         header = inner.read_bytes(base, _TLM["NOVA_TLM_HEADER_SIZE"])
@@ -377,7 +387,7 @@ class TelemetryProvider:
         if missing:
             raise ValueError("the firmware publishes no slot for: " + ", ".join(sorted(set(missing))))
 
-    def read(self, obs: Obs, *, live: bool = True) -> object:
+    def read(self, obs: Obs, *, live: bool = True, since: int | None = None) -> Reading:
         # Guest memory, which the firmware does not publish and could
         # not vouch for if it did.
         if obs.pa is not None:
@@ -398,7 +408,12 @@ class TelemetryProvider:
         before = _u64(descriptor, _TLM["NOVA_TLM_DESC_SEQ_OFF"])
         if before % 2:
             raise elfsym.TornRead(f"{obs.topic}: the publisher is inside the window")
-        if self._seen.get(obs.topic) == before:
+        # Against the cursor this caller brought, not against whoever
+        # read last: the saving belongs to the reader that already has
+        # this copy, and a second reader must not be answered with a
+        # word about the first one's. A caller with no cursor compares
+        # equal to nothing and is always given the value.
+        if since == before:
             raise Unchanged(obs.topic)
 
         offset = _u32(descriptor, _TLM["NOVA_TLM_DESC_AT_OFF"])
@@ -411,14 +426,15 @@ class TelemetryProvider:
         if after != before:
             raise elfsym.TornRead(f"{obs.topic}: the publisher crossed the read")
 
-        self._seen[obs.topic] = before
-        self.stamps[obs.topic] = _u64(descriptor, _TLM["NOVA_TLM_DESC_STAMP_OFF"])
-
         resolved = self._resolved[obs.topic]
         value = elfsym.decode(resolved.type, payload, fields=obs.fields)
         if obs.shape is not None:
             value = obs.shape(value, resolved.type)
-        return _hexify(value) if obs.hex else value
+        return Reading(
+            _hexify(value) if obs.hex else value,
+            seq=before,
+            stamp=_u64(descriptor, _TLM["NOVA_TLM_DESC_STAMP_OFF"]),
+        )
 
     def read_bytes(self, pa: int, size: int) -> bytes:
         return self._inner.read_bytes(pa, size)
@@ -457,13 +473,17 @@ def open_provider(
 
 
 class Unchanged(Exception):
-    """The publisher says this value has not moved since it was last read.
+    """The publisher says this value has not moved past the caller's cursor.
 
     Distinct from reading it and finding it equal: nothing was decoded,
     because the firmware answered the question with one word. That is
     the whole point of the sequence — on a memory map it saves the
     decode, and on a link narrower than a memory map it is the
     difference between sending a value and not.
+
+    Only ever raised against a `since` the caller supplied, so it is an
+    answer to that reader alone. A caller with no cursor is asking for
+    the value, not for news about it, and always gets one.
     """
 
 
@@ -472,6 +492,14 @@ class SnapshotPoller:
 
     A torn enum read aborts that observation's tick silently — the value
     was mid-write and the next tick sees a consistent one.
+
+    Every cursor this reader keeps is its own: which sequence it last
+    took (`_seq`), when the firmware said that copy was made (`_stamp`),
+    what it published from it (`_last`), and when the topic is next due.
+    Kept here rather than under the provider so that another reader of
+    the same region — a walk asking where a guest is rooted, a
+    scenario's predicate — neither starves this one of readings nor
+    moves the clock it publishes them with.
     """
 
     def __init__(
@@ -485,6 +513,8 @@ class SnapshotPoller:
         self._monotonic = monotonic
         self._due = dict.fromkeys((obs.topic for obs in self._observations), 0.0)
         self._last: dict[str, object] = {}
+        self._seq: dict[str, int] = {}
+        self._stamp: dict[str, int] = {}
 
     def tick(self) -> list[tuple[Obs, object]]:
         now = self._monotonic()
@@ -494,24 +524,31 @@ class SnapshotPoller:
                 continue
             self._due[obs.topic] = now + 1.0 / obs.rate_hz
             try:
-                value = self._provider.read(obs)
+                reading = self._provider.read(obs, since=self._seq.get(obs.topic))
             except (elfsym.TornRead, Unchanged):
                 continue
-            if self._last.get(obs.topic) != value:
-                self._last[obs.topic] = value
-                changes.append((obs, value))
+            if reading.seq is not None:
+                self._seq[obs.topic] = reading.seq
+            if reading.stamp is not None:
+                self._stamp[obs.topic] = reading.stamp
+            if self._last.get(obs.topic) != reading.value:
+                self._last[obs.topic] = reading.value
+                changes.append((obs, reading.value))
         return changes
 
     def stamp(self, topic: str) -> int | None:
-        """When the firmware says this topic last moved, on its own clock.
+        """When the firmware made the copy this poller last took.
 
         None when the provider cannot say — a scripted or replayed one,
         or a reader of raw addresses, neither of which has a publisher
         to ask. A caller that cannot get a firmware clock falls back to
         the envelope's arrival time, which is what it had before.
+
+        The clock of *this* reader's copy, so the value published and
+        the moment published with it are the same look.
         """
 
-        return self._provider.stamps.get(topic)
+        return self._stamp.get(topic)
 
     def sweep(self) -> list[tuple[Obs, object]]:
         """Every observation at once, rate and change gate ignored.
@@ -527,14 +564,16 @@ class SnapshotPoller:
         safe here for the same reason — nothing is writing.
 
         The cache is updated, so resuming does not replay as changes the
-        values this already sent.
+        values this already sent. The sequence cursor and the stamp are
+        not: an address read carries neither, and taking None for them
+        would forget which published copy this reader is past.
         """
         values = []
         for obs in self._observations:
             try:
-                value = self._provider.read(obs, live=False)
+                reading = self._provider.read(obs, live=False)
             except elfsym.TornRead:
                 continue
-            self._last[obs.topic] = value
-            values.append((obs, value))
+            self._last[obs.topic] = reading.value
+            values.append((obs, reading.value))
         return values

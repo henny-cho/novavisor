@@ -16,7 +16,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 from novakit.services import expect, spawn  # noqa: E402
 from novakit.services.surfaces import Surfaces  # noqa: E402
-from novakit.services.workbench import trace  # noqa: E402
+from novakit.services.workbench import snapshot, trace  # noqa: E402
 from novakit.services.workbench.protocol import Clock, Envelopes  # noqa: E402
 from novakit.services.workbench.session import (  # noqa: E402
     Deps,
@@ -626,11 +626,10 @@ class PollLoopTest(Draining):
                 # No image behind it, so no page tables to publish, and
                 # no publisher behind it, so no firmware clock to quote.
                 self.regimes: dict = {}
-                self.stamps: dict = {}
 
-            def read(self, _obs, *, live=True):
-                del live
-                return {"n": 1}
+            def read(self, _obs, *, live=True, since=None):
+                del live, since
+                return snapshot.Reading({"n": 1})
 
             def close(self):
                 self.closed = True
@@ -675,11 +674,10 @@ class PollLoopTest(Draining):
                 # No image behind it, so no page tables to publish, and
                 # no publisher behind it, so no firmware clock to quote.
                 self.regimes: dict = {}
-                self.stamps: dict = {}
 
-            def read(self, _obs, *, live=True):
-                del live
-                return {"n": 1}
+            def read(self, _obs, *, live=True, since=None):
+                del live, since
+                return snapshot.Reading({"n": 1})
 
             def close(self):
                 self.closed = True

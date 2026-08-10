@@ -22,7 +22,7 @@ from ...image import observe
 from .. import expect
 from . import commands, hardware, trace
 from .observations import COMMAND_PAGE, OBSERVATIONS
-from .snapshot import Unchanged, image_symbols, open_provider
+from .snapshot import image_symbols, open_provider
 
 # A terminal waits at the same cadence a scenario does.
 _POLL_SECONDS = expect.POLL_SECONDS
@@ -65,9 +65,16 @@ class Machine:
         return self._provider
 
     def reading(self, topic: str) -> object:
+        """This topic's value now.
+
+        No cursor is passed, so the publisher answers with the value
+        every time rather than with news about someone else's copy: a
+        scenario asks what a topic reads, and two steps of one run may
+        be asking about the same one.
+        """
         for obs in OBSERVATIONS:
             if obs.topic == topic:
-                value = self.provider().read(obs)
+                value = self.provider().read(obs).value
                 if self._on_reading is not None:
                     self._on_reading(topic, value)
                 return value
@@ -181,23 +188,17 @@ def observe_handler(machine: Machine) -> expect.StepHandler:
         topic = step["observe"]
         where = step.get("where", {})
         wanted = step.get("equals", {})
-        last: dict[str, object] = {}
 
         def poll() -> expect.StepOutcome:
             try:
-                last["value"] = machine.reading(topic)
+                value = machine.reading(topic)
             except KeyError as error:
                 # A topic this build does not publish is a manifest that
                 # cannot be satisfied by any run, not a slow boot.
                 return expect.step_failed(str(error))
-            except Unchanged:
-                # The publisher answered "not since you last looked", so
-                # the reading this step has is still the current one.
-                if "value" not in last:
-                    return expect.PENDING
             except (FileNotFoundError, observe.Stale):
                 return expect.PENDING  # ordinary during boot
-            entry = _select(last.get("value"), where)
+            entry = _select(value, where)
             if entry is None:
                 return expect.step_pending(
                     f"nothing in {topic} matches {where}")
