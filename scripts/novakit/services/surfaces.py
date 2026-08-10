@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import shutil
 import socket
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -100,11 +101,32 @@ def sweep_stale_surfaces(base: Path, min_age_seconds: float = 60.0) -> None:
             continue
 
 
-def make_surfaces() -> Surfaces:
-    """tmpfs keeps the RAM file's dirtied pages off the disk; fall back
-    to the default temp directory where /dev/shm is unavailable."""
+def make_surfaces(need_bytes: int = 0) -> Surfaces:
+    """Where one run's surfaces live.
+
+    tmpfs first, because the RAM file's dirtied pages never reach a disk
+    there — but only where it can hold the whole aperture. A /dev/shm
+    too small does not fail at launch: QEMU allocates the backend
+    lazily, so the machine dies when the guest touches the page that
+    does not fit, with no output and no reason. Falling back to the disk
+    costs writeback and keeps the run.
+
+    Swept first, so room a dead bridge is still holding is room this run
+    can have. `need_bytes` is zero for a caller that does not yet know
+    which machine it will launch; the attach refuses what does not fit.
+    """
     base = Path("/dev/shm")
     if base.is_dir():
         sweep_stale_surfaces(base)
-    root = tempfile.mkdtemp(prefix="nova-wb-", dir=base if base.is_dir() else None)
+        free = shutil.disk_usage(base).free
+        if need_bytes and free < need_bytes:
+            print(
+                f"[surfaces] {base} has {free >> 20} MiB free and this run needs "
+                f"{need_bytes >> 20} MiB; backing guest RAM on disk instead",
+                file=sys.stderr,
+            )
+            base = None
+    else:
+        base = None
+    root = tempfile.mkdtemp(prefix="nova-wb-", dir=base)
     return Surfaces(Path(root))

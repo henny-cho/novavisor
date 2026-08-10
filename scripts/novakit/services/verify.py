@@ -91,7 +91,11 @@ def run_scenario(scenario: expect.Scenario, sink: Sink, *, scope: str) -> int:
     # soak path builds every variant's scenario before running any, and
     # a surface made there would pin a guest's RAM in tmpfs for the
     # whole soak.
-    opened = surfaces.make_surfaces() if expect.needs_observation(scenario.steps) else None
+    opened = (
+        surfaces.make_surfaces(board.aperture_bytes(scenario.command))
+        if expect.needs_observation(scenario.steps)
+        else None
+    )
     machine = None
     if opened is not None:
         scenario, machine = observable(scenario, opened, scope=scope)

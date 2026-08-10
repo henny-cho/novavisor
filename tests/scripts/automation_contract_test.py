@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from typer.main import get_command
 from typer.testing import CliRunner
@@ -77,6 +80,30 @@ class PublicCommandContractTest(unittest.TestCase):
         self.assertEqual(given, base)
         self.assertEqual(base, board.command(kernel=Path("novavisor.elf")))
         self.assertNotIn("memory-backend", " ".join(board.MACHINE_ARGS))
+
+    def test_a_backend_that_cannot_fit_is_refused_rather_than_launched(self):
+        """QEMU allocates the backend lazily, so a filesystem too small
+        does not fail at launch: the machine dies when the guest touches
+        the page that does not fit, with no output and nothing saying
+        why. A container's default /dev/shm is 64 MiB, which holds a
+        small guest and not a Linux one."""
+        with tempfile.TemporaryDirectory() as directory:
+            room = shutil._ntuple_diskusage(total=0, used=0, free=64 << 20)
+            with mock.patch.object(board.shutil, "disk_usage", return_value=room):
+                with self.assertRaises(SystemExit) as refused:
+                    board.attach_workbench(
+                        board.command(kernel=Path("novavisor.elf")),
+                        shm_path=Path(directory) / "guest-ram",
+                        qmp_path=Path(directory) / "qmp.sock",
+                    )
+        said = str(refused.exception)
+        self.assertIn("1024 MiB", said)
+        self.assertIn("64 MiB free", said)
+
+    def test_the_aperture_is_read_back_from_the_command_itself(self):
+        """Whoever places the backing file needs the size the machine
+        will actually be given, not a second copy of it."""
+        self.assertEqual(board.aperture_bytes(board.command()), 1024 << 20)
 
 
 class BuildPresetContractTest(unittest.TestCase):

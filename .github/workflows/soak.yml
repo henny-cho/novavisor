@@ -36,6 +36,11 @@ jobs:
     timeout-minutes: ${{ matrix.timeout }}
     container:
       image: ghcr.io/henny-cho/novavisor-toolchain@sha256:df411e49c264e5bc41f807ec9145ebc3c8a83acc2865b2bc0b6a3a9da7485c3c
+      # An observed run backs guest RAM with a file the reader mmaps, and
+      # keeping it on tmpfs is what keeps those pages off the disk. The
+      # default 64 MiB holds a small guest and not a Linux one, and the
+      # runner has 16 GiB to lend.
+      options: --shm-size=2g
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

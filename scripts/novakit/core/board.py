@@ -7,6 +7,8 @@ disagree about nothing except the image they boot.
 from __future__ import annotations
 
 import os
+import shutil
+from collections.abc import Sequence
 from pathlib import Path
 
 QEMU = os.environ.get("NOVA_QEMU", "qemu-system-aarch64")
@@ -49,6 +51,16 @@ def command(
     return argv
 
 
+def aperture_bytes(command: Sequence[str]) -> int:
+    """How much guest RAM a composed command asks for, from its own -m.
+
+    Read back rather than passed alongside: an observation backend is a
+    file of exactly this size, and whoever places that file needs the
+    number the machine will actually be given.
+    """
+    return int(command[list(command).index("-m") + 1]) << 20
+
+
 def attach_workbench(
     command: list[str],
     *,
@@ -62,9 +74,23 @@ def attach_workbench(
     a QMP socket exposes machine-level control. The frozen MACHINE_ARGS
     stay untouched: the memory size is read back from the command's own
     -m value, and the backend is merged into its -machine string.
+
+    Refused when the filesystem holding that file cannot fit it. QEMU
+    allocates the backend lazily, so a short one does not fail at launch:
+    it fails when the guest touches the page that does not fit, and the
+    machine dies with no output and nothing saying why. A container's
+    default /dev/shm is 64 MiB, which holds a small guest and not a
+    Linux one.
     """
     argv = list(command)
     memory_mib = argv[argv.index("-m") + 1]
+    need = aperture_bytes(argv)
+    free = shutil.disk_usage(Path(shm_path).parent).free
+    if free < need:
+        raise SystemExit(
+            f"[board] guest RAM backend needs {need >> 20} MiB under "
+            f"{Path(shm_path).parent}, which has {free >> 20} MiB free"
+        )
     argv[argv.index("-machine") + 1] += ",memory-backend=wbram"
     argv += [
         "-object",
