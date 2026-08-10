@@ -731,7 +731,10 @@ function onFrame(frame) {
       timeline.note(data);
       /* The rate the drawer needs before a difference between two
          counter values is a duration. */
-      if (data.span?.freq_hz) panels.setClock(data.span.freq_hz);
+      if (data.span?.freq_hz) {
+        panels.setClock(data.span.freq_hz);
+        memory.setClock(data.span.freq_hz);
+      }
       /* The one record that answers rather than reports: it goes back
          to the control that asked for it. */
       drive.answered(data.command);

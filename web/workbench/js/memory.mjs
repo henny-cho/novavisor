@@ -10,13 +10,15 @@
    differing only in output address, and the bridge folds them before
    they travel. */
 
-import { clear, el } from "./format.mjs";
+import { clear, el, elapsed, micros } from "./format.mjs";
 
 /* S-layer topics this view reads, declared as the board declares its
    own so a topic the manifest dropped fails a test. The stream table is
    polled rather than read with the tables it points at, because a fault
-   quarantines a stream and this is the entry that changes. */
-const TOPICS = new Set(["smmu.stream"]);
+   quarantines a stream and this is the entry that changes. The sync
+   stamps are here because a live answer says how old the root it walked
+   from was, and it is dated against the slot's own sync. */
+const TOPICS = new Set(["smmu.stream", "ctx.synced"]);
 
 /* A probe lands on exactly one row per level. */
 const onPath = (row, steps) =>
@@ -42,6 +44,9 @@ export function createMemory({ pick, form, input, note, body, request }) {
   let chosen = null;
   let shown = null; /* the last answer, for the regime it was asked about */
   let streams = []; /* the stream table as last polled */
+  let told = false; /* whether this run has said anything about its regimes */
+  const readings = new Map(); /* topic -> values, for the topic a walk is dated by */
+  let counterHz = 0;
 
   function ask(address) {
     if (!chosen) return;
@@ -170,6 +175,27 @@ export function createMemory({ pick, form, input, note, body, request }) {
     }
   }
 
+  /* How old the root a live walk started from was. The answer names
+     both the topic that dates it and the slot, so nothing here decides
+     either; both stamps are the firmware's counter, so the difference
+     is the machine's own. A guest's root is a shadow of a register,
+     refreshed when the guest traps, and an answer that showed only
+     where it landed would be presenting a copy as the present. */
+  function rootAge(rooted) {
+    if (!rooted || !counterHz) return null;
+    const stamps = readings.get(rooted.as_of);
+    const taken = Array.isArray(stamps) ? Number(stamps[rooted.slot]?.synced_at ?? 0) : 0;
+    if (!taken) return null;
+    const us = micros(rooted.at - taken, counterHz);
+    return us === null || us < 0 ? null : elapsed(us);
+  }
+
+  function renderRooted(rooted, into) {
+    const age = rootAge(rooted);
+    if (age === null) return;
+    into.append(el("div", "mnote", `\uBFCC\uB9AC\uB294 ${age} \uC804 \uC0AC\uBCF8`));
+  }
+
   /* The hop after this one. A guest's Stage 1 answers an IPA, which is
      the input to the translation beneath it, so the two together are the
      whole address and either alone reads like the whole address. */
@@ -212,6 +238,7 @@ export function createMemory({ pick, form, input, note, body, request }) {
     const rows = tree.nodes || [];
     const regime = regimes.find((entry) => entry.id === chosen);
     input.placeholder = firstMapped(rows);
+    renderRooted(shown.rooted, body);
     renderBeside(shown.beside, body);
     renderThrough(shown.through, shown.probe || {}, body);
     renderMoving(shown.moving, body);
@@ -278,9 +305,14 @@ export function createMemory({ pick, form, input, note, body, request }) {
        none leaves the view saying so rather than empty. */
     setWorld(memory) {
       const listed = Array.isArray(memory?.regimes) ? memory.regimes : [];
+      /* The first word a run says about its regimes is drawn even when
+         it is "none": a client joining before EL2 has built its tables
+         would otherwise get an empty view with nothing saying why. */
       const same =
+        told &&
         listed.length === regimes.length &&
         listed.every((regime, index) => regime.id === regimes[index].id);
+      told = true;
       regimes = listed;
       if (same) return;
       chosen = null;
@@ -306,8 +338,16 @@ export function createMemory({ pick, form, input, note, body, request }) {
       if (frame.kind !== "snapshot") return;
       const values = frame.data?.values;
       if (!Array.isArray(values)) return;
-      streams = values;
+      readings.set(frame.topic, values);
+      if (frame.topic === "smmu.stream") streams = values;
       if (shown) renderAnswer();
+    },
+
+    /* The counter's rate, learned with the first trace window. Until it
+       arrives an age is a tick count, which is wrong by whatever the
+       clock turns out to be. */
+    setClock(hz) {
+      counterHz = Number(hz) || 0;
     },
 
     /* Asked again when the view opens: a run that started since the
