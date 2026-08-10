@@ -19,7 +19,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from ...core import config
-from ...image import observe
+from ...image import elfsym, observe
 from ..surfaces import Surfaces, make_surfaces
 from . import (
     commands,
@@ -170,14 +170,9 @@ class Bridge:
         # The run whose S layer ended in a fault, so it is reported
         # once: the fault is a property of the run, not of the tick.
         self._provider_failed: int | None = None
-        # Which run's tables have been published. Built once and never
-        # rewritten, so one capture per run is all of them.
-        self._mapped_run: int | None = None
-        # The roster is rebuilt every poll and the copy once, so they are
-        # held apart and published together.
-        self._listed: list[dict] = []
-        self._copied: dict = {}
-        self._el1_banks: list[dict] = []
+        # This run's topology, kept at the two rates its halves move at.
+        # Per run because a rebuild moves every address in it.
+        self._capture: regimes.Capture | None = None
         # The one writable view of the machine: the command ring's page,
         # and nothing else this process can reach. Per run, like every
         # other mapping of a RAM file that a restart replaces.
@@ -810,17 +805,22 @@ class Bridge:
     def _answer_probe(self, data: dict) -> None:
         """Walk this run's page tables and hand back the map.
 
-        Answered from the tables on the topology rather than from RAM, so
-        a replay walks the bytes its run had by the same code. Kept out
-        of the connect backlog: every reader asks its own.
+        Which bytes are walked is the regime's own answer. What EL2
+        built is on the topology, so a replay walks the tables its run
+        had by the same code as the run did. A guest's own tables are
+        not: they move while it runs, so they are read from RAM at the
+        moment the question is asked — which is why a replay can be told
+        a guest regime exists and still not be able to walk it.
+
+        Kept out of the connect backlog: every reader asks its own.
         """
         captured = self.store.topology.get("memory")
         if not captured:
             self._reject("probe: this run has published no page tables")
             return
         try:
-            answer = regimes.answer(captured, data, live=self._provider, banks=self._el1_banks)
-        except (KeyError, ValueError) as error:
+            answer = regimes.answer(captured, data, live=self._provider)
+        except (KeyError, ValueError, elfsym.TornRead) as error:
             self._reject(f"probe: {error}")
             return
         self.store.publish(Topic.PROBE, Kind.SNAPSHOT, answer, src=Src.SNAP, replay=False)
@@ -1078,10 +1078,7 @@ class Bridge:
         writer, self._writer = self._writer, None
         self._poller = None
         self._provider_run = None
-        self._mapped_run = None
-        self._listed = []
-        self._copied = {}
-        self._el1_banks = []
+        self._capture = None
         self._writer_run = None
         if provider is not None:
             provider.close()
@@ -1092,30 +1089,17 @@ class Bridge:
             writer.close()
 
     def _refresh_memory_map(self) -> None:
-        """Which regimes exist, and — once — the tables behind them.
+        """Publish this run's topology whenever it has moved.
 
-        The roster is read every poll: EL2's regimes are there from init,
-        but a guest's own appear when it enables its MMU, and go when it
-        turns it off. The copy is read once, because the regimes it
-        covers are written during EL2 init and never again; attempted
-        every poll until it lands, since the RAM backend exists from the
-        moment QEMU starts and a read before the build would copy zeros.
+        Attempted every poll: the RAM backend exists from the moment
+        QEMU starts, so the first looks land before EL2 has built
+        anything, and a guest's own regimes appear later still.
         """
-        if self._provider is None:
+        if self._capture is None:
             return
-        listed = regimes.roster(self._provider, self._provider.regimes, self._el1_banks)
-        if not listed:
-            return  # EL2 has not built its tables yet
-        if self._mapped_run != self.session.run_id:
-            copied = regimes.copy_tables(self._provider, self._provider.regimes)
-            if copied is None:
-                return
-            self._mapped_run = self.session.run_id
-            self._copied = copied
-        if listed == self._listed:
-            return
-        self._listed = listed
-        self.session.adopt_memory_map({**self._copied, "regimes": listed})
+        topology = self._capture.refresh()
+        if topology is not None:
+            self.session.adopt_memory_map(topology)
 
     async def _ensure_poller(self) -> snapshot.SnapshotPoller | None:
         """The S reader for this run, built once and shared.
@@ -1154,6 +1138,7 @@ class Bridge:
             return None
         self._provider = built
         self._poller = snapshot.SnapshotPoller(built)
+        self._capture = regimes.Capture(built, built.regimes)
         self._provider_run = current
         return self._poller
 
@@ -1205,10 +1190,6 @@ class Bridge:
                         # The one reading the topology defers to.
                         if obs.topic == observations.GUEST_TABLE:
                             self.session.adopt_guest_table(value)
-                        # A guest's Stage 1 roots and geometry live in
-                        # this bank, so the roster is built from it.
-                        if obs.topic == observations.EL1_BANKS:
-                            self._el1_banks = value
                 except (FileNotFoundError, snapshot.NotPublishedYet):
                     # The backend vanished mid-step, or EL2 has not
                     # opened its region yet. Both are "not now"; retry.

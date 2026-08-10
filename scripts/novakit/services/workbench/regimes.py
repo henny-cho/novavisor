@@ -20,10 +20,17 @@ from dataclasses import dataclass
 
 from ...image import abi, elfsym, observe
 from . import translation
+from .observations import EL1_BANKS, OBSERVATIONS
+from .snapshot import Reading, settled
 
 # vCPU slots are flat: a VM owns a fixed stride of them, so a slot names
 # its VM by division rather than by a table this file would keep.
 _VCPUS_PER_VM = abi.MAX_VCPUS_PER_VM
+
+# The published bank a guest's Stage 1 is rooted in. Named once: the
+# roster lists halves from it, a walk roots itself in it, and the answer
+# says how old that reading was by the manifest entry the panels use.
+_BANKS = next(obs for obs in OBSERVATIONS if obs.topic == EL1_BANKS)
 
 # Descriptor formats by the name the wire calls their kind, so the two
 # cannot drift.
@@ -156,7 +163,7 @@ def _el2_regime(resolved: dict[str, elfsym.ResolvedSymbol]) -> dict:
     return _regime("self", None, fmt.geometry.name, root.address, _limit(root.size + pool.size, fmt))
 
 
-def _guest_stage1_regimes(banks: list[dict] | None) -> list[dict]:
+def _guest_stage1_regimes(reader) -> list[dict]:
     """Every guest half that is translating right now.
 
     Listed only where the guest has left it on — its MMU enabled, that
@@ -168,7 +175,7 @@ def _guest_stage1_regimes(banks: list[dict] | None) -> list[dict]:
     process the vCPU is running, so it is read when a walk asks.
     """
     listed = []
-    for slot, bank in enumerate(banks or []):
+    for slot, bank in enumerate(reader.read(_BANKS).value or []):
         held = bank.get("el1", {}) if isinstance(bank, dict) else {}
         for high in (False, True):
             geometry = _guest_geometry_of(held, high)
@@ -204,18 +211,23 @@ def _guest_geometry_of(held: dict, high: bool) -> translation.Geometry | None:
         return None
 
 
-def roster(reader, resolved: dict[str, elfsym.ResolvedSymbol], banks: list[dict] | None = None) -> list[dict]:
+def roster(reader, resolved: dict[str, elfsym.ResolvedSymbol]) -> list[dict]:
     """Which regimes this run has, right now.
 
     Cheap enough to ask every poll, which is the point: EL2's are there
     from init, and a guest's appear when it enables its own MMU.
+
+    The reader answers both questions a roster asks — bytes at an
+    address for what EL2 built, and the published bank for what a guest
+    turned on — so nothing has to be read for this by somebody else and
+    handed in at whatever rate they read it.
     """
     if not resolved:
         return []
     stage2 = _stage2_regimes(reader, resolved)
     if not stage2:
         return []  # EL2 has not built its tables; nothing else is real yet either
-    return [*stage2, *_dma_regimes(reader, resolved), _el2_regime(resolved), *_guest_stage1_regimes(banks)]
+    return [*stage2, *_dma_regimes(reader, resolved), _el2_regime(resolved), *_guest_stage1_regimes(reader)]
 
 
 def copy_tables(reader, resolved: dict[str, elfsym.ResolvedSymbol]) -> dict | None:
@@ -241,6 +253,49 @@ def copy_tables(reader, resolved: dict[str, elfsym.ResolvedSymbol]) -> dict | No
             if value:
                 words[f"{entry.address + offset:#x}"] = f"{value:#x}"
     return {"extents": extents, "words": words}
+
+
+class Capture:
+    """A run's topology, kept at the two rates its halves change at.
+
+    The roster is a hundredth of a millisecond, and a guest's regimes
+    appear when it enables its own MMU, so it is read every look. The
+    copy is thirteen of the same tables EL2 wrote once during init and
+    never again, so it is read until it lands and then not again. One
+    constructor for both would charge the cheap half the dear one's
+    price on every poll.
+
+    The one place a topology is assembled, so a bridge, a fixture and a
+    scenario are looking at the same thing put together the same way.
+    """
+
+    def __init__(self, reader, resolved: dict[str, elfsym.ResolvedSymbol]):
+        self._reader = reader
+        self._resolved = resolved
+        self._copied: dict | None = None
+        self._listed: list[dict] = []
+
+    def refresh(self) -> dict | None:
+        """This run's topology, when it reads differently than last look.
+
+        None while EL2 has not built its tables, while the bank the
+        roster needs is mid-copy — the next look has it, and a poll has
+        nobody waiting on it — and whenever the roster comes back the
+        same, since a topology republished unchanged says nothing and
+        costs every client a rebuild.
+        """
+        try:
+            listed = roster(self._reader, self._resolved)
+        except elfsym.TornRead:
+            return None
+        if not listed:
+            return None
+        if self._copied is None:
+            self._copied = copy_tables(self._reader, self._resolved)
+        if listed == self._listed:
+            return None
+        self._listed = listed
+        return {**self._copied, "regimes": listed}
 
 
 @dataclass(frozen=True)
@@ -307,23 +362,71 @@ class _Walks:
     captured ground reads the copy, live or in replay, and a live one
     reads this moment's memory through the guest's Stage 2 — so a replay,
     which has no memory, cannot walk it and says so instead.
+
+    A live regime's root is in a bank the firmware publishes, and this
+    reads it: one copy per look, so a regime's geometry, its root and
+    the walk that follows them are one moment rather than three.
     """
 
-    def __init__(self, topology: dict, live=None, banks: list[dict] | None = None):
+    def __init__(self, topology: dict, live=None):
         self.copy = Tables.of(topology)
         self._live = live
-        self._banks = banks or []
         self._regimes = topology["regimes"]
         self._trees: dict[str, translation.Tree] = {}
+        self._held: Reading | None = None
+
+    def again(self) -> None:
+        """Take the next look, so the walk after this is a second moment."""
+        self._held = None
+
+    def _look(self) -> Reading:
+        """This look at the published EL1 banks.
+
+        Read here rather than handed in: a walk rooted by whoever read
+        last is rooted at whenever that was, and the answer would then
+        put this moment's table bytes under a root from a poll period
+        ago.
+        """
+        if self._held is None:
+            if self._live is None:
+                raise ValueError(
+                    "a guest's Stage 1 is rooted in a bank read as it is asked, "
+                    "and a replay has no publisher to ask"
+                )
+            self._held = settled(self._live, _BANKS)
+        return self._held
+
+    @staticmethod
+    def _slot(regime: dict) -> int:
+        return regime["vm"] * _VCPUS_PER_VM + regime["vcpu"]
 
     def _bank(self, regime: dict) -> dict:
         """The EL1 bank this regime is rooted in, as published now."""
-        slot = regime["vm"] * _VCPUS_PER_VM + regime["vcpu"]
-        held = self._banks[slot] if slot < len(self._banks) else {}
+        banks = self._look().value or []
+        slot = self._slot(regime)
+        held = banks[slot] if slot < len(banks) else {}
         bank = held.get("el1", {}) if isinstance(held, dict) else {}
         if _guest_geometry_of(bank, regime["role"].endswith("high")) is None:
             raise ValueError(f"{regime['id']} is not translating now")
         return bank
+
+    def rooted(self, regime: dict) -> dict | None:
+        """How old the root this walk used is, and what dates it.
+
+        The same two things a published shadow carries — the clock of
+        the copy and the topic whose `synced_at` it is measured against
+        — so a derived answer is aged by the rule published readings
+        already follow rather than by one of its own. None where there
+        is no publisher to have stamped it.
+
+        The flat vCPU slot rather than the pair, because the age is
+        indexed by it; deriving it from vm and vcpu would put the ABI's
+        stride on the far side.
+        """
+        at = self._look().stamp
+        if at is None:
+            return None
+        return {"at": at, "as_of": _BANKS.as_of, "slot": self._slot(regime)}
 
     def format(self, regime: dict) -> translation.Format:
         if regime["ground"] == CAPTURED:
@@ -353,8 +456,6 @@ class _Walks:
         """The bytes this regime's tables are in."""
         if regime["ground"] == CAPTURED:
             return self.copy
-        if self._live is None:
-            raise ValueError(f"{regime['id']} is walked as it is asked, and a replay has no memory to walk")
         return translation.GuestReader(self._live, self.root(self.beneath(regime)))
 
     def tree(self, regime: dict) -> translation.Tree:
@@ -445,7 +546,7 @@ def _isolation(walks: _Walks, captured: dict, regime: dict) -> dict | None:
     }
 
 
-def answer(topology: dict, request: dict, live=None, banks: list[dict] | None = None) -> dict:
+def answer(topology: dict, request: dict, live=None) -> dict:
     """Walk one regime for a client.
 
     A captured regime is read from the copy live and in replay alike, so
@@ -453,13 +554,15 @@ def answer(topology: dict, request: dict, live=None, banks: list[dict] | None = 
     one is rooted and read now, through the guest's Stage 2, and carries
     no tree: its map is thousands of tables and the question a reader has
     is about one address. The root travels with the answer either way,
-    because for a live regime it is part of what was asked.
+    because for a live regime it is part of what was asked — and it
+    carries how old that root was, because a bank is a shadow of a
+    register and the difference is the machine's own.
     """
     wanted = str(request.get("regime", ""))
     regime = next((entry for entry in topology["regimes"] if entry["id"] == wanted), None)
     if regime is None:
         raise KeyError(f"no regime {wanted!r}")
-    walks = _Walks(topology, live, banks)
+    walks = _Walks(topology, live)
     fmt = walks.format(regime)
     data = {"regime": regime["id"], "ground": regime["ground"], "root": f"{walks.root(regime):#x}"}
     if regime["ground"] == CAPTURED:
@@ -467,6 +570,10 @@ def answer(topology: dict, request: dict, live=None, banks: list[dict] | None = 
         isolation = _isolation(walks, topology, regime)
         if isolation is not None:
             data["isolation"] = isolation
+    else:
+        rooted = walks.rooted(regime)
+        if rooted is not None:
+            data["rooted"] = rooted
     if request.get("address") in (None, ""):
         return data
     at = _address(request["address"])
@@ -476,9 +583,11 @@ def answer(topology: dict, request: dict, live=None, banks: list[dict] | None = 
         # A guest rewrites these tables as it runs, and a walk reads one
         # level at a time: the answer can be two moments spliced. A single
         # descriptor is one word and cannot tear, so what is checked is the
-        # chain — walked again, and reported as differing rather than
-        # retried, because how many tries would settle it is not a number
-        # anyone knows.
+        # chain — walked again from a second look at the bank, so a root
+        # that moved counts as movement too, and reported as differing
+        # rather than retried, because how many tries would settle it is
+        # not a number anyone knows.
+        walks.again()
         data["moving"] = walks.probe(regime, at) != found
         if found.output is not None:
             # The output is an IPA, which is an input to the translation

@@ -128,11 +128,49 @@ class Reading:
 
 
 class SnapshotProvider(Protocol):
+    # How long a publisher's window can be open, in microseconds. Zero
+    # where there is no publisher, which is also where a read cannot
+    # land inside one.
+    period_us: int
+
     def read(
         self, obs: Obs, *, live: bool = True, since: int | None = None
     ) -> Reading: ...
 
     def close(self) -> None: ...
+
+
+def settled(
+    provider: SnapshotProvider,
+    obs: Obs,
+    *,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Reading:
+    """One whole copy of a topic, waiting out the publisher's window.
+
+    A tear is a moment rather than a state: the publisher opens its
+    window on every visit to a slot and closes it inside the same turn,
+    so a read that landed in one succeeds on the next look. Refusing at
+    the first tear would throw away one read in a hundred for a reason
+    that is gone in one period.
+
+    Bounded by a turn of the publisher's own clock, read from the region
+    rather than chosen. A retry count is a number nobody can justify —
+    measured copies outran eight immediate tries inside one turn, and
+    the same eight would be far too many on a slower publisher.
+
+    Yields between tries: the copy is another core's work, and holding
+    the interpreter through it delays this process rather than that one.
+    """
+    deadline = monotonic() + provider.period_us / 1_000_000
+    while True:
+        try:
+            return provider.read(obs)
+        except elfsym.TornRead:
+            if monotonic() >= deadline:
+                raise
+            sleep(0)
 
 
 class MemoryReader(Protocol):
@@ -158,6 +196,10 @@ class ElfRamProvider:
     A caller that already has the image resolved passes it in; the
     provider itself never holds the ELF open past construction.
     """
+
+    # Addresses are read as they are, so there is no window to land in
+    # and nothing to wait out.
+    period_us = 0
 
     def __init__(
         self, elf_path: Path, ram_path: Path, ram_base: int, view: observe.View | None = None

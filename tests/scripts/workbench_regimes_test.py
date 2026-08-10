@@ -9,12 +9,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
 import workbench_image  # noqa: E402
-from novakit.image import observe  # noqa: E402
+from novakit.image import elfsym, observe  # noqa: E402
 from novakit.services.workbench import (  # noqa: E402
     hardware,
     observations,  # noqa: E402
@@ -69,12 +70,8 @@ class CaptureTest(unittest.TestCase):
         return made
 
     def capture(self, reader) -> dict:
-        """Roster and copy together, the way the bridge publishes them.
-
-        Two calls because their answers change at different times; one
-        topology entry because a walk needs both.
-        """
-        return {**regimes.copy_tables(reader, self.symbols), "regimes": regimes.roster(reader, self.symbols)}
+        """This run's topology, assembled where the bridge assembles it."""
+        return regimes.Capture(reader, self.symbols).refresh()
 
     def field(self, symbol: str, name: str) -> int:
         entry = self.symbols[symbol]
@@ -100,6 +97,20 @@ class CaptureTest(unittest.TestCase):
         before the build would copy a page of zeros and publish it as the
         machine's whole address map."""
         self.assertEqual(regimes.roster(self.provider(), self.symbols), [])
+        self.assertIsNone(regimes.Capture(self.provider(), self.symbols).refresh())
+
+    def test_the_copy_is_read_once_and_the_roster_at_every_look(self):
+        """The two halves move at rates three orders apart: the roster is
+        a hundredth of a millisecond, the copy is thirteen of them. Read
+        together they would cost the dear one on every poll."""
+        self.build_guest_tables()
+        capture = regimes.Capture(self.provider(), self.symbols)
+        with mock.patch.object(regimes, "copy_tables", wraps=regimes.copy_tables) as copied:
+            self.assertIsNotNone(capture.refresh())
+            # Nothing moved, so there is nothing to republish -- and the
+            # tables were not read a second time to find that out.
+            self.assertIsNone(capture.refresh())
+            self.assertEqual(copied.call_count, 1)
 
     def test_a_built_guest_becomes_a_regime_rooted_where_vttbr_points(self):
         l1, _ = self.build_guest_tables()
@@ -173,6 +184,38 @@ class CaptureTest(unittest.TestCase):
         copy = regimes.Tables.of(captured)
         with self.assertRaises(ValueError):
             copy.read_bytes(RAM_BASE, translation.STAGE2.table_bytes)
+
+
+class Published:
+    """A copy standing in for live memory, with banks published over it.
+
+    A walk reads both from one reader now — the tables it follows and
+    the bank it is rooted in — so a stand-in has to offer both. Each
+    look takes the next bank listed and the last one repeats, which is
+    how a root that moves under a walk is put in front of one. Tears are
+    dealt out on demand, for the wait that a publisher's window needs.
+    """
+
+    period_us = round(1_000_000 / observations.PUBLISH_HZ)
+
+    def __init__(self, tables, *looks: list[dict], stamp: int | None = None, tears: int = 0):
+        self._tables = tables
+        self._looks = looks
+        self._taken = 0
+        self._stamp = stamp
+        self.tears = tears
+
+    def read_bytes(self, pa: int, size: int) -> bytes:
+        return self._tables.read_bytes(pa, size)
+
+    def read(self, obs, *, live: bool = True, since: int | None = None):
+        del live, since
+        if self.tears:
+            self.tears -= 1
+            raise elfsym.TornRead(f"{obs.topic}: the publisher is inside the window")
+        banks = self._looks[min(self._taken, len(self._looks) - 1)]
+        self._taken += 1
+        return snapshot.Reading(banks, stamp=self._stamp)
 
 
 class AnswerTest(unittest.TestCase):
@@ -263,6 +306,10 @@ class AnswerTest(unittest.TestCase):
             }
         ]
 
+    def live(self, *looks: list[dict], **held) -> Published:
+        """This VM's memory and the banks rooting it, from one reader."""
+        return Published(regimes.Tables.of(self.captured), *(looks or (self.BANK,)), **held)
+
     def test_a_live_regime_is_rooted_when_the_walk_is_asked_for(self):
         """Its root is TTBR_EL1, which follows whatever process the vCPU
         is running. On the topology it would be a value that was true
@@ -270,37 +317,88 @@ class AnswerTest(unittest.TestCase):
         switched process."""
         topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
         self.assertNotIn("root", self._guest(high=False))
-        answer = regimes.answer(
-            topology, {"regime": "vm0.v0.el1.low"}, live=regimes.Tables.of(self.captured), banks=self.BANK
-        )
+        answer = regimes.answer(topology, {"regime": "vm0.v0.el1.low"}, live=self.live())
         self.assertEqual(answer["root"], f"{self.ipa_of(self.GUEST_L1):#x}")
         self.assertEqual(answer["ground"], regimes.LIVE)
 
     def test_a_live_regime_carries_no_map(self):
         # Thousands of tables, and the question is about one address.
         topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
-        answer = regimes.answer(
-            topology, {"regime": "vm0.v0.el1.low"}, live=regimes.Tables.of(self.captured), banks=self.BANK
-        )
+        answer = regimes.answer(topology, {"regime": "vm0.v0.el1.low"}, live=self.live())
         self.assertNotIn("tree", answer)
         self.assertNotIn("isolation", answer)
 
-    def test_a_replay_can_root_a_live_regime_but_not_walk_it(self):
-        """The recording holds the bank, so where the regime was rooted is
-        a recorded fact. The tables it pointed at are not: their ground
-        moved under the run, so there was never a copy to record."""
+    def test_a_replay_cannot_root_a_live_regime(self):
+        """Where a guest is rooted is a register the firmware shadows and
+        publishes, read at the moment a walk asks. A replay has neither
+        the publisher nor the memory, and the refusal says which."""
         topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
-        rooted = regimes.answer(topology, {"regime": "vm0.v0.el1.low"}, banks=self.BANK)
-        self.assertEqual(rooted["root"], f"{self.ipa_of(self.GUEST_L1):#x}")
-        with self.assertRaises(ValueError):
-            regimes.answer(topology, {"regime": "vm0.v0.el1.low", "address": "0x1000"}, banks=self.BANK)
+        with self.assertRaises(ValueError) as caught:
+            regimes.answer(topology, {"regime": "vm0.v0.el1.low"})
+        self.assertIn("no publisher", str(caught.exception))
+
+    def test_a_torn_bank_is_waited_out_rather_than_refused(self):
+        """A tear is a moment: the publisher opens its window on every
+        visit and closes it inside the same turn. Refusing at the first
+        one would throw away a walk for a reason gone in a period."""
+        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        answer = regimes.answer(
+            topology, {"regime": "vm0.v0.el1.low"}, live=self.live(tears=3)
+        )
+        self.assertEqual(answer["root"], f"{self.ipa_of(self.GUEST_L1):#x}")
+
+    def test_a_bank_torn_past_a_whole_turn_is_refused(self):
+        """The other end of the same rule: waiting is bounded by a turn
+        of the publisher's clock, and a copy still torn after one is not
+        a moment. The refusal is an observation's limit, not a fault the
+        machine answered with."""
+        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        with self.assertRaises(elfsym.TornRead):
+            regimes.answer(
+                topology, {"regime": "vm0.v0.el1.low"}, live=self.live(tears=1 << 30)
+            )
+
+    def test_a_root_that_moved_between_looks_reads_as_moving(self):
+        """What the recheck is for. The guest switched process across the
+        two walks, so the second one started somewhere else -- which the
+        walk can only see because it reads the root itself."""
+        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        moved = [{"el1": self.BANK[0]["el1"] | {"ttbr0": f"{self.ipa_of(self.GUEST_L2):#x}"}}]
+        answer = regimes.answer(
+            topology,
+            {"regime": "vm0.v0.el1.low", "address": "0x1000"},
+            live=self.live(self.BANK, moved),
+        )
+        self.assertTrue(answer["moving"])
+
+    def test_a_live_answer_says_how_old_the_root_it_used_was(self):
+        """A bank is a shadow of a register, updated at a trap. The
+        answer carries the same two things a published shadow does --
+        the clock of the copy and the topic that dates it -- so the age
+        of a derived answer is read by the rule readings already follow.
+        """
+        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        answer = regimes.answer(
+            topology, {"regime": "vm0.v0.el1.low"}, live=self.live(stamp=4242)
+        )
+        dater = observations.POLICY[observations.EL1_BANKS].as_of
+        self.assertEqual(answer["rooted"], {"at": 4242, "as_of": dater, "slot": 0})
+
+    def test_a_root_with_no_publisher_behind_it_carries_no_age(self):
+        """A made-up clock cannot be told from a real one, and the UI
+        would subtract it."""
+        topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
+        answer = regimes.answer(topology, {"regime": "vm0.v0.el1.low"}, live=self.live())
+        self.assertNotIn("rooted", answer)
+
+    def test_a_captured_answer_has_no_age_to_carry(self):
+        """Its root is on the topology because it does not move."""
+        self.assertNotIn("rooted", regimes.answer(self.captured, {"regime": "vm0.cpu"}))
 
     def test_a_half_the_guest_turned_off_cannot_be_walked(self):
         topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=True)]}
         with self.assertRaises(ValueError):
-            regimes.answer(
-                topology, {"regime": "vm0.v0.el1.high"}, live=regimes.Tables.of(self.captured), banks=self.BANK
-            )
+            regimes.answer(topology, {"regime": "vm0.v0.el1.high"}, live=self.live())
 
     def test_a_live_answer_closes_the_chain_and_says_if_it_moved(self):
         """VA to IPA is half an answer: the output is an input to the
@@ -308,9 +406,8 @@ class AnswerTest(unittest.TestCase):
         a reader doing the walk. The recheck is reported rather than
         retried — how many tries would settle it is not a known number."""
         topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
-        copy = regimes.Tables.of(self.captured)
         answer = regimes.answer(
-            topology, {"regime": "vm0.v0.el1.low", "address": "0x1000"}, live=copy, banks=self.BANK
+            topology, {"regime": "vm0.v0.el1.low", "address": "0x1000"}, live=self.live()
         )
         self.assertIn("moving", answer)
         self.assertFalse(answer["moving"])  # this copy cannot change under the walk
@@ -332,10 +429,7 @@ class AnswerTest(unittest.TestCase):
         answer looks like a fact about the address that was asked."""
         topology = self.captured | {"regimes": [*self.captured["regimes"], self._guest(high=False)]}
         answer = regimes.answer(
-            topology,
-            {"regime": "vm0.cpu", "address": "0x201000"},
-            live=regimes.Tables.of(self.captured),
-            banks=self.BANK,
+            topology, {"regime": "vm0.cpu", "address": "0x201000"}, live=self.live()
         )
         self.assertEqual([beside["regime"] for beside in answer["beside"]], ["vm0.dma"])
 
