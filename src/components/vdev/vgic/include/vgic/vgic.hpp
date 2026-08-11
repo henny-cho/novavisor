@@ -49,6 +49,10 @@ void cpu_reset(std::size_t index) noexcept;
 void cpu_save(std::size_t index) noexcept;
 void cpu_restore(std::size_t index) noexcept;
 
+// Clear this core's residency shadow — cpu_restore's counterpart,
+// called when a retiring vCPU was the one it had marked resident here.
+void vacate() noexcept;
+
 // Mark a private INTID (SGI/PPI) pending in `index`'s redistributor
 // and deliver what fits into its list registers. Runs on the owning
 // core (core_vcpu routes). False beyond the private range.

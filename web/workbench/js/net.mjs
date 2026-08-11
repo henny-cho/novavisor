@@ -3,7 +3,7 @@
    are always single JSON objects. */
 
 const WS_PATH = "/ws";
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const BACKOFF_MIN_MS = 500;
 const BACKOFF_MAX_MS = 5000;
 /* Duplicate memory. The bridge replays at most a few hundred frames on

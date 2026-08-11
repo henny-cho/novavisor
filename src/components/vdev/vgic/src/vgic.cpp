@@ -336,6 +336,10 @@ void cpu_restore(std::size_t index) noexcept {
   resident_here() = index;
 }
 
+void vacate() noexcept {
+  resident_here() = kNoResident;
+}
+
 auto post_private(std::size_t index, std::uint32_t vintid) noexcept -> bool {
   if (vintid >= kNumPrivate) {
     return false;

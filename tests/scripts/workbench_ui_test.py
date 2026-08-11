@@ -33,6 +33,21 @@ SIM = REPO / "web_sim" / "novavisor-sim.html"
 HTML_REFERENCE = re.compile(r'(?:src|href)="([^"]+)"')
 MODULE_IMPORT = re.compile(r'(?:import|from)\s+"(\./[^"]+)"')
 CUSTOM_PROPERTY = re.compile(r"(--[\w-]+)\s*:\s*([^;]+);")
+PROTOCOL_CONST = re.compile(r"PROTOCOL_VERSION\s*=\s*(\d+)")
+
+
+class ProtocolVersionTest(unittest.TestCase):
+    """The version stamped on every downlink envelope; the client checks
+    it on every frame and drops the whole stream without a word on a
+    mismatch, so the two copies drifting apart is invisible until a
+    browser opens the page."""
+
+    def test_the_client_expects_what_the_bridge_stamps(self):
+        from novakit.services.workbench import protocol
+
+        client = PROTOCOL_CONST.search((UI / "js" / "net.mjs").read_text())
+        self.assertIsNotNone(client, "net.mjs PROTOCOL_VERSION not found")
+        self.assertEqual(int(client.group(1)), protocol.PROTOCOL_VERSION)
 
 
 class UiStructureTest(unittest.TestCase):

@@ -300,6 +300,7 @@ auto retire_vcpu(std::size_t slot) noexcept -> bool {
   }
   if (was_current) {
     me().current = kNoVcpu;
+    vgic::vacate();
     reschedule_slice();
   }
   return was_current;

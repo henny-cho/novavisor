@@ -663,7 +663,11 @@ function onLife(ts, data) {
       events.addNotice(ts, message, { severity: "CRIT" });
       break;
     }
+    /* Terminal in practice — QEMU never exits this wfi loop — but the
+       session is still RUNNING to the bridge, so the badge has to say
+       so itself rather than let "실행 중" stand for a parked machine. */
     case "halted":
+      setPhase("running", "게스트 종료 — 머신 유지");
       events.addNotice(ts, "모든 vCPU 정지", { severity: "WARN" });
       break;
     case "verify-pass":
