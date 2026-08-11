@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+import uuid
 
 from . import trace
 from .protocol import MAX_BUCKETS
@@ -25,6 +26,16 @@ from .protocol import MAX_BUCKETS
 # or two; the rest is headroom for a stretch whose density is wildly
 # uneven, and running out is reported rather than answered with a guess.
 _NARROW_TRIES = 6
+
+
+class _RequestIds:
+    def __init__(self):
+        self._prefix = f"cli:{uuid.uuid4().hex[:16]}"
+        self._next = 0
+
+    def make(self) -> str:
+        self._next += 1
+        return f"{self._prefix}:{self._next}"
 
 
 def tail(port: int, seconds: float, limit: int, forever: bool) -> int:
@@ -58,6 +69,7 @@ def tail(port: int, seconds: float, limit: int, forever: bool) -> int:
         return 1
     try:
         with socket:
+            ids = _RequestIds()
             while True:
                 span, freq, ceiling = _ask(socket)
                 if span is None:
@@ -67,7 +79,7 @@ def tail(port: int, seconds: float, limit: int, forever: bool) -> int:
                 back = int(seconds * freq) if freq else span["to"] - span["from"]
                 first = newest + 1 if newest else max(span["from"], span["to"] - back)
                 if first <= span["to"]:
-                    records = _narrow(socket, first, span["to"], limit, ceiling)
+                    records = _narrow(socket, first, span["to"], limit, ceiling, ids)
                     if records:
                         newest = records[-1].ts
                         trace.print_records(records, freq, limit)
@@ -122,7 +134,9 @@ def _ask(socket, seconds: float = 3.0):
     return latest, freq, ceiling
 
 
-def _narrow(socket, first: int, last: int, limit: int, ceiling: int) -> list[trace.Record]:
+def _narrow(
+    socket, first: int, last: int, limit: int, ceiling: int, ids: _RequestIds
+) -> list[trace.Record]:
     """The newest records in a stretch, narrowing until they can be sent.
 
     A window holding more records than the resolution asked for comes
@@ -136,7 +150,7 @@ def _narrow(socket, first: int, last: int, limit: int, ceiling: int) -> list[tra
     how a loop like this ends up not converging on either.
     """
     for _ in range(_NARROW_TRIES):
-        records, dense = _window(socket, first, last, ceiling)
+        records, dense = _window(socket, first, last, ceiling, ids)
         if not dense:
             return records[-limit:] if limit else records
         # From the newest end: a terminal reads the end of a run.
@@ -148,7 +162,9 @@ def _narrow(socket, first: int, last: int, limit: int, ceiling: int) -> list[tra
     return []
 
 
-def _window(socket, first: int, last: int, buckets: int) -> tuple[list[trace.Record], int]:
+def _window(
+    socket, first: int, last: int, buckets: int, ids: _RequestIds
+) -> tuple[list[trace.Record], int]:
     """One window: its records, or how many were too many to list.
 
     A response carries records or the density standing in for them. A
@@ -157,11 +173,20 @@ def _window(socket, first: int, last: int, buckets: int) -> tuple[list[trace.Rec
     because "nothing happened" and "too much happened" are not the same
     report.
     """
+    request_id = ids.make()
     socket.send(json.dumps({
         "topic": "trace",
         "data": {"op": "window", "from": first, "to": last, "buckets": buckets},
+        "request_id": request_id,
     }))
     for frame in _frames(socket):
+        if frame.get("reply_to") != request_id:
+            continue
+        if (
+            frame.get("topic") == "life"
+            and frame.get("data", {}).get("phase") in ("uplink-rejected", "query-cancelled")
+        ):
+            raise RuntimeError(frame["data"].get("reason", "query failed"))
         if frame.get("topic") != "trace" or frame.get("kind") != "snapshot":
             continue
         data = frame["data"]

@@ -309,7 +309,9 @@ class UplinkTest(unittest.TestCase):
         return bridge
 
     def _reasons(self, bridge, data: dict) -> list[str]:
-        bridge._handle_uplink(json.dumps({"topic": "cmd", "data": data}))
+        bridge._handle_uplink(
+            json.dumps({"topic": "cmd", "data": data, "request_id": "command:1"})
+        )
         return [
             frame["data"].get("reason", "")
             for frame in bridge.store.drain()

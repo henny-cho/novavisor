@@ -10,14 +10,16 @@ later slot in behind the same `Clock.now` call without touching users.
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
-# 2: the topology's command contract carries one row per op the machine
-#    carries out instead of a list of opcode names and two named bands.
-PROTOCOL_VERSION = 2
+# 3: every uplink carries a request identity, and replies reflect it so
+#    readers sharing the broadcast never consume one another's answers.
+PROTOCOL_VERSION = 3
+REQUEST_ID = re.compile(r"[A-Za-z0-9._:-]{1,64}\Z")
 
 # Columns a window request may ask to be answered in. A limit on a
 # request field is part of the contract, not an implementation detail of
@@ -89,6 +91,7 @@ class Envelopes:
         *,
         src: Src | str = Src.BRIDGE,
         ts: int | None = None,
+        reply_to: str | None = None,
     ) -> dict:
         # Every field here takes a string as readily as its enum, and
         # for two different reasons. S-layer topics come from the
@@ -106,7 +109,7 @@ class Envelopes:
         # is never given, because it belongs to this connection's
         # ordering and not to the run.
         self._seq += 1
-        return {
+        frame = {
             "v": PROTOCOL_VERSION,
             "seq": self._seq,
             "topic": topic.value if isinstance(topic, Topic) else topic,
@@ -115,20 +118,32 @@ class Envelopes:
             "src": src.value if isinstance(src, Src) else src,
             "data": data,
         }
+        if reply_to is not None:
+            frame["reply_to"] = reply_to
+        return frame
 
 
 def encode(frames: Iterable[dict]) -> str:
     return json.dumps(list(frames), separators=(",", ":"), ensure_ascii=False)
 
 
+class ProtocolError(ValueError):
+    """The request has no safe identity to answer and closes its socket."""
+
+
 class UplinkError(ValueError):
-    """Client fault: reported back over the socket, never fatal."""
+    """An identified client fault that can be answered on the wire."""
+
+    def __init__(self, message: str, request_id: str):
+        super().__init__(message)
+        self.request_id = request_id
 
 
 @dataclass(frozen=True)
 class Uplink:
     topic: Topic
     data: dict
+    request_id: str
 
 
 def parse_uplink(text: str, accepted: frozenset[Topic]) -> Uplink:
@@ -141,18 +156,21 @@ def parse_uplink(text: str, accepted: frozenset[Topic]) -> Uplink:
     """
     try:
         payload = json.loads(text)
-    except json.JSONDecodeError as error:
-        raise UplinkError(f"malformed JSON: {error}") from error
+    except (json.JSONDecodeError, TypeError) as error:
+        raise ProtocolError(f"malformed JSON: {error}") from error
     if not isinstance(payload, dict):
-        raise UplinkError("uplink must be a JSON object")
+        raise ProtocolError("uplink must be a JSON object")
+    request_id = payload.get("request_id")
+    if not isinstance(request_id, str) or REQUEST_ID.fullmatch(request_id) is None:
+        raise ProtocolError("request_id must match [A-Za-z0-9._:-]{1,64}")
     topic = payload.get("topic")
     values = {candidate.value: candidate for candidate in accepted}
     if topic not in values:
-        raise UplinkError(f"unknown uplink topic: {topic!r}")
+        raise UplinkError(f"unknown uplink topic: {topic!r}", request_id)
     data = payload.get("data", {})
     if not isinstance(data, dict):
-        raise UplinkError("uplink data must be a JSON object")
-    return Uplink(values[topic], data)
+        raise UplinkError("uplink data must be a JSON object", request_id)
+    return Uplink(values[topic], data, request_id)
 
 
 def decode_bytes(value: str) -> bytes:

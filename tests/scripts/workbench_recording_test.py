@@ -64,6 +64,8 @@ class RoundTripTest(Recorded):
         for index in range(5):
             frame = {"seq": index, "topic": "life", "kind": "event",
                      "ts": index * 10, "data": {"phase": "x", "n": index}}
+            if index == 2:
+                frame["reply_to"] = "recorded:2"
             sent.append(frame)
             recorder.frame(frame)
         recorder.close()
@@ -352,7 +354,11 @@ class IdentityTest(Recorded):
 
         async def asked():
             # Built on a worker, so the call that asks returns first.
-            bridge._answer_window(request)
+            bridge._handle_uplink(json.dumps({
+                "topic": "trace",
+                "data": request,
+                "request_id": "identity:1",
+            }))
             await bridge.settled()
 
         asyncio.run(asked())
@@ -386,6 +392,29 @@ class IdentityTest(Recorded):
         request = {"op": "window", "from": 1_000, "to": 1_600, "buckets": 8192,
                    "events": ["trap"]}
         self.assertEqual(self.answer(live, request), self.answer(replayed, request))
+
+    def test_replay_restamping_does_not_claim_an_old_reply(self):
+        from novakit.services.workbench.server import Bridge
+
+        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        recorder.frame({
+            "seq": 1,
+            "topic": "trace",
+            "kind": "snapshot",
+            "ts": 5,
+            "src": "T",
+            "data": {"window": {}},
+            "reply_to": "past:1",
+        })
+        recorder.close()
+
+        bridge = Bridge(ui_root=self.ui)
+        bridge.load_replay(recording.load(self.directory))
+        trace_frames = [
+            frame for frame in bridge._connect_payload() if frame["topic"] == "trace"
+        ]
+        self.assertEqual(len(trace_frames), 1)
+        self.assertNotIn("reply_to", trace_frames[0])
 
     def test_opening_a_replay_does_not_report_the_bridge_falling_behind(self):
         """It did. Handing a client the whole run went through the
@@ -502,7 +531,11 @@ class IdentityTest(Recorded):
         for handler in driving:
             with self.subTest(topic=handler.topic.value):
                 bridge.store.drain()
-                bridge._handle_uplink(json.dumps({"topic": handler.topic.value, "data": {}}))
+                bridge._handle_uplink(json.dumps({
+                    "topic": handler.topic.value,
+                    "data": {},
+                    "request_id": f"replay:{handler.topic.value}",
+                }))
                 said = [
                     frame["data"].get("reason", "")
                     for frame in bridge.store.drain()
@@ -719,10 +752,22 @@ class CursorTest(Recorded):
         bridge.load_replay(self.recorded())
         return bridge
 
+    @staticmethod
+    def ask(bridge, ts: int) -> None:
+        async def answered():
+            bridge._handle_uplink(json.dumps({
+                "topic": "cursor",
+                "data": {"ts": ts},
+                "request_id": "cursor:1",
+            }))
+            await bridge.settled()
+
+        asyncio.run(answered())
+
     def test_a_seek_answers_with_the_panels_of_that_moment(self):
         bridge = self.bridge()
         bridge.store.drain()
-        bridge._handle_uplink(json.dumps({"topic": "cursor", "data": {"ts": 150}}))
+        self.ask(bridge, 150)
         frames = bridge.store.drain()
 
         panels = [f for f in frames if f["topic"] == "sched.cpu"]
@@ -739,13 +784,13 @@ class CursorTest(Recorded):
         reader asked to be returned to."""
         bridge = self.bridge()
         bridge.store.drain()
-        bridge._handle_uplink(json.dumps({"topic": "cursor", "data": {"ts": 0}}))
+        self.ask(bridge, 0)
         cursor = [f for f in bridge.store.drain() if f["topic"] == "cursor"]
         self.assertEqual(cursor[0]["data"]["unread"], ["dev.dma"])
 
         # And once the run has read it, it stops being unread.
         bridge.store.drain()
-        bridge._handle_uplink(json.dumps({"topic": "cursor", "data": {"ts": 1 << 40}}))
+        self.ask(bridge, 1 << 40)
         cursor = [f for f in bridge.store.drain() if f["topic"] == "cursor"]
         self.assertEqual(cursor[0]["data"]["unread"], [])
 
@@ -755,7 +800,7 @@ class CursorTest(Recorded):
         disagree about which is a reading."""
         bridge = self.bridge()
         bridge.store.drain()
-        bridge._handle_uplink(json.dumps({"topic": "cursor", "data": {"ts": 0}}))
+        self.ask(bridge, 0)
         for frame in bridge.store.drain():
             if frame["topic"] == "sched.cpu":
                 self.assertEqual(frame["kind"], "snapshot")
@@ -769,7 +814,11 @@ class CursorTest(Recorded):
 
         bridge = Bridge(ui_root=self.ui)
         bridge.store.drain()
-        bridge._handle_uplink(json.dumps({"topic": "cursor", "data": {"ts": 5}}))
+        bridge._handle_uplink(json.dumps({
+            "topic": "cursor",
+            "data": {"ts": 5},
+            "request_id": "cursor:2",
+        }))
         said = [f["data"].get("reason", "") for f in bridge.store.drain()]
         self.assertTrue(any("only a replay" in text for text in said), said)
 

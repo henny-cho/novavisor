@@ -3,7 +3,7 @@
    much of the stream was lost. */
 
 import { MAX_VM_SLOT, clear, clockLabel, describeStep, el } from "./format.mjs";
-import { connect, send } from "./net.mjs";
+import { connect } from "./net.mjs";
 import { createBoard } from "./board.mjs";
 import { createCards } from "./cards.mjs";
 import { createConsole } from "./console.mjs";
@@ -60,6 +60,7 @@ let autoRunning = false;
 /* Snapshots may arrive out of order during connect replay; the highest
    sequence is the current world. */
 let topoSeq = 0;
+let wire = { send: () => false, ask: () => false };
 
 const events = createEvents({
   list: ref("elog"),
@@ -100,13 +101,13 @@ const memory = createMemory({
   body: ref("mmap-body"),
   /* Same topic out as in: the kind already says which direction a
      frame went. */
-  request: (data) => send("probe", data),
+  request: (data) => wire.ask("probe", data),
 });
 
 const drive = createDrive({
   root: ref("drive"),
   note: ref("drive-note"),
-  send: (data) => send("cmd", data),
+  send: (data) => wire.send("cmd", data),
 });
 
 /* What the view slot can hold, named here so the tab buttons carry no
@@ -145,7 +146,7 @@ const timeline = createTimeline({
   /* The window request goes out on the same topic the summaries come
      back on: the kind already distinguishes an answer from something
      sent unasked. */
-  request: (data) => send("trace", data),
+  request: (data) => wire.ask("trace", data),
   /* A mark is a moment on a path, so selecting one says both: the
      fields the firmware recorded, and the path lit on the board. The
      board already knows how to focus, and pointing it at the edge the
@@ -191,7 +192,7 @@ const timeline = createTimeline({
        a reader picks on the strip is the moment the panels and the
        console are returned to. Live there is only now, and asking
        would be asking a machine to have been something it is not. */
-    if (replaying) send("cursor", { ts: record.ts });
+    if (replaying) wire.ask("cursor", { ts: record.ts });
   },
 });
 
@@ -284,6 +285,7 @@ const consoleView = createConsole({
   form: ref("cin"),
   input: ref("cin-text"),
   focusButton: ref("cin-focus"),
+  send: (topic, data) => wire.send(topic, data),
   onNotice: notify,
 });
 
@@ -292,6 +294,7 @@ const topology = createTopology({
   runButton: ref("run"),
   rerunButton,
   pane: ref("topo"),
+  send: (topic, data) => wire.send(topic, data),
   onStart: (demo) => {
     rerunButton.hidden = true;
     /* One start per click storm: the next terminal phase (or a
@@ -357,7 +360,7 @@ function setPaused(next) {
 }
 
 pauseButton.addEventListener("click", () => {
-  if (!send("halt", { cmd: paused ? "cont" : "stop" })) {
+  if (!wire.send("halt", { cmd: paused ? "cont" : "stop" })) {
     notify("브리지에 연결되지 않아 요청을 보내지 못했습니다");
   }
 });
@@ -398,7 +401,7 @@ function say(text) {
 }
 
 function halt(data) {
-  if (!send("halt", data)) {
+  if (!wire.send("halt", data)) {
     notify("브리지에 연결되지 않아 요청을 보내지 못했습니다");
     return false;
   }
@@ -863,4 +866,4 @@ themeButton.addEventListener("click", () => {
 });
 
 applyTheme(storedTheme() || "dark");
-connect({ onFrame, onStatus, onReset, onLoss: noteLoss, onGap, onBatch });
+wire = connect({ onFrame, onStatus, onReset, onLoss: noteLoss, onGap, onBatch });

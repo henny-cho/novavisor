@@ -79,9 +79,13 @@ class UplinkTest(unittest.TestCase):
         for handler in HANDLERS:
             with self.subTest(topic=handler.topic.value):
                 uplink = protocol.parse_uplink(
-                    json.dumps({"topic": handler.topic.value, "data": {}}), UPLINK
+                    json.dumps(
+                        {"topic": handler.topic.value, "data": {}, "request_id": "test:1"}
+                    ),
+                    UPLINK,
                 )
                 self.assertEqual(uplink.topic, handler.topic)
+                self.assertEqual(uplink.request_id, "test:1")
                 # And what answers it is a method of the bridge the
                 # message arrived at, taking the parsed payload.
                 self.assertIs(getattr(Bridge, handler.call.__name__), handler.call)
@@ -89,21 +93,37 @@ class UplinkTest(unittest.TestCase):
 
     def test_data_defaults_to_an_empty_object(self):
         self.assertEqual(
-            protocol.parse_uplink('{"topic":"uart"}', frozenset({protocol.Topic.UART})).data, {}
+            protocol.parse_uplink(
+                '{"topic":"uart","request_id":"test:2"}',
+                frozenset({protocol.Topic.UART}),
+            ).data,
+            {},
         )
 
-    def test_rejections(self):
+    def test_identified_rejections(self):
+        accepted = frozenset({protocol.Topic.UART})
+        for text in (
+            '{"topic":"console","data":{},"request_id":"test:3"}',
+            '{"topic":"target","data":{},"request_id":"test:3"}',
+            '{"topic":"nope","data":{},"request_id":"test:3"}',
+            '{"topic":"uart","data":[1],"request_id":"test:3"}',
+        ):
+            with self.subTest(text=text):
+                with self.assertRaises(protocol.UplinkError):
+                    protocol.parse_uplink(text, accepted)
+
+    def test_requests_without_a_safe_identity_are_protocol_errors(self):
         accepted = frozenset({protocol.Topic.UART})
         for text in (
             "not json",
             "[1,2]",
-            '{"topic":"console","data":{}}',  # downlink topic
-            '{"topic":"target","data":{}}',  # uplink the caller does not take
-            '{"topic":"nope","data":{}}',
-            '{"topic":"uart","data":[1]}',
+            '{"topic":"uart"}',
+            '{"topic":"uart","request_id":""}',
+            '{"topic":"uart","request_id":"spaces are unsafe"}',
+            json.dumps({"topic": "uart", "request_id": "x" * 65}),
         ):
             with self.subTest(text=text):
-                with self.assertRaises(protocol.UplinkError):
+                with self.assertRaises(protocol.ProtocolError):
                     protocol.parse_uplink(text, accepted)
 
     def test_control_bytes_decode(self):
@@ -146,6 +166,19 @@ class FrameWindowTest(unittest.TestCase):
 
 
 class StateStoreTest(unittest.TestCase):
+    def test_reply_identity_rides_live_frames(self):
+        store = StateStore(envelopes())
+        frame = store.publish(
+            protocol.Topic.TRACE,
+            protocol.Kind.SNAPSHOT,
+            {},
+            replay=False,
+            reply_to="client:7",
+        )
+
+        self.assertEqual(frame["reply_to"], "client:7")
+        self.assertEqual(store.drain(), [frame])
+
     def test_publish_reaches_window_and_backlog(self):
         store = StateStore(envelopes())
         frame = store.publish(protocol.Topic.CONSOLE, protocol.Kind.EVENT, {"vm": 0})

@@ -8,15 +8,19 @@ there is no second cap to pick and nothing to truncate.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
+import threading
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novakit.services.workbench import events, trace  # noqa: E402
+from novakit.services.workbench import client, events, trace  # noqa: E402
 
 BIND = events.BY_ID["vgic.bind"].code
 TRAP = events.BY_ID["trap"].code
@@ -77,6 +81,43 @@ class ColumnTest(unittest.TestCase):
                 self.assertEqual(entry["code"], events.BY_ID[entry["id"]].code)
 
 
+class ClientOwnershipTest(unittest.TestCase):
+    class Socket:
+        def __init__(self):
+            self.request_id = ""
+            self.sent = False
+
+        def send(self, payload: str) -> None:
+            self.request_id = json.loads(payload)["request_id"]
+
+        def recv(self, timeout: float):
+            del timeout
+            if self.sent:
+                raise TimeoutError
+            self.sent = True
+            columns = {"ts": [0], "code": [TRAP], "cpu": [0], "a": [0], "b": [0], "c": [0]}
+            return json.dumps([
+                {
+                    "topic": "trace",
+                    "kind": "snapshot",
+                    "reply_to": "someone-else:1",
+                    "data": {"window": {"from": 0, "n": 99}, "hist": {}},
+                },
+                {
+                    "topic": "trace",
+                    "kind": "snapshot",
+                    "reply_to": self.request_id,
+                    "data": {"window": {"from": 0, "n": 1}, "cols": columns},
+                },
+            ])
+
+    def test_the_terminal_client_consumes_only_its_answer(self):
+        records_, dense = client._window(self.Socket(), 0, 10, 10, client._RequestIds())
+
+        self.assertEqual(len(records_), 1)
+        self.assertEqual(dense, 0)
+
+
 class WindowRequestTest(unittest.IsolatedAsyncioTestCase):
     """The uplink, against a bridge whose history is seeded directly."""
 
@@ -96,15 +137,24 @@ class WindowRequestTest(unittest.IsolatedAsyncioTestCase):
         A window is answered off the loop, so the call that asks for one
         returns before the answer exists.
         """
-        bridge._handle_uplink(json.dumps({"topic": "trace", "data": {"op": "window", **request}}))
+        bridge._handle_uplink(json.dumps({
+            "topic": "trace",
+            "data": {"op": "window", **request},
+            "request_id": "window:1",
+        }))
         await bridge.settled()
         frames = bridge.store.drain()
         replies = [f for f in frames if f["topic"] == "trace" and f["kind"] == "snapshot"]
         self.assertEqual(len(replies), 1, f"expected one reply, got {frames}")
         return replies[0]["data"]
 
-    def rejection(self, bridge, **request) -> str:
-        bridge._handle_uplink(json.dumps({"topic": "trace", "data": {"op": "window", **request}}))
+    async def rejection(self, bridge, **request) -> str:
+        bridge._handle_uplink(json.dumps({
+            "topic": "trace",
+            "data": {"op": "window", **request},
+            "request_id": "window:2",
+        }))
+        await bridge.settled()
         reasons = [
             f["data"]["reason"]
             for f in bridge.store.drain()
@@ -153,14 +203,19 @@ class WindowRequestTest(unittest.IsolatedAsyncioTestCase):
     async def test_an_absurd_resolution_is_refused_not_quietly_reduced(self):
         """The response arrays are as long as this number, and a caller
         that asked for a million columns has misunderstood something."""
-        self.assertIn("buckets", self.rejection(self.bridge(), buckets=10**6))
+        self.assertIn("buckets", await self.rejection(self.bridge(), buckets=10**6))
 
     async def test_a_backwards_window_is_refused(self):
-        self.assertIn("ends before", self.rejection(self.bridge(), **{"from": 50, "to": 10}))
+        self.assertIn(
+            "ends before", await self.rejection(self.bridge(), **{"from": 50, "to": 10})
+        )
 
     async def test_an_unknown_op_is_refused_rather_than_guessed(self):
         bridge = self.bridge()
-        bridge._handle_uplink('{"topic":"trace","data":{"op":"everything"}}')
+        bridge._handle_uplink(
+            '{"topic":"trace","data":{"op":"everything"},"request_id":"window:3"}'
+        )
+        await bridge.settled()
         reasons = [
             f["data"].get("reason")
             for f in bridge.store.drain()
@@ -176,6 +231,141 @@ class WindowRequestTest(unittest.IsolatedAsyncioTestCase):
         data = await self.answer(bridge, **{"from": 0, "to": 10})
         self.assertEqual(data["window"]["n"], 0)
         self.assertEqual(data["cols"]["ts"], [])
+
+    async def test_one_connection_keeps_one_worker_and_only_the_latest_replacement(self):
+        from novakit.services.workbench import server
+
+        bridge = self.bridge()
+        connection = object()
+        bridge._connections.add(connection)
+        active = 0
+        peak = 0
+        calls = []
+        lock = threading.Lock()
+
+        def build(_packed, _span, _freq, first, last, _buckets, _wanted):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                calls.append(first)
+            time.sleep(0.02)
+            with lock:
+                active -= 1
+            return {"window": {"from": first, "to": last, "n": 0}, "cols": {}}
+
+        with mock.patch.object(server, "_window_payload", side_effect=build):
+            for index in range(3):
+                bridge._handle_uplink(
+                    json.dumps({
+                        "topic": "trace",
+                        "data": {"op": "window", "from": index, "to": 10},
+                        "request_id": f"burst:{index}",
+                    }),
+                    connection,
+                )
+            await bridge.settled()
+
+        frames = bridge.store.drain()
+        replies = [frame["reply_to"] for frame in frames if frame["topic"] == "trace"]
+        rejected = [
+            frame["reply_to"]
+            for frame in frames
+            if frame["data"].get("phase") == "uplink-rejected"
+        ]
+        self.assertEqual(calls, [0, 2])
+        self.assertEqual(peak, 1)
+        self.assertEqual(replies, ["burst:0", "burst:2"])
+        self.assertEqual(rejected, ["burst:1"])
+
+    async def test_two_connections_keep_their_out_of_order_answers_identified(self):
+        from novakit.services.workbench import server
+
+        bridge = self.bridge()
+        slow, fast = object(), object()
+        bridge._connections.update((slow, fast))
+
+        def build(_packed, _span, _freq, first, last, _buckets, _wanted):
+            time.sleep(0.03 if first == 1 else 0.005)
+            return {"window": {"from": first, "to": last, "n": 0}, "cols": {}}
+
+        with mock.patch.object(server, "_window_payload", side_effect=build):
+            for connection, first, request_id in (
+                (slow, 1, "slow:1"),
+                (fast, 2, "fast:1"),
+            ):
+                bridge._handle_uplink(
+                    json.dumps({
+                        "topic": "trace",
+                        "data": {"op": "window", "from": first, "to": 10},
+                        "request_id": request_id,
+                    }),
+                    connection,
+                )
+            await bridge.settled()
+
+        replies = [
+            (frame["data"]["window"]["from"], frame["reply_to"])
+            for frame in bridge.store.drain()
+            if frame["topic"] == "trace"
+        ]
+        self.assertEqual(replies, [(2, "fast:1"), (1, "slow:1")])
+
+    async def test_a_run_change_terminates_the_old_question_as_cancelled(self):
+        from novakit.services.workbench import server
+
+        bridge = self.bridge()
+
+        def changes_run(*_args):
+            bridge.session.run_id += 1
+            return {"window": {}, "cols": {}}
+
+        with mock.patch.object(server, "_window_payload", side_effect=changes_run):
+            bridge._handle_uplink(json.dumps({
+                "topic": "trace",
+                "data": {"op": "window", "from": 0, "to": 10},
+                "request_id": "old-run:1",
+            }))
+            await bridge.settled()
+
+        terminal = [
+            frame
+            for frame in bridge.store.drain()
+            if frame.get("reply_to") == "old-run:1"
+        ]
+        self.assertEqual(len(terminal), 1)
+        self.assertEqual(terminal[0]["data"]["phase"], "query-cancelled")
+
+    async def test_a_disconnected_question_publishes_no_orphaned_answer(self):
+        from novakit.services.workbench import server
+
+        bridge = self.bridge()
+        connection = object()
+        bridge._connections.add(connection)
+        started = threading.Event()
+        release = threading.Event()
+
+        def build(*_args):
+            started.set()
+            release.wait(1)
+            return {"window": {}, "cols": {}}
+
+        with mock.patch.object(server, "_window_payload", side_effect=build):
+            bridge._handle_uplink(json.dumps({
+                "topic": "trace",
+                "data": {"op": "window", "from": 0, "to": 10},
+                "request_id": "gone:1",
+            }), connection)
+            self.assertTrue(await asyncio.to_thread(started.wait, 1))
+            bridge._connections.discard(connection)
+            bridge._disconnect_queries(connection)
+            release.set()
+            await bridge.settled()
+
+        self.assertEqual(
+            [frame for frame in bridge.store.drain() if frame.get("reply_to") == "gone:1"],
+            [],
+        )
 
 
 if __name__ == "__main__":

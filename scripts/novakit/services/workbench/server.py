@@ -38,6 +38,7 @@ from .protocol import (
     Clock,
     Envelopes,
     Kind,
+    ProtocolError,
     Src,
     Topic,
     UplinkError,
@@ -113,8 +114,35 @@ class Handler:
     """One uplink topic: what answers it, and what it needs to."""
 
     topic: Topic
-    call: Callable[[Bridge, dict], None]
+    call: Callable[[Bridge, Request], object]
     needs: Needs = Needs.NOTHING
+    query: bool = False
+
+
+@dataclass(frozen=True)
+class Request:
+    """One identified uplink and the connection that owns its reply."""
+
+    connection: object | None
+    topic: Topic
+    data: dict
+    request_id: str
+
+
+@dataclass
+class QuerySlot:
+    """The running question and the only newer one worth retaining."""
+
+    active: Request
+    replacement: Request | None = None
+
+
+class QueryRejected(ValueError):
+    """A valid question the bridge cannot answer."""
+
+
+class QueryCancelled(RuntimeError):
+    """A question whose run disappeared while its answer was built."""
 
 
 def _require_websockets():
@@ -154,6 +182,8 @@ class Bridge:
         self._ui_root = ui_root
         self._connections: set = set()
         self._tasks: set[asyncio.Task] = set()
+        self._queries: dict[tuple[object | None, Topic], QuerySlot] = {}
+        self._closing = False
         self._server = None
         self._flusher: asyncio.Task | None = None
         self._halting = False
@@ -307,6 +337,8 @@ class Bridge:
             )
 
     async def close(self) -> None:
+        self._closing = True
+        self._queries.clear()
         if self._flusher is not None:
             self._flusher.cancel()
         for task in tuple(self._tasks):
@@ -374,12 +406,10 @@ class Bridge:
             await connection.send(encode(self._connect_payload()))
             async for message in connection:
                 try:
-                    self._handle_uplink(message)
-                except Exception as error:
-                    # One unhandled message costs its own reply, never the
-                    # connection: a browser that loses its socket also
-                    # loses the console it was reading.
-                    self._reject(f"uplink failed: {error}")
+                    self._handle_uplink(message, connection)
+                except ProtocolError as error:
+                    await connection.close(code=1008, reason=str(error)[:120])
+                    break
         except Exception:
             # Everything else here is transport: a tab that navigated
             # away, slept, or missed the keepalive deadline ends its
@@ -387,24 +417,95 @@ class Bridge:
             pass
         finally:
             self._connections.discard(connection)
+            self._disconnect_queries(connection)
 
-    def _handle_uplink(self, message) -> None:
+    def _handle_uplink(self, message, connection=None) -> None:
         if isinstance(message, bytes):
-            message = message.decode("utf-8", errors="replace")
+            try:
+                message = message.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise ProtocolError(f"uplink must be UTF-8: {error}") from error
         try:
             uplink = parse_uplink(message, UPLINK)
         except UplinkError as error:
-            self._reject(str(error))
+            self._reject(str(error), error.request_id)
             return
         handler = BY_TOPIC[uplink.topic]
+        request = Request(connection, uplink.topic, uplink.data, uplink.request_id)
         unmet = self._unmet(handler.needs)
         if unmet is not None:
             # Refused with a reason rather than accepted and ignored: a
             # control that silently does nothing is worse than one that
             # says why it cannot.
-            self._reject(f"{handler.topic.value}: {unmet}")
+            self._reject(f"{handler.topic.value}: {unmet}", request.request_id)
             return
-        handler.call(self, uplink.data)
+        if handler.query:
+            self._schedule_query(handler, request)
+            return
+        try:
+            handler.call(self, request)
+        except Exception as error:
+            self._reject(f"{handler.topic.value}: {error}", request.request_id)
+
+    def _schedule_query(self, handler: Handler, request: Request) -> None:
+        key = (request.connection, request.topic)
+        slot = self._queries.get(key)
+        if slot is None:
+            self._queries[key] = QuerySlot(request)
+            self.spawn(self._run_query(handler, request))
+            return
+        if slot.replacement is not None:
+            self._reject(
+                f"{request.topic.value}: superseded by a newer request",
+                slot.replacement.request_id,
+            )
+        slot.replacement = request
+
+    async def _run_query(self, handler: Handler, request: Request) -> None:
+        try:
+            await handler.call(self, request)
+        except QueryCancelled as error:
+            self._cancel(request, str(error))
+        except QueryRejected as error:
+            self._reject_query(request, str(error))
+        except Exception as error:
+            self._reject_query(request, f"internal failure: {error}")
+        finally:
+            self._finish_query(handler, request)
+
+    def _finish_query(self, handler: Handler, request: Request) -> None:
+        key = (request.connection, request.topic)
+        slot = self._queries.get(key)
+        if slot is None or slot.active is not request:
+            return
+        replacement = slot.replacement
+        del self._queries[key]
+        if replacement is not None and self._request_live(replacement):
+            self._queries[key] = QuerySlot(replacement)
+            self.spawn(self._run_query(handler, replacement))
+
+    def _disconnect_queries(self, connection) -> None:
+        for key in [key for key in self._queries if key[0] is connection]:
+            del self._queries[key]
+
+    def _request_live(self, request: Request) -> bool:
+        return not self._closing and (
+            request.connection is None or request.connection in self._connections
+        )
+
+    def _reject_query(self, request: Request, reason: str) -> None:
+        if self._request_live(request):
+            self._reject(f"{request.topic.value}: {reason}", request.request_id)
+
+    def _cancel(self, request: Request, reason: str) -> None:
+        if self._request_live(request):
+            self.store.publish(
+                Topic.LIFE,
+                Kind.EVENT,
+                {"phase": "query-cancelled", "reason": reason},
+                replay=False,
+                reply_to=request.request_id,
+            )
 
     def _unmet(self, needs: Needs) -> str | None:
         """Why this handler cannot act on this session, or None.
@@ -422,21 +523,24 @@ class Bridge:
             refused = False
         return needs.value.format(phase=self.session.phase.value) if refused else None
 
-    def _send_uart(self, data: dict) -> None:
-        reason = self.session.send_bytes(decode_bytes(str(data.get("bytes", ""))))
+    def _send_uart(self, request: Request) -> None:
+        reason = self.session.send_bytes(decode_bytes(str(request.data.get("bytes", ""))))
         if reason is not None:
-            self._reject(f"uart: {reason}")
+            self._reject(f"uart: {reason}", request.request_id)
 
-    def _select_target(self, data: dict) -> None:
+    def _select_target(self, request: Request) -> None:
         """Point the session at a demo, and arm before it can run away."""
+        data = request.data
         demo = data.get("demo")
         if not demo:
-            self._reject("target: missing demo")
+            self._reject("target: missing demo", request.request_id)
             return
         if self.session.phase in (Phase.BUILDING, Phase.VERIFYING):
             # Selects queue on the session lock; accepting one per click
             # would replay every impatient click as a build+teardown.
-            self._reject(f"target: session is {self.session.phase.value}")
+            self._reject(
+                f"target: session is {self.session.phase.value}", request.request_id
+            )
             return
         variant = data.get("variant")
         # Hand the outgoing machine back before it is torn down; a run
@@ -444,7 +548,9 @@ class Bridge:
         self._release()
         stops = [str(name) for name in data.get("stops", [])]
         if stops:
-            self.spawn(self._arm_at_launch(self.session.run_id, stops))
+            self.spawn(
+                self._arm_at_launch(self.session.run_id, stops, request.request_id)
+            )
         self.spawn(
             self.session.select(
                 Target(
@@ -455,7 +561,7 @@ class Bridge:
             )
         )
 
-    def _reject(self, reason: str) -> None:
+    def _reject(self, reason: str, reply_to: str | None = None) -> None:
         # Window only: a flood of bad uplinks must not evict the replay
         # history every future connection depends on.
         self.store.publish(
@@ -463,6 +569,7 @@ class Bridge:
             Kind.EVENT,
             {"phase": "uplink-rejected", "reason": reason},
             replay=False,
+            reply_to=reply_to,
         )
 
     def _hold(self) -> halt.HaltInspector:
@@ -597,7 +704,9 @@ class Bridge:
             )
             await self._sweep_to_panels(inspector)
 
-    async def _arm_at_launch(self, previous_run: int, stops: list[str]) -> None:
+    async def _arm_at_launch(
+        self, previous_run: int, stops: list[str], reply_to: str | None = None
+    ) -> None:
         """Take the stop before the guest can reach the event.
 
         Short demos are over in well under a second — the DMA demo has
@@ -619,7 +728,7 @@ class Bridge:
                 continue
             break
         else:
-            self._reject("halt: the machine never came up to be armed")
+            self._reject("halt: the machine never came up to be armed", reply_to)
             return
         if self._halting:
             return  # a reader got there first; theirs wins
@@ -633,20 +742,23 @@ class Bridge:
             )
             await self._advance(inspector, {"stops": stops})
         except Exception as error:
-            self._reject(f"halt: {error}")
+            self._reject(f"halt: {error}", reply_to)
         finally:
             self._halting = False
             self._abort = False
 
-    def _take_halt(self, data: dict) -> None:
+    def _take_halt(self, request: Request) -> None:
         """Accept one halt command, or say why it is not one."""
+        data = request.data
         command = str(data.get("cmd", ""))
         if command not in HALT_COMMANDS:
-            self._reject(f"halt: unknown cmd {command!r}")
+            self._reject(f"halt: unknown cmd {command!r}", request.request_id)
             return
-        self.spawn(self._halt_command(command, data))
+        self.spawn(self._halt_command(command, data, request.request_id))
 
-    async def _halt_command(self, command: str, data: dict) -> None:
+    async def _halt_command(
+        self, command: str, data: dict, reply_to: str | None = None
+    ) -> None:
         """Pause is a held gdb connection; the machine stays stopped
         (virtual clock frozen) until it is advanced or resumed."""
         if command == "abort":
@@ -656,7 +768,7 @@ class Bridge:
             self._abort = True
             return
         if self._halting:
-            self._reject("halt: inspection in progress")
+            self._reject("halt: inspection in progress", reply_to)
             return
         self._halting = True
         self._abort = False
@@ -667,7 +779,7 @@ class Bridge:
             # This coroutine is the request boundary: any protocol fault
             # (bad JSON, corrupt RSP hex, a missing XML attribute) must
             # become a reply, not an unretrieved task exception.
-            self._reject(f"halt: {error}")
+            self._reject(f"halt: {error}", reply_to)
         finally:
             self._halting = False
             self._abort = False
@@ -812,7 +924,7 @@ class Bridge:
         self.session.regrade_paths(tracing=True)
         return True
 
-    def _answer_probe(self, data: dict) -> None:
+    async def _answer_probe(self, request: Request) -> None:
         """Walk this run's page tables and hand back the map.
 
         Which bytes are walked is the regime's own answer. What EL2
@@ -826,16 +938,14 @@ class Bridge:
         """
         captured = self.store.topology.get("memory")
         if not captured:
-            self._reject("probe: this run has published no page tables")
-            return
-        self.spawn(
-            self._answer_off_loop(
-                Topic.PROBE, Src.SNAP, regimes.answer, captured, data, self._provider
-            )
+            raise QueryRejected("this run has published no page tables")
+        answer = await self._answer_off_loop(
+            regimes.answer, captured, request.data, self._provider
         )
+        self._publish_reply(request, Topic.PROBE, answer, Src.SNAP)
 
-    async def _answer_off_loop(self, topic: Topic, src: Src, build, *inputs) -> None:
-        """Build one answer on a worker and publish it if its run is still here.
+    async def _answer_off_loop(self, build, *inputs):
+        """Build one answer on a worker while its run remains current.
 
         The heavy answers a client asks for are tens of milliseconds at
         best and over a second at worst, against a poll every fifty.
@@ -854,13 +964,26 @@ class Bridge:
         try:
             answer = await loop.run_in_executor(None, build, *inputs)
         except (KeyError, ValueError, elfsym.TornRead) as error:
-            # A restart closes the mapping under the worker, and the tail
-            # end of that is not a refusal worth showing anyone.
-            if self.session.run_id == run:
-                self._reject(f"{topic.value}: {error}")
+            if self.session.run_id != run:
+                raise QueryCancelled("the run changed while the answer was built") from error
+            raise QueryRejected(str(error)) from error
+        if self.session.run_id != run:
+            raise QueryCancelled("the run changed while the answer was built")
+        return answer
+
+    def _publish_reply(
+        self, request: Request, topic: Topic | str, data: dict, src: Src | str
+    ) -> None:
+        if not self._request_live(request):
             return
-        if self.session.run_id == run:
-            self.store.publish(topic, Kind.SNAPSHOT, answer, src=src, replay=False)
+        self.store.publish(
+            topic,
+            Kind.SNAPSHOT,
+            data,
+            src=src,
+            replay=False,
+            reply_to=request.request_id,
+        )
 
     @staticmethod
     def _word(value) -> int:
@@ -874,7 +997,7 @@ class Bridge:
             raise ValueError(f"a command argument must be a whole number, not {value!r}")
         return value
 
-    def _issue_command(self, data: dict) -> None:
+    def _issue_command(self, request: Request) -> None:
         """Put one command in this run's ring.
 
         Nothing is published on success: EL2 answers with a trace
@@ -883,23 +1006,26 @@ class Bridge:
         will say it — the command never reached EL2, so no record can
         describe it.
         """
+        data = request.data
         name = str(data.get("op", ""))
         if name not in commands.OPS:
-            self._reject(f"cmd: unknown op {name!r}")
+            self._reject(f"cmd: unknown op {name!r}", request.request_id)
             return
         try:
             a, b = self._word(data.get("a", 0)), self._word(data.get("b", 0))
         except ValueError as error:
-            self._reject(f"cmd: {error}")
+            self._reject(f"cmd: {error}", request.request_id)
             return
         writer = self._ensure_writer()
         if writer is None:
-            self._reject("cmd: this run has published no command ring")
+            self._reject(
+                "cmd: this run has published no command ring", request.request_id
+            )
             return
         try:
             writer.issue(commands.OPS[name], a, b)
         except (commands.Full, ValueError, OSError) as error:
-            self._reject(f"cmd: {error}")
+            self._reject(f"cmd: {error}", request.request_id)
 
     def _ensure_writer(self) -> commands.Writer | None:
         """This run's write window, opened once the page exists.
@@ -942,7 +1068,7 @@ class Bridge:
         self.session.adopt_command_ring(writer.as_dict())
         return writer
 
-    def _answer_cursor(self, data: dict) -> None:
+    async def _answer_cursor(self, request: Request) -> None:
         """Put the whole view at one point in the run.
 
         One timestamp moves the strip, the panels and the console
@@ -954,10 +1080,9 @@ class Bridge:
         would show a value nothing can be checked against.
         """
         try:
-            ts = int(data.get("ts"))
+            ts = int(request.data.get("ts"))
         except (TypeError, ValueError):
-            self._reject("cursor: ts must be an integer")
-            return
+            raise QueryRejected("ts must be an integer") from None
         wire = self._replay.wire_ts(ts)
         state = self._replay.at(wire)
         # Ordinary snapshot frames, in the shape the panels already
@@ -971,6 +1096,7 @@ class Bridge:
                 src=frame.get("src", Src.BRIDGE.value),
                 replay=False,
                 ts=frame.get("ts"),
+                reply_to=request.request_id,
             )
         # Both clocks: the client cuts its console by the wire's and
         # draws its strip by the machine's. Topics with no reading yet at
@@ -985,9 +1111,10 @@ class Bridge:
                 "unread": [topic for topic in self._replay.topics if topic not in state],
             },
             replay=False,
+            reply_to=request.request_id,
         )
 
-    def _answer_window(self, data: dict) -> None:
+    async def _answer_window(self, request: Request) -> None:
         """Answer a request for part of the history, at its resolution.
 
         The request carries how many columns the caller can draw, and
@@ -998,44 +1125,38 @@ class Bridge:
         marks vanish — more points than pixels is a density by
         definition.
         """
+        data = request.data
         if str(data.get("op", "")) != "window":
-            self._reject(f"trace: unknown op {data.get('op')!r}")
-            return
+            raise QueryRejected(f"unknown op {data.get('op')!r}")
         span = self._history.span()
         try:
             first = int(data.get("from", span.first))
             last = int(data.get("to", span.last))
             buckets = int(data.get("buckets", DEFAULT_BUCKETS))
         except (TypeError, ValueError):
-            self._reject("trace: window bounds must be integers")
-            return
+            raise QueryRejected("window bounds must be integers") from None
         if not 1 <= buckets <= MAX_BUCKETS:
             # Refused rather than clamped: the response array is as long
             # as this number, and a caller that asked for a million
             # columns has misunderstood something worth telling it about.
-            self._reject(f"trace: buckets must be 1..{MAX_BUCKETS}")
-            return
+            raise QueryRejected(f"buckets must be 1..{MAX_BUCKETS}")
         if last < first:
-            self._reject("trace: window ends before it starts")
-            return
+            raise QueryRejected("window ends before it starts")
         wanted = {str(name) for name in data.get("events", [])}
         # Copied here and decoded elsewhere. The copy has to happen where
         # the drain cannot interleave with it; the decode is a hundred
         # times the cost and is the part that would hold the loop.
-        self.spawn(
-            self._answer_off_loop(
-                Topic.TRACE,
-                Src.TRACE,
-                _window_payload,
-                self._history.slice(first, last),
-                span.as_dict(),
-                self._history.freq_hz,
-                first,
-                last,
-                buckets,
-                wanted,
-            )
+        answer = await self._answer_off_loop(
+            _window_payload,
+            self._history.slice(first, last),
+            span.as_dict(),
+            self._history.freq_hz,
+            first,
+            last,
+            buckets,
+            wanted,
         )
+        self._publish_reply(request, Topic.TRACE, answer, Src.TRACE)
 
     def _pump_trace(self) -> bool:
         """Drain the firmware's rings and publish what fired.
@@ -1368,9 +1489,9 @@ def _window_payload(
 # tells a request from what the bridge sends unasked.
 HANDLERS = (
     Handler(Topic.UART, Bridge._send_uart),
-    Handler(Topic.TRACE, Bridge._answer_window),
-    Handler(Topic.PROBE, Bridge._answer_probe),
-    Handler(Topic.CURSOR, Bridge._answer_cursor, Needs.REPLAY),
+    Handler(Topic.TRACE, Bridge._answer_window, query=True),
+    Handler(Topic.PROBE, Bridge._answer_probe, query=True),
+    Handler(Topic.CURSOR, Bridge._answer_cursor, Needs.REPLAY, query=True),
     Handler(Topic.CMD, Bridge._issue_command, Needs.MACHINE),
     Handler(Topic.TARGET, Bridge._select_target, Needs.MACHINE),
     Handler(Topic.HALT, Bridge._take_halt, Needs.RUNNING),

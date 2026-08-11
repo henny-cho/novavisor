@@ -840,9 +840,13 @@ class ConnectionHandlerTest(unittest.IsolatedAsyncioTestCase):
             self.sent: list[str] = []
             self._messages = list(messages)
             self._error = error
+            self.closed = None
 
         async def send(self, payload: str) -> None:
             self.sent.append(payload)
+
+        async def close(self, code: int, reason: str) -> None:
+            self.closed = (code, reason)
 
         async def __aiter__(self):
             for message in self._messages:
@@ -866,22 +870,34 @@ class ConnectionHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(connection.sent), 1)  # the replay still went out
         self.assertNotIn(connection, bridge._connections)
 
-    async def test_a_failing_message_costs_a_reply_not_the_socket(self):
+    async def test_a_message_without_an_identity_closes_only_its_socket(self):
         bridge = self.bridge()
-        # A non-text frame reaches json.loads as a non-buffer: a TypeError
-        # no uplink parser claims.
-        connection = self.FakeConnection(messages=[5, '{"topic":"uart","data":{"bytes":"x"}}'])
+        connection = self.FakeConnection(messages=[5])
 
         await bridge._handler(connection)
 
-        phases = [
+        self.assertEqual(connection.closed[0], 1008)
+        self.assertEqual(
+            [frame for frame in bridge.store.drain() if frame["topic"] == "life"], []
+        )
+
+    async def test_an_identified_bad_request_costs_a_reply_not_the_socket(self):
+        bridge = self.bridge()
+        connection = self.FakeConnection(messages=[
+            '{"topic":"nonesuch","data":{},"request_id":"fake:1"}',
+            '{"topic":"uart","data":{"bytes":"x"},"request_id":"fake:2"}',
+        ])
+
+        await bridge._handler(connection)
+
+        reasons = [
             frame["data"].get("reason", "")
             for frame in bridge.store.drain()
             if frame["data"].get("phase") == "uplink-rejected"
         ]
-        self.assertTrue(any("uplink failed" in reason for reason in phases), phases)
-        # Iteration continued: the second message was still delivered.
-        self.assertTrue(any("session is idle" in reason for reason in phases), phases)
+        self.assertTrue(any("unknown uplink" in reason for reason in reasons), reasons)
+        self.assertTrue(any("session is idle" in reason for reason in reasons), reasons)
+        self.assertIsNone(connection.closed)
 
     async def test_abort_is_not_refused_by_the_advance_it_cancels(self):
         """An abort is only ever sent *while* an advance is running, so
@@ -921,7 +937,9 @@ class ConnectionHandlerTest(unittest.IsolatedAsyncioTestCase):
         bridge = self.bridge()
         before = len(bridge._tasks)
 
-        bridge._handle_uplink('{"topic":"target","data":{"demo":"01_hello"}}')
+        bridge._handle_uplink(
+            '{"topic":"target","data":{"demo":"01_hello"},"request_id":"target:1"}'
+        )
 
         # One task for the select; none for arming.
         self.assertEqual(len(bridge._tasks), before + 1)
@@ -1003,7 +1021,9 @@ class ServerSmokeTest(unittest.IsolatedAsyncioTestCase):
 
                     # The connect topo was published, so a later flush
                     # re-broadcasts it; answers are found, not indexed.
-                    await connection.send('{"topic":"nonesuch","data":{}}')
+                    await connection.send(
+                        '{"topic":"nonesuch","data":{},"request_id":"smoke:1"}'
+                    )
                     await self.until(
                         connection,
                         {
@@ -1012,7 +1032,9 @@ class ServerSmokeTest(unittest.IsolatedAsyncioTestCase):
                         },
                     )
 
-                    await connection.send('{"topic":"halt","data":{"cmd":"stop"}}')
+                    await connection.send(
+                        '{"topic":"halt","data":{"cmd":"stop"},"request_id":"smoke:2"}'
+                    )
                     await self.until(
                         connection,
                         {"phase": "uplink-rejected", "reason": "halt: session is idle"},

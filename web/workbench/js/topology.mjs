@@ -2,7 +2,6 @@
    snapshot: the catalog fills the picker, the guest list fills the rail.
    This module is the only sender of target uplinks. */
 
-import { send } from "./net.mjs";
 import { clear, el, vmSlot } from "./format.mjs";
 
 const TARGET_KEY = "nv-wb-target";
@@ -24,7 +23,15 @@ function remember(demo) {
   }
 }
 
-export function createTopology({ select, runButton, rerunButton, pane, onStart, onNotice }) {
+export function createTopology({
+  select,
+  runButton,
+  rerunButton,
+  pane,
+  send,
+  onStart,
+  onNotice,
+}) {
   let catalogKey = null;
   let lastTarget = stored();
 

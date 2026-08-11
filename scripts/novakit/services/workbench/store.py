@@ -71,6 +71,7 @@ class StateStore:
         src: Src | str = Src.BRIDGE,
         replay: bool = True,
         ts: int | None = None,
+        reply_to: str | None = None,
     ) -> dict:
         """Mint an envelope and broadcast it to every client.
 
@@ -80,7 +81,7 @@ class StateStore:
         `ts` names the moment when it is not now: a recorded frame
         happened when the recording says it did.
         """
-        frame = self.stamp(topic, kind, data, src=src, ts=ts)
+        frame = self.stamp(topic, kind, data, src=src, ts=ts, reply_to=reply_to)
         # Ahead of the window, which sheds console frames on overrun: an
         # observer of everything must not be given a client's view.
         if self._on_frame is not None:
@@ -98,6 +99,7 @@ class StateStore:
         *,
         src: Src | str = Src.BRIDGE,
         ts: int | None = None,
+        reply_to: str | None = None,
     ) -> dict:
         """Mint an envelope and hand it straight back, announcing nothing.
 
@@ -106,7 +108,9 @@ class StateStore:
         shed thousands of frames, re-sent what it kept on the next flush,
         and reported the shedding as the bridge having fallen behind.
         """
-        return self._envelopes.make(topic, kind, data, src=src, ts=ts)
+        return self._envelopes.make(
+            topic, kind, data, src=src, ts=ts, reply_to=reply_to
+        )
 
     @property
     def topology(self) -> dict:

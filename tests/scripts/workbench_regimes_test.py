@@ -615,7 +615,9 @@ class BridgeProbeTest(Walkable, unittest.IsolatedAsyncioTestCase):
 
     @staticmethod
     def _ask(bridge, **data) -> None:
-        bridge._handle_uplink(json.dumps({"topic": "probe", "data": data}))
+        bridge._handle_uplink(
+            json.dumps({"topic": "probe", "data": data, "request_id": "probe:1"})
+        )
 
     async def answered(self, bridge, **data) -> dict:
         self._ask(bridge, **data)

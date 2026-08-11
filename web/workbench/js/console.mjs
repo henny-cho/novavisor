@@ -2,7 +2,6 @@
    feeds the firmware's UART. Lines arrive already split by the bridge
    (vm === null means a hypervisor line), so this module only renders. */
 
-import { send } from "./net.mjs";
 import { MAX_VM_SLOT, atBottom, clear, el, toBottom, trim, vmSlot } from "./format.mjs";
 
 const LINE_CAP = 5000; /* per tab; oldest lines drop out */
@@ -12,7 +11,7 @@ const VM_SLOTS = 4; /* accent classes v0..v3 cycle */
    a stray control byte could reach QEMU's own escape handling. */
 const FOCUS_CYCLE = "\u0014";
 
-export function createConsole({ tabs, logs, banner, form, input, focusButton, onNotice }) {
+export function createConsole({ tabs, logs, banner, form, input, focusButton, send, onNotice }) {
   const views = new Map();
   let active = MERGED;
   let signature = null;
