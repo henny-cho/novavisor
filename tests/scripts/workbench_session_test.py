@@ -307,8 +307,10 @@ class SessionTest(Draining):
 
         await session.stop()
 
-        phases = [frame["data"].get("phase") for frame in state.drain()]
+        frames = state.drain()
+        phases = [frame["data"].get("phase") for frame in frames]
         self.assertEqual(phases, ["stop-failed", "idle"])
+        self.assertEqual(frames[0]["data"]["target"], "10_console_mux")
 
     async def test_select_replaces_the_previous_child(self):
         first, second = FakeLive(), FakeLive()

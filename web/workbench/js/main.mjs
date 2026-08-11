@@ -51,12 +51,23 @@ const PHASES = {
   replay: { text: "리플레이", tone: "idle" },
 };
 
+const WIRE_FAULTS = {
+  envelope: "잘못된 프레임",
+  protocol: "프로토콜 불일치",
+  handler: "화면 처리 실패",
+  payload: "메시지 해석 실패",
+  batch: "잘못된 메시지 묶음",
+  socket: "연결 전송 실패",
+};
+const CRITICAL_WIRE_FAULTS = new Set(["protocol", "handler"]);
+
 let latestTs = 0;
 let clockText = "";
 let lostFrames = 0;
 let currentRun = null;
 let paused = false;
 let autoRunning = false;
+let wireFault = null;
 /* Snapshots may arrive out of order during connect replay; the highest
    sequence is the current world. */
 let topoSeq = 0;
@@ -543,6 +554,13 @@ function traceStateText(data) {
   }
 }
 
+function lifeDetail(data) {
+  if (data.error) return String(data.error);
+  if (data.reason) return String(data.reason);
+  if (Array.isArray(data.guests) && data.guests.length) return data.guests.map(String).join(", ");
+  return "";
+}
+
 function onLife(ts, data) {
   const phase = String(data.phase || "");
   const demo = data.demo ? ` — ${data.demo}` : "";
@@ -691,9 +709,34 @@ function onLife(ts, data) {
         severity: data.state === "mismatch" ? "WARN" : undefined,
       });
       break;
+    case "task-failed":
+      events.addNotice(ts, `백그라운드 작업 실패: ${data.error || "원인 미상"}`, {
+        severity: "CRIT",
+      });
+      break;
+    case "snapshot-unavailable":
+      events.addNotice(ts, `정지 스냅샷 실패: ${data.error || "원인 미상"}`, {
+        severity: "CRIT",
+      });
+      break;
+    case "stop-failed":
+      events.addNotice(ts, `프로세스 종료 실패: ${data.target || "현재 머신"}`, {
+        severity: "WARN",
+      });
+      break;
+    case "guests-differ":
+      events.addNotice(
+        ts,
+        `게스트 구성 불일치: ${Array.isArray(data.guests) ? data.guests.join(", ") : "대상 미상"}`,
+        { severity: "WARN" },
+      );
+      break;
     case "uplink-rejected":
       armRun(true); /* a rejected select ends its attempt */
-      events.addNotice(ts, `업링크 거부: ${data.reason || "?"}`, { dim: true });
+      events.addNotice(ts, `업링크 거부: ${data.reason || "?"}`, { severity: "WARN" });
+      break;
+    case "query-cancelled":
+      events.addNotice(ts, `질문 취소: ${data.reason || "?"}`, { severity: "WARN" });
       break;
     case "frames-dropped":
       /* The seq holes the eviction left already count these frames;
@@ -701,7 +744,12 @@ function onLife(ts, data) {
       events.addNotice(ts, `브리지 프레임 유실 ${data.count ?? "?"}건`, { dim: true });
       break;
     default:
-      events.addNotice(ts, `상태: ${phase || "?"}`, { dim: true });
+      {
+        const detail = lifeDetail(data);
+        events.addNotice(ts, `상태: ${phase || "?"}${detail ? ` — ${detail}` : ""}`, {
+          severity: detail ? "CRIT" : "WARN",
+        });
+      }
   }
 }
 
@@ -799,8 +847,27 @@ function onFrame(frame) {
 
 function onStatus(state) {
   const live = state === "connected";
+  if (live) wireFault = null;
+  if (!live && wireFault) return;
   connBadge.dataset.tone = live ? "live" : "busy";
   connText.textContent = live ? "연결됨" : "재연결 중";
+}
+
+function onFault(fault) {
+  wireFault = fault;
+  connBadge.dataset.tone = CRITICAL_WIRE_FAULTS.has(fault.kind) ? "crit" : "busy";
+  connText.textContent = fault.count > 1 ? `수신 오류 ×${fault.count}` : "수신 오류";
+  if (fault.count !== 1) return;
+  const label = WIRE_FAULTS[fault.kind] || fault.kind;
+  events.addNotice(latestTs, `수신 오류 — ${label}: ${fault.detail}`, {
+    severity: CRITICAL_WIRE_FAULTS.has(fault.kind) ? "CRIT" : "WARN",
+  });
+}
+
+function onHealthy() {
+  if (!wireFault) return;
+  wireFault = null;
+  onStatus("connected");
 }
 
 /* The bridge restarted: nothing on screen describes the new session. */
@@ -866,4 +933,13 @@ themeButton.addEventListener("click", () => {
 });
 
 applyTheme(storedTheme() || "dark");
-wire = connect({ onFrame, onStatus, onReset, onLoss: noteLoss, onGap, onBatch });
+wire = connect({
+  onFrame,
+  onStatus,
+  onFault,
+  onHealthy,
+  onReset,
+  onLoss: noteLoss,
+  onGap,
+  onBatch,
+});

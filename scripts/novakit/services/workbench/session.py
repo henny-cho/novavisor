@@ -500,7 +500,12 @@ class Session:
         if not dead:
             # A child that survived SIGKILL keeps its RAM backend pinned
             # in tmpfs; say so instead of pretending the slate is clean.
-            self._store.publish(Topic.LIFE, Kind.EVENT, {"phase": "stop-failed"})
+            target = self._store.topology.get("demo") or "current machine"
+            self._store.publish(
+                Topic.LIFE,
+                Kind.EVENT,
+                {"phase": "stop-failed", "target": target},
+            )
         self.paused = False
         self._set_phase(Phase.IDLE)
 

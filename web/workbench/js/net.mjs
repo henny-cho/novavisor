@@ -114,7 +114,32 @@ export function createReceiver(callbacks = {}, options = {}) {
   let seen = new Set();
   let sessionToken = null;
   let firstOfConnection = true;
+  let faultKind = null;
+  let faultCount = 0;
+  let batchFaulted = false;
   const ownsReply = options.ownsReply || (() => true);
+
+  function fault(kind, detail) {
+    batchFaulted = true;
+    faultCount = kind === faultKind ? faultCount + 1 : 1;
+    faultKind = kind;
+    try {
+      callbacks.onFault?.({ kind, detail: String(detail), count: faultCount });
+    } catch (error) {
+      debug("fault handler failed", error);
+    }
+  }
+
+  function healthy() {
+    if (faultKind === null) return;
+    faultKind = null;
+    faultCount = 0;
+    try {
+      callbacks.onHealthy?.();
+    } catch (error) {
+      debug("healthy handler failed", error);
+    }
+  }
 
   function reset() {
     lastSeq = 0;
@@ -135,7 +160,10 @@ export function createReceiver(callbacks = {}, options = {}) {
   }
 
   function dispatch(frame) {
-    if (!frame || typeof frame.seq !== "number") return;
+    if (!frame || !Number.isSafeInteger(frame.seq) || frame.seq < 1) {
+      fault("envelope", "missing or invalid frame sequence");
+      return;
+    }
     const seq = frame.seq;
     const compatible = frame.v === undefined || frame.v === PROTOCOL_VERSION;
     const token = compatible && frame.topic === "topo" && frame.data
@@ -161,37 +189,54 @@ export function createReceiver(callbacks = {}, options = {}) {
     } else if (seq > lastSeq + 1) {
       callbacks.onLoss?.(seq - lastSeq - 1);
     }
-    if (!accept(seq) || !compatible) return;
+    if (!accept(seq)) return;
+    if (!compatible) {
+      fault("protocol", `received version ${frame.v}; expected ${PROTOCOL_VERSION}`);
+      return;
+    }
     if (frame.reply_to !== undefined && !ownsReply(frame.reply_to)) return;
     try {
       callbacks.onFrame?.(frame);
     } catch (error) {
       debug("frame handler failed", frame.topic, error);
+      fault("handler", `${frame.topic || "?"}: ${error}`);
     } finally {
       options.onTerminal?.(frame);
     }
   }
 
   function ingest(payload) {
+    batchFaulted = false;
     let frames;
     try {
       frames = JSON.parse(payload);
     } catch (error) {
       debug("undecodable message", error);
+      fault("payload", error);
       return;
     }
     if (!Array.isArray(frames)) {
       debug("non-batch message ignored");
+      fault("batch", "message is not an array");
       return;
     }
     for (const frame of frames) dispatch(frame);
-    callbacks.onBatch?.();
+    try {
+      callbacks.onBatch?.();
+    } catch (error) {
+      debug("batch handler failed", error);
+      fault("handler", `batch: ${error}`);
+    }
+    if (!batchFaulted) healthy();
   }
 
   return {
+    fault,
     ingest,
     opened() {
       firstOfConnection = true;
+      faultKind = null;
+      faultCount = 0;
     },
     reset,
   };
@@ -206,7 +251,12 @@ export function connect(callbacks = {}, options = {}) {
   function transmit(topic, data) {
     if (!socket || socket.readyState !== WebSocket.OPEN) return null;
     const requestId = ids.make();
-    socket.send(JSON.stringify({ topic, data, request_id: requestId }));
+    try {
+      socket.send(JSON.stringify({ topic, data, request_id: requestId }));
+    } catch (error) {
+      receiver.fault("socket", error);
+      return null;
+    }
     return requestId;
   }
 
@@ -244,7 +294,10 @@ export function connect(callbacks = {}, options = {}) {
       callbacks.onStatus?.("reconnecting");
       scheduleRetry();
     });
-    ws.addEventListener("error", () => debug("socket error"));
+    ws.addEventListener("error", (event) => {
+      debug("socket error", event);
+      receiver.fault("socket", event?.message || "WebSocket transport error");
+    });
   }
 
   open();

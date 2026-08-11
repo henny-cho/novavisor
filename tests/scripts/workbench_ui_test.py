@@ -50,6 +50,49 @@ class ProtocolVersionTest(unittest.TestCase):
         self.assertEqual(int(client.group(1)), protocol.PROTOCOL_VERSION)
 
 
+class FailureVisibilityTest(unittest.TestCase):
+    def setUp(self):
+        self.main = (UI / "js" / "main.mjs").read_text()
+        found = re.search(r"function onLife\(.*?\n}\n\nfunction onFrame", self.main, re.S)
+        self.assertIsNotNone(found, "life handler not found")
+        self.life = found.group(0)
+
+    def life_case(self, phase: str) -> str:
+        found = re.search(
+            rf'case "{re.escape(phase)}":(.*?)(?=\n    case |\n    default:)',
+            self.life,
+            re.S,
+        )
+        self.assertIsNotNone(found, f"life phase is not visible: {phase}")
+        return found.group(1)
+
+    def test_critical_failures_keep_their_error(self):
+        for phase in ("task-failed", "snapshot-unavailable"):
+            with self.subTest(phase=phase):
+                block = self.life_case(phase)
+                self.assertIn("data.error", block)
+                self.assertIn('severity: "CRIT"', block)
+
+    def test_warnings_name_their_target(self):
+        expected = {"stop-failed": "data.target", "guests-differ": "data.guests"}
+        for phase, field in expected.items():
+            with self.subTest(phase=phase):
+                block = self.life_case(phase)
+                self.assertIn(field, block)
+                self.assertIn('severity: "WARN"', block)
+
+    def test_unknown_lifecycle_details_are_not_dimmed_away(self):
+        fallback = re.search(r"\n    default:(.*?)\n  }\n}", self.life, re.S)
+        self.assertIsNotNone(fallback, "life fallback not found")
+        self.assertIn("lifeDetail(data)", fallback.group(1))
+        self.assertNotIn("dim: true", fallback.group(1))
+
+    def test_every_view_tab_is_live(self):
+        tabs = re.findall(r'<button class="vtab".*?</button>', (UI / "index.html").read_text(), re.S)
+        self.assertTrue(tabs)
+        self.assertTrue(all("disabled" not in tab for tab in tabs))
+
+
 class UiStructureTest(unittest.TestCase):
     def test_every_referenced_asset_exists(self):
         index = UI / "index.html"

@@ -103,3 +103,116 @@ describe("workbench request ownership", () => {
     assert.deepEqual(second.sent[0].data, { from: 9 });
   });
 });
+
+describe("workbench receiver faults", () => {
+  it("reports malformed and non-batch messages with bounded consecutive counts", () => {
+    const faults = [];
+    const healthy = [];
+    const receiver = createReceiver({
+      onFault: (value) => faults.push(value),
+      onHealthy: () => healthy.push(true),
+    });
+    receiver.opened();
+
+    receiver.ingest("{");
+    receiver.ingest("{");
+    receiver.ingest("{}");
+    receiver.ingest(JSON.stringify([frame(1, "topo", undefined)]));
+    receiver.ingest("{");
+
+    assert.deepEqual(faults.map(({ kind, count }) => [kind, count]), [
+      ["payload", 1],
+      ["payload", 2],
+      ["batch", 1],
+      ["payload", 1],
+    ]);
+    assert.equal(healthy.length, 1);
+  });
+
+  it("reports invalid envelopes and version mismatches without inventing loss", () => {
+    const faults = [];
+    const losses = [];
+    const delivered = [];
+    const receiver = createReceiver({
+      onFault: (value) => faults.push(value),
+      onLoss: (count) => losses.push(count),
+      onFrame: (value) => delivered.push(value),
+    });
+    receiver.opened();
+
+    receiver.ingest(JSON.stringify([
+      { v: 3, topic: "trace", data: {} },
+      { ...frame(1, "trace", undefined), v: 2 },
+      frame(2, "trace", undefined),
+    ]));
+
+    assert.deepEqual(faults.map(({ kind, count }) => [kind, count]), [
+      ["envelope", 1],
+      ["protocol", 1],
+    ]);
+    assert.deepEqual(losses, []);
+    assert.deepEqual(delivered.map((value) => value.seq), [2]);
+  });
+
+  it("continues with later frames after one frame handler fails", () => {
+    const attempted = [];
+    const faults = [];
+    const receiver = createReceiver({
+      onFault: (value) => faults.push(value),
+      onFrame: (value) => {
+        attempted.push(value.topic);
+        if (value.topic === "broken") throw new Error("renderer exploded");
+      },
+    });
+    receiver.opened();
+
+    receiver.ingest(JSON.stringify([
+      frame(1, "broken", undefined),
+      frame(2, "healthy", undefined),
+    ]));
+
+    assert.deepEqual(attempted, ["broken", "healthy"]);
+    assert.equal(faults.length, 1);
+    assert.equal(faults[0].kind, "handler");
+    assert.match(faults[0].detail, /renderer exploded/);
+  });
+
+  it("distinguishes reconnect gaps, stream loss, and sequence restart", () => {
+    const gaps = [];
+    const losses = [];
+    const resets = [];
+    const receiver = createReceiver({
+      onGap: () => gaps.push(true),
+      onLoss: (count) => losses.push(count),
+      onReset: () => resets.push(true),
+    });
+    receiver.opened();
+    receiver.ingest(JSON.stringify([frame(1, "trace", undefined)]));
+    receiver.ingest(JSON.stringify([frame(3, "trace", undefined)]));
+
+    receiver.opened();
+    receiver.ingest(JSON.stringify([frame(6, "trace", undefined)]));
+    receiver.opened();
+    receiver.ingest(JSON.stringify([frame(1, "trace", undefined)]));
+
+    assert.deepEqual(losses, [1]);
+    assert.equal(gaps.length, 1);
+    assert.equal(resets.length, 1);
+  });
+
+  it("surfaces WebSocket transport errors", (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    FakeSocket.instances = [];
+    globalThis.WebSocket = FakeSocket;
+    const faults = [];
+    connect({ onFault: (value) => faults.push(value) }, { requestPrefix: "fault" });
+    const socket = FakeSocket.instances[0];
+    socket.fire("open");
+
+    socket.fire("error", { message: "link failed" });
+
+    assert.equal(faults.length, 1);
+    assert.equal(faults[0].kind, "socket");
+    assert.equal(faults[0].detail, "link failed");
+  });
+});
