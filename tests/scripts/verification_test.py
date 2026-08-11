@@ -1046,6 +1046,29 @@ class StepAnchorTest(unittest.TestCase):
         self.assertEqual(attach(), expect.CARRIED)
 
 
+class ObservationStepTest(unittest.TestCase):
+    def test_a_publication_in_progress_is_retried(self):
+        from novakit.image import elfsym
+        from novakit.services.workbench import steps
+
+        class Machine:
+            def __init__(self):
+                self.reads = 0
+
+            def reading(self, _topic):
+                self.reads += 1
+                if self.reads == 1:
+                    raise elfsym.TornRead("publisher is inside the window")
+                return {"state": "translate"}
+
+        poll = steps.observe_handler(Machine())(
+            {"observe": "smmu.stream", "equals": {"state": "translate"}}
+        )
+
+        self.assertEqual(poll(), expect.PENDING)
+        self.assertEqual(poll(), expect.CARRIED)
+
+
 class TerminalCommandTest(unittest.TestCase):
     """The hand-driven twin of a `command` step. It shares the step's
     issuing and verdict reading, so what is tested here is the loop and

@@ -716,35 +716,6 @@ def summarise(records: list[Record]) -> dict:
     return summary if answered is None else summary | {"command": answered}
 
 
-def _charted(pairs, first: int, last: int, buckets: int, wanted: set[str]):
-    """How many records a filter admits, and which column each fell in.
-
-    Takes instants and kinds rather than records, because those two
-    fields are all a density needs: building half a million records to
-    produce a few hundred counts is where a window's cost was.
-
-    A record whose code this build does not know is counted and not
-    charted. It happened — that is what the count says — but there is no
-    name to put a lane under.
-    """
-    span = max(1, last - first + 1)
-    out: dict[str, list[int]] = {}
-    total = 0
-    for ts, code in pairs:
-        entry = events.BY_CODE.get(code)
-        if wanted and (entry is None or entry.id not in wanted):
-            continue
-        total += 1
-        if entry is None:
-            continue
-        column = min(buckets - 1, (ts - first) * buckets // span)
-        lane = out.get(entry.id)
-        if lane is None:
-            lane = out[entry.id] = [0] * buckets
-        lane[max(0, column)] += 1
-    return total, out
-
-
 def histogram(records: list[Record], first: int, last: int, buckets: int) -> dict[str, list[int]]:
     """How many of each event fell in each column of a window.
 
@@ -756,55 +727,68 @@ def histogram(records: list[Record], first: int, last: int, buckets: int) -> dic
     edge, and a lane per path would sum them into one column that no
     longer says which fired; the UI has the catalogue and can group.
     """
-    return _charted(((r.ts, r.code) for r in records), first, last, buckets, set())[1]
+    span = max(1, last - first + 1)
+    out: dict[str, list[int]] = {}
+    for record in records:
+        entry = events.BY_CODE.get(record.code)
+        if entry is None:
+            continue
+        column = min(buckets - 1, (record.ts - first) * buckets // span)
+        lane = out.get(entry.id)
+        if lane is None:
+            lane = out[entry.id] = [0] * buckets
+        lane[max(0, column)] += 1
+    return out
 
 
-def density(packed: bytes, first: int, last: int, buckets: int, wanted: set[str]):
-    """A window's count and density, straight from the packed records.
+def window(
+    packed: bytes,
+    first: int,
+    last: int,
+    buckets: int,
+    wanted: set[str],
+) -> tuple[int, dict[str, list[int]], dict[str, list[int]] | None]:
+    """Count, chart, and conditionally retain one packed window.
 
-    The answer to a wide window is a few hundred numbers, and it is
-    reached without a record ever existing.
+    The density needs every record, while marks are useful only when
+    they fit the caller's columns. Keep primitive mark fields until the
+    count crosses that limit, then discard them and finish the same
+    scan for the density.
     """
-    return _charted(
-        ((ts, code) for ts, code, *_ in _RECORD.iter_unpack(packed)),
-        first,
-        last,
-        buckets,
-        wanted,
-    )
-
-
-def matching(packed: bytes, wanted: set[str]) -> list[Record]:
-    """The records of a packed run that a filter admits.
-
-    The other half of a window's answer, wanted only once the records
-    are few enough to be drawn as marks.
-    """
-    found = []
+    span = max(1, last - first + 1)
+    hist: dict[str, list[int]] = {}
+    cols: dict[str, list[int]] | None = {
+        "ts": [],
+        "code": [],
+        "cpu": [],
+        "a": [],
+        "b": [],
+        "c": [],
+    }
+    count = 0
     for ts, code, cpu, _flags, a, b, c in _RECORD.iter_unpack(packed):
         entry = events.BY_CODE.get(code)
         if wanted and (entry is None or entry.id not in wanted):
             continue
-        found.append(Record(ts, code, cpu, a, b, c))
-    return found
-
-
-def columns(records: list[Record], first: int) -> dict[str, list[int]]:
-    """Records as parallel arrays, timestamps relative to the window.
-
-    Repeating six field names per record costs ~110 bytes against ~40
-    for the columns, and the browser's decode is an indexed loop either
-    way. Relative timestamps keep the numbers well inside the range a
-    JSON number carries exactly, which a raw 64-bit counter is not.
-    """
-    return {
-        "ts": [record.ts - first for record in records],
-        "code": [record.code for record in records],
-        "cpu": [record.cpu for record in records],
-        "a": [record.a for record in records],
-        "b": [record.b for record in records],
-        "c": [record.c for record in records],
-    }
+        count += 1
+        if entry is not None:
+            column = min(buckets - 1, (ts - first) * buckets // span)
+            lane = hist.get(entry.id)
+            if lane is None:
+                lane = hist[entry.id] = [0] * buckets
+            lane[max(0, column)] += 1
+        if cols is None:
+            continue
+        if count > buckets:
+            cols = None
+            continue
+        cols["ts"].append(ts - first)
+        cols["code"].append(code)
+        cols["cpu"].append(cpu)
+        cols["a"].append(a)
+        cols["b"].append(b)
+        cols["c"].append(c)
+    return count, hist, cols
 
 
 def decode(record: Record) -> dict:

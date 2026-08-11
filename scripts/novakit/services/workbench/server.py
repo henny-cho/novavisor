@@ -1460,21 +1460,21 @@ def _window_payload(
     as marks. No separate cap to pick, and no cliff at which marks
     vanish — more points than pixels is a density by definition.
 
-    Counted and charted in one pass over the bytes, and the records are
-    built only in the branch that sends them: the wide window, which is
-    the one that costs, is answered without a record ever existing.
+    Counted, charted, and conditionally retained in one pass over the
+    bytes. Primitive column candidates never exceed `buckets`; a wide
+    window drops them as soon as it crosses that boundary.
     """
-    count, hist = trace.density(packed, first, last, buckets, wanted)
+    count, hist, cols = trace.window(packed, first, last, buckets, wanted)
     payload = {
         # `freq_hz` is the history's, not the reader's that filled it:
         # a replay has no reader.
         "window": {"from": first, "to": last, "n": count, "freq_hz": freq_hz},
         "span": span,
     }
-    if count <= buckets:
-        payload["cols"] = trace.columns(trace.matching(packed, wanted), first)
-    else:
+    if cols is None:
         payload["hist"] = hist
+    else:
+        payload["cols"] = cols
     return payload
 
 

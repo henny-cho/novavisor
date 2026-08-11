@@ -30,6 +30,13 @@ def records(stamps, code: int = TRAP) -> list[trace.Record]:
     return [trace.Record(ts=ts, code=code, cpu=0, a=ts, b=ts, c=ts) for ts in stamps]
 
 
+def packed(records_: list[trace.Record]) -> bytes:
+    out = bytearray(len(records_) * trace.REC_SIZE)
+    for index, record in enumerate(records_):
+        trace.pack_into(out, index * trace.REC_SIZE, record)
+    return bytes(out)
+
+
 class HistogramTest(unittest.TestCase):
     def test_every_record_lands_in_a_column(self):
         """A wide window is answered by summarising all of it. Returning
@@ -65,11 +72,13 @@ class ColumnTest(unittest.TestCase):
     def test_timestamps_are_relative_to_the_window(self):
         """Small numbers, and well inside what a JSON number carries
         exactly — which a raw 64-bit counter is not guaranteed to be."""
-        cols = trace.columns(records([1000, 1005]), 1000)
+        _, _, cols = trace.window(packed(records([1000, 1005])), 1000, 1005, 2, set())
+        self.assertIsNotNone(cols)
         self.assertEqual(cols["ts"], [0, 5])
 
     def test_columns_are_parallel_and_complete(self):
-        cols = trace.columns(records([1, 2, 3]), 0)
+        _, _, cols = trace.window(packed(records([1, 2, 3])), 0, 3, 3, set())
+        self.assertIsNotNone(cols)
         self.assertEqual({len(values) for values in cols.values()}, {3})
         self.assertEqual(set(cols), {"ts", "code", "cpu", "a", "b", "c"})
 
@@ -79,6 +88,58 @@ class ColumnTest(unittest.TestCase):
         for entry in events.catalogue():
             with self.subTest(event=entry["id"]):
                 self.assertEqual(entry["code"], events.BY_ID[entry["id"]].code)
+
+
+class PackedWindowTest(unittest.TestCase):
+    COUNT = 524_288
+
+    @classmethod
+    def setUpClass(cls):
+        def one(code: int) -> bytes:
+            return packed([trace.Record(ts=5, code=code, cpu=1, a=2, b=3, c=4)])
+
+        cls.large = one(TRAP) * (cls.COUNT - 32) + one(BIND) * 32
+
+    def scan(self, wanted: set[str]):
+        original = trace._RECORD
+
+        class Counted:
+            calls = 0
+
+            def iter_unpack(self, buffer):
+                self.calls += 1
+                return original.iter_unpack(buffer)
+
+        counted = Counted()
+        with mock.patch.object(trace, "_RECORD", counted):
+            answer = trace.window(self.large, 0, 9, 128, wanted)
+        self.assertEqual(counted.calls, 1)
+        return answer
+
+    def test_wide_and_narrow_answers_each_scan_the_large_window_once(self):
+        count, hist, cols = self.scan(set())
+        self.assertEqual(count, self.COUNT)
+        self.assertIsNone(cols)
+        self.assertEqual(sum(map(sum, hist.values())), self.COUNT)
+
+        count, _hist, cols = self.scan({"vgic.bind"})
+        self.assertEqual(count, 32)
+        self.assertIsNotNone(cols)
+        self.assertEqual(len(cols["ts"]), 32)
+
+    def test_narrow_columns_keep_duplicates_gaps_and_unknown_codes(self):
+        source = [
+            trace.Record(ts=5, code=TRAP, cpu=0, a=1, b=2, c=3),
+            trace.Record(ts=5, code=999, cpu=1, a=4, b=5, c=6),
+            trace.Record(ts=6, code=trace.GAP_CODE, cpu=0, a=7, b=8, c=9),
+        ]
+
+        count, hist, cols = trace.window(packed(source), 0, 9, 3, set())
+
+        self.assertEqual(count, 3)
+        self.assertEqual(cols["ts"], [5, 5, 6])
+        self.assertEqual(cols["code"], [TRAP, 999, trace.GAP_CODE])
+        self.assertEqual(sum(map(sum, hist.values())), 2)
 
 
 class ClientOwnershipTest(unittest.TestCase):

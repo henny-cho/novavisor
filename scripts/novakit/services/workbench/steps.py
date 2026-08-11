@@ -221,8 +221,8 @@ def observe_handler(machine: Machine) -> expect.StepHandler:
                 # A topic this build does not publish is a manifest that
                 # cannot be satisfied by any run, not a slow boot.
                 return expect.step_failed(str(error))
-            except (FileNotFoundError, observe.Stale):
-                return expect.PENDING  # ordinary during boot
+            except (FileNotFoundError, observe.Stale, elfsym.TornRead):
+                return expect.PENDING  # live surfaces may not have settled yet
             entry = _select(value, where)
             if entry is None:
                 return expect.step_pending(
