@@ -44,6 +44,7 @@ Demo = Annotated[
         metavar="[DEMO]",
         help="Demo ID or directory name to launch on startup.",
         callback=_demo,
+        autocompletion=manifest.demo_names,
     ),
 ]
 Host = Annotated[str, typer.Option(help="Bind address for the UI and WebSocket.")]

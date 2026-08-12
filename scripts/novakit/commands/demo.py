@@ -28,7 +28,12 @@ def _demo(value: str | None) -> str | None:
 
 Demo = Annotated[
     str,
-    typer.Argument(metavar="DEMO", help="Demo ID or directory name.", callback=_demo),
+    typer.Argument(
+        metavar="DEMO",
+        help="Demo ID or directory name.",
+        callback=_demo,
+        autocompletion=manifest.demo_names,
+    ),
 ]
 OptionalDemo = Annotated[
     str | None,
@@ -36,6 +41,7 @@ OptionalDemo = Annotated[
         metavar="[DEMO]",
         help="Demo ID or directory name.",
         callback=_demo,
+        autocompletion=manifest.demo_names,
     ),
 ]
 AllDemos = Annotated[

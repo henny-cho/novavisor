@@ -54,6 +54,40 @@ Common workspace operations are top-level commands. Scoped operations use
 `nova <domain> <operation>`; for example, `nova inspect size` and
 `nova firmware verify qemu-tfa`.
 
+### Shell completion
+
+Nova provides tab completion for commands, options, and typed values through
+Typer. Run the installer once through its repository path; it registers
+`scripts` on `PATH`, installs completion, and reports every file it created,
+updated, or left unchanged:
+
+```bash
+./scripts/nova completion install
+exec "$SHELL"
+```
+
+Shell detection is automatic. To select one explicitly, pass `--shell zsh`,
+`--shell bash`, `--shell fish`, `--shell powershell`, or `--shell pwsh`.
+The generated startup block checks the current `PATH` before prepending the
+repository, and repeated installs replace the same block instead of appending
+duplicates.
+
+To remove both the completion script and the managed `PATH` registration:
+
+```bash
+nova completion uninstall
+exec "$SHELL"
+```
+
+Completion then follows the full command hierarchy:
+
+```text
+nova d<TAB>             # completes "demo"
+nova demo v<TAB>        # completes "verify"
+nova demo run <TAB>     # lists demo directory names
+nova build --p<TAB>     # completes "--preset"
+```
+
 ### Build
 
 ```bash

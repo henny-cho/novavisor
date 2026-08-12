@@ -36,14 +36,20 @@ def load_manifest(name: str) -> tuple[Path, dict]:
     return manifest_path, data
 
 
+def demo_names() -> list[str]:
+    return [
+        path.name
+        for path in sorted(config.DEMO_DIR.iterdir())
+        if path.is_dir() and (path / "manifest.yml").is_file()
+    ]
+
+
 def iter_demos() -> list[tuple[str, dict]]:
     yaml = _require_yaml()
     out = []
-    for p in sorted(config.DEMO_DIR.iterdir()):
-        mf = p / "manifest.yml"
-        if p.is_dir() and mf.exists():
-            with open(mf) as f:
-                out.append((p.name, yaml.safe_load(f)))
+    for name in demo_names():
+        with open(config.DEMO_DIR / name / "manifest.yml") as manifest_file:
+            out.append((name, yaml.safe_load(manifest_file)))
     return out
 
 
@@ -55,7 +61,7 @@ def demo_id(name: str) -> str:
 
 def resolve_demo(token: str) -> str:
     """Map a numeric ID ("2", "02") or a full directory name to the demo name."""
-    names = [n for n, _ in iter_demos()]
+    names = demo_names()
     if token in names:
         return token
     if token.isdigit():

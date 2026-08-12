@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,7 +15,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
 from novakit.core import config, proc  # noqa: E402
-from novakit.services import ci, cmake, report  # noqa: E402
+from novakit.services import ci, cmake, manifest, report  # noqa: E402
 
 
 class BuildTests(unittest.TestCase):
@@ -71,7 +72,221 @@ class ProcessTests(unittest.TestCase):
         )
 
 
+class ManifestTests(unittest.TestCase):
+    def test_demo_names_follow_the_manifest_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            demo_dir = Path(directory)
+            first = demo_dir / "01_first"
+            second = demo_dir / "12_second"
+            ignored = demo_dir / "99_without_manifest"
+            first.mkdir()
+            second.mkdir()
+            ignored.mkdir()
+            (first / "manifest.yml").write_text("enabled: true\n")
+            (second / "manifest.yml").write_text("enabled: true\n")
+
+            with mock.patch.object(config, "DEMO_DIR", demo_dir):
+                self.assertEqual(
+                    manifest.demo_names(),
+                    ["01_first", "12_second"],
+                )
+
+
 class CliTests(unittest.TestCase):
+    def test_root_serves_shell_completion_without_an_unmanaged_installer(self):
+        environment = os.environ.copy()
+        environment["_NOVA_COMPLETE"] = "complete_zsh"
+        environment["_TYPER_COMPLETE_ARGS"] = "nova "
+        result = subprocess.run(
+            [str(REPO / "scripts" / "nova")],
+            cwd=REPO,
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("completion", result.stdout)
+
+        help_result = subprocess.run(
+            [str(REPO / "scripts" / "nova"), "--help"],
+            cwd=REPO,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotIn("--install-completion", help_result.stdout)
+
+    def test_demo_arguments_complete_from_the_manifest_catalog(self):
+        for command in ("demo run ", "demo verify ", "workbench serve "):
+            with self.subTest(command=command):
+                environment = os.environ.copy()
+                environment["_NOVA_COMPLETE"] = "complete_zsh"
+                environment["_TYPER_COMPLETE_ARGS"] = f"nova {command}"
+                result = subprocess.run(
+                    [str(REPO / "scripts" / "nova")],
+                    cwd=REPO,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotEqual(result.stdout.strip(), "_files")
+                self.assertIn('"01_hello"', result.stdout)
+                self.assertIn('"18_panic_smoke"', result.stdout)
+                self.assertNotIn('\n"1"\n', result.stdout)
+
+    def test_completion_install_supports_any_directory_and_uninstall(self):
+        with tempfile.TemporaryDirectory() as home:
+            away = Path(home) / "away"
+            away.mkdir()
+            environment = os.environ.copy()
+            environment["HOME"] = home
+            scripts = str(REPO / "scripts")
+            environment["PATH"] = os.pathsep.join(
+                entry
+                for entry in environment["PATH"].split(os.pathsep)
+                if entry != scripts
+            )
+            completion = Path(home) / ".zfunc" / "_nova"
+            startup = Path(home) / ".zshrc"
+            startup.write_text(
+                "export USER_SETTING=kept\n"
+                "fpath+=~/.zfunc; autoload -Uz compinit; compinit\n"
+                f"source {completion}\n"
+            )
+            result = subprocess.run(
+                [
+                    str(REPO / "scripts" / "nova"),
+                    "completion",
+                    "install",
+                    "--shell",
+                    "zsh",
+                ],
+                cwd=away,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                f"[completion] created: {completion}: zsh completion script",
+                result.stdout,
+            )
+            self.assertIn(
+                f"[completion] updated: {startup}: "
+                "PATH registration and completion startup",
+                result.stdout,
+            )
+            self.assertIn("#compdef nova", completion.read_text())
+            zshrc = startup.read_text()
+            self.assertIn("# >>> NovaVisor shell integration >>>", zshrc)
+            self.assertIn("export USER_SETTING=kept", zshrc)
+            self.assertIn(scripts, zshrc)
+            self.assertIn(f"source {completion}", zshrc)
+            self.assertNotIn("fpath+=~/.zfunc", zshrc)
+
+            repeated = subprocess.run(
+                [
+                    str(REPO / "scripts" / "nova"),
+                    "completion",
+                    "install",
+                    "--shell",
+                    "zsh",
+                ],
+                cwd=away,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            self.assertEqual(repeated.returncode, 0, repeated.stderr)
+            self.assertIn(f"[completion] unchanged: {completion}", repeated.stdout)
+            self.assertIn(f"[completion] unchanged: {startup}", repeated.stdout)
+            zshrc = startup.read_text()
+            self.assertEqual(zshrc.count("# >>> NovaVisor shell integration >>>"), 1)
+            self.assertEqual(zshrc.count(f"source {completion}"), 1)
+            self.assertEqual(zshrc.count(scripts), 1)
+
+            zsh = shutil.which("zsh")
+            if zsh is not None:
+                shell = subprocess.run(
+                    [
+                        zsh,
+                        "-fc",
+                        (
+                            "autoload -Uz compinit; compinit -D; "
+                            "_openstack() { :; }; compdef _openstack nova; "
+                            'source "$HOME/.zshrc"; source "$HOME/.zshrc"; '
+                            'print -r -- "NOVA_BIN=$(command -v nova)"; '
+                            'print -r -- "NOVA_COMP=${_comps[nova]}"; '
+                            'print -r -- "NOVA_PATH=${PATH}"; '
+                            "nova --help >/dev/null; "
+                            "for command in build run clean format lint test ci "
+                            "inspect completion demo firmware workbench; do "
+                            'nova "$command" --help >/dev/null || exit; '
+                            "done; nova demo list >/dev/null"
+                        ),
+                    ],
+                    cwd=away,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                )
+                self.assertEqual(shell.returncode, 0, shell.stderr)
+                self.assertIn(f"NOVA_BIN={REPO / 'scripts' / 'nova'}", shell.stdout)
+                self.assertIn("NOVA_COMP=_nova_completion", shell.stdout)
+                path_line = next(
+                    line for line in shell.stdout.splitlines()
+                    if line.startswith("NOVA_PATH=")
+                )
+                self.assertEqual(path_line.split("=")[1].split(":").count(scripts), 1)
+
+            removed = subprocess.run(
+                [
+                    str(REPO / "scripts" / "nova"),
+                    "completion",
+                    "uninstall",
+                    "--shell",
+                    "zsh",
+                ],
+                cwd=away,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            self.assertEqual(removed.returncode, 0, removed.stderr)
+            self.assertIn(f"[completion] removed: {completion}", removed.stdout)
+            self.assertIn(f"[completion] updated: {startup}", removed.stdout)
+            self.assertFalse(completion.exists())
+            self.assertIn("export USER_SETTING=kept", startup.read_text())
+            self.assertNotIn("NovaVisor shell integration", startup.read_text())
+
+            repeated_remove = subprocess.run(
+                [
+                    str(REPO / "scripts" / "nova"),
+                    "completion",
+                    "uninstall",
+                    "--shell",
+                    "zsh",
+                ],
+                cwd=away,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            self.assertEqual(repeated_remove.returncode, 0, repeated_remove.stderr)
+            self.assertIn(f"[completion] absent: {completion}", repeated_remove.stdout)
+            self.assertIn(f"[completion] unchanged: {startup}", repeated_remove.stdout)
+
     def test_unknown_build_option_fails_before_build(self):
         result = subprocess.run(
             [str(REPO / "scripts" / "nova"), "build", "--unknown"],
