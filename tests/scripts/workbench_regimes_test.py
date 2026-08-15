@@ -609,7 +609,7 @@ class BridgeProbeTest(Walkable, unittest.IsolatedAsyncioTestCase):
         bridge = Bridge(ui_root=Path("/nonexistent"))
         if topology is not None:
             bridge.session.adopt_memory_map(topology)
-        bridge._provider = live
+        bridge._poller_service.provider = live
         bridge.store.drain()
         return bridge
 

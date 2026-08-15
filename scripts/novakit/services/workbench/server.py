@@ -22,7 +22,6 @@ from . import (
     halt,
     hardware,
     history,
-    observations,
     recording,
     regimes,
     snapshot,
@@ -193,141 +192,7 @@ class Bridge:
         self._replay: recording.Recording | None = None
         self._replay_frames: list[dict] = []
 
-    @property
-    def _poller(self) -> snapshot.SnapshotPoller | None:
-        return self._poller_service.poller
 
-    @_poller.setter
-    def _poller(self, value: snapshot.SnapshotPoller | None) -> None:
-        self._poller_service.poller = value
-
-    @property
-    def _provider(self) -> snapshot.SnapshotProvider | None:
-        return self._poller_service.provider
-
-    @_provider.setter
-    def _provider(self, value: snapshot.SnapshotProvider | None) -> None:
-        self._poller_service.provider = value
-
-    @property
-    def _provider_run(self) -> int | None:
-        return self._poller_service.provider_run
-
-    @_provider_run.setter
-    def _provider_run(self, value: int | None) -> None:
-        self._poller_service.provider_run = value
-
-    @property
-    def _provider_failed(self) -> int | None:
-        return self._poller_service.provider_failed
-
-    @_provider_failed.setter
-    def _provider_failed(self, value: int | None) -> None:
-        self._poller_service.provider_failed = value
-
-    @property
-    def _capture(self) -> regimes.Capture | None:
-        return self._poller_service.capture
-
-    @_capture.setter
-    def _capture(self, value: regimes.Capture | None) -> None:
-        self._poller_service.capture = value
-
-    @property
-    def _writer(self) -> commands.Writer | None:
-        return self._poller_service.writer
-
-    @_writer.setter
-    def _writer(self, value: commands.Writer | None) -> None:
-        self._poller_service.writer = value
-
-    @property
-    def _writer_run(self) -> int | None:
-        return self._poller_service.writer_run
-
-    @_writer_run.setter
-    def _writer_run(self, value: int | None) -> None:
-        self._poller_service.writer_run = value
-
-    @property
-    def _tracer(self) -> trace.TraceReader | None:
-        return self._trace_service.tracer
-
-    @_tracer.setter
-    def _tracer(self, value: trace.TraceReader | None) -> None:
-        self._trace_service.tracer = value
-
-    @property
-    def _tracer_run(self) -> int | None:
-        return self._trace_service.tracer_run
-
-    @_tracer_run.setter
-    def _tracer_run(self, value: int | None) -> None:
-        self._trace_service.tracer_run = value
-
-    @property
-    def _budget(self) -> trace.Budget | None:
-        return self._trace_service.budget
-
-    @_budget.setter
-    def _budget(self, value: trace.Budget | None) -> None:
-        self._trace_service.budget = value
-
-    @property
-    def _drain_limit(self) -> int:
-        return self._trace_service.drain_limit
-
-    @_drain_limit.setter
-    def _drain_limit(self, value: int) -> None:
-        self._trace_service.drain_limit = value
-
-    @property
-    def _trace_state(self) -> str:
-        return self._trace_service.trace_state
-
-    @_trace_state.setter
-    def _trace_state(self, value: str) -> None:
-        self._trace_service.trace_state = value
-
-    @property
-    def _inspector(self) -> halt.HaltInspector | None:
-        return self._halt_service.inspector
-
-    @_inspector.setter
-    def _inspector(self, value: halt.HaltInspector | None) -> None:
-        self._halt_service.inspector = value
-
-    @property
-    def _inspector_run(self) -> int:
-        return self._halt_service.inspector_run
-
-    @_inspector_run.setter
-    def _inspector_run(self, value: int) -> None:
-        self._halt_service.inspector_run = value
-
-    @property
-    def _halting(self) -> bool:
-        return self._halt_service.halting
-
-    @_halting.setter
-    def _halting(self, value: bool) -> None:
-        self._halt_service.halting = value
-
-    @property
-    def _abort(self) -> bool:
-        return self._halt_service.abort
-
-    @_abort.setter
-    def _abort(self, value: bool) -> None:
-        self._halt_service.abort = value
-
-    @property
-    def _stopped_at(self) -> dict[str, object]:
-        return self._halt_service.stopped_at
-
-    @_stopped_at.setter
-    def _stopped_at(self, value: dict[str, object]) -> None:
-        self._halt_service.stopped_at = value
 
     def load_replay(self, rec: recording.Recording) -> None:
         """Show a recorded run instead of a live machine.
@@ -677,7 +542,7 @@ class Bridge:
         index exists the answer is unknown, which is not the same as no,
         so the probing carries on either way.
         """
-        symbols = snapshot.image_symbols(self._provider)
+        symbols = snapshot.image_symbols(self._poller_service.provider)
         return symbols is None or symbols.has(trace.WRITER_SYMBOL)
 
     def _attach_tracer(self) -> bool:
@@ -705,7 +570,7 @@ class Bridge:
         if not captured:
             raise QueryRejected("this run has published no page tables")
         answer = await self._answer_off_loop(
-            regimes.answer, captured, request.data, self._provider
+            regimes.answer, captured, request.data, self._poller_service.provider
         )
         self._publish_reply(request, Topic.PROBE, answer, Src.SNAP)
 
@@ -781,7 +646,7 @@ class Bridge:
         except ValueError as error:
             self._reject(f"cmd: {error}", request.request_id)
             return
-        writer = self._ensure_writer()
+        writer = self._poller_service.ensure_writer()
         if writer is None:
             self._reject(
                 "cmd: this run has published no command ring", request.request_id
@@ -791,47 +656,6 @@ class Bridge:
             writer.issue(commands.OPS[name], a, b)
         except (commands.Full, ValueError, OSError) as error:
             self._reject(f"cmd: {error}", request.request_id)
-
-    def _ensure_writer(self) -> commands.Writer | None:
-        """This run's write window, opened once the page exists.
-
-        Attempted every poll until it lands, like the page tables: EL2
-        places the ring in its last init action, so a window opened with
-        the provider would find nothing there. What is placed is
-        published, so a reader knows whether this run can be driven
-        rather than finding out by trying.
-        """
-        if self._writer_run == self.session.run_id:
-            return self._writer
-        symbols = snapshot.image_symbols(self._provider)
-        if symbols is None or self.session.surfaces is None:
-            # No image behind this provider, so no page to find — and no
-            # machine this bridge could be driving either.
-            return None
-        try:
-            page, size = symbols.extent_of(observations.COMMAND_PAGE)
-            writer = commands.Writer(
-                self.session.surfaces.shm_path,
-                self._board_numbers()["NOVA_BOARD_PHYS_RAM_BASE"],
-                page,
-                size,
-            )
-        except commands.NotYetFormatted:
-            return None  # a moment in a boot; ask again
-        except (commands.NotFormatted, KeyError, ValueError) as error:
-            # Settled for this run: an image without the ring, or one
-            # whose layout this bridge does not understand. Marked as
-            # answered so the reason is given once rather than every
-            # fiftieth of a second.
-            self._writer_run = self.session.run_id
-            self._reject(f"cmd: {error}")
-            return None
-        except OSError:
-            return None  # the backend is not readable yet
-        self._writer = writer
-        self._writer_run = self.session.run_id
-        self.session.adopt_command_ring(writer.as_dict())
-        return writer
 
     async def _answer_cursor(self, request: Request) -> None:
         """Put the whole view at one point in the run.

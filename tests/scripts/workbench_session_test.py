@@ -787,7 +787,7 @@ class TraceAttachTest(unittest.TestCase):
             )
             self.assertTrue(bridge._attach_tracer())
             self.assertEqual(self.states(bridge), ["active"])
-            self.assertEqual(bridge._tracer.geometry.early, 4)
+            self.assertEqual(bridge._trace_service.tracer.geometry.early, 4)
             bridge._drop_tracer()
 
     def test_an_image_without_the_writer_says_so_and_keeps_looking(self):
@@ -808,7 +808,7 @@ class TraceAttachTest(unittest.TestCase):
             self.assertFalse(bridge._attach_tracer())
             self.assertEqual(self.states(bridge), ["waiting"])
 
-            bridge._provider = NoWriter()
+            bridge._poller_service.provider = NoWriter()
             self.assertFalse(bridge._attach_tracer())
             self.assertEqual(self.states(bridge), ["none"])
 
@@ -906,11 +906,11 @@ class ConnectionHandlerTest(unittest.IsolatedAsyncioTestCase):
         putting it behind the busy guard rejects it exactly when it is
         needed — and the advance then waits forever with no way out."""
         bridge = self.bridge()
-        bridge._halting = True
+        bridge._halt_service.halting = True
 
         await bridge._halt_command("abort", {})
 
-        self.assertTrue(bridge._abort)
+        self.assertTrue(bridge._halt_service.abort)
         rejections = [
             frame["data"]
             for frame in bridge.store.drain()
@@ -950,7 +950,7 @@ class ConnectionHandlerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_every_other_command_still_waits_its_turn(self):
         bridge = self.bridge()
-        bridge._halting = True
+        bridge._halt_service.halting = True
 
         await bridge._halt_command("run", {})
 
