@@ -11,12 +11,11 @@ from __future__ import annotations
 import asyncio  # noqa: TID251 — the event loop lives here
 import signal
 import sys
-import time
 import uuid
 from pathlib import Path
 
 from ...core import config
-from ...image import elfsym, observe
+from ...image import elfsym
 from ..surfaces import Surfaces, make_surfaces
 from . import (
     commands,
@@ -39,6 +38,7 @@ from .dispatcher import (
     QuerySlot,
     Request,
 )
+from .poller import ObservationPoller
 from .protocol import (
     MAX_BUCKETS,
     Clock,
@@ -52,16 +52,19 @@ from .protocol import (
 )
 from .session import Deps, Phase, Session, Target, initial_topology
 from .store import StateStore
+from .trace_drain import TraceDrain
 
 __all__ = [
     "Bridge",
     "Dispatcher",
     "Handler",
     "Needs",
+    "ObservationPoller",
     "QueryCancelled",
     "QueryRejected",
     "QuerySlot",
     "Request",
+    "TraceDrain",
     "replay",
     "serve",
 ]
@@ -161,51 +164,129 @@ class Bridge:
         # command that took it: held while paused, dropped on resume.
         self._inspector: halt.HaltInspector | None = None
         self._inspector_run = 0
-        self._abort = False
-        # The poll loop owns it; the halt path borrows it to read the
-        # whole machine at a stop, where every value is of one instant.
-        self._poller: snapshot.SnapshotPoller | None = None
-        self._provider: snapshot.SnapshotProvider | None = None
-        self._provider_run: int | None = None
-        # The run whose S layer ended in a fault, so it is reported
-        # once: the fault is a property of the run, not of the tick.
-        self._provider_failed: int | None = None
-        # This run's topology, kept at the two rates its halves move at.
-        # Per run because a rebuild moves every address in it.
-        self._capture: regimes.Capture | None = None
-        # The one writable view of the machine: the command ring's page,
-        # and nothing else this process can reach. Per run, like every
-        # other mapping of a RAM file that a restart replaces.
-        self._writer: commands.Writer | None = None
-        self._writer_run: int | None = None
-        # The T layer reads the same file but needs no image, so it is
-        # built and torn down on its own: a failure to resolve symbols
-        # must not take the event stream with it.
-        self._tracer: trace.TraceReader | None = None
-        self._tracer_run: int | None = None
-        # What the ring depth is worth on this host. Built with the
-        # geometry, so it dies with the run whose rings it describes.
-        self._budget: trace.Budget | None = None
-        # How many records one drain may take. Paced against the turn
-        # budget as the run reveals what a record costs here.
-        self._drain_limit = TRACE_DRAIN_FLOOR
-        # What has been said about the T layer this run, so a state is
-        # published on the transition rather than on every tick.
-        self._trace_state = ""
-        self._board: dict[str, int] | None = None
-        # The previous stop's reading, per topic. A stop publishes the
-        # whole machine; this is what lets it also say what moved.
-        self._stopped_at: dict[str, object] = {}
         # The bridge's memory of the run. The firmware's rings hold
         # about a second, so this is where the cause of anything noticed
         # late is still findable.
         self._history = history.History(trace_history)
+        # The S-layer observation poller manages DWARF provider mapping and S-layer polling.
+        self._poller_service = ObservationPoller(
+            self.store, self.session, self._board_numbers
+        )
+        # The T-layer trace drain manages trace ring attachment, draining, and pacing.
+        self._trace_service = TraceDrain(
+            self.store,
+            lambda: self._history,
+            self.session,
+            self._recorder,
+            self._board_numbers,
+            self._image_has_tracing,
+        )
+        self._board: dict[str, int] | None = None
+        # The previous stop's reading, per topic. A stop publishes the
+        # whole machine; this is what lets it also say what moved.
+        self._stopped_at: dict[str, object] = {}
         # Stamped into every connect topology: a changed token is the
         # restart signal, whatever the sequence counter says.
         self._token = uuid.uuid4().hex[:8]
         # A run read back from disk, if this bridge is showing one.
         self._replay: recording.Recording | None = None
         self._replay_frames: list[dict] = []
+
+    @property
+    def _poller(self) -> snapshot.SnapshotPoller | None:
+        return self._poller_service.poller
+
+    @_poller.setter
+    def _poller(self, value: snapshot.SnapshotPoller | None) -> None:
+        self._poller_service.poller = value
+
+    @property
+    def _provider(self) -> snapshot.SnapshotProvider | None:
+        return self._poller_service.provider
+
+    @_provider.setter
+    def _provider(self, value: snapshot.SnapshotProvider | None) -> None:
+        self._poller_service.provider = value
+
+    @property
+    def _provider_run(self) -> int | None:
+        return self._poller_service.provider_run
+
+    @_provider_run.setter
+    def _provider_run(self, value: int | None) -> None:
+        self._poller_service.provider_run = value
+
+    @property
+    def _provider_failed(self) -> int | None:
+        return self._poller_service.provider_failed
+
+    @_provider_failed.setter
+    def _provider_failed(self, value: int | None) -> None:
+        self._poller_service.provider_failed = value
+
+    @property
+    def _capture(self) -> regimes.Capture | None:
+        return self._poller_service.capture
+
+    @_capture.setter
+    def _capture(self, value: regimes.Capture | None) -> None:
+        self._poller_service.capture = value
+
+    @property
+    def _writer(self) -> commands.Writer | None:
+        return self._poller_service.writer
+
+    @_writer.setter
+    def _writer(self, value: commands.Writer | None) -> None:
+        self._poller_service.writer = value
+
+    @property
+    def _writer_run(self) -> int | None:
+        return self._poller_service.writer_run
+
+    @_writer_run.setter
+    def _writer_run(self, value: int | None) -> None:
+        self._poller_service.writer_run = value
+
+    @property
+    def _tracer(self) -> trace.TraceReader | None:
+        return self._trace_service.tracer
+
+    @_tracer.setter
+    def _tracer(self, value: trace.TraceReader | None) -> None:
+        self._trace_service.tracer = value
+
+    @property
+    def _tracer_run(self) -> int | None:
+        return self._trace_service.tracer_run
+
+    @_tracer_run.setter
+    def _tracer_run(self, value: int | None) -> None:
+        self._trace_service.tracer_run = value
+
+    @property
+    def _budget(self) -> trace.Budget | None:
+        return self._trace_service.budget
+
+    @_budget.setter
+    def _budget(self, value: trace.Budget | None) -> None:
+        self._trace_service.budget = value
+
+    @property
+    def _drain_limit(self) -> int:
+        return self._trace_service.drain_limit
+
+    @_drain_limit.setter
+    def _drain_limit(self, value: int) -> None:
+        self._trace_service.drain_limit = value
+
+    @property
+    def _trace_state(self) -> str:
+        return self._trace_service.trace_state
+
+    @_trace_state.setter
+    def _trace_state(self, value: str) -> None:
+        self._trace_service.trace_state = value
 
     def load_replay(self, rec: recording.Recording) -> None:
         """Show a recorded run instead of a live machine.
@@ -726,18 +807,9 @@ class Bridge:
         await self._advance(inspector, data)
 
     def _drop_tracer(self) -> None:
-        tracer, self._tracer = self._tracer, None
-        self._tracer_run = None
-        self._trace_state = ""
-        # Measured against a geometry that is going away.
-        self._budget = None
-        # A new machine's timestamps are a new epoch, and merging them
-        # with the last run's would put the two in one order. The same
-        # goes for a stop-to-stop delta across a restart.
         self._history = history.History(self._history.capacity)
         self._stopped_at = {}
-        if tracer is not None:
-            tracer.close()
+        self._trace_service.drop()
 
     def _board_numbers(self) -> dict[str, int]:
         """Board constants, read once. The headers do not change while
@@ -748,10 +820,7 @@ class Bridge:
 
     def _set_trace_state(self, state: str, **detail) -> None:
         """Say where the T layer stands, once per transition."""
-        if self._trace_state == state:
-            return
-        self._trace_state = state
-        self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "trace", "state": state, **detail})
+        self._trace_service.set_trace_state(state, **detail)
 
     def _image_has_tracing(self) -> bool:
         """Does this build carry the ring writer?
@@ -770,76 +839,13 @@ class Bridge:
         return symbols is None or symbols.has(trace.WRITER_SYMBOL)
 
     def _attach_tracer(self) -> bool:
-        """Bind the T reader to this run's region, if it is there yet.
+        return self._trace_service.attach()
 
-        Two questions, kept apart. Whether the image has a trace layer
-        is settled by the image; whether the region has been formatted
-        yet is settled by the region, at the cost of a stat and a header
-        read. Neither is answered by a retry budget, so nothing here
-        latches: the probe is cheap enough to run for the life of a run,
-        and an appearing region corrects whatever was said before it.
-        """
-        session = self.session
-        if session.surfaces is None:
-            return False
-        if self._tracer_run != session.run_id:
-            self._drop_tracer()
-            self._tracer_run = session.run_id
-        if self._tracer is not None:
-            return True
-        shm_path = session.surfaces.shm_path
-        if not shm_path.exists() or shm_path.stat().st_size == 0:
-            return False
-        board = self._board_numbers()
-        try:
-            self._tracer = trace.TraceReader(
-                shm_path,
-                board["NOVA_BOARD_PHYS_RAM_BASE"],
-                board["NOVA_BOARD_TRACE_PA"],
-                board["NOVA_BOARD_TRACE_SIZE"],
-            )
-        except trace.NotYetFormatted as error:
-            self._set_trace_state(
-                "waiting" if self._image_has_tracing() else "none", reason=str(error)
-            )
-            return False
-        except trace.NotFormatted as error:
-            # A region that is there and disagrees about its layout. No
-            # amount of asking again resolves a version skew.
-            self._set_trace_state("mismatch", reason=str(error))
-            return False
-        # The clock the history's timestamps are in. Known only once a
-        # region has been read, and needed by everything that turns a
-        # range of them back into a duration.
-        self._history.freq_hz = self._tracer.geometry.freq_hz
-        self._budget = trace.Budget(
-            self._tracer.geometry.capacity, self._tracer.geometry.freq_hz
-        )
-        # A new machine may decode at a different cost, and the pace
-        # this run reached says nothing about the next one.
-        self._drain_limit = TRACE_DRAIN_FLOOR
-        if self._recorder is not None:
-            # A range of counter values is not a duration without this,
-            # and a replay needs it before it can answer the first
-            # window — so it goes in the meta, not in a frame.
-            # The run identity is the recorder's own business — it opens
-            # a new recording when the machine restarts — so only the
-            # clock is told here.
-            self._recorder.note(freq_hz=self._tracer.geometry.freq_hz)
-        # Constant for the run, so it rides the transition rather than
-        # every summary frame. The geometry travels with it: a stall
-        # reported without the depth it ran against cannot be read as a
-        # close call or a comfortable one.
-        self._set_trace_state(
-            "active",
-            early=self._tracer.geometry.early,
-            rings=self._tracer.geometry.rings,
-            capacity=self._tracer.geometry.capacity,
-            region_bytes=board["NOVA_BOARD_TRACE_SIZE"],
-        )
-        # A layer arriving is a change in what the board may claim.
-        self.session.regrade_paths(tracing=True)
-        return True
+    def _drop_tracer(self) -> None:
+        self._trace_service.drop()
+
+    def _set_trace_state(self, state: str, **detail) -> None:
+        self._trace_service.set_trace_state(state, **detail)
 
     async def _answer_probe(self, request: Request) -> None:
         """Walk this run's page tables and hand back the map.
@@ -1090,235 +1096,32 @@ class Bridge:
         everything else, and the summary's loss count is read back off
         them rather than tallied beside them.
         """
-        if not self._attach_tracer():
-            return False
-        # The cheap gate sits here rather than in the loop, so every
-        # tick with a reader attached counts as a look: a ring's exposure
-        # is the time between opportunities to empty it, and a tick that
-        # found it empty is still one.
-        #
-        # The look is stamped on arrival. Exposure is the stretch a ring
-        # went unwatched, which ends when the reader gets there, not
-        # when it finishes with what it found — stamping at the end put
-        # this turn's own work inside the number that decides whether
-        # the ring was deep enough for it.
-        arrived = time.monotonic()
-        waiting = self._tracer.pending()
-        records = self._tracer.drain(limit=self._drain_limit) if waiting else []
-        self._budget.looked(records, arrived)
-        if not records:
-            return False
-        self._history.append(records)
-        if self._recorder is not None:
-            # The records themselves, because the wire carries only the
-            # summary: a recording of the frames alone would replay a
-            # run whose timeline is empty.
-            self._recorder.drained(records)
-        self.store.publish(
-            Topic.TRACE,
-            Kind.EVENT,
-            trace.summarise(records)
-            | {
-                "count": len(records),
-                "span": self._history.span().as_dict(),
-                "budget": self._budget.as_dict(),
-            },
-            src=Src.TRACE,
-        )
-        self._pace_drain(time.monotonic() - arrived, capped=waiting > self._drain_limit)
-        return bool(self._tracer.pending())
+    def _pump_trace(self) -> bool:
+        return self._trace_service.pump()
 
     def _pace_drain(self, took: float, capped: bool) -> None:
-        """Move the allowance so a turn keeps landing inside its budget.
-
-        What a record costs is a property of this machine and this code,
-        so it is found rather than declared. A turn that ran over halves
-        the allowance; one that came in well under doubles it — but only
-        when the allowance was the reason it stopped, or a quiet ring
-        would raise it on evidence it never produced.
-        """
-        if took > TRACE_TURN_SECONDS:
-            self._drain_limit = max(TRACE_DRAIN_FLOOR, self._drain_limit // 2)
-        elif capped and took < TRACE_TURN_SECONDS / 2:
-            self._drain_limit = min(self._tracer.geometry.capacity, self._drain_limit * 2)
+        self._trace_service.pace(took, capped)
 
     def _drop_provider(self) -> None:
-        provider, self._provider = self._provider, None
-        writer, self._writer = self._writer, None
-        self._poller = None
-        self._provider_run = None
-        self._capture = None
-        self._writer_run = None
-        if provider is not None:
-            provider.close()
-        # The write window maps the same file for the same run, so it
-        # goes with it: a mapping outliving its run points into the RAM
-        # of a machine that no longer exists.
-        if writer is not None:
-            writer.close()
+        self._poller_service.drop_provider()
 
     def _refresh_memory_map(self) -> None:
-        """Publish this run's topology whenever it has moved.
+        self._poller_service.refresh_memory_map()
 
-        Attempted every poll: the RAM backend exists from the moment
-        QEMU starts, so the first looks land before EL2 has built
-        anything, and a guest's own regimes appear later still.
-        """
-        if self._capture is None:
-            return
-        topology = self._capture.refresh()
-        if topology is not None:
-            self.session.adopt_memory_map(topology)
-
-    async def _ensure_poller(self) -> snapshot.SnapshotPoller | None:
-        """The S reader for this run, built once and shared.
-
-        Both the poll loop and the halt path need it, and a stop can
-        arrive before the loop's first successful build — arming at
-        launch stops the machine during EL2 boot, well ahead of the
-        first poll — so whoever needs it first builds it. Returns None
-        while the backend is not ready yet; the caller retries.
-        """
-        session = self.session
-        if session.phase is not Phase.RUNNING or session.elf_path is None:
-            return None
-        if session.surfaces is None:
-            return None
-        current = session.run_id
-        if self._provider_run == current:
-            return self._poller
-        if self._provider_failed == current:
-            # Ended for this run, and nothing inside a run un-ends it:
-            # image, view and backend are all fixed at launch. Retrying
-            # republishes the same fault twenty times a second.
-            return None
-        # A rebuild moves symbols, so a new run needs a new reader.
-        self._drop_provider()
-        shm_path = session.surfaces.shm_path
-        # The backend is created and sized by QEMU; until it is there,
-        # there is nothing to map.
-        if not shm_path.exists() or shm_path.stat().st_size == 0:
-            return None
-        built = self._build_provider(session.elf_path, shm_path)
-        if session.run_id != current:
-            # A restart landed mid-build: this provider maps the
-            # previous run's RAM file.
-            built.close()
-            return None
-        self._provider = built
-        self._poller = snapshot.SnapshotPoller(built)
-        self._capture = regimes.Capture(built, built.regimes)
-        self._provider_run = current
-        return self._poller
+    def _ensure_writer(self) -> commands.Writer | None:
+        return self._poller_service.ensure_writer()
 
     def _build_provider(self, elf_path: Path, shm_path: Path):
-        """This run's S reader: RAM mapped here, the image already
-        answered by the build."""
-        view = self.session.view
-        if view is None:
-            raise observe.Stale(f"no observation view for {elf_path.name}")
-        return snapshot.open_provider(
-            elf_path, shm_path, self._board_numbers()["NOVA_BOARD_PHYS_RAM_BASE"], view
-        )
+        return self._poller_service._build_provider(elf_path, shm_path)
+
+    async def _ensure_poller(self) -> snapshot.SnapshotPoller | None:
+        return await self._poller_service.ensure_poller()
 
     async def _poll_loop(self) -> None:
-        """Publish S-layer snapshots while a run is live.
-
-        RAM backend races at startup retry silently; any other fault
-        ends this run's S layer, is reported once, and never kills the
-        loop. The next run starts clean.
-        """
-        try:
-            while True:
-                await asyncio.sleep(POLL_INTERVAL_SECONDS)
-                try:
-                    poller = await self._ensure_poller()
-                    if poller is None:
-                        continue
-                    self._refresh_memory_map()
-                    self._ensure_writer()
-                    if self.session.paused:
-                        # Nothing can change while the machine is
-                        # stopped, and the stop already published a full
-                        # sweep. Polling static RAM would only spend
-                        # reads to confirm it.
-                        continue
-                    for obs, value in poller.tick():
-                        # `ts` is the publisher's CNTPCT for this slot,
-                        # on the same clock and in the same units the
-                        # trace records carry. A reading can therefore
-                        # be placed against the events around it instead
-                        # of against the moment this loop got to it,
-                        # which is a different quantity by however long
-                        # the poll interval and the decode took.
-                        payload = {"values": value}
-                        stamp = poller.stamp(obs.topic)
-                        if stamp is not None:
-                            payload["ts"] = stamp
-                        self.store.publish(obs.topic, Kind.SNAPSHOT, payload, src=Src.SNAP)
-                        # The one reading the topology defers to.
-                        if obs.topic == observations.GUEST_TABLE:
-                            self.session.adopt_guest_table(value)
-                except (FileNotFoundError, snapshot.NotPublishedYet):
-                    # The backend vanished mid-step, or EL2 has not
-                    # opened its region yet. Both are "not now"; retry.
-                    continue
-                except Exception as error:
-                    self.store.publish(
-                        Topic.LIFE,
-                        Kind.EVENT,
-                        {"phase": "snapshot-unavailable", "error": str(error)},
-                    )
-                    self._provider_failed = self.session.run_id
-                    self._drop_provider()
-        finally:
-            self._drop_provider()
+        await self._poller_service.loop()
 
     async def _trace_loop(self) -> None:
-        """Drain the firmware's rings, on the T layer's own clock.
-
-        Separate from the S loop, which costs seconds per DWARF walk: a
-        shared loop would put the T layer behind whatever the S layer is
-        doing. The two were already independent in what they read; this
-        makes them independent in when they read it.
-
-        Draining happens here rather than on a worker. The hand-off
-        costs ~122 us against a ~6 us look and takes the GIL twice more
-        per tick, so the worker costs more than the work — which holds
-        only because a drain is bounded by TRACE_TURN_SECONDS. Reading a
-        whole ring in one turn would put the cost of the backlog on this
-        loop, and the backlog is how long the last turn took.
-
-        Behind, the loop yields instead of waiting: the tick paces looks
-        at a ring that has caught up, and holding to it while records
-        are already waiting would only make the next batch bigger.
-        """
-        try:
-            behind = False
-            while True:
-                # Nothing to hurry for once the image itself says there
-                # is no ring to attach to, or that its layout disagrees.
-                hurry = self._tracer is not None or self._trace_state in ("", "waiting")
-                if behind:
-                    await asyncio.sleep(0)
-                else:
-                    await asyncio.sleep(
-                        TRACE_DRAIN_SECONDS if hurry else POLL_INTERVAL_SECONDS
-                    )
-                if self.session.phase is not Phase.RUNNING:
-                    # Yielding is only owed to a backlog this loop is
-                    # working through; carrying the debt past the run it
-                    # belongs to would spin on a machine that has none.
-                    behind = False
-                    continue
-                try:
-                    behind = self._pump_trace()
-                except (FileNotFoundError, ValueError):
-                    # The backing file went out from under the run.
-                    behind = False
-                    self._drop_tracer()
-        finally:
-            self._drop_tracer()
+        await self._trace_service.loop()
 
     async def _flush_loop(self) -> None:
         while True:
