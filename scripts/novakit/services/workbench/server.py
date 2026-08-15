@@ -13,9 +13,6 @@ import signal
 import sys
 import time
 import uuid
-from collections.abc import Callable
-from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 
 from ...core import config
@@ -33,6 +30,15 @@ from . import (
     static,
     trace,
 )
+from .dispatcher import (
+    Dispatcher,
+    Handler,
+    Needs,
+    QueryCancelled,
+    QueryRejected,
+    QuerySlot,
+    Request,
+)
 from .protocol import (
     MAX_BUCKETS,
     Clock,
@@ -41,13 +47,24 @@ from .protocol import (
     ProtocolError,
     Src,
     Topic,
-    UplinkError,
     decode_bytes,
     encode,
-    parse_uplink,
 )
 from .session import Deps, Phase, Session, Target, initial_topology
 from .store import StateStore
+
+__all__ = [
+    "Bridge",
+    "Dispatcher",
+    "Handler",
+    "Needs",
+    "QueryCancelled",
+    "QueryRejected",
+    "QuerySlot",
+    "Request",
+    "replay",
+    "serve",
+]
 
 FLUSH_INTERVAL_SECONDS = 0.05
 POLL_INTERVAL_SECONDS = 0.05
@@ -89,60 +106,7 @@ TRACE_DRAIN_FLOOR = 64
 DEFAULT_BUCKETS = 1200
 
 
-class Needs(StrEnum):
-    """What a handler must be given before it can act, and what the
-    reader is told when it is not there.
 
-    One rule per name, stated once. Telling a recording from a machine
-    used to be written out at three call sites — twice as a refusal, once
-    inverted — and a rule spread over three sites is the rule the fourth
-    handler gets written without.
-    """
-
-    NOTHING = ""
-    # A recording is an observation, not a machine.
-    MACHINE = "this is a replay; there is no machine to drive"
-    # And one that is up. Stricter than MACHINE and covers it, since a
-    # replay is never RUNNING.
-    RUNNING = "session is {phase}"
-    # The inverse rule: a live machine's now is the only point it has.
-    REPLAY = "only a replay can be moved in time"
-
-
-@dataclass(frozen=True)
-class Handler:
-    """One uplink topic: what answers it, and what it needs to."""
-
-    topic: Topic
-    call: Callable[[Bridge, Request], object]
-    needs: Needs = Needs.NOTHING
-    query: bool = False
-
-
-@dataclass(frozen=True)
-class Request:
-    """One identified uplink and the connection that owns its reply."""
-
-    connection: object | None
-    topic: Topic
-    data: dict
-    request_id: str
-
-
-@dataclass
-class QuerySlot:
-    """The running question and the only newer one worth retaining."""
-
-    active: Request
-    replacement: Request | None = None
-
-
-class QueryRejected(ValueError):
-    """A valid question the bridge cannot answer."""
-
-
-class QueryCancelled(RuntimeError):
-    """A question whose run disappeared while its answer was built."""
 
 
 def _require_websockets():
@@ -182,8 +146,14 @@ class Bridge:
         self._ui_root = ui_root
         self._connections: set = set()
         self._tasks: set[asyncio.Task] = set()
-        self._queries: dict[tuple[object | None, Topic], QuerySlot] = {}
         self._closing = False
+        self._dispatcher = Dispatcher(
+            HANDLERS,
+            self._reject,
+            self._cancel_publication,
+            self.spawn,
+        )
+        self._queries = self._dispatcher._queries
         self._server = None
         self._flusher: asyncio.Task | None = None
         self._halting = False
@@ -420,108 +390,46 @@ class Bridge:
             self._disconnect_queries(connection)
 
     def _handle_uplink(self, message, connection=None) -> None:
-        if isinstance(message, bytes):
-            try:
-                message = message.decode("utf-8")
-            except UnicodeDecodeError as error:
-                raise ProtocolError(f"uplink must be UTF-8: {error}") from error
-        try:
-            uplink = parse_uplink(message, UPLINK)
-        except UplinkError as error:
-            self._reject(str(error), error.request_id)
-            return
-        handler = BY_TOPIC[uplink.topic]
-        request = Request(connection, uplink.topic, uplink.data, uplink.request_id)
-        unmet = self._unmet(handler.needs)
-        if unmet is not None:
-            # Refused with a reason rather than accepted and ignored: a
-            # control that silently does nothing is worse than one that
-            # says why it cannot.
-            self._reject(f"{handler.topic.value}: {unmet}", request.request_id)
-            return
-        if handler.query:
-            self._schedule_query(handler, request)
-            return
-        try:
-            handler.call(self, request)
-        except Exception as error:
-            self._reject(f"{handler.topic.value}: {error}", request.request_id)
-
-    def _schedule_query(self, handler: Handler, request: Request) -> None:
-        key = (request.connection, request.topic)
-        slot = self._queries.get(key)
-        if slot is None:
-            self._queries[key] = QuerySlot(request)
-            self.spawn(self._run_query(handler, request))
-            return
-        if slot.replacement is not None:
-            self._reject(
-                f"{request.topic.value}: superseded by a newer request",
-                slot.replacement.request_id,
-            )
-        slot.replacement = request
-
-    async def _run_query(self, handler: Handler, request: Request) -> None:
-        try:
-            await handler.call(self, request)
-        except QueryCancelled as error:
-            self._cancel(request, str(error))
-        except QueryRejected as error:
-            self._reject_query(request, str(error))
-        except Exception as error:
-            self._reject_query(request, f"internal failure: {error}")
-        finally:
-            self._finish_query(handler, request)
-
-    def _finish_query(self, handler: Handler, request: Request) -> None:
-        key = (request.connection, request.topic)
-        slot = self._queries.get(key)
-        if slot is None or slot.active is not request:
-            return
-        replacement = slot.replacement
-        del self._queries[key]
-        if replacement is not None and self._request_live(replacement):
-            self._queries[key] = QuerySlot(replacement)
-            self.spawn(self._run_query(handler, replacement))
-
-    def _disconnect_queries(self, connection) -> None:
-        for key in [key for key in self._queries if key[0] is connection]:
-            del self._queries[key]
-
-    def _request_live(self, request: Request) -> bool:
-        return not self._closing and (
-            request.connection is None or request.connection in self._connections
+        self._dispatcher.handle_uplink(
+            self,
+            message,
+            connection,
+            self.session.phase,
+            self.session.surfaces,
+            self._replay is not None,
+            self._closing,
+            self._connections,
         )
 
+    def _schedule_query(self, handler: Handler, request: Request) -> None:
+        self._dispatcher.schedule_query(
+            self, handler, request, self._closing, self._connections
+        )
+
+    def _finish_query(self, handler: Handler, request: Request) -> None:
+        self._dispatcher.finish_query(
+            self, handler, request, self._closing, self._connections
+        )
+
+    def _disconnect_queries(self, connection) -> None:
+        self._dispatcher.disconnect_queries(connection)
+
+    def _request_live(self, request: Request) -> bool:
+        return self._dispatcher.request_live(request, self._closing, self._connections)
+
     def _reject_query(self, request: Request, reason: str) -> None:
-        if self._request_live(request):
-            self._reject(f"{request.topic.value}: {reason}", request.request_id)
+        self._dispatcher.reject_query(request, reason, self._closing, self._connections)
 
     def _cancel(self, request: Request, reason: str) -> None:
-        if self._request_live(request):
-            self.store.publish(
-                Topic.LIFE,
-                Kind.EVENT,
-                {"phase": "query-cancelled", "reason": reason},
-                replay=False,
-                reply_to=request.request_id,
-            )
+        self._dispatcher.cancel_query(request, reason, self._closing, self._connections)
 
     def _unmet(self, needs: Needs) -> str | None:
-        """Why this handler cannot act on this session, or None.
-
-        The one place a recording is told apart from a machine, applied
-        to whatever the table says needs which.
-        """
-        if needs is Needs.MACHINE:
-            refused = self._replay is not None
-        elif needs is Needs.RUNNING:
-            refused = self.session.phase is not Phase.RUNNING or self.session.surfaces is None
-        elif needs is Needs.REPLAY:
-            refused = self._replay is None
-        else:
-            refused = False
-        return needs.value.format(phase=self.session.phase.value) if refused else None
+        return self._dispatcher.unmet(
+            needs,
+            self.session.phase,
+            self.session.surfaces,
+            self._replay is not None,
+        )
 
     def _send_uart(self, request: Request) -> None:
         reason = self.session.send_bytes(decode_bytes(str(request.data.get("bytes", ""))))
@@ -570,6 +478,15 @@ class Bridge:
             {"phase": "uplink-rejected", "reason": reason},
             replay=False,
             reply_to=reply_to,
+        )
+
+    def _cancel_publication(self, request: Request, reason: str) -> None:
+        self.store.publish(
+            Topic.LIFE,
+            Kind.EVENT,
+            {"phase": "query-cancelled", "reason": reason},
+            replay=False,
+            reply_to=request.request_id,
         )
 
     def _hold(self) -> halt.HaltInspector:
