@@ -38,6 +38,7 @@ from .dispatcher import (
     QuerySlot,
     Request,
 )
+from .inspector import HaltController
 from .poller import ObservationPoller
 from .protocol import (
     MAX_BUCKETS,
@@ -159,15 +160,6 @@ class Bridge:
         self._queries = self._dispatcher._queries
         self._server = None
         self._flusher: asyncio.Task | None = None
-        self._halting = False
-        # The gdb connection *is* the stop, so the inspector outlives the
-        # command that took it: held while paused, dropped on resume.
-        self._inspector: halt.HaltInspector | None = None
-        self._inspector_run = 0
-        # The bridge's memory of the run. The firmware's rings hold
-        # about a second, so this is where the cause of anything noticed
-        # late is still findable.
-        self._history = history.History(trace_history)
         # The S-layer observation poller manages DWARF provider mapping and S-layer polling.
         self._poller_service = ObservationPoller(
             self.store, self.session, self._board_numbers
@@ -181,10 +173,19 @@ class Bridge:
             self._board_numbers,
             self._image_has_tracing,
         )
+        # The H-layer halt controller manages GDB/QMP inspection, breakpoints, and stepping.
+        self._halt_service = HaltController(
+            self.store,
+            self.session,
+            self._reject,
+            self._ensure_poller,
+            self.spawn,
+        )
+        # The bridge's memory of the run. The firmware's rings hold
+        # about a second, so this is where the cause of anything noticed
+        # late is still findable.
+        self._history = history.History(trace_history)
         self._board: dict[str, int] | None = None
-        # The previous stop's reading, per topic. A stop publishes the
-        # whole machine; this is what lets it also say what moved.
-        self._stopped_at: dict[str, object] = {}
         # Stamped into every connect topology: a changed token is the
         # restart signal, whatever the sequence counter says.
         self._token = uuid.uuid4().hex[:8]
@@ -287,6 +288,46 @@ class Bridge:
     @_trace_state.setter
     def _trace_state(self, value: str) -> None:
         self._trace_service.trace_state = value
+
+    @property
+    def _inspector(self) -> halt.HaltInspector | None:
+        return self._halt_service.inspector
+
+    @_inspector.setter
+    def _inspector(self, value: halt.HaltInspector | None) -> None:
+        self._halt_service.inspector = value
+
+    @property
+    def _inspector_run(self) -> int:
+        return self._halt_service.inspector_run
+
+    @_inspector_run.setter
+    def _inspector_run(self, value: int) -> None:
+        self._halt_service.inspector_run = value
+
+    @property
+    def _halting(self) -> bool:
+        return self._halt_service.halting
+
+    @_halting.setter
+    def _halting(self, value: bool) -> None:
+        self._halt_service.halting = value
+
+    @property
+    def _abort(self) -> bool:
+        return self._halt_service.abort
+
+    @_abort.setter
+    def _abort(self, value: bool) -> None:
+        self._halt_service.abort = value
+
+    @property
+    def _stopped_at(self) -> dict[str, object]:
+        return self._halt_service.stopped_at
+
+    @_stopped_at.setter
+    def _stopped_at(self, value: dict[str, object]) -> None:
+        self._halt_service.stopped_at = value
 
     def load_replay(self, rec: recording.Recording) -> None:
         """Show a recorded run instead of a live machine.
@@ -571,244 +612,45 @@ class Bridge:
         )
 
     def _hold(self) -> halt.HaltInspector:
-        """The inspector for this run, made once and kept.
-
-        Attaching stops the machine, so a fresh inspector per command
-        would take a new stop on every click and leak the previous one.
-        Keyed on the run: a restart replaces the sockets underneath, and
-        an inspector still holding the old ones answers for a machine
-        that no longer exists.
-        """
-        if self._inspector_run != self.session.run_id:
-            self._release()
-        if self._inspector is None:
-            surfaces = self.session.surfaces
-            view = self.session.view
-            self._inspector = halt.HaltInspector(
-                surfaces.qmp_path, surfaces.gdb_path, None if view is None else view.symbols
-            )
-            self._inspector_run = self.session.run_id
-        return self._inspector
+        """The inspector for this run, made once and kept."""
+        return self._halt_service.hold()
 
     def _release(self) -> None:
-        """Give the machine back and forget the inspector.
-
-        Called on resume and at every run boundary: the next run has new
-        sockets, and an inspector still holding the old ones would answer
-        for a machine that no longer exists.
-        """
-        inspector, self._inspector = self._inspector, None
-        if inspector is not None:
-            inspector.resume()
+        """Give the machine back and forget the inspector."""
+        self._halt_service.release()
 
     async def _sweep_to_panels(self, inspector: halt.HaltInspector) -> None:
-        """Everything the machine knows about the instant it stopped.
-
-        Registers come from the stub; the rest is the whole observation
-        manifest, read from the addresses rather than from the published
-        copy. What that adds is the machine's last `staleness_us` worth
-        of motion — the publisher makes the copy whole and torn-free on
-        its own, but a stopped machine takes no further turn, so its
-        last one is as far as publication got. It goes out as H because
-        it is read a different way, not because it is a different fact.
-        """
-        loop = asyncio.get_running_loop()
-        data = await loop.run_in_executor(None, inspector.pause)
-        self.session.paused = True
-        # Same data shape as the S-layer topics: the UI panels read every
-        # snapshot's payload from "values".
-        was, self._stopped_at = self._stopped_at, {Topic.SYSREG.value: data}
-        self.store.publish(
-            Topic.SYSREG, Kind.SNAPSHOT, self._with_delta(data, was, Topic.SYSREG.value),
-            src=Src.HALT,
-        )
-        try:
-            # Built here if the poll loop has not got to it: arming at
-            # launch stops the machine during EL2 boot, long before the
-            # first successful poll, and a stop that silently skipped
-            # the manifest would be the emptiest one of the run.
-            poller = await self._ensure_poller()
-            if poller is None:
-                return
-            values = await loop.run_in_executor(None, poller.sweep)
-        except Exception as error:
-            self.store.publish(
-                Topic.LIFE, Kind.EVENT, {"phase": "snapshot-unavailable", "error": str(error)}
-            )
-            return
-        for obs, value in values:
-            self._stopped_at[obs.topic] = value
-            self.store.publish(
-                obs.topic, Kind.SNAPSHOT, self._with_delta(value, was, obs.topic), src=Src.HALT
-            )
+        """Everything the machine knows about the instant it stopped."""
+        await self._halt_service.sweep_to_panels(inspector)
 
     @staticmethod
     def _with_delta(value, previous: dict, topic: str) -> dict:
-        """A stopped reading, and what moved since the last stop.
-
-        Absent on the first stop of a run rather than reported as
-        "everything changed": there was nothing to change from, and a UI
-        that highlighted every field would be pointing at the reading
-        itself.
-        """
-        payload = {"values": value}
-        if topic in previous:
-            payload["changed"] = snapshot.changed_mask(previous[topic], value)
-        return payload
+        """A stopped reading, and what moved since the last stop."""
+        return HaltController.with_delta(value, previous, topic)
 
     async def _advance(self, inspector: halt.HaltInspector, data: dict) -> None:
-        """Run until a catalogued event, as many times as asked.
-
-        The wait is sliced rather than blocking: a machine that never
-        reaches the chosen event would otherwise pin an executor thread
-        and ignore the abort button. `period` paces the repeats so the
-        reader can watch events at a human speed — the unit of a step is
-        an *event*, because a fixed slice of time holds anywhere from
-        zero of them to thousands.
-        """
-        stops = [str(name) for name in data.get("stops", [])]
-        period = max(0.0, min(float(data.get("period", 0.0)), 10.0))
-        repeat = max(1, min(int(data.get("repeat", 1)), 1000))
-        loop = asyncio.get_running_loop()
-        for index in range(repeat):
-            if self._abort:
-                break
-            if index and period:
-                await asyncio.sleep(period)
-                if self._abort:
-                    break
-            await loop.run_in_executor(None, inspector.begin, stops)
-            self.session.paused = False
-            stop = None
-            waited = 0.0
-            noticed = False
-            while stop is None and not self._abort:
-                stop = await loop.run_in_executor(None, inspector.wait, RUN_SLICE_SECONDS)
-                waited += RUN_SLICE_SECONDS
-                if stop is None and not noticed and waited >= WAIT_NOTICE_SECONDS:
-                    # The chosen event may be rare, or may not happen at
-                    # all on this demo. Silence would be indistinguishable
-                    # from a hung bridge, so say which stops are pending.
-                    noticed = True
-                    self.store.publish(
-                        Topic.LIFE, Kind.EVENT,
-                        {"phase": "waiting", "stops": sorted(inspector.armed)},
-                    )
-            if stop is None:
-                stop = await loop.run_in_executor(None, inspector.interrupt)
-            self.session.paused = True
-            self.store.publish(
-                Topic.LIFE, Kind.EVENT, {"phase": "stopped", **stop.payload()}
-            )
-            await self._sweep_to_panels(inspector)
+        """Run until a catalogued event, as many times as asked."""
+        await self._halt_service.advance(inspector, data)
 
     async def _arm_at_launch(
         self, previous_run: int, stops: list[str], reply_to: str | None = None
     ) -> None:
-        """Take the stop before the guest can reach the event.
-
-        Short demos are over in well under a second — the DMA demo has
-        finished its transfers before a browser could send a command — so
-        "stop at the first X" is unreachable if arming has to wait for a
-        reader to click. Attaching to the stub stops the machine by
-        itself and the socket exists from QEMU's first moments, so taking
-        it during EL2 boot arrives long before any guest code runs.
-        """
-        deadline = asyncio.get_running_loop().time() + LAUNCH_ARM_TIMEOUT_SECONDS
-        while asyncio.get_running_loop().time() < deadline:
-            await asyncio.sleep(LAUNCH_POLL_SECONDS)
-            if self.session.phase in (Phase.FAILED, Phase.IDLE, Phase.EXITED):
-                return  # the launch did not happen; nothing to arm
-            if self.session.run_id == previous_run:
-                continue
-            surfaces = self.session.surfaces
-            if surfaces is None or not surfaces.gdb_path.exists():
-                continue
-            break
-        else:
-            self._reject("halt: the machine never came up to be armed", reply_to)
-            return
-        if self._halting:
-            return  # a reader got there first; theirs wins
-        self._halting = True
-        self._abort = False
-        try:
-            inspector = self._hold()
-            await self._sweep_to_panels(inspector)
-            self.store.publish(
-                Topic.LIFE, Kind.EVENT, {"phase": "armed", "stops": sorted(stops)}
-            )
-            await self._advance(inspector, {"stops": stops})
-        except Exception as error:
-            self._reject(f"halt: {error}", reply_to)
-        finally:
-            self._halting = False
-            self._abort = False
+        """Take the stop before the guest can reach the event."""
+        await self._halt_service.arm_at_launch(previous_run, stops, reply_to)
 
     def _take_halt(self, request: Request) -> None:
         """Accept one halt command, or say why it is not one."""
-        data = request.data
-        command = str(data.get("cmd", ""))
-        if command not in HALT_COMMANDS:
-            self._reject(f"halt: unknown cmd {command!r}", request.request_id)
-            return
-        self.spawn(self._halt_command(command, data, request.request_id))
+        self._halt_service.take_halt(request)
 
     async def _halt_command(
         self, command: str, data: dict, reply_to: str | None = None
     ) -> None:
-        """Pause is a held gdb connection; the machine stays stopped
-        (virtual clock frozen) until it is advanced or resumed."""
-        if command == "abort":
-            # Checked before the busy guard, not after: an abort is only
-            # ever sent *while* an advance is running, so guarding it the
-            # same way would reject it exactly when it is needed.
-            self._abort = True
-            return
-        if self._halting:
-            self._reject("halt: inspection in progress", reply_to)
-            return
-        self._halting = True
-        self._abort = False
-        try:
-            inspector = self._hold()
-            await HALT_STEPS[command](self, inspector, data)
-        except Exception as error:
-            # This coroutine is the request boundary: any protocol fault
-            # (bad JSON, corrupt RSP hex, a missing XML attribute) must
-            # become a reply, not an unretrieved task exception.
-            self._reject(f"halt: {error}", reply_to)
-        finally:
-            self._halting = False
-            self._abort = False
-
-    async def _halt_stop(self, inspector: halt.HaltInspector, _data: dict) -> None:
-        await self._sweep_to_panels(inspector)
-        self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "paused"})
-
-    async def _halt_cont(self, _inspector: halt.HaltInspector, _data: dict) -> None:
-        await asyncio.get_running_loop().run_in_executor(None, self._release)
-        self.session.paused = False
-        self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "resumed"})
-
-    async def _halt_step(self, inspector: halt.HaltInspector, data: dict) -> None:
-        if not inspector.paused:
-            await self._sweep_to_panels(inspector)
-        count = max(1, min(int(data.get("count", 1)), MAX_STEPS))
-        result = await asyncio.get_running_loop().run_in_executor(
-            None, inspector.step, count
-        )
-        self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "stepped", **result})
-        await self._sweep_to_panels(inspector)
-
-    async def _halt_run(self, inspector: halt.HaltInspector, data: dict) -> None:
-        if not inspector.paused:
-            await self._sweep_to_panels(inspector)
-        await self._advance(inspector, data)
+        """Pause is a held gdb connection; the machine stays stopped."""
+        await self._halt_service.halt_command(command, data, reply_to)
 
     def _drop_tracer(self) -> None:
         self._history = history.History(self._history.capacity)
-        self._stopped_at = {}
+        self._halt_service.stopped_at = {}
         self._trace_service.drop()
 
     def _board_numbers(self) -> dict[str, int]:
@@ -1218,18 +1060,6 @@ HANDLERS = (
 )
 UPLINK = frozenset(handler.topic for handler in HANDLERS)
 BY_TOPIC = {handler.topic: handler for handler in HANDLERS}
-
-# What `halt` may ask the stop to do. The vocabulary is the table's keys,
-# so a command named in one place and dispatched in another cannot
-# happen. `abort` is not among them: it is answered *while* one of these
-# is running, so it never takes the inspector.
-HALT_STEPS = {
-    "stop": Bridge._halt_stop,
-    "cont": Bridge._halt_cont,
-    "step": Bridge._halt_step,
-    "run": Bridge._halt_run,
-}
-HALT_COMMANDS = ("abort", *HALT_STEPS)
 
 
 async def _serve_forever(

@@ -138,6 +138,17 @@ class WorkflowContractTest(unittest.TestCase):
                 meta = ci_service.lane_metadata(name)
                 self.assertIn("cache_scope", meta)
                 self.assertIn("compiler", meta)
+                self.assertIn("timeout_minutes", meta)
+
+    def test_ci_workflow_matrix_matches_lane_timeout_ssot(self):
+        ci_doc = yaml.safe_load((WORKFLOWS / "ci.yml").read_text())
+        matrix_includes = ci_doc["jobs"]["lane"]["strategy"]["matrix"]["include"]
+        for entry in matrix_includes:
+            lane_name = entry["lane"]
+            yaml_timeout = entry["timeout"]
+            ssot_lane = ci_service.BY_NAME[lane_name]
+            with self.subTest(lane=lane_name):
+                self.assertEqual(yaml_timeout, ssot_lane.timeout_minutes)
 
 
 if __name__ == "__main__":

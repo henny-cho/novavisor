@@ -34,6 +34,7 @@ class Lane:
     need_guests: bool = False
     need_firmware: bool = False
     cache_scope: str = "target"
+    timeout_minutes: int = 15
 
     def __post_init__(self) -> None:
         # Step names key the job summary, so a repeat would report two
@@ -87,8 +88,8 @@ def _recheck() -> int:
 
 
 LANES = (
-    Lane("host", (("format", _format), ("tests", _tests)), cache_scope="host"),
-    Lane("static", (("static-analysis", _static), ("manifest", _manifest)), cache_scope="target"),
+    Lane("host", (("format", _format), ("tests", _tests)), cache_scope="host", timeout_minutes=15),
+    Lane("static", (("static-analysis", _static), ("manifest", _manifest)), cache_scope="target", timeout_minutes=20),
     Lane(
         "runtime",
         (
@@ -100,13 +101,14 @@ LANES = (
         need_guests=True,
         need_firmware=True,
         cache_scope="target",
+        timeout_minutes=40,
     ),
 )
 BY_NAME = {lane.name: lane for lane in LANES}
 
 SOAK_LANES = {
-    "soak-dma": Lane("soak-dma", (), need_guests=False, need_firmware=False, cache_scope="target"),
-    "soak-mixed": Lane("soak-mixed", (), need_guests=True, need_firmware=False, cache_scope="target"),
+    "soak-dma": Lane("soak-dma", (), need_guests=False, need_firmware=False, cache_scope="target", timeout_minutes=60),
+    "soak-mixed": Lane("soak-mixed", (), need_guests=True, need_firmware=False, cache_scope="target", timeout_minutes=60),
 }
 ALL_METADATA_LANES = {**BY_NAME, **SOAK_LANES}
 
@@ -121,6 +123,7 @@ def lane_metadata(name: str) -> dict[str, str]:
         "guests": "true" if lane.need_guests else "false",
         "firmware": "true" if lane.need_firmware else "false",
         "cache_scope": lane.cache_scope,
+        "timeout_minutes": str(lane.timeout_minutes),
         "firmware_pin": versions.get("TFA_COMMIT", ""),
         "compiler": f"{versions.get('ARM_GNU_VERSION', '')}-tidy{versions.get('CLANG_TIDY_VERSION', '')}",
     }
