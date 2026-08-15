@@ -31,6 +31,9 @@ EVIDENCE = report.ArtifactPaths(config.BUILD_ROOT / "ci-evidence")
 class Lane:
     name: str
     steps: tuple[tuple[str, Callable[[], int]], ...]
+    need_guests: bool = False
+    need_firmware: bool = False
+    cache_scope: str = "target"
 
     def __post_init__(self) -> None:
         # Step names key the job summary, so a repeat would report two
@@ -84,8 +87,8 @@ def _recheck() -> int:
 
 
 LANES = (
-    Lane("host", (("format", _format), ("tests", _tests))),
-    Lane("static", (("static-analysis", _static), ("manifest", _manifest))),
+    Lane("host", (("format", _format), ("tests", _tests)), cache_scope="host"),
+    Lane("static", (("static-analysis", _static), ("manifest", _manifest)), cache_scope="target"),
     Lane(
         "runtime",
         (
@@ -94,9 +97,33 @@ LANES = (
             ("demos", _demos),
             ("recheck", _recheck),
         ),
+        need_guests=True,
+        need_firmware=True,
+        cache_scope="target",
     ),
 )
 BY_NAME = {lane.name: lane for lane in LANES}
+
+SOAK_LANES = {
+    "soak-dma": Lane("soak-dma", (), need_guests=False, need_firmware=False, cache_scope="target"),
+    "soak-mixed": Lane("soak-mixed", (), need_guests=True, need_firmware=False, cache_scope="target"),
+}
+ALL_METADATA_LANES = {**BY_NAME, **SOAK_LANES}
+
+
+def lane_metadata(name: str) -> dict[str, str]:
+    """Provide the single source of truth for CI workflow cache and environment parameters."""
+    if name not in ALL_METADATA_LANES:
+        raise ValueError(f"unknown lane: {name}")
+    lane = ALL_METADATA_LANES[name]
+    versions = config.tool_versions()
+    return {
+        "guests": "true" if lane.need_guests else "false",
+        "firmware": "true" if lane.need_firmware else "false",
+        "cache_scope": lane.cache_scope,
+        "firmware_pin": versions.get("TFA_COMMIT", ""),
+        "compiler": f"{versions.get('ARM_GNU_VERSION', '')}-tidy{versions.get('CLANG_TIDY_VERSION', '')}",
+    }
 
 
 def _ccache_stats() -> tuple[str, ...]:

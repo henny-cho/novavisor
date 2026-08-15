@@ -7,33 +7,6 @@ inputs:
 runs:
   using: composite
   steps:
-    # What a lane needs follows from the lane, so the workflows name the
-    # lane and nothing else.
-    - name: Resolve lane inputs
-      id: lane
-      shell: bash
-      env:
-        LANE: ${{ inputs.name }}
-      run: |
-        source scripts/tool-versions.env
-        case "${LANE}" in
-          host)            guests=false; firmware=false; cache_scope=host   ;;
-          static|soak-dma) guests=false; firmware=false; cache_scope=target ;;
-          runtime)         guests=true;  firmware=true;  cache_scope=target ;;
-          soak-mixed)      guests=true;  firmware=false; cache_scope=target ;;
-          *)
-            echo "::error::unknown lane: ${LANE}"
-            exit 2
-            ;;
-        esac
-        {
-          echo "guests=${guests}"
-          echo "firmware=${firmware}"
-          echo "cache_scope=${cache_scope}"
-          echo "firmware_pin=${TFA_COMMIT}"
-          echo "compiler=${ARM_GNU_VERSION}-tidy${CLANG_TIDY_VERSION}"
-        } >> "${GITHUB_OUTPUT}"
-
     - name: Prepare Python CLI
       shell: bash
       run: |
@@ -44,6 +17,16 @@ runs:
           nova_python="${RUNNER_TEMP}/nova-python/bin/python"
         fi
         echo "NOVA_PYTHON=${nova_python}" >> "${GITHUB_ENV}"
+
+    # What a lane needs follows from the lane, queried directly from the
+    # CLI so the Python lane table is the only place it is declared.
+    - name: Resolve lane inputs
+      id: lane
+      shell: bash
+      env:
+        LANE: ${{ inputs.name }}
+      run: |
+        scripts/nova ci --metadata "${LANE}" >> "${GITHUB_OUTPUT}"
 
     - name: Cache CPM packages
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

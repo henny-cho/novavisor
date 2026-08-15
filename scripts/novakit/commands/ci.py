@@ -11,15 +11,27 @@ from ..services import ci as service
 
 Lane = Enum(
     "Lane",
-    {name.upper(): name for name in (*service.BY_NAME, "all")},
+    {name.upper(): name for name in (*service.ALL_METADATA_LANES, "all")},
     type=str,
 )
 
 
 def run(
     lane: Annotated[Lane, typer.Argument(help="Lane to run; all runs every lane.")],
+    metadata: Annotated[
+        bool,
+        typer.Option("--metadata", help="Print lane environment and cache metadata for CI."),
+    ] = False,
 ) -> None:
-    """Run a CI lane locally."""
+    """Run a CI lane locally, or inspect its metadata."""
+    if metadata:
+        if lane.value == "all":
+            raise typer.BadParameter("--metadata cannot be used with 'all'")
+        data = service.lane_metadata(lane.value)
+        for key, value in data.items():
+            print(f"{key}={value}")
+        return
+
     code = service.run_lane(lane.value)
     if code:
         raise typer.Exit(code)

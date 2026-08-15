@@ -104,6 +104,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertNotIn(".toolchain", action)
         self.assertIn("scripts/python-env", action)
         self.assertIn("NOVA_PYTHON=", action)
+        self.assertIn("scripts/nova ci --metadata", action)
         data = yaml.safe_load(action)
         self.assertEqual(list(data["inputs"]), ["name"])
         for path in (
@@ -121,22 +122,10 @@ class WorkflowContractTest(unittest.TestCase):
                 "${{ steps.lane.outputs.cache_scope }}",
                 cache["with"][field],
             )
-        self.assertIn('echo "::error::unknown lane: ${LANE}"', action)
 
     def test_the_lane_action_knows_every_lane_and_soak_target(self):
-        # The case labels are the third place a lane name appears, and the only
-        # one nothing checked: a new lane passed every test here and failed in
-        # Actions with "unknown lane".
-        action = yaml.safe_load((GITHUB / "actions" / "lane" / "action.yml").read_text())
-        resolve = next(
-            step for step in action["runs"]["steps"] if step.get("id") == "lane"
-        )["run"]
-        # Read the labels as shell, not as YAML indentation.
-        handled = {
-            name
-            for labels in re.findall(r"^\s*([\w|-]+)\)\s", resolve, re.MULTILINE)
-            for name in labels.split("|")
-        }
+        # All lanes and soak targets must be registered in the CI metadata table,
+        # which provides the single source of truth for workflow environments.
         soak = yaml.safe_load((WORKFLOWS / "soak.yml").read_text())
         targets = [
             f"soak-{entry['target']}"
@@ -146,7 +135,9 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertTrue(targets)
         for name in (*ci_service.BY_NAME, *targets):
             with self.subTest(lane=name):
-                self.assertIn(name, handled)
+                meta = ci_service.lane_metadata(name)
+                self.assertIn("cache_scope", meta)
+                self.assertIn("compiler", meta)
 
 
 if __name__ == "__main__":
