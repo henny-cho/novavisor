@@ -1,5 +1,6 @@
-import { MAX_VM_SLOT, clear, el, vmSlot } from "./format.mjs";
+import { MAX_VM_SLOT, clear, el, toBottom, vmSlot } from "./format.mjs";
 import { StreamLog } from "./primitives/stream_log.mjs";
+
 
 const LINE_CAP = 5000; /* per tab; oldest lines drop out */
 const MERGED = "all";
