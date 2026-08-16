@@ -46,6 +46,16 @@ _OP_BY_CODE = {code: name for name, code in OPS.items()}
 _RESULT_BY_CODE = {code: name for name, code in RESULTS.items()}
 _ARG_BY_CODE = {code: name for name, code in ARGS.items()}
 
+COMMAND_META: dict[str, dict[str, str]] = {
+    "mark": {"label": "표식", "action": "남기기", "desc": "타임라인 마크 기록"},
+    "spi": {"label": "SPI", "action": "주입", "desc": "가상 SPI 인터럽트 주입"},
+    "slice": {"label": "슬라이스", "action": "적용", "desc": "스케줄러 타임 슬라이스 변경"},
+    "stop": {"label": "정지", "action": "정지", "desc": "대상 VM 실행 정지"},
+    "reset": {"label": "리셋", "action": "리셋", "desc": "대상 VM 시스템 리셋"},
+    "start": {"label": "기동", "action": "기동", "desc": "대상 VM 시스템 기동"},
+}
+
+
 
 def op_name(code: int) -> str:
     """The opcode's name, or the number when this build has no such op.

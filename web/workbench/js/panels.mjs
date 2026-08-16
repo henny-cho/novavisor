@@ -11,133 +11,21 @@
    changed topic actually feeds. */
 
 import { clear, el, elapsed, micros, stamp } from "./format.mjs";
+import { globalBitfieldPopover } from "./primitives/bitfield.mjs";
+import {
+  BareCell,
+  Cell,
+  Cursor,
+  generic,
+  note,
+  plain,
+  section,
+  table,
+} from "./primitives/table.mjs";
 
-function fmt(shown) {
-  if (typeof shown === "boolean") return shown ? "●" : "·";
-  /* A nested value has no column of its own; its shape is still the
-     truth, so it travels as JSON rather than as "[object Object]". */
-  if (shown !== null && typeof shown === "object") return JSON.stringify(shown);
-  return String(shown ?? "—");
-}
+export { BareCell, Cell, Cursor, generic, note, plain, section, table };
 
-/* One cell: what to show, and whether it moved since the previous stop.
-   Both, always, because a cell drawn from a bare number has already
-   thrown away the thing a stop is for.
 
-   The kit — this, `Cursor`, `plain()` and `table()` — is exported so
-   its rules can be exercised directly. The panels below are its only
-   callers in the page. */
-export class Cell {
-  constructor(shown, moved) {
-    this.shown = shown;
-    this.moved = Boolean(moved);
-  }
-}
-
-/* A reading and the mask of what moved in it, walked together.
- *
- * The alternative was for each renderer to rebuild the address of its
- * own cell — `sched.cpu[1].current` — and look it up in a list. That
- * puts the mask's grammar in the client a second time, and a cell whose
- * address is spelled wrong is silently never highlighted. Nine
- * renderers is nine chances, and every new panel is another.
- *
- * Here the mask is shaped like the value, so descending the value
- * descends the mask by the same key. The cursor arrives at the cell
- * carrying both; there is nothing to look up and nothing to forget. */
-export class Cursor extends Cell {
-  constructor(shown, mask) {
-    super(shown, mask === true);
-    this.mask = mask;
-  }
-
-  /* A child by key or index. `true` at a node means the node itself
-     changed shape, and everything under it with it. */
-  get(key) {
-    const inner = this.mask === true ? true : this.mask?.[String(key)];
-    return new Cursor(this.shown?.[key], inner);
-  }
-
-  /* An array's elements, as cursors. Not a plain map(), because the
-     index has to reach the mask as the string key the bridge sent. */
-  rows() {
-    return Array.isArray(this.shown) ? this.shown.map((_, index) => this.get(index)) : [];
-  }
-
-  keys() {
-    return this.shown && typeof this.shown === "object" ? Object.keys(this.shown) : [];
-  }
-}
-
-/* A cell with no provenance, said so out loud: a row number, a label, a
-   unit — something computed here rather than read from the machine.
-   The point is that `plain()` is a claim a reader can grep for, where a
-   bare value in a cell is indistinguishable from a forgotten cursor. */
-export const plain = (shown) => new Cell(shown, false);
-
-/* A cell handed to table() with no provenance: an authoring fault,
-   distinct from the decode failures that arrive from guest RAM. Its own
-   type so the drawer can name it without catching theirs. */
-export class BareCell extends TypeError {}
-
-export function table(headers, rows) {
-  const node = el("table", "ptable");
-  const head = el("tr");
-  for (const header of headers) head.append(el("th", "", header));
-  node.append(head);
-  for (const cells of rows) {
-    const row = el("tr");
-    for (const cell of cells) {
-      /* Refused rather than rendered. A bare value here would draw
-         correctly and never highlight, which is the failure this whole
-         arrangement exists to make impossible — so it must not be a
-         thing that draws correctly. */
-      if (!(cell instanceof Cell)) {
-        throw new BareCell(`table cell is neither a cursor nor plain(): ${String(cell)}`);
-      }
-      row.append(el("td", cell.moved ? "moved" : "", fmt(cell.shown)));
-    }
-    node.append(row);
-  }
-  return node;
-}
-
-/* A section heading. `moved` because a reading is sometimes clearer in
-   a heading than in a column, and a value that escapes the table must
-   not escape the highlight with it — otherwise the tab's count points
-   at a drawer where nothing appears to have changed. */
-function section(title, moved = false) {
-  return el("div", moved ? "psec-h moved" : "psec-h", title);
-}
-
-function note(text, moved = false) {
-  return el("div", moved ? "pnote moved" : "pnote", text);
-}
-
-/* Any decoded value, without knowing what it is. The field names come
-   from the firmware's own debug info, so a table of them is already
-   readable — what a hand-written panel adds is ordering, units and
-   which columns matter, not the ability to show the value at all. */
-function generic(cursor) {
-  const held = cursor.shown;
-  if (Array.isArray(held)) {
-    const rows = cursor.rows();
-    const shaped = held.find((item) => item && typeof item === "object" && !Array.isArray(item));
-    if (!shaped) return table(["#", "value"], rows.map((row, index) => [plain(index), row]));
-    const columns = [...new Set(held.flatMap((item) => Object.keys(item || {})))];
-    return table(
-      ["#", ...columns],
-      rows.map((row, index) => [plain(index), ...columns.map((key) => row.get(key))]),
-    );
-  }
-  if (held && typeof held === "object") {
-    return table(
-      ["key", "value"],
-      cursor.keys().map((key) => [plain(key), cursor.get(key)]),
-    );
-  }
-  return note(fmt(held), cursor.moved);
-}
 
 /* Which panels were open, so a reload does not undo the choice. */
 const OPEN_KEY = "nv-wb-panels";
@@ -487,13 +375,24 @@ export function createPanels({ tabs, host }) {
                up only if the *list* changed, which is not a value the
                machine moved. The readings are the columns beside it. */
             registers.map((name) => [
-              plain(name.shown),
+              plain(name.shown, "클릭하여 비트필드 분해"),
               ...cpus.map((cpu) => cpu.get(name.shown)),
             ]),
+            {
+              onCellClick(cell, ev) {
+                const text = String(cell.shown || "").toLowerCase();
+                if (text.includes("sctlr")) {
+                  globalBitfieldPopover.show(ev.currentTarget, "sctlr", cell.shown);
+                } else if (text.includes("esr")) {
+                  globalBitfieldPopover.show(ev.currentTarget, "esr", cell.shown);
+                }
+              },
+            },
           ),
         );
       },
     },
+
   ];
 
   /* Whatever no panel above claims, so a new row in the observation

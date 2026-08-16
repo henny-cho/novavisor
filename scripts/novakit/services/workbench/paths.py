@@ -66,22 +66,35 @@ class Edge:
     topic: str = ""
     badges: tuple[Badge, ...] = ()
     pair: str = ""
+    label: str = ""
 
+
+EDGE_LABELS: dict[str, str] = {
+    EDGE_TRAP: "게스트 트랩 → EL2",
+    "phys": "물리 IRQ → PE",
+    EDGE_POST: "장치 SPI → 분배기",
+    EDGE_INJECT: "vIRQ 주입 → 게스트",
+    EDGE_MMIO: "MMIO 트랩 → 에뮬레이션",
+    EDGE_DMA: "장치 DMA → SMMU",
+    EDGE_WALK: "SMMU 변환 → 메모리",
+    "cross": "코어 간 크로스콜",
+    "ivc": "IVC 도어벨 → 공유 페이지",
+    "psci": "PSCI 기동 → PE",
+    "uart": "vuart → 물리 UART",
+}
 
 EDGES: tuple[Edge, ...] = (
-    Edge(EDGE_TRAP, BAND_EL1, "trap", GRADE_POLL, "ctx.syndrome", (Badge.TRAP,)),
-    Edge("phys", "gicd", BAND_PE, GRADE_CONSOLE, badges=(Badge.IRQ, Badge.GIC)),
-    # The hop between a device posting and the list register taking it,
-    # read from the token store the post writes and the refill empties.
-    Edge(EDGE_POST, "gicd", "vgic", GRADE_POLL, "vgic.token"),
-    Edge(EDGE_INJECT, "vgic", BAND_EL1, GRADE_POLL, "vgic.lr"),
-    Edge(EDGE_MMIO, BAND_EL1, "vgic", GRADE_CONSOLE, badges=(Badge.VGIC,)),
-    Edge(EDGE_DMA, BAND_DEV, "smmu", GRADE_POLL, "dev.dma", (Badge.DMA,)),
-    Edge(EDGE_WALK, "smmu", "mem", GRADE_CONSOLE, badges=(Badge.SMMU,)),
-    Edge("cross", "", "", GRADE_POLL, "smp.mail", (Badge.SMP,), pair=PAIR_CORES),
-    Edge("ivc", "ivc", "pa:shared", GRADE_POLL, "ivc.page"),
-    Edge("psci", "sched", BAND_PE, GRADE_CONSOLE, badges=(Badge.PSCI,)),
-    Edge("uart", "vuart", "uart0", GRADE_POLL, "dev.uart", (Badge.VUART, Badge.MUX)),
+    Edge(EDGE_TRAP, BAND_EL1, "trap", GRADE_POLL, "ctx.syndrome", (Badge.TRAP,), label=EDGE_LABELS[EDGE_TRAP]),
+    Edge("phys", "gicd", BAND_PE, GRADE_CONSOLE, badges=(Badge.IRQ, Badge.GIC), label=EDGE_LABELS["phys"]),
+    Edge(EDGE_POST, "gicd", "vgic", GRADE_POLL, "vgic.token", label=EDGE_LABELS[EDGE_POST]),
+    Edge(EDGE_INJECT, "vgic", BAND_EL1, GRADE_POLL, "vgic.lr", label=EDGE_LABELS[EDGE_INJECT]),
+    Edge(EDGE_MMIO, BAND_EL1, "vgic", GRADE_CONSOLE, badges=(Badge.VGIC,), label=EDGE_LABELS[EDGE_MMIO]),
+    Edge(EDGE_DMA, BAND_DEV, "smmu", GRADE_POLL, "dev.dma", (Badge.DMA,), label=EDGE_LABELS[EDGE_DMA]),
+    Edge(EDGE_WALK, "smmu", "mem", GRADE_CONSOLE, badges=(Badge.SMMU,), label=EDGE_LABELS[EDGE_WALK]),
+    Edge("cross", "", "", GRADE_POLL, "smp.mail", (Badge.SMP,), pair=PAIR_CORES, label=EDGE_LABELS["cross"]),
+    Edge("ivc", "ivc", "pa:shared", GRADE_POLL, "ivc.page", label=EDGE_LABELS["ivc"]),
+    Edge("psci", "sched", BAND_PE, GRADE_CONSOLE, badges=(Badge.PSCI,), label=EDGE_LABELS["psci"]),
+    Edge("uart", "vuart", "uart0", GRADE_POLL, "dev.uart", (Badge.VUART, Badge.MUX), label=EDGE_LABELS["uart"]),
 )
 
 
@@ -119,5 +132,6 @@ def edges(cpus: int, blocks: Iterable[str], direct: Iterable[str] = ()) -> list[
                 "grade": GRADE_DIRECT if edge.id in observable else edge.grade,
                 "topic": edge.topic,
                 "badges": [badge.value for badge in edge.badges],
+                "label": edge.label,
             })
     return out

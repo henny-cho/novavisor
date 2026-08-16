@@ -34,6 +34,22 @@ MAX_VCPUS = abi.MAX_GUESTS * abi.MAX_VCPUS_PER_VM
 
 
 @dataclass(frozen=True)
+class ColumnSpec:
+    key: str
+    title: str
+    format: str = "text"
+    hint: str = ""
+
+
+@dataclass(frozen=True)
+class PanelSchema:
+    panel: str
+    title: str
+    section: str = ""
+    columns: tuple[ColumnSpec, ...] = ()
+
+
+@dataclass(frozen=True)
 class Obs:
     """One observation, whole: what it reads and how it travels."""
 
@@ -54,6 +70,7 @@ class Obs:
     # carrying when that shadow last became true. The publish stamp
     # dates the copy, which is a different question.
     as_of: str = ""
+    schema: PanelSchema | None = None
 
 
 @dataclass(frozen=True)
@@ -64,6 +81,8 @@ class Policy:
     hex: bool = False
     shape: derive.Shape | None = None
     as_of: str = ""
+    schema: PanelSchema | None = None
+
 
 
 # How often the firmware takes a reading. Sampling faster asks the same
@@ -151,6 +170,7 @@ def _joined() -> tuple[Obs, ...]:
                 hex=POLICY[want.topic].hex,
                 shape=POLICY[want.topic].shape,
                 as_of=POLICY[want.topic].as_of,
+                schema=POLICY[want.topic].schema,
             )
             for want in observe.OBSERVED
         )
@@ -159,6 +179,7 @@ def _joined() -> tuple[Obs, ...]:
 
 
 OBSERVATIONS: tuple[Obs, ...] = _joined()
+
 
 
 def _check_rates() -> None:
@@ -245,11 +266,24 @@ def observation_rates() -> dict[str, dict]:
     the UI instead, the two drift and the badge lies.
     """
     asserted = asserted_names()
-    return {
-        obs.topic: {"rate": obs.rate_hz, "asserted": obs.topic in asserted}
-        | ({"as_of": obs.as_of} if obs.as_of else {})
-        for obs in OBSERVATIONS
-    }
+    out: dict[str, dict] = {}
+    for obs in OBSERVATIONS:
+        info: dict = {"rate": obs.rate_hz, "asserted": obs.topic in asserted}
+        if obs.as_of:
+            info["as_of"] = obs.as_of
+        if obs.schema is not None:
+            info["schema"] = {
+                "panel": obs.schema.panel,
+                "title": obs.schema.title,
+                "section": obs.schema.section,
+                "columns": [
+                    {"key": col.key, "title": col.title, "format": col.format, "hint": col.hint}
+                    for col in obs.schema.columns
+                ],
+            }
+        out[obs.topic] = info
+    return out
+
 
 
 SLOT_HEADER = (

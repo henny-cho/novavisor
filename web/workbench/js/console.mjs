@@ -1,8 +1,5 @@
-/* Console view: one merged log plus one tab per guest, and the input that
-   feeds the firmware's UART. Lines arrive already split by the bridge
-   (vm === null means a hypervisor line), so this module only renders. */
-
-import { MAX_VM_SLOT, atBottom, clear, el, toBottom, trim, vmSlot } from "./format.mjs";
+import { MAX_VM_SLOT, clear, el, vmSlot } from "./format.mjs";
+import { StreamLog } from "./primitives/stream_log.mjs";
 
 const LINE_CAP = 5000; /* per tab; oldest lines drop out */
 const MERGED = "all";
@@ -37,16 +34,15 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
     pane.setAttribute("aria-label", name || label);
     tab.setAttribute("aria-controls", pane.id);
     pane.hidden = true;
-    const view = { tab, pane, stick: true };
-    pane.addEventListener("scroll", () => {
-      view.stick = atBottom(pane);
-    });
+    const stream = new StreamLog({ container: pane, lineCap: LINE_CAP });
+    const view = { tab, pane, stream, get stick() { return stream.stick; }, set stick(v) { stream.stick = v; } };
 
     views.set(key, view);
     tabs.append(tab);
     logs.append(pane);
     return view;
   }
+
 
   function merged() {
     return views.get(MERGED) || makeView(MERGED, "전체", "", "");
@@ -100,9 +96,7 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
     if (ts !== undefined) row.dataset.ts = String(ts);
     row.append(el("span", "cg", vm === null ? "EL2" : `vm${vm}`));
     row.append(el("span", "ct", text === undefined || text === null ? "" : text));
-    view.pane.append(row);
-    trim(view.pane, LINE_CAP);
-    dirty = true;
+    view.stream.append(row);
   }
 
   /* Hide everything printed after `ts`, or show it all again with null.
@@ -116,17 +110,14 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
         row.hidden = ts !== null && at !== undefined && Number(at) > ts;
       }
     }
-    dirty = true;
   }
 
   /* One scroll write per batch instead of a forced layout per line —
      a boot burst carries thousands of lines in one flush. `stick` is
      maintained solely by each pane's scroll listener. */
   function settle() {
-    if (!dirty) return;
-    dirty = false;
     for (const view of views.values()) {
-      if (!view.pane.hidden && view.stick) toBottom(view.pane);
+      if (!view.pane.hidden) view.stream.settle();
     }
   }
 
@@ -141,10 +132,9 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
   /* Session divider in the merged log, so two runs never read as one. */
   function mark(text) {
     const view = merged();
-    view.pane.append(el("div", "cline mark", text));
-    trim(view.pane, LINE_CAP);
-    dirty = true;
+    view.stream.append(el("div", "cline mark", text));
   }
+
 
   function setBanner(text) {
     clear(banner);

@@ -642,7 +642,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
      in-flight list is a sample, so a count would be unmeasured. "Last
      seen at" is exactly as much as the evidence supports. */
   function edgeTitle(edge) {
-    const name = EDGE_TEXT[edge.id] || edge.id;
+    const name = edge.label || EDGE_TEXT[edge.id] || edge.id;
     const seen = edge.last ? ` · 마지막 ${stamp(edge.last.ts)} ${edge.last.message || ""}` : "";
     if (edge.grade === "direct") return `${name} — 정지 가능 · 실측${seen}`;
     if (edge.grade === "console") return `${name} — 콘솔 이벤트 · 시각 정확${seen}`;
@@ -652,6 +652,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     }
     return `${name} — 관측 없음 · 구조만 표시`;
   }
+
 
   /* A classified console line, routed to the paths it is evidence for.
 

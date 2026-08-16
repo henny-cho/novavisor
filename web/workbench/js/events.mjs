@@ -1,9 +1,6 @@
-/* Event log: rows the bridge classified, plus lifecycle notices from this
-   UI. The badge vocabulary is never known ahead of time — it arrives in
-   the topology snapshot and its chip colour is derived from the name, so
-   adding a subsystem needs no change here. */
-
-import { accentOf, atBottom, clear, el, stamp, toBottom, trim } from "./format.mjs";
+import { accentOf, clear, el, stamp } from "./format.mjs";
+import { StreamLog } from "./primitives/stream_log.mjs";
+import { chipButton } from "./primitives/ui_kit.mjs";
 
 const ROW_CAP = 2000;
 /* UI-local chip for lifecycle rows: not part of the bridge taxonomy. */
@@ -12,20 +9,11 @@ const LIFE = "LIFE";
 export function createEvents({ list, filters, resetButton, clearButton }) {
   /* Badges the user switched off. */
   const muted = new Set();
-  /* Badges the board is asking to see, or null for "no narrowing".
-
-     A separate layer from `muted` on purpose: folding the board's choice
-     into the user's would mean clearing the focus restores chips the
-     user had switched off themselves. Two reasons to hide a row, kept
-     apart, so undoing one leaves the other exactly as it was. */
+  /* Badges the board is asking to see, or null for "no narrowing". */
   let narrowed = null;
   const chips = new Map();
   const hidden = (name) => muted.has(name) || (narrowed !== null && !narrowed.has(name));
-  let stick = true;
-  let dirty = false;
-  list.addEventListener("scroll", () => {
-    stick = atBottom(list);
-  });
+  const stream = new StreamLog({ container: list, lineCap: ROW_CAP });
 
   const accent = (name) => (name === LIFE ? "var(--ink3)" : accentOf(name));
 
@@ -49,7 +37,7 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
     for (const row of list.children) {
       if (row.dataset.badge) row.hidden = !shows(row);
     }
-    dirty = true;
+    stream.dirty = true;
   }
 
   /* Show only these badges, or pass null to stop narrowing. What the
@@ -68,16 +56,18 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
   }
 
   function makeChip(name) {
-    const chip = el("button", name === LIFE ? "fchip life" : "fchip", name);
-    chip.type = "button";
-    chip.style.setProperty("--chipc", accent(name));
-    chip.setAttribute("aria-pressed", String(!muted.has(name)));
-    chip.title = `${name} 표시 전환`;
-    chip.addEventListener("click", () => {
-      if (muted.has(name)) muted.delete(name);
-      else muted.add(name);
-      chip.setAttribute("aria-pressed", String(!muted.has(name)));
-      refresh();
+    const chip = chipButton({
+      label: name,
+      accent: accent(name),
+      pressed: !muted.has(name),
+      title: `${name} 표시 전환`,
+      className: name === LIFE ? "life" : "",
+      onClick: () => {
+        if (muted.has(name)) muted.delete(name);
+        else muted.add(name);
+        chip.setAttribute("aria-pressed", String(!muted.has(name)));
+        refresh();
+      },
     });
     chips.set(name, chip);
     return chip;
@@ -118,17 +108,14 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
       }
     }
     row.hidden = !shows(row);
-    list.append(row);
-    trim(list, ROW_CAP);
-    dirty = true;
+    stream.append(row);
   }
 
   /* One scroll write per batch; `stick` follows the scroll listener. */
   function settle() {
-    if (!dirty) return;
-    dirty = false;
-    if (stick) toBottom(list);
+    stream.settle();
   }
+
 
   /* A classified console event straight off the wire. */
   function addEvent(ts, data) {

@@ -34,6 +34,7 @@ export function createDrive({ root, note, send }) {
   const LABEL = { mark: "표식", spi: "SPI", slice: "슬라이스" };
   const ACTION = { mark: "남기기", spi: "주입", slice: "적용" };
 
+
   /* A select rather than a number: EL2 refuses a VM that is not
      running, and being refused for typing 9 is a poor way to learn the
      machine has two. */
@@ -67,9 +68,12 @@ export function createDrive({ root, note, send }) {
   /* One control per row: as many inputs as the op reads, each dressed
      by what its argument means. Nothing here knows an opcode — an op
      this build added arrives as a row and gets a control for free. */
-  function renderOp(into, op, guests) {
+  function renderOp(into, op, guests, commandsMeta = {}) {
+    const meta = commandsMeta[op.name] || {};
+    const labelText = meta.label || LABEL[op.name] || op.name;
+    const actionText = meta.action || ACTION[op.name] || op.name;
     const row = el("div", "drow");
-    row.append(el("span", "dlabel", LABEL[op.name] || op.name));
+    row.append(el("span", "dlabel", labelText));
     const fields = op.args.map((arg) =>
       arg.kind === "vm" ? vmPicker(arg, guests) : numberInput(arg),
     );
@@ -78,8 +82,9 @@ export function createDrive({ root, note, send }) {
       .filter((arg) => !arg.free && arg.kind !== "vm")
       .map((arg) => (arg.kind === "micros" ? `${usText(arg.lo)}–${usText(arg.hi)}` : `${arg.lo}–${arg.hi}`))
       .join(" ");
+    const btnTitle = meta.desc ? `${actionText} (${meta.desc})` : (bounds ? `${op.name} · ${bounds}` : op.name);
     row.append(
-      button(ACTION[op.name] || op.name, bounds ? `${op.name} · ${bounds}` : op.name, () => {
+      button(actionText, btnTitle, () => {
         const [a = 0, b = 0] = fields.map((field) => Number(field.value));
         issue(op.name, a, b);
         /* A free tag is spent once it is sent. */
@@ -94,7 +99,7 @@ export function createDrive({ root, note, send }) {
   function render() {
     clear(root);
     if (!world) return;
-    for (const op of world.ops) renderOp(root, op, world.guests);
+    for (const op of world.ops) renderOp(root, op, world.guests, world.commandsMeta);
   }
 
   return {
@@ -109,6 +114,7 @@ export function createDrive({ root, note, send }) {
     setWorld(topology) {
       const command = topology?.command;
       const ops = Array.isArray(command?.ops) ? command.ops : null;
+      const commandsMeta = topology?.ui_metadata?.commands || {};
       const next = ops
         ? {
             ops,
@@ -117,6 +123,7 @@ export function createDrive({ root, note, send }) {
                drain period would otherwise return early here and leave
                the previous wait on screen for the rest of the session. */
             period: command.period_us,
+            commandsMeta,
           }
         : null;
       if (JSON.stringify(next) === JSON.stringify(world)) return;
@@ -127,6 +134,7 @@ export function createDrive({ root, note, send }) {
       note.textContent = contract || "이 실행은 명령을 받지 않는다";
       render();
     },
+
 
     /* EL2's own verdict, arriving as a trace record like everything
        else the machine says — so a refusal reads the way an acceptance
