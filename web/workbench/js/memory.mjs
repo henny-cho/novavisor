@@ -48,9 +48,12 @@ export function createMemory({ pick, form, input, note, body, request }) {
   const readings = new Map(); /* topic -> values, for the topic a walk is dated by */
   let counterHz = 0;
 
-  function ask(address) {
+  /* An absent address is the map alone — what the walk reads an empty one
+     as too, so callers pass whatever the box holds, and this is the only
+     place that guards on a regime having been chosen. */
+  function ask(address = "") {
     if (!chosen) return;
-    request({ regime: chosen, address: address ?? "" });
+    request({ regime: chosen, address });
   }
 
   function choose(id) {
@@ -59,7 +62,7 @@ export function createMemory({ pick, form, input, note, body, request }) {
     shown = null;
     renderPick();
     clear(body);
-    ask(null);
+    ask();
   }
 
   function renderPick() {
@@ -353,7 +356,7 @@ export function createMemory({ pick, form, input, note, body, request }) {
     /* Asked again when the view opens: a run that started since the
        last look has different tables. */
     refresh() {
-      if (chosen) ask(input.value.trim() || null);
+      ask(input.value.trim());
     },
   };
 }

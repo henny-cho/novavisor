@@ -7,13 +7,16 @@
 
    Nothing here decodes a descriptor or knows where a level's index
    sits: the answers below are shaped the way the bridge shapes them,
-   and what is checked is what a reader ends up looking at. */
+   and what is checked is what a reader ends up looking at.
+
+   The probe box is the other half — what the view asks for when someone
+   types an address, picks a regime, or comes back to the view. */
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createMemory } from "../workbench/js/memory.mjs";
-import { element, find, findAll, installDom } from "./dom.mjs";
+import { element, find, findAll, fire, gesture, installDom } from "./dom.mjs";
 
 /* A machine's counter, the same rate the board declares. */
 const HZ = 62_500_000;
@@ -230,5 +233,96 @@ describe("address view: what it asks for", () => {
     world(memory, [GUEST, CPU]);
     memory.answer({ ...CLOSED, regime: CPU.id });
     assert.equal(find(body, "mbeside"), null);
+  });
+});
+
+describe("address view: the probe box", () => {
+  it("asks about the address the reader typed, trimmed", () => {
+    const { memory, form, input, asked } = harness();
+    world(memory, [GUEST]);
+    input.value = "  0xffff8000807c12a4  ";
+
+    const event = gesture();
+    fire(form, "submit", event);
+
+    assert.deepEqual(asked.at(-1), { regime: GUEST.id, address: "0xffff8000807c12a4" });
+    assert.ok(event.prevented, "a submit that reloaded the page would drop the session");
+  });
+
+  it("asks nothing before a run has published a regime", () => {
+    /* An address with no regime is a question about nothing — the bridge
+       would reject it on the run's topology. */
+    const { memory, form, input, asked } = harness();
+    world(memory, []);
+    input.value = "0x40000000";
+
+    fire(form, "submit", gesture());
+
+    assert.deepEqual(asked, []);
+  });
+
+  it("asks again when the view is reopened, and an empty box asks for the map", () => {
+    const { memory, input, asked } = harness();
+    world(memory, [GUEST]);
+
+    input.value = "0x40000000";
+    memory.refresh();
+    assert.deepEqual(asked.at(-1), { regime: GUEST.id, address: "0x40000000" });
+
+    input.value = "";
+    memory.refresh();
+    /* The walk reads an absent address as the map alone. */
+    assert.deepEqual(asked.at(-1), { regime: GUEST.id, address: "" });
+  });
+
+  it("asks about the regime the reader picked and drops the answer on screen", () => {
+    const { memory, pick, body, asked } = harness();
+    world(memory, [GUEST, CPU]);
+    memory.answer(CLOSED);
+    assert.ok(find(body, "mbeside"), "the first regime's answer is drawn");
+
+    fire(findAll(pick, "chip")[1], "click");
+
+    assert.deepEqual(asked.at(-1), { regime: CPU.id, address: "" });
+    assert.equal(find(body, "mbeside"), null, "one regime's map must not sit under another's name");
+  });
+
+  it("suggests the first address the machine mapped, not one typed into the page", () => {
+    const { memory, input } = harness();
+    world(memory, [CPU]);
+    memory.answer({
+      regime: CPU.id,
+      ground: "captured",
+      root: "0x40000000",
+      tree: {
+        nodes: [
+          {
+            kind: "table",
+            level: 0,
+            index: 0,
+            count: 1,
+            base: "0x0",
+            size: "512G",
+            output: "0x100000",
+            children: [
+              {
+                kind: "block",
+                level: 1,
+                index: 1,
+                count: 1,
+                base: "0x40000000",
+                size: "1G",
+                output: "0x40000000",
+                w: true,
+                x: false,
+                memory: "normal",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    assert.equal(input.placeholder, "0x40000000");
   });
 });
