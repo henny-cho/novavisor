@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createTimeline } from "../workbench/js/timeline.mjs";
-import { element, fire, installDom } from "./dom.mjs";
+import { element, fire, gesture, installDom } from "./dom.mjs";
 
 /* One tick is one microsecond, so a gap and its printed delta are the
    same number and a wrong one cannot hide in the conversion. */
@@ -329,7 +329,7 @@ describe("timeline pointer and keys", () => {
     const { timeline, chosen, canvas, strip } = harness();
     timeline.apply(answer(1000, FOUR));
 
-    const key = (name) => fire(canvas, "keydown", { key: name, preventDefault() {} });
+    const key = (name) => fire(canvas, "keydown", gesture({ key: name }));
     key("ArrowRight");
     assert.equal(strip.dataset.follow, "off");
     assert.equal(chosen.at(-1).index, 0);

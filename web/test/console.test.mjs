@@ -1,10 +1,13 @@
-/* Console multiplexer test: tabs, merged view, and guest logging. */
+/* Console multiplexer test: tabs, merged view, guest logging, and the
+   keys a reader presses back at the machine. */
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createConsole } from "../workbench/js/console.mjs";
-import { element, findAll, fire, installDom } from "./dom.mjs";
+import { element, findAll, fire, gesture, installDom } from "./dom.mjs";
+
+const FOCUS_CYCLE = "\u0014"; /* the byte Ctrl-T stands for */
 
 function harness() {
   installDom();
@@ -14,8 +17,15 @@ function harness() {
   const form = element("form");
   const input = element("input");
   const focusButton = element("button");
+  /* The link the input path answers to. `up` is writable so one test can
+     lose it and get it back, which is the retry the console promises. */
+  const link = { up: true };
   const sent = [];
-  const send = (data) => sent.push(data);
+  const send = (topic, data) => {
+    if (!link.up) return false;
+    sent.push([topic, data]);
+    return true;
+  };
   const notices = [];
   const onNotice = (msg) => notices.push(msg);
 
@@ -30,8 +40,20 @@ function harness() {
     onNotice,
   });
 
-  return { consoleView, tabs, logs, banner, form, input, focusButton, sent, notices };
+  return { consoleView, tabs, logs, banner, form, input, focusButton, link, sent, notices };
 }
+
+const submit = (form) => {
+  const event = gesture();
+  fire(form, "submit", event);
+  return event;
+};
+
+const press = (input, key, held = {}) => {
+  const event = gesture({ key, ctrlKey: true, altKey: false, metaKey: false, ...held });
+  fire(input, "keydown", event);
+  return event;
+};
 
 describe("console multiplexer", () => {
   it("initializes tabs and appends hypervisor lines to merged view", () => {
@@ -78,5 +100,79 @@ describe("console multiplexer", () => {
 
     consoleView.cutAt(null);
     assert.equal(merged.children[1].hidden, false);
+  });
+});
+
+describe("console input", () => {
+  it("sends the typed line with the newline Enter stands for, and empties the box", () => {
+    const { form, input, sent } = harness();
+    input.value = "help";
+
+    const event = submit(form);
+
+    assert.deepEqual(sent, [["uart", { bytes: "help\n" }]]);
+    assert.equal(input.value, "", "the line went out, so the box is clear for the next one");
+    assert.ok(event.prevented, "a submit that reloaded the page would drop the session");
+  });
+
+  it("sends a bare newline when Enter is pressed on an empty box", () => {
+    const { form, sent } = harness();
+
+    submit(form);
+
+    /* Enter at a prompt is a keystroke the guest answers, not nothing. */
+    assert.deepEqual(sent, [["uart", { bytes: "\n" }]]);
+  });
+
+  it("keeps a line the bridge could not take, so it can be sent again", () => {
+    const { form, input, link, sent, notices } = harness();
+    link.up = false;
+    input.value = "reboot";
+
+    submit(form);
+
+    assert.deepEqual(sent, []);
+    assert.equal(input.value, "reboot", "typing survives a bridge that was not there");
+    assert.match(notices.at(-1), /입력을 보내지 못했습니다/);
+
+    link.up = true;
+    submit(form);
+
+    assert.deepEqual(sent, [["uart", { bytes: "reboot\n" }]]);
+    assert.equal(input.value, "");
+  });
+
+  it("cycles focus on Ctrl-T with a control byte rather than a typed letter", () => {
+    const { input, sent } = harness();
+
+    const lower = press(input, "t");
+    const upper = press(input, "T"); /* the same chord with shift held */
+
+    assert.deepEqual(sent, [
+      ["uart", { bytes: FOCUS_CYCLE }],
+      ["uart", { bytes: FOCUS_CYCLE }],
+    ]);
+    assert.ok(lower.prevented && upper.prevented, "an unstopped chord types its letter too");
+  });
+
+  it("leaves a keystroke that is not the chord to the box", () => {
+    const { input, sent } = harness();
+
+    const typed = press(input, "t", { ctrlKey: false });
+    press(input, "t", { altKey: true });
+    press(input, "t", { metaKey: true });
+    press(input, "r");
+
+    assert.deepEqual(sent, [], "only Ctrl-T alone is the focus cycle");
+    assert.ok(!typed.prevented, "a letter the console stopped would never reach the box");
+  });
+
+  it("cycles focus from the button and hands the caret back", () => {
+    const { focusButton, input, sent } = harness();
+
+    fire(focusButton, "click", gesture());
+
+    assert.deepEqual(sent, [["uart", { bytes: FOCUS_CYCLE }]]);
+    assert.ok(input.focused, "a reader who clicked the button still means to type");
   });
 });

@@ -38,12 +38,18 @@ class Element {
     this.classes = new Set();
     this.own = ""; /* text set directly on this node */
     this.hidden = false;
+    this.focused = false;
     this.scrollLeft = 0;
     this.scrollTop = 0;
     this.scrollHeight = 0;
     this.clientHeight = 0;
     /* What getBoundingClientRect answers; a test that cares sets it. */
     this.rect = { left: 0, top: 0, width: 0, height: 0 };
+    /* A text field reads back as empty before anything is typed, as the
+       real one does; a view that sends `${input.value}` must not be able
+       to send the word "undefined" here and pass. A <select> keeps
+       reporting undefined — that is what the option rule below reads. */
+    if (this.tagName === "INPUT") this.value = "";
     this.classList = {
       add: (...names) => names.forEach((name) => this.classes.add(name)),
       remove: (...names) => names.forEach((name) => this.classes.delete(name)),
@@ -117,6 +123,10 @@ class Element {
   }
 
   setPointerCapture() {}
+
+  focus() {
+    this.focused = true;
+  }
 
   getBoundingClientRect() {
     const { left, top, width, height } = this.rect;
@@ -224,6 +234,17 @@ export const element = (tag) => globalThis.document.createElement(tag);
 /* What a listener the module registered would receive. */
 export function fire(node, type, event = {}) {
   for (const handler of node.handlers.get(type) ?? []) handler(event);
+}
+
+/* A gesture that remembers whether the handler stopped the page from
+   acting on it — submitting the form, typing the letter. Without this
+   the call is a no-op stub and the refusal is invisible. */
+export function gesture(fields = {}) {
+  const event = { ...fields, prevented: false };
+  event.preventDefault = () => {
+    event.prevented = true;
+  };
+  return event;
 }
 
 export function walk(node, seen = []) {
