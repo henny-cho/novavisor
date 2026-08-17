@@ -1,11 +1,19 @@
 #pragma once
 
-// FDT fixtures for fdt_model_test — bytes produced by the real
-// generator so the parser and configuration pipeline verify each
-// other. Regeneration requires the selected board layout and device
-// inventory alongside each source configuration.
-//   (kNoUartDtb: a 1-guest config with memory_size 0x300000, vcpus 1,
-//    uart none), then re-dump the byte arrays.
+// FDT fixtures for fdt_model_test: two blobs the generator once wrote,
+// kept as bytes rather than rebuilt.
+//
+// Held still on purpose. The parser is the consumer of this format and
+// the generator is its producer; a fixture regenerated beside the parser
+// would only ever prove the two agree with each other, which is exactly
+// what a walker with a wrong offset also does. What the generator emits
+// today is checked where it is written — by dtc, which reads every blob
+// back before the build keeps it, and by the generator's own tests.
+//
+// So these bytes are a frozen sample of the wire format, and the thing
+// to notice is not that they are old but that the walker still reads
+// them: a change to the parser that needs new fixture bytes is a change
+// that stopped reading FDT v17.
 
 #include <cstdint>
 

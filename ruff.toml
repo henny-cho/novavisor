@@ -19,4 +19,4 @@ select = ["E4", "E7", "E9", "F", "I", "ARG", "TID251"]
 # exemption would waive the rule for the other six packages too, which
 # is the opposite of what naming an owner means.
 [lint.per-file-ignores]
-"tests/scripts/*.py" = ["TID251"]
+"tests/**/*.py" = ["TID251"]

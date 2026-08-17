@@ -128,10 +128,17 @@ describe("address view: the recheck", () => {
   });
 
   it("says nothing about movement for a regime that does not move", () => {
+    /* A regime walked once has no second answer to compare, so the
+       reading is absent rather than false: reporting "walked twice, same
+       answer" about one walk would be evidence nobody produced. */
     const { memory, body } = harness();
     world(memory, [CPU]);
     memory.answer({ regime: CPU.id, ground: "captured", root: "0x40000000", tree: { nodes: [] } });
-    assert.equal(findAll(body, "mwarn").length, 0);
+    const said = [...findAll(body, "mnote"), ...findAll(body, "mwarn")];
+    assert.deepEqual(
+      said.map((node) => node.textContent).filter((text) => /걸어|섞였다/.test(text)),
+      [],
+    );
   });
 });
 

@@ -17,9 +17,21 @@ if TYPE_CHECKING:
     from .session import Session
     from .store import StateStore
 
+# The trace loop's period: the interval that has to fit inside the ring
+# depth, set by the peak fill rather than the average, since a guest boot
+# bursts to tens of times the run's mean rate. An idle look costs two
+# eight-byte reads, because the drain is skipped when nothing is waiting.
 TRACE_DRAIN_SECONDS = 0.005
+# How often to look when there is no reader to feed.
 POLL_INTERVAL_SECONDS = 0.05
+# What one drain may cost the loop it runs on. Stated as a duration
+# because that is the thing at stake: a record count would encode how
+# fast this machine decodes one, and the ring depth such a count would
+# have been chosen against has already moved by sixty-four times once.
 TRACE_TURN_SECONDS = 0.008
+# Where the allowance starts and how low it may fall. A floor can only
+# make a turn shorter than the budget, never longer, so it cannot bring
+# back the stall it is here to prevent.
 TRACE_DRAIN_FLOOR = 64
 
 
@@ -78,6 +90,10 @@ class TraceDrain:
             return False
         if self.tracer_run != session.run_id:
             self.drop()
+            # A new machine's timestamps are a new epoch. Only a run
+            # change clears the history: a read that failed mid-run must
+            # not cost that run its records.
+            self.history.reset()
             self.tracer_run = session.run_id
         if self.tracer is not None:
             return True
@@ -124,7 +140,20 @@ class TraceDrain:
         return True
 
     def pump(self) -> bool:
-        """Drain the firmware's rings and publish what fired."""
+        """Drain the firmware's rings and publish what fired.
+
+        Returns whether records are still waiting, which is the caller's
+        cue to come straight back rather than hold to its tick.
+
+        Counts per path, not the records: a few thousand events a second
+        is nothing to the bridge and a great deal to a browser. The
+        records stay in the history for a window request to ask for.
+
+        What the drain could not recover arrives as records too, so the
+        history holds the holes in the same order and shape as everything
+        else, and the summary's loss count is read back off them rather
+        than tallied beside them.
+        """
         if not self.attach() or self.tracer is None or self.budget is None:
             return False
         arrived = time.monotonic()

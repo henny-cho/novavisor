@@ -56,7 +56,7 @@ endif()
 # Clang-Tidy retarget args for `scripts/nova lint` (cross builds only).
 include(cmake/clang_tidy.cmake)
 
-# Target-definition helpers (nova_add_component, nova_add_host_test).
+# Target-definition helpers (nova_add_component, nova_add_test).
 include(cmake/nova_helpers.cmake)
 include(cmake/nova_platform_contract.cmake)
 
@@ -164,38 +164,37 @@ else()
         )
     endif()
 
-    # Foundation-tree tests (tests/host/).
-    nova_add_host_test(esr_parse_test)  # nova/arch/esr.hpp + sysreg_trap.hpp
-    nova_add_host_test(data_abort_test) # nova/arch/data_abort.hpp MMIO decode
-    nova_add_host_test(spin_lock_test)     # nova/sync.hpp mutual exclusion
-    nova_add_host_test(dma_policy_test)    # Stream ID ownership and DMA windows
-    nova_add_host_test(gic_spi_test)       # arbitrary physical SPI banks
-    nova_add_host_test(payload_test)       # embedded image metadata and checksum
-    nova_add_host_test(el2_stage1_test)       # EL2 Stage-1 identity map + W^X
-    nova_add_host_test(timebase_test)         # CNTFRQ contract + overflow-safe ms conversion
-    nova_add_host_test(cpu_features_test)     # speculation-barrier ID fields → SMCCC verdict
-    nova_add_host_test(trace_ring_test)       # overwriting trace ring: loss is counted, never torn
-    nova_add_host_test(command_ring_test)     # refusing command ring: accepted means delivered once
-    nova_add_host_test(telemetry_test)        # publishing region: a reading is one moment, a sequence one change
-
-    # Component tests (src/components/<group>/<name>/test/).
-    nova_add_component_test(core_mmu stage2_builder_test)    # Stage 2 identity-map builder
-    nova_add_component_test(vgic vgic_model_test)            # GICD/GICR register model
-    nova_add_component_test(vgic vgic_delivery_test)         # pending → LR multiplexing
-    nova_add_component_test(console_mux line_model_test)     # line assembly + focus cycling
-    nova_add_component_test(soft_timer timer_queue_test)     # deadline-slot queue
-    nova_add_component_test(core_vcpu sched_model_test)      # scheduler pick/predicates
-    nova_add_component_test(psci smccc_model_test)           # SMCCC arch service + FEATURES gate
-    nova_add_component_test(dma_device device_lifecycle_model_test) # per-device lifecycle registry
-    nova_add_component_test(smp quiesce_model_test)           # VM quiesce-epoch tracker
-    nova_add_component_test(ivc ring_test)                   # SPSC ring protocol (threads)
-    nova_add_component_test(vuart vuart_model_test)          # PL011 register model
-    nova_add_component_test(dtb_parser fdt_model_test)       # FDT walker + guest extraction
-    nova_add_component_test(smmu queue_model_test)           # CMDQ/EVTQ phase transitions
-    nova_add_component_test(smmu fault_model_test)           # SID/address fault records
-    nova_add_component_test(smmu runtime_model_test)         # runtime capabilities and layout
-    nova_add_component_test(smmu domain_model_test)          # guest DMA context lifecycle
-    nova_add_component_test(smmu hw_driver_test)             # register protocol vs. fake device
-    nova_add_component_test(smmu dma_table_model_test PEERS core_mmu) # DMA-only Stage-2 mappings
+    # Every host test lives beside the headers it exercises, under
+    # src/**/test/, and is registered here by name alone.
+    nova_add_test(esr_parse_test)       # nova/arch/esr.hpp + sysreg_trap.hpp
+    nova_add_test(data_abort_test)      # nova/arch/data_abort.hpp MMIO decode
+    nova_add_test(spin_lock_test)       # nova/sync.hpp mutual exclusion
+    nova_add_test(dma_policy_test)      # Stream ID ownership and DMA windows
+    nova_add_test(gic_spi_test)         # arbitrary physical SPI banks
+    nova_add_test(payload_test)         # embedded image metadata and checksum
+    nova_add_test(el2_stage1_test)      # EL2 Stage-1 identity map + W^X
+    nova_add_test(timebase_test)        # CNTFRQ contract + overflow-safe ms conversion
+    nova_add_test(cpu_features_test)    # speculation-barrier ID fields → SMCCC verdict
+    nova_add_test(trace_ring_test)      # overwriting trace ring: loss is counted, never torn
+    nova_add_test(command_ring_test)    # refusing command ring: accepted means delivered once
+    nova_add_test(telemetry_test)       # publishing region: a reading is one moment, a sequence one change
+    nova_add_test(stage2_builder_test)  # Stage 2 identity-map builder
+    nova_add_test(vgic_model_test)      # GICD/GICR register model
+    nova_add_test(vgic_delivery_test)   # pending → LR multiplexing
+    nova_add_test(line_model_test)      # line assembly + focus cycling
+    nova_add_test(timer_queue_test)     # deadline-slot queue
+    nova_add_test(sched_model_test)     # scheduler pick/predicates
+    nova_add_test(smccc_model_test)     # SMCCC arch service + FEATURES gate
+    nova_add_test(device_lifecycle_model_test) # per-device lifecycle registry
+    nova_add_test(quiesce_model_test)   # VM quiesce-epoch tracker
+    nova_add_test(ring_test)            # SPSC ring protocol (threads)
+    nova_add_test(vuart_model_test)     # PL011 register model
+    nova_add_test(fdt_model_test)       # FDT walker + guest extraction
+    nova_add_test(queue_model_test)     # CMDQ/EVTQ phase transitions
+    nova_add_test(fault_model_test)     # SID/address fault records
+    nova_add_test(runtime_model_test)   # runtime capabilities and layout
+    nova_add_test(domain_model_test)    # guest DMA context lifecycle
+    nova_add_test(hw_driver_test)       # register protocol vs. fake device
+    nova_add_test(dma_table_model_test PEERS core_mmu) # DMA-only Stage-2 mappings
 
 endif() # CMAKE_CROSSCOMPILING

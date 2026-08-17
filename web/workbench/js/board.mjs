@@ -65,24 +65,6 @@ const LR_GLYPH = {
   "pending+active": "◆",
 };
 
-/* What each path is called, keyed by the edge id the bridge assigns.
-   Same split as the segment captions below: the bridge states which
-   blocks a path joins and what watches it, the UI supplies the words.
-   An edge with no caption here still draws — it just goes unnamed. */
-const EDGE_TEXT = {
-  trap: "게스트 트랩 → EL2",
-  phys: "물리 IRQ → PE",
-  post: "장치 SPI → 분배기",
-  inject: "vIRQ 주입 → 게스트",
-  mmio: "MMIO 트랩 → 에뮬레이션",
-  dma: "장치 DMA → SMMU",
-  walk: "SMMU 변환 → 메모리",
-  cross: "코어 간 크로스콜",
-  ivc: "IVC 도어벨 → 공유 페이지",
-  psci: "PSCI 기동 → PE",
-  uart: "vuart → 물리 UART",
-};
-
 /* The classes a pulse cycles through: two per grade.
 
    It alternates because re-adding a class the element already has does
@@ -642,7 +624,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
      in-flight list is a sample, so a count would be unmeasured. "Last
      seen at" is exactly as much as the evidence supports. */
   function edgeTitle(edge) {
-    const name = edge.label || EDGE_TEXT[edge.id] || edge.id;
+    const name = edge.label || edge.id;
     const seen = edge.last ? ` · 마지막 ${stamp(edge.last.ts)} ${edge.last.message || ""}` : "";
     if (edge.grade === "direct") return `${name} — 정지 가능 · 실측${seen}`;
     if (edge.grade === "console") return `${name} — 콘솔 이벤트 · 시각 정확${seen}`;

@@ -97,7 +97,11 @@ def test() -> int:
             "unittest",
             "discover",
             "-s",
-            str(config.REPO / "tests" / "scripts"),
+            str(config.REPO / "tests"),
+            # The repository is the top level so `tests/__init__.py` runs
+            # and the suite finds novakit without a stanza per module.
+            "-t",
+            str(config.REPO),
             "-p",
             "*_test.py",
         ]
@@ -139,7 +143,7 @@ def static_analysis() -> int:
         raise SystemExit(
             f"missing static analysis tools: {', '.join(missing)}; run scripts/bootstrap"
         )
-    proc.run(["ruff", "check", "--no-cache", "scripts", "tests/scripts"])
+    proc.run(["ruff", "check", "--no-cache", "scripts", "tests"])
     proc.run(["shellcheck", "-x", "--exclude=SC1091", *files.shell_scripts()])
     proc.run(["actionlint"])
     _web()

@@ -414,13 +414,17 @@ class Writer:
         list of opcodes it was written against.
 
         The names come from the ABI header both sides compile against;
-        everything else comes from the page this run placed.
+        everything else comes from the page this run placed. Each row
+        also carries its own prose, so a panel draws the name it was
+        given or falls back to the opcode -- there is no second channel
+        to keep in step with the rows.
         """
         return {
             "ops": [
                 {
                     "name": op.name,
                     "code": op.code,
+                    **COMMAND_META.get(op.name, {}),
                     "args": [
                         {
                             "kind": arg.kind_name,

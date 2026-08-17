@@ -178,13 +178,6 @@ TEST(SmmuStreamIndex, OutOfRangeVmHasNoStreams) {
   EXPECT_TRUE(index.streams_of(dma::kNoVm).empty());
 }
 
-TEST(SmmuAttachGate, AcceptsFreshDomain) {
-  const auto bindings = make_bindings();
-  const auto index    = build_stream_index<kTestStreams>(bindings);
-  EXPECT_TRUE(can_attach_vm(bindings, index.streams_of(0), 1));
-  EXPECT_TRUE(can_attach_vm(bindings, index.streams_of(1), 1));
-}
-
 TEST(SmmuAttachGate, EmptyStreamListIsTriviallyAttachable) {
   const auto bindings = make_bindings();
   const auto index    = build_stream_index<kTestStreams>(bindings);

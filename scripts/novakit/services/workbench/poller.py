@@ -27,10 +27,12 @@ class ObservationPoller:
         store: StateStore,
         session: Session,
         board_numbers_fn: Callable[[], dict[str, int]],
+        reject_fn: Callable[[str, str | None], None],
     ) -> None:
         self.store = store
         self.session = session
         self._board_numbers = board_numbers_fn
+        self._reject = reject_fn
 
         self.poller: snapshot.SnapshotPoller | None = None
         self.provider: snapshot.SnapshotProvider | None = None
@@ -61,7 +63,18 @@ class ObservationPoller:
             self.session.adopt_memory_map(topology)
 
     def ensure_writer(self) -> commands.Writer | None:
-        """This run's write window, opened once the page exists."""
+        """This run's write window, opened once the page exists.
+
+        Where the page is, is the image's answer and not the board's: the
+        firmware allocates it as an ordinary global, so the symbol table
+        is the only thing that knows the address. The demo step writes
+        through the same symbol, which is what keeps one page under both.
+
+        Opening the window is also what tells a reader the run takes
+        commands, so the rows go out here: the panel is built from them,
+        and a window opened without publishing them is a machine that
+        accepts commands nobody is offered.
+        """
         session = self.session
         if session.phase is not Phase.RUNNING or session.surfaces is None:
             return None
@@ -74,19 +87,33 @@ class ObservationPoller:
         shm_path = session.surfaces.shm_path
         if not shm_path.exists() or shm_path.stat().st_size == 0:
             return None
-        board = self._board_numbers()
-        if "NOVA_BOARD_CMD_BASE" not in board:
+        symbols = snapshot.image_symbols(self.provider)
+        if symbols is None:
+            return None  # the S layer has not read the image yet
+        if not symbols.has(observations.COMMAND_PAGE):
+            # This build carries no command component. Settled for the
+            # run: the absent block is how a reader is told so.
+            self.writer_run = current
             return None
+        page, size = symbols.extent_of(observations.COMMAND_PAGE)
         try:
             self.writer = commands.Writer(
-                shm_path,
-                board["NOVA_BOARD_PHYS_RAM_BASE"],
-                board["NOVA_BOARD_CMD_BASE"],
-                board["NOVA_BOARD_CMD_SIZE"],
+                shm_path, self._board_numbers()["NOVA_BOARD_PHYS_RAM_BASE"], page, size
             )
-            self.writer_run = current
-        except (FileNotFoundError, OSError, commands.NotFormatted):
+        except commands.NotYetFormatted:
+            # EL2 has not placed the page yet. Nothing is settled, so no
+            # reason is given and the next tick looks again.
             return None
+        except commands.NotFormatted as error:
+            # A layout this build cannot read will not become readable by
+            # asking again: settle the run, and say why once.
+            self.writer_run = current
+            self._reject(f"cmd: {error}", None)
+            return None
+        except (FileNotFoundError, OSError):
+            return None
+        self.writer_run = current
+        self.session.adopt_command_ring(self.writer.as_dict())
         return self.writer
 
     def _build_provider(self, elf_path: Path, shm_path: Path):

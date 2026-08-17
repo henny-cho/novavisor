@@ -17,12 +17,20 @@ import { element, find, findAll, fire, installDom } from "./dom.mjs";
 const band = (kind, lo, hi, dflt = 0) => ({ kind, lo, hi, default: dflt, free: lo > hi });
 const free = (kind = "plain") => band(kind, 1, 0);
 
+/* Each row carries its own prose, the way the bridge sends it: the panel
+   draws the name it was given and falls back to the machine's word. */
 const RUN = {
   command: {
     ops: [
-      { name: "mark", code: 1, args: [free()] },
-      { name: "spi", code: 2, args: [band("vm", 0, 1), band("plain", 32, 63, 32)] },
-      { name: "slice", code: 3, args: [band("micros", 500, 1000, 500)] },
+      { name: "mark", code: 1, label: "표식", action: "남기기", args: [free()] },
+      {
+        name: "spi", code: 2, label: "SPI", action: "주입",
+        args: [band("vm", 0, 1), band("plain", 32, 63, 32)],
+      },
+      {
+        name: "slice", code: 3, label: "슬라이스", action: "적용",
+        args: [band("micros", 500, 1000, 500)],
+      },
     ],
     period_us: 2000,
   },
@@ -84,12 +92,6 @@ describe("drive panel", () => {
     find(root, "pick").value = "1";
     press(root, "stop");
     assert.deepEqual(sent.at(-1), { op: "stop", a: 1, b: 0 });
-  });
-
-  it("states the wait the run promised", () => {
-    const { drive, note } = harness();
-    drive.setWorld(RUN);
-    assert.equal(note.textContent, "≤2 ms");
   });
 
   it("bounds the SPI control by the range the run declares", () => {

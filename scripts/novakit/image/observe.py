@@ -15,6 +15,7 @@ Rates and shapes are the bridge's; the two halves meet at the topic.
 from __future__ import annotations
 
 import argparse  # noqa: TID251 — the build graph runs this as a program
+import functools
 import hashlib
 import json
 import sys
@@ -136,30 +137,46 @@ class View:
     enums: dict[str, dict[int, str]] = field(default_factory=dict)
 
 
+@functools.lru_cache(maxsize=1)
+def _index(elf: Path, stamp: tuple[int, int]) -> elfsym.ElfIndex:
+    """The image's debug information, walked once per image.
+
+    The walk is the expensive half of every question below — seconds, for
+    an answer that cannot change while the file does not. `stamp` carries
+    the image's identity, so a relinked ELF is a different key and is
+    walked again; only one is remembered, because a process asks about the
+    image it is working on.
+
+    The cache owns the stream, so the index is not closed here: reading a
+    symbol from a closed one would fail, and holding one read-only
+    descriptor is the price of not walking the DWARF three times.
+    """
+    del stamp  # part of the key, not of the walk
+    return elfsym.ElfIndex(elf)
+
+
 def resolve(elf: Path) -> View:
     """Answer every question above against one image.
 
-    Opens the ELF, reads it, closes it, returns data — runnable
-    anywhere, including a build step.
+    Reads the ELF and returns data — runnable anywhere, including a build
+    step, which calls it once.
 
     A question with no answer raises rather than yielding a hole: a
     dropped enum turns exception classes into bare numbers and a renamed
     global blanks a panel, both silently.
     """
-    index = elfsym.ElfIndex(elf)
-    try:
-        resolved = {want.topic: index.resolve(want.symbol) for want in OBSERVED}
-        for want in OBSERVED:
-            _prove(want, resolved[want.topic])
-        return View(
-            resolved,
-            index.symbols,
-            {symbol: index.resolve(symbol) for symbol in WALK},
-            {want.symbol: resolved[want.topic].address for want in OBSERVED},
-            {name: index.enum_labels(name) for name in ENUMS},
-        )
-    finally:
-        index.close()
+    stat = elf.stat()
+    index = _index(elf, (stat.st_mtime_ns, stat.st_size))
+    resolved = {want.topic: index.resolve(want.symbol) for want in OBSERVED}
+    for want in OBSERVED:
+        _prove(want, resolved[want.topic])
+    return View(
+        resolved,
+        index.symbols,
+        {symbol: index.resolve(symbol) for symbol in WALK},
+        {want.symbol: resolved[want.topic].address for want in OBSERVED},
+        {name: index.enum_labels(name) for name in ENUMS},
+    )
 
 
 def _prove(want: Want, entry: elfsym.ResolvedSymbol) -> None:

@@ -82,6 +82,19 @@ class History:
         # counter that could drift from the buffer it describes.
         self._head = 0
 
+    def reset(self) -> None:
+        """Start a new epoch, keeping the allocation.
+
+        A new run's timestamps restart low, and appending them to the
+        last run's puts both in one order: every record of the new run is
+        older than everything held, so append() lifts the whole buffer
+        and evicts each one by its own reinstatement. Everything the
+        history reports is derived from `_head`, so winding it back is
+        the whole of being empty.
+        """
+        self._head = 0
+        self.freq_hz = 0
+
     def __len__(self) -> int:
         return min(self._head, self.capacity)
 

@@ -19,7 +19,7 @@ from ...core import board
 from ...image import observe
 from .. import artifacts, cmake, expect, manifest, spawn, verify
 from ..surfaces import Surfaces
-from . import anchors, commands, derive, events, hardware, paths, steps
+from . import anchors, derive, events, hardware, paths, steps
 from .observations import observation_rates, timer_slot_labels
 from .protocol import MAX_BUCKETS, Kind, Src, Topic
 from .store import StateStore
@@ -121,12 +121,7 @@ def initial_topology() -> dict:
         "timer_slots": timer_slot_labels(),
         "observations": observation_rates(),
         "limits": {"buckets": MAX_BUCKETS},
-        "ui_metadata": {
-            "commands": commands.COMMAND_META,
-            "edges": paths.EDGE_LABELS,
-        },
     }
-
 
 
 def _select_variant(demo_manifest: dict, name: str | None) -> dict:
@@ -172,10 +167,6 @@ def prepare(target: Target) -> Prepared:
         "timer_slots": timer_slot_labels(),
         "observations": observation_rates(),
         "limits": {"buckets": MAX_BUCKETS},
-        "ui_metadata": {
-            "commands": commands.COMMAND_META,
-            "edges": paths.EDGE_LABELS,
-        },
     }
     return Prepared(scenario, topology)
 

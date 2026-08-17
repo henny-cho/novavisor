@@ -19,7 +19,6 @@ from ...image import elfsym
 from ..surfaces import Surfaces, make_surfaces
 from . import (
     commands,
-    halt,
     hardware,
     history,
     recording,
@@ -69,39 +68,10 @@ __all__ = [
     "serve",
 ]
 
+# How often the downlink is flushed to every connection. The H and T
+# loops keep their own cadences beside the state they pace.
 FLUSH_INTERVAL_SECONDS = 0.05
-POLL_INTERVAL_SECONDS = 0.05
 WS_PATH = "/ws"
-# Waiting for a breakpoint is sliced so an abort is answered promptly;
-# the machine keeps running across slices, only the listening pauses.
-RUN_SLICE_SECONDS = 0.25
-# How long to run before saying so. A chosen event may be rare or may
-# never occur on this demo; silence reads as a hung bridge.
-WAIT_NOTICE_SECONDS = 2.0
-# ~700 us per instruction over RSP, so this caps one request at a couple
-# of seconds. Stepping is for looking inside an event, not reaching one.
-MAX_STEPS = 2000
-# Arming at launch races the guest, so the watch is tight; the budget
-# covers a cold build ahead of the machine it is waiting for.
-LAUNCH_POLL_SECONDS = 0.005
-LAUNCH_ARM_TIMEOUT_SECONDS = 600.0
-# The trace loop's period: the interval that has to fit inside the ring
-# depth, set by the peak fill rather than the average, since a guest boot
-# bursts to tens of times the run's mean rate. An idle look costs two
-# eight-byte reads, because the drain is skipped when nothing is waiting.
-TRACE_DRAIN_SECONDS = 0.005
-# What one drain may cost the loop it runs on. Stated as a duration
-# because that is the thing at stake: a record count would encode how
-# fast this machine decodes one, and the ring depth such a count would
-# have been chosen against has already moved by sixty-four times once.
-# Eight milliseconds is the cost the design accepted for a full ring
-# when a full ring was 4096 records; it is now enforced rather than
-# assumed, and the allowance in records is found by measurement.
-TRACE_TURN_SECONDS = 0.008
-# Where the allowance starts and how low it may fall. A floor can only
-# make a turn shorter than the budget, never longer, so it cannot bring
-# back the stall it is here to prevent.
-TRACE_DRAIN_FLOOR = 64
 # Columns a window request is answered in, when it does not say. A
 # resolution, not a cap on data: the density always covers the whole
 # window and only the individual marks are gated on it, because more
@@ -161,7 +131,7 @@ class Bridge:
         self._flusher: asyncio.Task | None = None
         # The S-layer observation poller manages DWARF provider mapping and S-layer polling.
         self._poller_service = ObservationPoller(
-            self.store, self.session, self._board_numbers
+            self.store, self.session, self._board_numbers, self._reject
         )
         # The T-layer trace drain manages trace ring attachment, draining, and pacing.
         self._trace_service = TraceDrain(
@@ -388,35 +358,11 @@ class Bridge:
             self._connections,
         )
 
-    def _schedule_query(self, handler: Handler, request: Request) -> None:
-        self._dispatcher.schedule_query(
-            self, handler, request, self._closing, self._connections
-        )
-
-    def _finish_query(self, handler: Handler, request: Request) -> None:
-        self._dispatcher.finish_query(
-            self, handler, request, self._closing, self._connections
-        )
-
     def _disconnect_queries(self, connection) -> None:
         self._dispatcher.disconnect_queries(connection)
 
     def _request_live(self, request: Request) -> bool:
         return self._dispatcher.request_live(request, self._closing, self._connections)
-
-    def _reject_query(self, request: Request, reason: str) -> None:
-        self._dispatcher.reject_query(request, reason, self._closing, self._connections)
-
-    def _cancel(self, request: Request, reason: str) -> None:
-        self._dispatcher.cancel_query(request, reason, self._closing, self._connections)
-
-    def _unmet(self, needs: Needs) -> str | None:
-        return self._dispatcher.unmet(
-            needs,
-            self.session.phase,
-            self.session.surfaces,
-            self._replay is not None,
-        )
 
     def _send_uart(self, request: Request) -> None:
         reason = self.session.send_bytes(decode_bytes(str(request.data.get("bytes", ""))))
@@ -476,26 +422,9 @@ class Bridge:
             reply_to=request.request_id,
         )
 
-    def _hold(self) -> halt.HaltInspector:
-        """The inspector for this run, made once and kept."""
-        return self._halt_service.hold()
-
     def _release(self) -> None:
         """Give the machine back and forget the inspector."""
         self._halt_service.release()
-
-    async def _sweep_to_panels(self, inspector: halt.HaltInspector) -> None:
-        """Everything the machine knows about the instant it stopped."""
-        await self._halt_service.sweep_to_panels(inspector)
-
-    @staticmethod
-    def _with_delta(value, previous: dict, topic: str) -> dict:
-        """A stopped reading, and what moved since the last stop."""
-        return HaltController.with_delta(value, previous, topic)
-
-    async def _advance(self, inspector: halt.HaltInspector, data: dict) -> None:
-        """Run until a catalogued event, as many times as asked."""
-        await self._halt_service.advance(inspector, data)
 
     async def _arm_at_launch(
         self, previous_run: int, stops: list[str], reply_to: str | None = None
@@ -507,27 +436,12 @@ class Bridge:
         """Accept one halt command, or say why it is not one."""
         self._halt_service.take_halt(request)
 
-    async def _halt_command(
-        self, command: str, data: dict, reply_to: str | None = None
-    ) -> None:
-        """Pause is a held gdb connection; the machine stays stopped."""
-        await self._halt_service.halt_command(command, data, reply_to)
-
-    def _drop_tracer(self) -> None:
-        self._history = history.History(self._history.capacity)
-        self._halt_service.stopped_at = {}
-        self._trace_service.drop()
-
     def _board_numbers(self) -> dict[str, int]:
         """Board constants, read once. The headers do not change while
         the bridge runs, and the attach probe asks at 200 Hz."""
         if self._board is None:
             self._board = hardware.platform()
         return self._board
-
-    def _set_trace_state(self, state: str, **detail) -> None:
-        """Say where the T layer stands, once per transition."""
-        self._trace_service.set_trace_state(state, **detail)
 
     def _image_has_tracing(self) -> bool:
         """Does this build carry the ring writer?
@@ -544,15 +458,6 @@ class Bridge:
         """
         symbols = snapshot.image_symbols(self._poller_service.provider)
         return symbols is None or symbols.has(trace.WRITER_SYMBOL)
-
-    def _attach_tracer(self) -> bool:
-        return self._trace_service.attach()
-
-    def _drop_tracer(self) -> None:
-        self._trace_service.drop()
-
-    def _set_trace_state(self, state: str, **detail) -> None:
-        self._trace_service.set_trace_state(state, **detail)
 
     async def _answer_probe(self, request: Request) -> None:
         """Walk this run's page tables and hand back the map.
@@ -747,39 +652,6 @@ class Bridge:
         )
         self._publish_reply(request, Topic.TRACE, answer, Src.TRACE)
 
-    def _pump_trace(self) -> bool:
-        """Drain the firmware's rings and publish what fired.
-
-        Returns whether records are still waiting, which is the caller's
-        cue to come straight back rather than hold to its tick.
-
-        Counts per path, not the records: a few thousand events a second
-        is nothing to the bridge and a great deal to a browser. The
-        records stay in the history for a window request to ask for.
-
-        What the drain could not recover arrives as records too, so the
-        history holds the holes in the same order and shape as
-        everything else, and the summary's loss count is read back off
-        them rather than tallied beside them.
-        """
-    def _pump_trace(self) -> bool:
-        return self._trace_service.pump()
-
-    def _pace_drain(self, took: float, capped: bool) -> None:
-        self._trace_service.pace(took, capped)
-
-    def _drop_provider(self) -> None:
-        self._poller_service.drop_provider()
-
-    def _refresh_memory_map(self) -> None:
-        self._poller_service.refresh_memory_map()
-
-    def _ensure_writer(self) -> commands.Writer | None:
-        return self._poller_service.ensure_writer()
-
-    def _build_provider(self, elf_path: Path, shm_path: Path):
-        return self._poller_service._build_provider(elf_path, shm_path)
-
     async def _ensure_poller(self) -> snapshot.SnapshotPoller | None:
         return await self._poller_service.ensure_poller()
 
@@ -883,7 +755,6 @@ HANDLERS = (
     Handler(Topic.HALT, Bridge._take_halt, Needs.RUNNING),
 )
 UPLINK = frozenset(handler.topic for handler in HANDLERS)
-BY_TOPIC = {handler.topic: handler for handler in HANDLERS}
 
 
 async def _serve_forever(

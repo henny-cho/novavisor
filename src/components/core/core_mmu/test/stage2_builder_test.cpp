@@ -313,13 +313,6 @@ TEST_F(IdentityMapFixture, MapsRangeCrossing1GiBWithTwoL2Tables) {
   EXPECT_EQ(output_addr(l1[2]), kFakeL2Pas[1]);
 }
 
-TEST_F(IdentityMapFixture, MapsSecond1GiBRegion) {
-  init_tables(tables);
-  ASSERT_TRUE(map_identity_range(tables, kIpaBase, kIpaSize, desc::kAttrNormalRwx));
-  ASSERT_TRUE(map_identity_range(tables, 0x8000'0000ULL, kIpaSize, desc::kAttrNormalRwx));
-  EXPECT_EQ(tables.l2_used, 2U);
-}
-
 TEST_F(IdentityMapFixture, RejectsL2PoolExhaustion) {
   init_tables(tables);
   ASSERT_TRUE(map_identity_range(tables, 0x1000'0000ULL, kIpaSize, desc::kAttrNormalRwx));

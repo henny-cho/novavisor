@@ -28,13 +28,6 @@ export function createDrive({ root, note, send }) {
     return control;
   }
 
-  /* Korean where a name is known, the machine's own word otherwise. A
-     missing entry degrades to the truth, so this list going stale
-     cannot make a control lie about what it sends. */
-  const LABEL = { mark: "표식", spi: "SPI", slice: "슬라이스" };
-  const ACTION = { mark: "남기기", spi: "주입", slice: "적용" };
-
-
   /* A select rather than a number: EL2 refuses a VM that is not
      running, and being refused for typing 9 is a poor way to learn the
      machine has two. */
@@ -68,10 +61,11 @@ export function createDrive({ root, note, send }) {
   /* One control per row: as many inputs as the op reads, each dressed
      by what its argument means. Nothing here knows an opcode — an op
      this build added arrives as a row and gets a control for free. */
-  function renderOp(into, op, guests, commandsMeta = {}) {
-    const meta = commandsMeta[op.name] || {};
-    const labelText = meta.label || LABEL[op.name] || op.name;
-    const actionText = meta.action || ACTION[op.name] || op.name;
+  function renderOp(into, op, guests) {
+    /* The row names itself; an op the bridge sent without prose is
+       drawn under the word the machine uses for it. */
+    const labelText = op.label || op.name;
+    const actionText = op.action || op.name;
     const row = el("div", "drow");
     row.append(el("span", "dlabel", labelText));
     const fields = op.args.map((arg) =>
@@ -82,7 +76,9 @@ export function createDrive({ root, note, send }) {
       .filter((arg) => !arg.free && arg.kind !== "vm")
       .map((arg) => (arg.kind === "micros" ? `${usText(arg.lo)}–${usText(arg.hi)}` : `${arg.lo}–${arg.hi}`))
       .join(" ");
-    const btnTitle = meta.desc ? `${actionText} (${meta.desc})` : (bounds ? `${op.name} · ${bounds}` : op.name);
+    /* The description if the row carried one, and the bands it declared
+       otherwise — a tooltip that repeats the button says nothing. */
+    const btnTitle = op.desc || (bounds ? `${op.name} · ${bounds}` : op.name);
     row.append(
       button(actionText, btnTitle, () => {
         const [a = 0, b = 0] = fields.map((field) => Number(field.value));
@@ -99,7 +95,7 @@ export function createDrive({ root, note, send }) {
   function render() {
     clear(root);
     if (!world) return;
-    for (const op of world.ops) renderOp(root, op, world.guests, world.commandsMeta);
+    for (const op of world.ops) renderOp(root, op, world.guests);
   }
 
   return {
@@ -114,7 +110,6 @@ export function createDrive({ root, note, send }) {
     setWorld(topology) {
       const command = topology?.command;
       const ops = Array.isArray(command?.ops) ? command.ops : null;
-      const commandsMeta = topology?.ui_metadata?.commands || {};
       const next = ops
         ? {
             ops,
@@ -123,7 +118,6 @@ export function createDrive({ root, note, send }) {
                drain period would otherwise return early here and leave
                the previous wait on screen for the rest of the session. */
             period: command.period_us,
-            commandsMeta,
           }
         : null;
       if (JSON.stringify(next) === JSON.stringify(world)) return;

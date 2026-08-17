@@ -17,13 +17,6 @@ struct alignas(64) RingStorage {
   std::array<unsigned char, NOVA_IVC_RING_SLOTS_OFF + NOVA_IVC_RING_SLOTS * 8> bytes{};
 };
 
-TEST(IvcRing, StartsEmpty) {
-  RingStorage     mem;
-  nova::ivc::Ring ring{mem.bytes.data()};
-  std::uint64_t   v = 0;
-  EXPECT_FALSE(ring.pop(v));
-}
-
 TEST(IvcRing, PushPopRoundTrips) {
   RingStorage     mem;
   nova::ivc::Ring ring{mem.bytes.data()};

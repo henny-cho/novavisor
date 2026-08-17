@@ -65,29 +65,34 @@ function(nova_add_component name)
     target_link_libraries(${name} ${scope} cib nova_platform ${ARG_DEPS})
 endfunction()
 
-# nova_add_host_test(<name>)
+# nova_add_test(<name> [PEERS <component>...])
 #
-# Defines a GTest executable from tests/host/<name>.cpp (tests of the
-# foundation trees, no component dependency) and registers it with
-# CTest.
-function(nova_add_host_test name)
-    add_executable(${name} ${CMAKE_SOURCE_DIR}/tests/host/${name}.cpp)
-    target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(${name} PRIVATE GTest::gtest_main nova_warnings)
-    add_test(NAME ${name} COMMAND ${name})
-endfunction()
-
-# nova_add_component_test(<component> <name> [PEERS <component>...])
+# Defines a GTest executable from src/**/test/<name>.cpp — the host-side
+# twin of pure headers, wherever those headers live. Resolved by name
+# alone, the way a component is: a test lives beside what it tests, and
+# a registration should not repeat the path that already says so.
 #
-# Defines a GTest executable from the component's test/<name>.cpp — the
-# host-side twin of its pure headers. Include dirs are added directly
-# (the cib targets only exist in the cross build), so a model that
-# spans two components names the other one in PEERS.
-function(nova_add_component_test component name)
+# What a test may include follows from where it sits: the source root
+# always, plus the include/ of the directory it is nested in when there
+# is one. Include dirs are added directly because the cib targets only
+# exist in the cross build, so a model spanning two components names the
+# other in PEERS — the one thing the location cannot state.
+function(nova_add_test name)
     cmake_parse_arguments(ARG "" "" "PEERS" ${ARGN})
-    nova_component_dir(dir "${component}")
-    add_executable(${name} ${dir}/test/${name}.cpp)
-    target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR}/src ${dir}/include)
+    file(GLOB_RECURSE matches "${CMAKE_SOURCE_DIR}/src/${name}.cpp")
+    list(LENGTH matches count)
+    if(count EQUAL 0)
+        message(FATAL_ERROR "Unknown test '${name}': no src/**/test/${name}.cpp")
+    elseif(NOT count EQUAL 1)
+        message(FATAL_ERROR "Test name '${name}' is ambiguous: ${matches}")
+    endif()
+    add_executable(${name} ${matches})
+    target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    get_filename_component(test_dir "${matches}" DIRECTORY)
+    get_filename_component(owner "${test_dir}" DIRECTORY)
+    if(IS_DIRECTORY "${owner}/include")
+        target_include_directories(${name} PRIVATE ${owner}/include)
+    endif()
     foreach(peer IN LISTS ARG_PEERS)
         nova_component_dir(peer_dir "${peer}")
         target_include_directories(${name} PRIVATE ${peer_dir}/include)

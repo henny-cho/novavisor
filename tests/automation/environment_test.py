@@ -1,0 +1,56 @@
+"""Single-source environment and toolchain image contracts."""
+
+from __future__ import annotations
+
+import json
+import unittest
+
+from novakit.core import config
+
+from tests import REPO
+
+BOOTSTRAP = REPO / "scripts" / "bootstrap"
+PYTHON_ENV = REPO / "scripts" / "python-env"
+CLI_REQUIREMENTS = REPO / "scripts" / "requirements-cli.txt"
+IMAGE = REPO / "containers" / "toolchain" / "Dockerfile"
+DEVCONTAINER = REPO / ".devcontainer" / "devcontainer.json"
+
+class ToolVersionTests(unittest.TestCase):
+    def test_the_image_is_pinned_to_one_base(self):
+        # Nothing else fails if this floats: the image would still build,
+        # from a different Ubuntu than the one the pins were chosen for.
+        self.assertTrue(config.tool_versions())
+        self.assertTrue(BOOTSTRAP.stat().st_mode & 0o111)
+        self.assertRegex(
+            IMAGE.read_text().splitlines()[0],
+            r"^FROM ubuntu:26\.04@sha256:[0-9a-f]{64}$",
+        )
+
+    def test_the_fetched_toolchain_is_still_checked_against_its_digest(self):
+        # The only integrity check on an archive pulled over the network,
+        # and the only consumer of the ARM_GNU_SHA256_* pins. Deleting
+        # the call would leave those pins validated for shape by
+        # config.tool_versions() and used for nothing.
+        self.assertIn('verify_sha256 "${TOOLCHAIN_SHA256}" "${archive}"', BOOTSTRAP.read_text())
+
+    def test_python_cli_environment_is_reproducible(self):
+        # An unpinned requirement resolves to whatever is newest on the
+        # day the image is built, which is how two machines diverge.
+        requirements = CLI_REQUIREMENTS.read_text().splitlines()
+        self.assertTrue(PYTHON_ENV.stat().st_mode & 0o111)
+        self.assertTrue(requirements)
+        for requirement in requirements:
+            self.assertRegex(requirement, r"^[A-Za-z][A-Za-z0-9-]*==\d+(?:\.\d+)+$")
+
+    def test_devcontainer_builds_the_shared_image(self):
+        data = json.loads(
+            "\n".join(
+                line for line in DEVCONTAINER.read_text().splitlines()
+                if not line.lstrip().startswith("//")
+            )
+        )
+        self.assertEqual(
+            data["build"]["dockerfile"],
+            "../containers/toolchain/Dockerfile",
+        )
+        self.assertEqual(data["remoteUser"], "nova")

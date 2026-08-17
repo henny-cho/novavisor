@@ -15,10 +15,18 @@ if TYPE_CHECKING:
     from .session import Session
     from .store import StateStore
 
+# Waiting for a breakpoint is sliced so an abort is answered promptly;
+# the machine keeps running across slices, only the listening pauses.
 RUN_SLICE_SECONDS = 0.05
+# How long to run before saying so. A chosen event may be rare or may
+# never occur on this demo; silence reads as a hung bridge.
 WAIT_NOTICE_SECONDS = 0.5
+# Arming at launch races the guest, so the watch is tight; the budget
+# covers a cold build ahead of the machine it is waiting for.
 LAUNCH_POLL_SECONDS = 0.02
-LAUNCH_ARM_TIMEOUT_SECONDS = 5.0
+LAUNCH_ARM_TIMEOUT_SECONDS = 600.0
+# ~700 us per instruction over RSP, so this caps one request at a few
+# seconds. Stepping is for looking inside an event, not reaching one.
 MAX_STEPS = 5000
 
 
@@ -51,6 +59,9 @@ class HaltController:
         """The held gdb connection, created if this is the first stop."""
         if self.inspector_run != self.session.run_id:
             self.release()
+            # The delta's baseline is a stop of *this* run; against the
+            # last machine's it would report registers nothing moved.
+            self.stopped_at = {}
         if self.inspector is None:
             surfaces = self.session.surfaces
             if surfaces is None:

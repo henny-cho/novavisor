@@ -146,7 +146,7 @@ describe("timeline cursor", () => {
     timeline.apply(answer(1000, FOUR));
     timeline.select(0);
 
-    assert.equal(timeline.play(), true);
+    timeline.play();
     assert.equal(timeline.isPlaying(), true);
     t.mock.timers.tick(89);
     assert.equal(chosen.length, 1, "playback moved before its own floor");
@@ -196,7 +196,7 @@ describe("timeline cursor", () => {
     timeline.select(0);
     timeline.play();
 
-    assert.equal(timeline.stop(), false);
+    timeline.stop();
     assert.equal(timeline.isPlaying(), false);
     const settled = chosen.length;
     t.mock.timers.tick(1000);

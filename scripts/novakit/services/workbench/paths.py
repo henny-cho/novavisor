@@ -7,8 +7,9 @@ to the taxonomy that defines them and the topics next to the manifest
 that publishes them: rename either and a test fails, instead of an edge
 going quietly dark.
 
-The words for an edge are not here. The UI captions it, the way it
-captions a region kind.
+Each edge carries the words it is drawn under, the way a block and a
+stop carry theirs. The UI falls back to the id, so an uncaptioned path
+still draws — under an internal word, which is what the caption is for.
 
 A grade is not decoration. It fixes how the edge is stroked and what its
 tooltip may claim, so a path can never look more certain than the thing
@@ -69,32 +70,18 @@ class Edge:
     label: str = ""
 
 
-EDGE_LABELS: dict[str, str] = {
-    EDGE_TRAP: "게스트 트랩 → EL2",
-    "phys": "물리 IRQ → PE",
-    EDGE_POST: "장치 SPI → 분배기",
-    EDGE_INJECT: "vIRQ 주입 → 게스트",
-    EDGE_MMIO: "MMIO 트랩 → 에뮬레이션",
-    EDGE_DMA: "장치 DMA → SMMU",
-    EDGE_WALK: "SMMU 변환 → 메모리",
-    "cross": "코어 간 크로스콜",
-    "ivc": "IVC 도어벨 → 공유 페이지",
-    "psci": "PSCI 기동 → PE",
-    "uart": "vuart → 물리 UART",
-}
-
 EDGES: tuple[Edge, ...] = (
-    Edge(EDGE_TRAP, BAND_EL1, "trap", GRADE_POLL, "ctx.syndrome", (Badge.TRAP,), label=EDGE_LABELS[EDGE_TRAP]),
-    Edge("phys", "gicd", BAND_PE, GRADE_CONSOLE, badges=(Badge.IRQ, Badge.GIC), label=EDGE_LABELS["phys"]),
-    Edge(EDGE_POST, "gicd", "vgic", GRADE_POLL, "vgic.token", label=EDGE_LABELS[EDGE_POST]),
-    Edge(EDGE_INJECT, "vgic", BAND_EL1, GRADE_POLL, "vgic.lr", label=EDGE_LABELS[EDGE_INJECT]),
-    Edge(EDGE_MMIO, BAND_EL1, "vgic", GRADE_CONSOLE, badges=(Badge.VGIC,), label=EDGE_LABELS[EDGE_MMIO]),
-    Edge(EDGE_DMA, BAND_DEV, "smmu", GRADE_POLL, "dev.dma", (Badge.DMA,), label=EDGE_LABELS[EDGE_DMA]),
-    Edge(EDGE_WALK, "smmu", "mem", GRADE_CONSOLE, badges=(Badge.SMMU,), label=EDGE_LABELS[EDGE_WALK]),
-    Edge("cross", "", "", GRADE_POLL, "smp.mail", (Badge.SMP,), pair=PAIR_CORES, label=EDGE_LABELS["cross"]),
-    Edge("ivc", "ivc", "pa:shared", GRADE_POLL, "ivc.page", label=EDGE_LABELS["ivc"]),
-    Edge("psci", "sched", BAND_PE, GRADE_CONSOLE, badges=(Badge.PSCI,), label=EDGE_LABELS["psci"]),
-    Edge("uart", "vuart", "uart0", GRADE_POLL, "dev.uart", (Badge.VUART, Badge.MUX), label=EDGE_LABELS["uart"]),
+    Edge(EDGE_TRAP, BAND_EL1, "trap", GRADE_POLL, "ctx.syndrome", (Badge.TRAP,), label="게스트 트랩 → EL2"),
+    Edge("phys", "gicd", BAND_PE, GRADE_CONSOLE, badges=(Badge.IRQ, Badge.GIC), label="물리 IRQ → PE"),
+    Edge(EDGE_POST, "gicd", "vgic", GRADE_POLL, "vgic.token", label="장치 SPI → 분배기"),
+    Edge(EDGE_INJECT, "vgic", BAND_EL1, GRADE_POLL, "vgic.lr", label="vIRQ 주입 → 게스트"),
+    Edge(EDGE_MMIO, BAND_EL1, "vgic", GRADE_CONSOLE, badges=(Badge.VGIC,), label="MMIO 트랩 → 에뮬레이션"),
+    Edge(EDGE_DMA, BAND_DEV, "smmu", GRADE_POLL, "dev.dma", (Badge.DMA,), label="장치 DMA → SMMU"),
+    Edge(EDGE_WALK, "smmu", "mem", GRADE_CONSOLE, badges=(Badge.SMMU,), label="SMMU 변환 → 메모리"),
+    Edge("cross", "", "", GRADE_POLL, "smp.mail", (Badge.SMP,), pair=PAIR_CORES, label="코어 간 크로스콜"),
+    Edge("ivc", "ivc", "pa:shared", GRADE_POLL, "ivc.page", label="IVC 도어벨 → 공유 페이지"),
+    Edge("psci", "sched", BAND_PE, GRADE_CONSOLE, badges=(Badge.PSCI,), label="PSCI 기동 → PE"),
+    Edge("uart", "vuart", "uart0", GRADE_POLL, "dev.uart", (Badge.VUART, Badge.MUX), label="vuart → 물리 UART"),
 )
 
 
