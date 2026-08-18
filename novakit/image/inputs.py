@@ -15,12 +15,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from ..core.config import REPO
+from ..core.config import PACKAGE
 
 # Files read this process, in the order nobody cares about.
 _READ: set[Path] = set()
-
-_TOOLING = REPO / "scripts"
 
 
 def record(path: Path) -> None:
@@ -40,7 +38,7 @@ def _loaded() -> set[Path]:
         if name is None:
             continue
         path = Path(name).resolve()
-        if path.is_relative_to(_TOOLING):
+        if path.is_relative_to(PACKAGE):
             found.add(path)
     return found
 

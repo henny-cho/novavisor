@@ -90,7 +90,7 @@ def _require_websockets():
     except ImportError as error:
         raise SystemExit(
             "nova workbench: the pinned websockets package is missing; "
-            "run scripts/python-env"
+            "run novakit/python-env"
         ) from error
     return websocket_server, Headers, Response
 

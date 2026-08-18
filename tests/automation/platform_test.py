@@ -5,7 +5,6 @@ import unittest
 from pathlib import Path
 
 from novakit.services import boundaries
-
 from tests import REPO
 
 

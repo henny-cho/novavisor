@@ -25,7 +25,6 @@ from novakit.services.workbench.protocol import (
     Topic,
 )
 from novakit.services.workbench.store import FrameWindow, StateStore
-
 from tests import REPO
 from tests.support import bridge as support
 

@@ -9,15 +9,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from novakit import cli
-from novakit.core import board, config
-from novakit.services import ci, gates, tfa
 from typer.main import get_command
 from typer.testing import CliRunner
 
+from novakit import cli
+from novakit.core import board, config
+from novakit.services import ci, gates, tfa
 from tests import REPO
 
-NOVA = REPO / "scripts" / "nova"
+NOVA = REPO / "nova"
 PRESETS = REPO / "CMakePresets.json"
 
 RUNNER = CliRunner()

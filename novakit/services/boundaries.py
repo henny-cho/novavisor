@@ -23,7 +23,7 @@ GENERIC_TREES = (
     Path("src/components"),
     Path("src/hal/arch"),
     Path("src/hal/drivers"),
-    Path("scripts/novakit/image"),
+    Path("novakit/image"),
 )
 
 # Components compose against hal facades, nova/*, and DEPS'd peers only.
@@ -37,7 +37,7 @@ FORBIDDEN_COMPONENT_INCLUDES = (
 )
 
 
-PACKAGE = Path("scripts/novakit")
+PACKAGE = Path("novakit")
 # Lower may not import higher. core and image are both foundations: core
 # owns the outside world, image owns what the build graph runs.
 LAYER_DEPTH = {"core": 0, "image": 0, "services": 1, "commands": 2, "": 3}
@@ -49,7 +49,7 @@ SINGLE_OWNER = {
     # generator does it once and writes the answers down; a reader at
     # run time is a second, slower answer to the same question.
     "ElfIndex(": "image/observe.py",
-    "parents[3]": "core/config.py",
+    "parents[1]": "core/config.py",
     "GITHUB_": "core/actions.py",
     "-machine": "core/board.py",
     "__main__": "image/dtb.py, image/layout.py, image/observe.py",

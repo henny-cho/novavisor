@@ -11,7 +11,7 @@ repos:
     hooks:
       - id: nova-format
         name: clang-format
-        entry: scripts/nova format
+        entry: ./nova format
         language: system
         pass_filenames: false
         types_or: [c++, c]
@@ -23,4 +23,4 @@ repos:
         args: ["-x"]
 
   # Cross-compilation context is only available after CMake configuration.
-  # Run clang-tidy with: scripts/nova lint
+  # Run clang-tidy with: ./nova lint

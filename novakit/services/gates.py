@@ -141,9 +141,9 @@ def static_analysis() -> int:
     ]
     if missing:
         raise SystemExit(
-            f"missing static analysis tools: {', '.join(missing)}; run scripts/bootstrap"
+            f"missing static analysis tools: {', '.join(missing)}; run ./bootstrap"
         )
-    proc.run(["ruff", "check", "--no-cache", "scripts", "tests"])
+    proc.run(["ruff", "check", "--no-cache", "novakit", "tests"])
     proc.run(["shellcheck", "-x", "--exclude=SC1091", *files.shell_scripts()])
     proc.run(["actionlint"])
     _web()

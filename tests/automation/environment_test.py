@@ -6,12 +6,11 @@ import json
 import unittest
 
 from novakit.core import config
-
 from tests import REPO
 
-BOOTSTRAP = REPO / "scripts" / "bootstrap"
-PYTHON_ENV = REPO / "scripts" / "python-env"
-CLI_REQUIREMENTS = REPO / "scripts" / "requirements-cli.txt"
+BOOTSTRAP = REPO / "bootstrap"
+PYTHON_ENV = REPO / "novakit" / "python-env"
+CLI_REQUIREMENTS = REPO / "novakit" / "requirements-cli.txt"
 IMAGE = REPO / "containers" / "toolchain" / "Dockerfile"
 DEVCONTAINER = REPO / ".devcontainer" / "devcontainer.json"
 

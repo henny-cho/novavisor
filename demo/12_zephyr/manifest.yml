@@ -7,7 +7,7 @@ timeout_seconds: 60
 config: "configs/zephyr.yml"
 
 # External image: fetch.sh builds the pinned Zephyr release into
-# external/cache/guests/12_zephyr/ (run `scripts/nova demo fetch 12` once).
+# external/cache/guests/12_zephyr/ (run `./nova demo fetch 12` once).
 # RAM placement comes from novavisor.overlay, so link base == slot 0.
 guests:
   - name: "zephyr"

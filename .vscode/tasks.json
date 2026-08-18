@@ -4,7 +4,7 @@
         {
             "label": "qemu: start GDB stub",
             "type": "shell",
-            "command": "${workspaceFolder}/scripts/nova",
+            "command": "${workspaceFolder}/nova",
             "args": ["run", "--debug"],
             "isBackground": true,
             "problemMatcher": [
@@ -34,7 +34,7 @@
         {
             "label": "qemu: start GDB stub (demo)",
             "type": "shell",
-            "command": "${workspaceFolder}/scripts/nova",
+            "command": "${workspaceFolder}/nova",
             "args": ["demo", "run", "${input:demoName}", "--debug"],
             "isBackground": true,
             "problemMatcher": [

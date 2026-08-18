@@ -26,7 +26,6 @@ from novakit.services.workbench.trace_drain import (
     TRACE_DRAIN_FLOOR,
     TRACE_TURN_SECONDS,
 )
-
 from tests.support import bridge as support
 
 

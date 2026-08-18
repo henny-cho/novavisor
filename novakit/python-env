@@ -9,4 +9,4 @@ if [[ ! -x "${NOVA_ENVIRONMENT}/bin/python" ]]; then
 fi
 "${NOVA_ENVIRONMENT}/bin/python" -m pip install \
     --disable-pip-version-check \
-    --requirement "${NOVA_REPO}/scripts/requirements-cli.txt"
+    --requirement "${NOVA_REPO}/novakit/requirements-cli.txt"

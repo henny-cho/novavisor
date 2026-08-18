@@ -11,11 +11,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from typer.testing import CliRunner
+
 from novakit import cli
 from novakit.core import config, proc
 from novakit.services import ci, cmake, manifest, report
-from typer.testing import CliRunner
-
 from tests import REPO
 
 RUNNER = CliRunner()
@@ -121,13 +121,13 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("--install-completion", listed.stdout)
 
     def test_the_wrapper_finds_its_own_repository_and_python(self):
-        # The one thing only a real process shows: `scripts/nova` resolves
+        # The one thing only a real process shows: `./nova` resolves
         # the repository from its own path, picks the toolchain python and
         # exports PYTHONPATH before exec. Run from elsewhere, so a wrapper
         # that leaned on the caller's cwd fails here.
         with tempfile.TemporaryDirectory() as elsewhere:
             result = subprocess.run(
-                [str(REPO / "scripts" / "nova"), "--help"],
+                [str(REPO / "nova"), "--help"],
                 cwd=elsewhere,
                 check=False,
                 capture_output=True,
@@ -154,11 +154,11 @@ class CliTests(unittest.TestCase):
             away.mkdir()
             environment = os.environ.copy()
             environment["HOME"] = home
-            scripts = str(REPO / "scripts")
+            root = str(REPO)
             environment["PATH"] = os.pathsep.join(
                 entry
                 for entry in environment["PATH"].split(os.pathsep)
-                if entry != scripts
+                if entry != root
             )
             completion = Path(home) / ".zfunc" / "_nova"
             startup = Path(home) / ".zshrc"
@@ -194,7 +194,7 @@ class CliTests(unittest.TestCase):
             zshrc = startup.read_text()
             self.assertIn("# >>> NovaVisor shell integration >>>", zshrc)
             self.assertIn("export USER_SETTING=kept", zshrc)
-            self.assertIn(scripts, zshrc)
+            self.assertIn(root, zshrc)
             self.assertIn(f"source {completion}", zshrc)
             self.assertNotIn("fpath+=~/.zfunc", zshrc)
 
@@ -205,7 +205,7 @@ class CliTests(unittest.TestCase):
             zshrc = startup.read_text()
             self.assertEqual(zshrc.count("# >>> NovaVisor shell integration >>>"), 1)
             self.assertEqual(zshrc.count(f"source {completion}"), 1)
-            self.assertEqual(zshrc.count(scripts), 1)
+            self.assertEqual(zshrc.count(root), 1)
 
             zsh = shutil.which("zsh")
             if zsh is not None:
@@ -234,13 +234,13 @@ class CliTests(unittest.TestCase):
                     env=environment,
                 )
                 self.assertEqual(shell.returncode, 0, shell.stderr)
-                self.assertIn(f"NOVA_BIN={REPO / 'scripts' / 'nova'}", shell.stdout)
+                self.assertIn(f"NOVA_BIN={REPO / 'nova'}", shell.stdout)
                 self.assertIn("NOVA_COMP=_nova_completion", shell.stdout)
                 path_line = next(
                     line for line in shell.stdout.splitlines()
                     if line.startswith("NOVA_PATH=")
                 )
-                self.assertEqual(path_line.split("=")[1].split(":").count(scripts), 1)
+                self.assertEqual(path_line.split("=")[1].split(":").count(root), 1)
 
             removed = installer("uninstall")
             self.assertEqual(removed.exit_code, 0, removed.stdout)

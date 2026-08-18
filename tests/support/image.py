@@ -16,7 +16,6 @@ from __future__ import annotations
 import functools
 
 from novakit.image import observe
-
 from tests import REPO
 
 ELF = REPO / "build" / "aarch64-debug" / "novavisor.elf"

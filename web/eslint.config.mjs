@@ -21,7 +21,7 @@ import noLayoutReadOnDrawPath from "./eslint-rules/no-layout-read-on-draw-path.j
    very thing the rule below forbids the UI from doing. */
 const badges = () => {
   const source = new URL(
-    "../scripts/novakit/services/workbench/taxonomy.py",
+    "../novakit/services/workbench/taxonomy.py",
     import.meta.url,
   );
   const enumerated = readFileSync(source, "utf8")

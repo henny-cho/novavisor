@@ -5,7 +5,6 @@ import zlib
 from pathlib import Path
 
 from novakit.image import dtb
-
 from tests import REPO
 
 BOARD_LAYOUT = REPO / "src/hal/board/qemu_virt/include/hal/board/active/board_layout.h"

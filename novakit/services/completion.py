@@ -54,16 +54,16 @@ def _powershell_quote(value: Path) -> str:
 
 
 def _integration_block(shell: str, completion: Path) -> str:
-    scripts = config.SCRIPTS
+    root = config.REPO
     if shell in {"bash", "zsh"}:
         lines = [
             START,
-            f"_novavisor_scripts={_shell_quote(scripts)}",
+            f"_novavisor_root={_shell_quote(root)}",
             'case ":${PATH}:" in',
-            '    *":${_novavisor_scripts}:"*) ;;',
-            '    *) export PATH="${_novavisor_scripts}:${PATH}" ;;',
+            '    *":${_novavisor_root}:"*) ;;',
+            '    *) export PATH="${_novavisor_root}:${PATH}" ;;',
             "esac",
-            "unset _novavisor_scripts",
+            "unset _novavisor_root",
         ]
         if shell == "zsh":
             lines.extend(
@@ -80,23 +80,23 @@ def _integration_block(shell: str, completion: Path) -> str:
         return "\n".join(
             (
                 START,
-                f"set -l _novavisor_scripts {_shell_quote(scripts)}",
-                "if not contains -- $_novavisor_scripts $PATH",
-                "    set -gx PATH $_novavisor_scripts $PATH",
+                f"set -l _novavisor_root {_shell_quote(root)}",
+                "if not contains -- $_novavisor_root $PATH",
+                "    set -gx PATH $_novavisor_root $PATH",
                 "end",
                 END,
             )
         )
-    scripts_ps = _powershell_quote(scripts)
+    root_ps = _powershell_quote(root)
     return "\n".join(
         (
             START,
-            f"$novaScripts = {scripts_ps}",
-            "if (($env:PATH -split [IO.Path]::PathSeparator) -notcontains $novaScripts) {",
-            "    $env:PATH = $novaScripts + [IO.Path]::PathSeparator + $env:PATH",
+            f"$novaRoot = {root_ps}",
+            "if (($env:PATH -split [IO.Path]::PathSeparator) -notcontains $novaRoot) {",
+            "    $env:PATH = $novaRoot + [IO.Path]::PathSeparator + $env:PATH",
             "}",
             f". {_powershell_quote(completion)}",
-            "Remove-Variable novaScripts",
+            "Remove-Variable novaRoot",
             END,
         )
     )

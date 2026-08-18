@@ -13,7 +13,7 @@ runs:
         if [[ -n "${NOVA_TOOLCHAIN_DIR:-}" && -x "${NOVA_TOOLCHAIN_DIR}/python/bin/python" ]]; then
           nova_python="${NOVA_TOOLCHAIN_DIR}/python/bin/python"
         else
-          scripts/python-env "${RUNNER_TEMP}/nova-python"
+          novakit/python-env "${RUNNER_TEMP}/nova-python"
           nova_python="${RUNNER_TEMP}/nova-python/bin/python"
         fi
         echo "NOVA_PYTHON=${nova_python}" >> "${GITHUB_ENV}"
@@ -26,7 +26,7 @@ runs:
       env:
         LANE: ${{ inputs.name }}
       run: |
-        scripts/nova ci --metadata "${LANE}" >> "${GITHUB_OUTPUT}"
+        ./nova ci --metadata "${LANE}" >> "${GITHUB_OUTPUT}"
 
     - name: Cache CPM packages
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

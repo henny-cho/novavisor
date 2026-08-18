@@ -17,7 +17,6 @@ import re
 import unittest
 
 from novakit.services.workbench import anchors
-
 from tests import REPO
 
 SOURCE = REPO / "src"

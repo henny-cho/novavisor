@@ -17,7 +17,6 @@ from novakit.image import abi
 from novakit.services.surfaces import Surfaces
 from novakit.services.workbench import commands, events, trace
 from novakit.services.workbench.session import Phase
-
 from tests.support import bridge as support
 
 _OFFSETS = abi.read_defines(

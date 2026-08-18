@@ -740,7 +740,7 @@ def main() -> int:
     # written, so a broken environment says so instead of surfacing as a
     # traceback from the first round-trip.
     if shutil.which("dtc") is None:
-        sys.exit("nova dtb: dtc is missing; run scripts/bootstrap")
+        sys.exit("nova dtb: dtc is missing; run ./bootstrap")
     for i, guest in enumerate(guests):
         blob = build_guest_dtb(guest, layout, serves_psci=not args.no_psci)
         if len(blob) > layout["NOVA_GUEST_DTB_SIZE"]:
@@ -750,7 +750,7 @@ def main() -> int:
         digest.update(blob)
         # Round-trip through dtc: the byte-level writer cannot see
         # malformed structure in what it just emitted. Unconditional —
-        # scripts/bootstrap installs dtc, so a missing one is a broken
+        # ./bootstrap installs dtc, so a missing one is a broken
         # environment, and skipping the check quietly is how an image
         # nobody validated reaches a board.
         r = subprocess.run(

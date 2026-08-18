@@ -6,8 +6,8 @@ import re
 import unittest
 
 import yaml
-from novakit.services import ci as ci_service
 
+from novakit.services import ci as ci_service
 from tests import REPO
 
 GITHUB = REPO / ".github"
@@ -64,10 +64,9 @@ class WorkflowContractTest(unittest.TestCase):
         )
 
         text = (WORKFLOWS / "ci.yml").read_text()
-        self.assertIn("scripts/nova ci ${{ matrix.lane }}", text)
+        self.assertIn("./nova ci ${{ matrix.lane }}", text)
         for lane in ci_service.BY_NAME:
             self.assertIn(f"lane: {lane}", text)
-        self.assertNotIn(f"scripts/{'task'}.sh", text)
 
     def test_every_lane_runs_the_same_way(self):
         # Two job definitions for the same kind of work is how the pinned
@@ -98,9 +97,9 @@ class WorkflowContractTest(unittest.TestCase):
 
         self.assertNotIn("bootstrap", action)
         self.assertNotIn(".toolchain", action)
-        self.assertIn("scripts/python-env", action)
+        self.assertIn("novakit/python-env", action)
         self.assertIn("NOVA_PYTHON=", action)
-        self.assertIn("scripts/nova ci --metadata", action)
+        self.assertIn("./nova ci --metadata", action)
         data = yaml.safe_load(action)
         self.assertEqual(list(data["inputs"]), ["name"])
         for path in (

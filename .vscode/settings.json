@@ -8,7 +8,7 @@
         "request": "launch",
         "cwd": "${workspaceFolder}",
         "MIMode": "gdb",
-        "miDebuggerPath": "${workspaceFolder}/scripts/aarch64-gdb",
+        "miDebuggerPath": "${workspaceFolder}/novakit/aarch64-gdb",
         "miDebuggerServerAddress": "localhost:1234",
         "stopAtConnect": true,
         "externalConsole": false,

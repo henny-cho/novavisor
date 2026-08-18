@@ -26,5 +26,5 @@
       ]
     }
   },
-  "postCreateCommand": "pre-commit install && scripts/nova --help"
+  "postCreateCommand": "pre-commit install && ./nova --help"
 }

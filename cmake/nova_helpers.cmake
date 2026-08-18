@@ -8,13 +8,13 @@ set(NOVA_PYTHON "python3" CACHE FILEPATH "Python interpreter for build-graph gen
 
 # nova_python_module(<out-var> <module>)
 #
-# Resolve the argv that runs an automation module out of scripts/. A
+# Resolve the argv that runs a module of the automation package. A
 # custom command then names the module the same way the CLI and the
 # tests do, so the package has one reachable form instead of a file path
 # per caller.
 function(nova_python_module out_var module)
     set(${out_var}
-        ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_SOURCE_DIR}/scripts
+        ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_SOURCE_DIR}
         ${NOVA_PYTHON} -m novakit.${module}
         PARENT_SCOPE)
 endfunction()

@@ -33,9 +33,9 @@ This document covers both how to *use* the workbench (Part I) and how to
 ### Quick start
 
 ```bash
-./scripts/bootstrap                    # once: toolchain + pinned Python env
-./scripts/nova workbench serve        # serve on http://127.0.0.1:8787/
-./scripts/nova workbench serve 10     # ...and launch demo 10 immediately
+./bootstrap                # once: toolchain + pinned Python env
+./nova workbench serve     # serve on http://127.0.0.1:8787/
+./nova workbench serve 10  # ...and launch demo 10 immediately
 ```
 
 Open `http://127.0.0.1:8787/` in a browser. Options:
@@ -211,7 +211,7 @@ The wire still carries counts per path and the last event of each,
 the timeline strip and by a terminal, from the same history:
 
 ```console
-$ ./scripts/nova workbench trace --since 0.05
+$ ./nova workbench trace --since 0.05
   ivc.doorbell=138  sched.switch=138  trap=277  vgic.inject=138  vgic.private=138
     270296us cpu0 vgic.bind     vm=0 vintid=37 pintid=37 generation=3
     270407us cpu0 vgic.inject   slot=0 vintid=37 lr=0 generation=3
@@ -258,7 +258,7 @@ Everything the S layer observes can be asked from the terminal, without a
 bridge or a browser:
 
 ```console
-$ ./scripts/nova inspect symbols
+$ ./nova inspect symbols
 topic                address    size    hz  shape
 sched.cpu         0x400460a0      48    20  CpuSched{current,fp,fp_trap,idling}[2]
 timer.queue       0x4006aa90    1408    10  Slot{deadline,fn,arg,armed}[22][2] -> deadline,armed
@@ -297,7 +297,7 @@ flowchart LR
     MF[observations.py<br/>manifest] -.single source.-> PR & CI[CI manifest step] & CLI[nova inspect symbols]
 ```
 
-Bridge modules (`scripts/novakit/services/workbench/`):
+Bridge modules (`novakit/services/workbench/`):
 
 | Module | Responsibility |
 |---|---|
@@ -431,8 +431,8 @@ for one tick; the next tick sees a consistent value.
 **Adding an observation:**
 
 1. Append an `Obs` entry to `OBSERVATIONS`.
-2. Confirm resolution: `./scripts/nova inspect symbols` (or run
-   `tests/scripts/workbench_manifest_test.py` with the debug ELF built).
+2. Confirm resolution: `./nova inspect symbols` (or run
+   `tests/workbench/manifest_test.py` with the debug ELF built).
 3. CI enforces it from now on — the static lane's `manifest` step resolves
    every entry against the freshly built image, so a renamed symbol or a
    reshaped struct **fails the pipeline** instead of silently blanking a panel.
@@ -500,7 +500,7 @@ routing are generic.
 | `automation_contract_test.py` | public CLI leaves (`workbench serve`, `inspect symbols`, …), `attach_workbench` leaves the board model frozen |
 | `automation_layer_test.py` | dependency boundaries: `websockets` only in `server.py`, `elftools` only in `elfsym.py`, `asyncio` only in `server.py`/`session.py`, `pexpect` only in `spawn.py` |
 
-Run everything with `./scripts/nova test`; the same suites run in the CI
+Run everything with `./nova test`; the same suites run in the CI
 `host` lane, and the manifest contract also runs as the `static` lane's
 `manifest` step.
 

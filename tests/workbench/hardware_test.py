@@ -14,7 +14,6 @@ import unittest
 
 from novakit.image import abi
 from novakit.services.workbench import hardware
-
 from tests import REPO
 
 BOARDS = sorted(path.name for path in hardware.BOARD_DIR.iterdir() if path.is_dir())

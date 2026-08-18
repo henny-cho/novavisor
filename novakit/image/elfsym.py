@@ -35,7 +35,7 @@ def _require_elftools():
     except ImportError as error:
         raise SystemExit(
             "symbol inspection requires the pinned pyelftools package; "
-            "run scripts/python-env"
+            "run novakit/python-env"
         ) from error
 
 

@@ -61,11 +61,11 @@ jobs:
       # A demo without external images reports that and succeeds, so the
       # target list stays the only place a target is described.
       - name: Fetch external guest images
-        run: scripts/nova demo fetch ${{ matrix.demo }}
+        run: ./nova demo fetch ${{ matrix.demo }}
 
       - name: Run recovery soak
         run: |
-          scripts/nova demo soak ${{ matrix.demo }} \
+          ./nova demo soak ${{ matrix.demo }} \
             --runs "${{ inputs.runs || matrix.default-runs }}" \
             --summary "${SOAK_DIR}/summary.csv" \
             --artifacts "${SOAK_DIR}"

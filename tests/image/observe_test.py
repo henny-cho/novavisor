@@ -18,7 +18,6 @@ from pathlib import Path
 from unittest import mock
 
 from novakit.image import elfsym, observe
-
 from tests.support import image as shared_image
 
 ELF = shared_image.ELF

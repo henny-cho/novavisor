@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   # Every lane runs in the toolchain image, so the pinned versions in
-  # scripts/tool-versions.env reach CI through exactly one path.
+  # novakit/tool-versions.env reach CI through exactly one path.
   lane:
     name: lane (${{ matrix.lane }})
     strategy:
@@ -54,7 +54,7 @@ jobs:
           name: ${{ matrix.lane }}
 
       - name: Run ${{ matrix.lane }} lane
-        run: scripts/nova ci ${{ matrix.lane }}
+        run: ./nova ci ${{ matrix.lane }}
 
       # The lane collects its own evidence, so this names one directory
       # instead of a build-tree layout that rots when the harness moves.

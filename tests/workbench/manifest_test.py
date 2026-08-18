@@ -21,7 +21,6 @@ from novakit.services.workbench import (
     snapshot,
     steps,
 )
-
 from tests.support import image as shared_image
 
 ELF = shared_image.ELF

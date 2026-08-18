@@ -16,7 +16,6 @@ import unittest
 from unittest import mock
 
 from novakit.services.workbench import client, events, trace
-
 from tests.support import bridge as support
 
 BIND = events.BY_ID["vgic.bind"].code

@@ -55,7 +55,7 @@ def resolve_guest_binary(demo_name: str, demo_build: Path, spec: dict) -> Path:
             return c
     # External images are fetched explicitly, never as a run side effect.
     hint = (
-        f"\nRun: scripts/nova demo fetch {manifests.demo_id(demo_name)}"
+        f"\nRun: ./nova demo fetch {manifests.demo_id(demo_name)}"
         if (config.DEMO_DIR / demo_name / "fetch.sh").exists()
         else ""
     )

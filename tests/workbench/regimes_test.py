@@ -20,7 +20,6 @@ from novakit.services.workbench import (
     snapshot,
     translation,
 )
-
 from tests.support import bridge as support
 from tests.support import image as shared_image
 

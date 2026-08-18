@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-NOVA_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+NOVA_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NOVA_PYTHON="${NOVA_PYTHON:-${NOVA_TOOLCHAIN_DIR:-${NOVA_REPO}/.toolchain}/python/bin/python}"
 
 if [[ ! -x "${NOVA_PYTHON}" ]]; then
-    echo "nova: Python environment is missing; run scripts/bootstrap" >&2
+    echo "nova: Python environment is missing; run ./bootstrap" >&2
     exit 2
 fi
 
-export PYTHONPATH="${NOVA_REPO}/scripts${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH="${NOVA_REPO}${PYTHONPATH:+:${PYTHONPATH}}"
 exec "${NOVA_PYTHON}" -c 'from novakit.cli import main; main()' "$@"

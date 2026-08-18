@@ -7,7 +7,6 @@ import unittest
 
 from novakit.services.workbench import anchors
 from novakit.services.workbench.taxonomy import Badge, Severity
-
 from tests import REPO
 
 # (line, badge, severity, field subset) — verbatim firmware shapes.

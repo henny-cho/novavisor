@@ -13,5 +13,5 @@ if command -v aarch64-none-elf-gdb >/dev/null 2>&1; then
 fi
 echo "aarch64-none-elf-gdb not found." >&2
 echo "  - Devcontainer users: reopen in container (.devcontainer/)." >&2
-echo "  - Manual setup: run ./scripts/bootstrap." >&2
+echo "  - Manual setup: run ./bootstrap." >&2
 exit 127

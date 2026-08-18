@@ -31,7 +31,7 @@
             //     "program": "${command:cmake.launchTargetPath}",
             //     "cwd": "${workspaceFolder}",
             //     "MIMode": "gdb",
-            //     "miDebuggerPath": "${workspaceFolder}/scripts/aarch64-gdb",
+            //     "miDebuggerPath": "${workspaceFolder}/novakit/aarch64-gdb",
             //     "miDebuggerServerAddress": "localhost:1234",
             //     "stopAtConnect": true,
             //     "preLaunchTask": "qemu: start GDB stub",
@@ -46,7 +46,7 @@
             // {
             //     "label": "my: quick run",
             //     "type": "shell",
-            //     "command": "${workspaceFolder}/scripts/nova",
+            //     "command": "${workspaceFolder}/nova",
             //     "args": ["run"]
             // }
         ]

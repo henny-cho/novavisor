@@ -17,7 +17,7 @@ cd novavisor
 
 ### 2. Set up the development environment
 
-Both setup methods use the same pinned tools and the same `scripts/nova` interface.
+Both setup methods use the same pinned tools and the same `./nova` interface.
 
 #### Method A — VS Code Dev Container (recommended ✨)
 
@@ -35,20 +35,20 @@ Use the automated setup script. It detects the host CPU architecture (x86_64 or 
 
 1. Install the apt dependencies and the ARM GNU toolchain:
    ```bash
-   ./scripts/bootstrap
+   ./bootstrap
    ```
 2. The toolchain and pinned Typer CLI environment land under `.toolchain/`, and pre-commit hooks are installed.
 3. Each new terminal session needs the toolchain on its PATH:
    ```bash
    source .toolchain/env.sh
    ```
-4. Run build, test, and demo commands through `./scripts/nova`.
+4. Run build, test, and demo commands through `./nova`.
 
 ---
 
 ## 🔧 Development Workflow
 
-All routine tasks go through `scripts/nova`.
+All routine tasks go through `./nova`.
 
 Common workspace operations are top-level commands. Scoped operations use
 `nova <domain> <operation>`; for example, `nova inspect size` and
@@ -57,12 +57,12 @@ Common workspace operations are top-level commands. Scoped operations use
 ### Shell completion
 
 Nova provides tab completion for commands, options, and typed values through
-Typer. Run the installer once through its repository path; it registers
-`scripts` on `PATH`, installs completion, and reports every file it created,
+Typer. Run the installer once through its repository path; it registers the
+repository root on `PATH`, installs completion, and reports every file it created,
 updated, or left unchanged:
 
 ```bash
-./scripts/nova completion install
+./nova completion install
 exec "$SHELL"
 ```
 
@@ -91,16 +91,16 @@ nova build --p<TAB>     # completes "--preset"
 ### Build
 
 ```bash
-./scripts/nova build                  # Debug cross-build (aarch64)
-./scripts/nova build --release        # Release
-./scripts/nova build --clean          # wipe build/ first
+./nova build            # Debug cross-build (aarch64)
+./nova build --release  # Release
+./nova build --clean    # wipe build/ first
 ```
 
 ### Run / Debug in QEMU
 
 ```bash
-./scripts/nova run                    # launch QEMU; Ctrl-A x to exit
-./scripts/nova run --debug            # QEMU halted with GDB server on :1234
+./nova run          # launch QEMU; Ctrl-A x to exit
+./nova run --debug  # QEMU halted with GDB server on :1234
 ```
 
 While `debug` is running, connect in a second terminal:
@@ -113,13 +113,13 @@ aarch64-none-elf-gdb build/aarch64-debug/novavisor.elf -ex 'target remote :1234'
 
 `.vscode/{launch,tasks,settings,extensions}.json` ship a ready-made configuration:
 
-- **Hypervisor only** — the CMake Tools **Debug** button (or `F5` with `QEMU Remote (aarch64-debug)`) starts `scripts/nova run --debug` and attaches `cppdbg` to port `1234`.
-- **Demo guest + hypervisor** — `F5` with `QEMU Demo Debug` prompts for a demo, runs `scripts/nova demo run <name> --debug`, and loads the generated guest symbol file.
+- **Hypervisor only** — the CMake Tools **Debug** button (or `F5` with `QEMU Remote (aarch64-debug)`) starts `./nova run --debug` and attaches `cppdbg` to port `1234`.
+- **Demo guest + hypervisor** — `F5` with `QEMU Demo Debug` prompts for a demo, runs `./nova demo run <name> --debug`, and loads the generated guest symbol file.
 
 Prerequisites:
 
 - Install the recommended extensions when VS Code prompts (`ms-vscode.cpptools`, `ms-vscode.cmake-tools`).
-- Toolchain must be available via the devcontainer or `./scripts/bootstrap`. `scripts/aarch64-gdb` resolves the GDB binary in both layouts.
+- Toolchain must be available via the devcontainer or `./bootstrap`. `novakit/aarch64-gdb` resolves the GDB binary in both layouts.
 - Linux / macOS / WSL only — the `postDebugTask` uses `pkill` to tear down QEMU.
 - The GDB stub uses port `1234`; run at most one debug session per host to avoid collisions.
 
@@ -137,7 +137,7 @@ VS Code settings precedence is `Default < User < Workspace (.code-workspace) < F
 ### Host unit tests
 
 ```bash
-./scripts/nova test
+./nova test
 ```
 
 Runs the GTest suite for header-only utilities (ESR parser, Stage 2 descriptor encoding, Stage 2 identity-map builder). These tests require no toolchain and execute as a native x86_64 binary.
@@ -147,10 +147,10 @@ Runs the GTest suite for header-only utilities (ESR parser, Stage 2 descriptor e
 Each roadmap phase is validated by a **demo** in `demo/NN_name/`. A demo consists of an EL1 guest program (or a reference OS image) plus a `manifest.yml` declaring expected UART output patterns. The demo simultaneously demonstrates the phase's feature set and gates phase completion.
 
 ```bash
-./scripts/nova demo list              # show all demos and their enabled status
-./scripts/nova demo run 1             # interactive launch (no pattern check)
-./scripts/nova demo verify 1          # ID or full directory name
-./scripts/nova demo verify --all      # every enabled demo
+./nova demo list          # show all demos and their enabled status
+./nova demo run 1         # interactive launch (no pattern check)
+./nova demo verify 1      # ID or full directory name
+./nova demo verify --all  # every enabled demo
 ```
 
 Before a phase is complete its demo has `enabled: false` in the manifest, and
@@ -159,7 +159,7 @@ Before a phase is complete its demo has `enabled: false` in the manifest, and
 ### Live workbench
 
 ```bash
-./scripts/nova workbench serve 10     # live console/event UI on http://127.0.0.1:8787/
+./nova workbench serve 10  # live console/event UI on http://127.0.0.1:8787/
 ```
 
 A browser UI over a live QEMU session: per-VM consoles with UART input,
@@ -171,17 +171,17 @@ The full manual — user guide and developer guide — lives in
 ### Format & lint
 
 ```bash
-./scripts/nova format                 # apply clang-format
-./scripts/nova format --check         # dry-run
-./scripts/nova lint                   # run-clang-tidy over the debug compile database
+./nova format          # apply clang-format
+./nova format --check  # dry-run
+./nova lint            # run-clang-tidy over the debug compile database
 ```
 
 ### Misc inspection helpers
 
 ```bash
-./scripts/nova inspect size           # section sizes of novavisor.elf
-./scripts/nova inspect disassemble    # disassembly interleaved with source
-./scripts/nova clean                  # remove build/
+./nova inspect size         # section sizes of novavisor.elf
+./nova inspect disassemble  # disassembly interleaved with source
+./nova clean                # remove build/
 ```
 
 ---
@@ -189,7 +189,7 @@ The full manual — user guide and developer guide — lives in
 ## ✅ Before Pushing — run the CI pipeline locally
 
 ```bash
-./scripts/nova ci all
+./nova ci all
 ```
 
 The same `host`, `static`, and `runtime` handlers run locally and in GitHub Actions.
@@ -247,21 +247,21 @@ Installed by both setup methods. On `git commit`:
 - **clang-format** — auto-fixes formatting; if it modifies files, re-stage them and retry the commit.
 - **shellcheck** — fails the commit on shell script warnings.
 
-`clang-tidy` is **not** a pre-commit hook because it needs a configured cross build. Run `./scripts/nova lint` before pushing. If a hook fails, fix the underlying issue rather than bypassing it.
+`clang-tidy` is **not** a pre-commit hook because it needs a configured cross build. Run `./nova lint` before pushing. If a hook fails, fix the underlying issue rather than bypassing it.
 
 ### Demo-driven phase completion
 
 Every roadmap phase ends with its demo's `manifest.enabled` flipping from `false` to `true`. The recommended flow:
 
 1. **Scaffold** — create `demo/NN_name/{main.c, CMakeLists.txt, manifest.yml}` with `enabled: false`, and append `NN_name` to `.vscode/tasks.json` → `inputs[0].options` so the F5 `QEMU Demo Debug` picker surfaces it. (If you already did this in an earlier commit, skip.)
-2. **Implement** — land hypervisor features in small atomic commits. Each commit keeps `./scripts/nova ci all` green; host-testable units ship with GTest cases.
-3. **Integrate** — once `./scripts/nova demo verify NN_name` passes locally, the demo is ready.
+2. **Implement** — land hypervisor features in small atomic commits. Each commit keeps `./nova ci all` green; host-testable units ship with GTest cases.
+3. **Integrate** — once `./nova demo verify NN_name` passes locally, the demo is ready.
 4. **Close** — the final commit of the phase flips `enabled: true` in the manifest. This commit is the phase-completion marker; CI now gates every future PR against this demo.
 
 ### Pull requests
 
 - Title follows the same convention as the lead commit (`feat(scope): …`).
-- Description: motivation, summary of changes, and the `scripts/nova` checks that passed.
+- Description: motivation, summary of changes, and the `./nova` checks that passed.
 - Keep a PR focused on one phase — or one logical slice within a phase.
 - CI must be green before merge. No force-push to `main`.
 

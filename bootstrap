@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# shellcheck source=tool-versions.env disable=SC1091
-source "${REPO}/scripts/tool-versions.env"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=novakit/tool-versions.env disable=SC1091
+source "${REPO}/novakit/tool-versions.env"
 
 MODE="developer"
 case "${1:-}" in
@@ -252,7 +252,7 @@ install_hooks() {
 }
 
 install_packages
-"${REPO}/scripts/python-env" "${TOOLCHAIN_ROOT}/python"
+"${REPO}/novakit/python-env" "${TOOLCHAIN_ROOT}/python"
 install_python_tools
 install_actionlint
 install_toolchain

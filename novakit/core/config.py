@@ -6,14 +6,14 @@ import os
 import re
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[3]
-SCRIPTS = REPO / "scripts"
+PACKAGE = Path(__file__).resolve().parents[1]
+REPO = PACKAGE.parent
 BUILD_ROOT = REPO / "build"
 DEMO_DIR = REPO / "demo"
 DEMO_BUILD_DIR = BUILD_ROOT / "demo"
 DEFAULT_CONFIG = REPO / "configs" / "default.yml"
 DEFAULT_PAYLOADS = REPO / "configs" / "payloads.yml"
-VERSION_SOURCE = SCRIPTS / "tool-versions.env"
+VERSION_SOURCE = PACKAGE / "tool-versions.env"
 HV_PRESET = os.environ.get("NOVA_HV_PRESET", "aarch64-debug")
 WEB_DIR = REPO / "web"
 WORKBENCH_UI_DIR = WEB_DIR / "workbench"
