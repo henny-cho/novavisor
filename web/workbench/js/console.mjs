@@ -1,10 +1,9 @@
-import { MAX_VM_SLOT, clear, el, toBottom, vmSlot } from "./format.mjs";
+import { MAX_VM_SLOT, clear, el, vmAccent, vmSlot } from "./format.mjs";
 import { StreamLog } from "./primitives/stream_log.mjs";
 
 
 const LINE_CAP = 5000; /* per tab; oldest lines drop out */
 const MERGED = "all";
-const VM_SLOTS = 4; /* accent classes v0..v3 cycle */
 /* console_mux focus-cycle byte (Ctrl-T). An empty payload is never sent:
    a stray control byte could reach QEMU's own escape handling. */
 const FOCUS_CYCLE = "\u0014";
@@ -13,9 +12,6 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
   const views = new Map();
   let active = MERGED;
   let signature = null;
-  let dirty = false;
-
-  const slot = (index) => `v${index % VM_SLOTS}`;
 
   function makeView(key, label, name, accent) {
     const tab = el("button", accent ? `tab ${accent}` : "tab");
@@ -35,9 +31,7 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
     pane.setAttribute("aria-label", name || label);
     tab.setAttribute("aria-controls", pane.id);
     pane.hidden = true;
-    const stream = new StreamLog({ container: pane, lineCap: LINE_CAP });
-    const view = { tab, pane, stream, get stick() { return stream.stick; }, set stick(v) { stream.stick = v; } };
-
+    const view = { tab, pane, stream: new StreamLog({ container: pane, lineCap: LINE_CAP }) };
     views.set(key, view);
     tabs.append(tab);
     logs.append(pane);
@@ -50,7 +44,7 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
   }
 
   function guestView(index) {
-    return views.get(index) || makeView(index, `vm${index}`, "", slot(index));
+    return views.get(index) || makeView(index, `vm${index}`, "", vmAccent(index));
   }
 
   function activate(key) {
@@ -59,7 +53,7 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
       const on = id === active;
       view.pane.hidden = !on;
       view.tab.setAttribute("aria-selected", String(on));
-      if (on && view.stick) toBottom(view.pane);
+      if (on) view.stream.pin();
     }
   }
 
@@ -84,20 +78,18 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
       const id = vmSlot(guest, index);
       const label = `vm${id}`;
       const name = String((guest && guest.name) || "");
-      makeView(id, label, name === label ? "" : name, slot(id));
+      makeView(id, label, name === label ? "" : name, vmAccent(id));
     });
     activate(active);
   }
 
   function push(view, vm, text, ts) {
-    const row = el("div", vm === null ? "cline hyp" : `cline guest ${slot(vm)}`);
-    /* When the line was printed, so a reader who moved the cursor back
-       is not shown output the machine had not produced yet. Live it is
-       never read; the cost is one attribute per line. */
-    if (ts !== undefined) row.dataset.ts = String(ts);
+    const row = el("div", vm === null ? "cline hyp" : `cline guest ${vmAccent(vm)}`);
     row.append(el("span", "cg", vm === null ? "EL2" : `vm${vm}`));
     row.append(el("span", "ct", text === undefined || text === null ? "" : text));
-    view.stream.append(row);
+    /* The stream stamps the row and holds the cut, so it is also what
+       says whether this line is the future of where the reader is. */
+    row.hidden = view.stream.append(row, ts);
   }
 
   /* Hide everything printed after `ts`, or show it all again with null.
@@ -106,10 +98,9 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
      what is already on the page. */
   function cutAt(ts) {
     for (const view of views.values()) {
-      for (const row of view.pane.children) {
-        const at = row.dataset.ts;
-        row.hidden = ts !== null && at !== undefined && Number(at) > ts;
-      }
+      view.stream.cutTo(ts, (row, past) => {
+        row.hidden = past;
+      });
     }
   }
 
@@ -150,8 +141,7 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
     signature = null;
     for (const [key, view] of views) {
       if (key === MERGED) {
-        clear(view.pane);
-        view.stick = true;
+        view.stream.clear();
         continue;
       }
       view.tab.remove();

@@ -3,25 +3,26 @@
 
 import { el } from "../format.mjs";
 
-function fmt(shown) {
+/* How a decoded value reads: a flag as a mark, anything structured as
+   its JSON, absent as an em dash. */
+export function fmt(shown) {
   if (typeof shown === "boolean") return shown ? "●" : "·";
   if (shown !== null && typeof shown === "object") return JSON.stringify(shown);
   return String(shown ?? "—");
 }
 
-/* One cell: what to show, whether it moved, and optional explanation hint. */
+/* One cell: what to show, and whether it moved. */
 export class Cell {
-  constructor(shown, moved = false, hint = "") {
+  constructor(shown, moved = false) {
     this.shown = shown;
     this.moved = Boolean(moved);
-    this.hint = hint;
   }
 }
 
 /* A reading and the mask of what moved in it, walked together. */
 export class Cursor extends Cell {
-  constructor(shown, mask, hint = "") {
-    super(shown, mask === true, hint);
+  constructor(shown, mask) {
+    super(shown, mask === true);
     this.mask = mask;
   }
 
@@ -42,7 +43,7 @@ export class Cursor extends Cell {
 }
 
 /* A cell with no provenance (a label, row index, unit, etc.). */
-export const plain = (shown, hint = "") => new Cell(shown, false, hint);
+export const plain = (shown) => new Cell(shown, false);
 
 /* A cell handed to table() with no provenance: an authoring fault. */
 export class BareCell extends TypeError {}
@@ -58,12 +59,7 @@ export function table(headers, rows, options = {}) {
       if (!(cell instanceof Cell)) {
         throw new BareCell(`table cell is neither a cursor nor plain(): ${String(cell)}`);
       }
-      const td = el("td", cell.moved ? "moved" : "", fmt(cell.shown));
-      if (cell.hint) td.title = cell.hint;
-      if (options.onCellClick) {
-        td.addEventListener("click", (ev) => options.onCellClick(cell, ev));
-      }
-      row.append(td);
+      row.append(el("td", cell.moved ? "moved" : "", fmt(cell.shown)));
     }
     node.append(row);
   }
@@ -74,10 +70,8 @@ export function section(title, moved = false) {
   return el("div", moved ? "psec-h moved" : "psec-h", title);
 }
 
-export function note(text, moved = false, hint = "") {
-  const node = el("div", moved ? "pnote moved" : "pnote", text);
-  if (hint) node.title = hint;
-  return node;
+export function note(text, moved = false) {
+  return el("div", moved ? "pnote moved" : "pnote", text);
 }
 
 /* Generic table renderer for unknown/fallback object structures. */

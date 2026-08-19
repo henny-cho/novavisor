@@ -6,6 +6,11 @@
    a comment, and an operator from the same characters inside a string,
    so each rule below states one contract and nothing near it.
 
+   `no-undef` is here for the same reason and is the most basic of
+   them: a free identifier stays unresolved until a browser reaches the
+   line. A refactor that moves a symbol and leaves a call behind ships,
+   and the first thing to notice is the reader.
+
    Every rule is a contract about *where a fact lives*. The bridge owns
    the machine's vocabulary — badges, addresses, sample rates, the stop
    catalogue — and publishes it in the topology snapshot; a copy typed
@@ -124,13 +129,33 @@ const restricted = (...rules) => ({
   "no-restricted-syntax": ["error", ...rules],
 });
 
+/* What this page touches outside the language. Written out rather than
+   pulled from a package: the list is short, and it says what the UI is
+   allowed to assume the browser has. */
+const BROWSER = Object.fromEntries(
+  [
+    "clearTimeout",
+    "console",
+    "document",
+    "getComputedStyle",
+    "localStorage",
+    "location",
+    "requestAnimationFrame",
+    "ResizeObserver",
+    "setTimeout",
+    "URLSearchParams",
+    "WebSocket",
+    "window",
+  ].map((name) => [name, "readonly"]),
+);
+
 export default [
   {
     name: "workbench/language",
     files: ["workbench/js/**/*.mjs"],
-    languageOptions: { ecmaVersion: "latest", sourceType: "module" },
+    languageOptions: { ecmaVersion: "latest", sourceType: "module", globals: BROWSER },
     plugins: { workbench: { rules: { "no-layout-read-on-draw-path": noLayoutReadOnDrawPath } } },
-    rules: restricted(...EVERY_MODULE),
+    rules: { "no-undef": "error", ...restricted(...EVERY_MODULE) },
   },
   {
     /* `no-restricted-syntax` takes one option list, so a view that adds

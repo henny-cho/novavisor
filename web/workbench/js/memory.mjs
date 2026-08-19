@@ -196,7 +196,7 @@ export function createMemory({ pick, form, input, note, body, request }) {
   function renderRooted(rooted, into) {
     const age = rootAge(rooted);
     if (age === null) return;
-    into.append(el("div", "mnote", `\uBFCC\uB9AC\uB294 ${age} \uC804 \uC0AC\uBCF8`));
+    into.append(el("div", "mnote", `뿌리는 ${age} 전 사본`));
   }
 
   /* The hop after this one. A guest's Stage 1 answers an IPA, which is

@@ -11,7 +11,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { BareCell, Cursor, createPanels, plain, table } from "../workbench/js/panels.mjs";
+import { createPanels } from "../workbench/js/panels.mjs";
+import { BareCell, Cursor, plain, table } from "../workbench/js/primitives/table.mjs";
 import { element, find, findAll, fire, installDom, movedIn, rowsOf } from "./dom.mjs";
 
 function harness() {
@@ -175,7 +176,7 @@ describe("panel faults", () => {
 
     panels.settle();
     assert.match(host.textContent, /출처를 잃었다/);
-    assert.doesNotMatch(host.textContent, /표시할 수 없는 값/);
+    assert.doesNotMatch(host.textContent, /그리지 못했다/);
   });
 
   it("keeps drawing after a panel faulted", () => {
@@ -191,13 +192,17 @@ describe("panel faults", () => {
     assert.ok(findAll(host, "ptable").length > 0);
   });
 
-  it("lets a shape it cannot walk take down only its own panel", () => {
+  it("names what failed instead of blaming the machine for it", () => {
     const { panels, host, document } = harness();
     panels.apply(SCHED);
     document.failOn("table", new RangeError("decoded out of live guest RAM"));
 
     panels.settle();
-    assert.match(host.textContent, /표시할 수 없는 값/);
+    /* The drawer cannot know whether a throw came from the reading or
+       from its own code, so it prints the throw. A fixed sentence about
+       an unreadable value would file this file's own bugs — a missing
+       import among them — as the machine's. */
+    assert.match(host.textContent, /decoded out of live guest RAM/);
   });
 });
 

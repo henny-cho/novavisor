@@ -2,15 +2,14 @@
    snapshot: the catalog fills the picker, the guest list fills the rail.
    This module is the only sender of target uplinks. */
 
-import { clear, el, vmSlot } from "./format.mjs";
+import { clear, el, vmAccent, vmSlot } from "./format.mjs";
 
 const TARGET_KEY = "nv-wb-target";
-const VM_SLOTS = 4; /* accent classes v0..v3 cycle */
 
 function stored() {
   try {
     return localStorage.getItem(TARGET_KEY) || "";
-  } catch (error) {
+  } catch {
     return "";
   }
 }
@@ -18,7 +17,7 @@ function stored() {
 function remember(demo) {
   try {
     localStorage.setItem(TARGET_KEY, demo);
-  } catch (error) {
+  } catch {
     /* private mode: the picker still works for this session */
   }
 }
@@ -82,7 +81,7 @@ export function createTopology({
     guests.forEach((guest, index) => {
       const id = vmSlot(guest, index);
       const slot = `vm${id}`;
-      const item = el("div", `gitem v${id % VM_SLOTS}`);
+      const item = el("div", `gitem ${vmAccent(id)}`);
       item.append(el("span", "gi", slot));
       const name = String((guest && guest.name) || "");
       /* Some manifests name a guest after its slot; repeating it adds nothing. */

@@ -88,8 +88,33 @@ class Element {
     return this.children[0] ?? null;
   }
 
+  get lastElementChild() {
+    return this.children.at(-1) ?? null;
+  }
+
   get childElementCount() {
     return this.children.length;
+  }
+
+  /* Sibling links and connectedness, for the log cut: it walks out from
+     the boundary it last found rather than over every row, and drops
+     the boundary when the cap has trimmed it away. */
+  get nextElementSibling() {
+    return this.#sibling(1);
+  }
+
+  get previousElementSibling() {
+    return this.#sibling(-1);
+  }
+
+  get isConnected() {
+    return this.parentNode !== null;
+  }
+
+  #sibling(step) {
+    const kin = this.parentNode?.children;
+    if (!kin) return null;
+    return kin[kin.indexOf(this) + step] ?? null;
   }
 
   append(...nodes) {
@@ -258,7 +283,7 @@ export const findAll = (node, className) =>
 
 export const find = (node, className) => findAll(node, className)[0] ?? null;
 
-export const byTag = (node, tagName) =>
+const byTag = (node, tagName) =>
   walk(node).filter((found) => found.tagName === tagName.toUpperCase());
 
 /* A table's body as text, row by row, which is how a reader checks one.
