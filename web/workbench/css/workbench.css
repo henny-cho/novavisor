@@ -28,6 +28,11 @@ body{
   font-family:var(--sans);font-size:var(--fs-title);
   overflow:hidden;
 }
+/* The `hidden` attribute hides, whatever an element's own rule says
+   about display: a `.mmap{display:flex}` outweighs the browser's
+   `[hidden]` and leaves the element laid out. Stated once rather than
+   once per element that sets display. */
+[hidden]{display:none !important}
 button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 button:disabled{cursor:not-allowed;opacity:.42}
 button:not(:disabled):active{transform:translateY(1px)}
@@ -72,7 +77,6 @@ b{font-weight:700}
 .btn:hover:not(:disabled){border-color:var(--hyp);background:var(--hyp-dim)}
 .btn.primary{border-color:var(--hyp);color:var(--hyp);font-weight:650}
 .btn.ghost{background:none;color:var(--ink2)}
-.btn[hidden]{display:none}
 
 .status{display:flex;align-items:center;gap:7px;margin-left:auto;min-width:0}
 .badge{
@@ -89,7 +93,6 @@ b{font-weight:700}
 .badge[data-tone="crit"]{color:var(--crit);border-color:var(--crit)}
 .badge[data-tone="crit"] .dot{background:var(--crit)}
 .badge[data-tone="idle"]{color:var(--ink2)}
-.badge[hidden]{display:none}
 .loss{color:var(--warn);border-color:var(--warn);font-family:var(--mono);cursor:pointer}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
 
@@ -252,7 +255,6 @@ b{font-weight:700}
   margin-left:-22px;border-radius:2px;background:var(--line2)
 }
 .split:hover::after{background:var(--hyp)}
-.split[hidden]{display:none}
 
 .board{
   flex:1;min-height:0;overflow:auto;padding:10px var(--wb-pad) 12px;
@@ -544,7 +546,6 @@ b{font-weight:700}
   border:1px solid var(--crit);background:color-mix(in srgb,var(--crit) 13%,var(--panel));
   color:var(--crit);font-family:var(--mono);font-size:var(--fs-body);line-height:1.5;word-break:break-all
 }
-.banner[hidden]{display:none}
 .banner .bl{font-weight:700;letter-spacing:.06em;flex:none}
 
 .logs{flex:1;min-height:0;position:relative;margin:8px var(--wb-pad);display:flex}
@@ -553,7 +554,6 @@ b{font-weight:700}
   padding:7px 10px;border:1px solid var(--line);border-radius:var(--wb-r);background:var(--sunken);
   font-family:var(--mono);font-size:var(--fs-body);line-height:1.62
 }
-.log[hidden]{display:none}
 .cline{display:flex;gap:8px;align-items:baseline}
 .cline .cg{
   flex:none;width:30px;text-align:right;font-size:var(--fs-label);color:var(--ink3);
@@ -623,7 +623,6 @@ b{font-weight:700}
   display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;
   padding:1px 5px 1px 6px;border-left:2px solid transparent;border-radius:3px
 }
-.erow[hidden]{display:none}
 .erow .et{
   flex:none;min-width:52px;text-align:right;font-size:var(--fs-label);color:var(--ink3);
   font-variant-numeric:tabular-nums
@@ -809,7 +808,6 @@ b{font-weight:700}
    bar's: these sit in a side pane and are pressed while reading the
    timeline beside them, not while setting a run up. */
 .drive{padding:6px var(--wb-pad) 8px}
-.drive[hidden]{display:none}
 .drow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:3px 0}
 .dlabel{
   min-width:7ch;font-family:var(--mono);font-size:var(--fs-meta);
