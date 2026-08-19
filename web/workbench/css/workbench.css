@@ -763,6 +763,12 @@ b{font-weight:700}
 .mempty{
   padding:8px 6px;font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink3)
 }
+/* The quiet half of a verdict: something true about the walk that needs
+   saying but not flagging. Same metrics as .mwarn, muted. */
+.mnote{
+  padding:5px 6px;margin-bottom:6px;font-family:var(--mono);
+  font-size:var(--fs-meta);color:var(--ink3)
+}
 /* The map against the question its own control register asks. Stated
    even when the answer is none — an invisible result reads as a check
    that never ran. */

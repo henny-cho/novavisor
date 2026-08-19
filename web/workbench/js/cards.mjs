@@ -2,9 +2,8 @@
    bridge actually knows at M1 — identity, vCPU count, console volume and
    the last line that guest printed. No state is inferred here. */
 
-import { clear, el, vmSlot } from "./format.mjs";
+import { clear, el, vmAccent, vmSlot } from "./format.mjs";
 
-const VM_SLOTS = 4; /* accent classes v0..v3 cycle */
 const ACTIVE_MS = 700;
 const IDLE_TEXT = "출력 없음";
 
@@ -22,7 +21,7 @@ export function createCards(root) {
   function makeCard(id, name, vcpus) {
     if (!cards.size) clear(root); /* drop the empty state */
     const label = `vm${id}`;
-    const node = el("article", `card v${id % VM_SLOTS}`);
+    const node = el("article", `card ${vmAccent(id)}`);
     const head = el("div", "ch");
     head.append(el("span", "cvm", label));
     /* Some manifests name a guest after its slot; repeating it adds nothing. */

@@ -17,8 +17,11 @@ import { element, fire, gesture, installDom } from "./dom.mjs";
    same number and a wrong one cannot hide in the conversion. */
 const FREQ = 1_000_000;
 const CATALOGUE = [
-  { id: "bind", code: 1, edge: "inject", fields: ["lr"] },
-  { id: "eoi", code: 2, edge: "inject", fields: [] },
+  { id: "bind", code: 1, edge: "inject", fields: ["lr"], stop: true },
+  { id: "eoi", code: 2, edge: "inject", fields: [], stop: true },
+  /* A record about the stream rather than a moment in the firmware, so
+     there is no symbol to break on — the shape `trace.gap` has. */
+  { id: "gap", code: 3, fields: ["count", "from"], stop: false, span: true },
 ];
 /* Wide enough that a lane is its own band of pixels: two lanes at 20px
    in a 200px strip, and 704px of plot after the caption gutter. */
@@ -92,6 +95,22 @@ describe("timeline cursor", () => {
     assert.equal(choice.next.id, "eoi");
     /* The gap from the previous mark, in real microseconds. */
     assert.equal(choice.dt, 200);
+  });
+
+  it("carries what the catalogue says about the mark, halting included", (t) => {
+    fake(t);
+    const { timeline, chosen } = harness();
+    timeline.apply(answer(1000, [{ ts: 0, code: 1 }, { ts: 100, code: 3 }]));
+
+    /* The chrome offers "stop at the next one of these" from a mark, and
+       a lane the firmware has no symbol for cannot answer it: arming one
+       clears every breakpoint and leaves the machine to be interrupted
+       wherever it is. The catalogue already says which, so the mark
+       carries that rather than the chrome deciding again. */
+    timeline.select(0);
+    assert.equal(chosen.at(-1).record.stop, true);
+    timeline.select(1);
+    assert.equal(chosen.at(-1).record.stop, false);
   });
 
   it("has no gap to report at the first mark", (t) => {
@@ -302,6 +321,30 @@ describe("timeline pointer and keys", () => {
     assert.equal(chosen.at(-1).kind, "mark");
     assert.equal(chosen.at(-1).record.ts, 1300);
     assert.equal(chosen.at(-1).index, 2, "a click took a path of its own");
+  });
+
+  it("takes the nearest mark in the lane pointed at, and none from empty space", (t) => {
+    fake(t);
+    const { timeline, chosen, canvas } = harness();
+    /* An `eoi` two ticks from a `bind`: near enough that a click aimed
+       at the bind lane would land on it if the lane were not asked. */
+    timeline.apply(answer(1000, [{ ts: 0, code: 1 }, { ts: 2, code: 2 }, { ts: 400, code: 2 }]));
+    const window_ = { from: 1000, to: 1400 };
+    const click = (ts, y) => {
+      const at = { clientX: xOf(ts, window_), clientY: y, pointerId: 1 };
+      fire(canvas, "pointerdown", at);
+      fire(canvas, "pointerup", at);
+    };
+
+    click(1002, 10); /* lane 0 is `bind`, twenty pixels tall */
+    assert.equal(chosen.at(-1).record.id, "bind");
+
+    /* Six pixels' worth of time either side of a mark, and no more: a
+       click on empty space selects nothing rather than answering with
+       whatever is furthest away. */
+    const before = chosen.length;
+    click(1200, 10);
+    assert.equal(chosen.length, before, "a click on empty space moved the cursor");
   });
 
   it("measures between two marks without moving the cursor", (t) => {

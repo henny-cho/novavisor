@@ -111,6 +111,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
       byId.set(stop.id, stop);
       order.push(stop.id);
     }
+    indexLanes();
   }
 
   function reset() {
@@ -141,6 +142,18 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     lanes.length = 0;
     for (const candidate of order) {
       if (seen.has(candidate)) lanes.push(candidate);
+    }
+    indexLanes();
+  }
+
+  /* The lane index, from the two things that decide it: the catalogue
+     that names codes and the lanes seen so far. Both can move, so both
+     callers come here rather than each keeping the map in step. */
+  function indexLanes() {
+    laneByCode = new Map();
+    for (const entry of byCode.values()) {
+      const lane = lanes.indexOf(entry.id);
+      if (lane >= 0) laneByCode.set(entry.code, lane);
     }
   }
 
@@ -376,6 +389,30 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     });
   }
 
+  /* Which lane a record's code draws in, so binning a record costs one
+     lookup rather than a scan of the lane list. */
+  let laneByCode = new Map();
+
+  /* The bins, kept between paints: a following strip repaints several
+     times a second and their shape moves only when a lane appears or
+     the canvas resizes, both of which the key catches. `owner` is not
+     cleared — it is read only where a count from this pass put
+     something. */
+  let bins = null;
+  function binsFor(columns) {
+    if (!bins || bins.columns !== columns || bins.rows !== lanes.length) {
+      bins = {
+        columns,
+        rows: lanes.length,
+        counts: lanes.map(() => new Uint32Array(columns)),
+        owner: lanes.map(() => new Uint8Array(columns)),
+      };
+    } else {
+      for (const column of bins.counts) column.fill(0);
+    }
+    return bins;
+  }
+
   /* Records binned into the columns the strip actually has.
      One path for every zoom, because the alternative is a mode switch
      that draws two hundred events per pixel as two hundred overlapping
@@ -384,10 +421,8 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
      same arithmetic as single ticks. */
   function bin(window_, columns) {
     const width = Math.max(1, window_.to - window_.from);
-    const counts = lanes.map(() => new Uint32Array(columns));
-    const owner = lanes.map(() => new Uint8Array(columns));
-    const place = (id, ts, cpu) => {
-      const lane = lanes.indexOf(id);
+    const { counts, owner } = binsFor(columns);
+    const place = (lane, ts, cpu) => {
       if (lane < 0 || ts < window_.from || ts > window_.to) return;
       const column = Math.min(columns - 1, Math.floor(((ts - window_.from) / width) * columns));
       counts[lane][column] += 1;
@@ -396,8 +431,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     if (chosen) {
       const cols = chosen.cols;
       for (let index = 0; index < cols.ts.length; index += 1) {
-        const entry = byCode.get(cols.code[index]);
-        if (entry) place(entry.id, chosen.from + cols.ts[index], cols.cpu[index]);
+        place(laneByCode.get(cols.code[index]) ?? -1, chosen.from + cols.ts[index], cols.cpu[index]);
       }
       return { counts, owner };
     }
@@ -418,8 +452,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     const total = held_count();
     for (let index = 0; index < total; index += 1) {
       const at = slot(index);
-      const entry = byCode.get(held.code[at]);
-      if (entry) place(entry.id, held.ts[at], held.cpu[at]);
+      place(laneByCode.get(held.code[at]) ?? -1, held.ts[at], held.cpu[at]);
     }
     return { counts, owner };
   }
@@ -502,11 +535,13 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     const width = Math.max(1, window_.to - window_.from);
     const x = (ts) => at.gutter + ((ts - window_.from) / width) * at.plot;
     context.fillStyle = hatch(colours.warn, at.scale);
-    for (const record of visible(window_)) {
-      const entry = byCode.get(record.code);
-      if (!entry || !entry.span) continue;
-      const lane = lanes.indexOf(entry.id);
-      if (lane < 0) continue;
+    const rows = onScreen();
+    for (let index = 0; index < rows.n; index += 1) {
+      const code = rows.codeAt(index);
+      if (!byCode.get(code).span) continue;
+      const lane = laneByCode.get(code);
+      if (lane === undefined) continue;
+      const record = rows.read(index);
       const from = Math.max(at.gutter, record.b ? x(record.b) : at.gutter);
       const to = Math.min(at.gutter + at.plot, x(record.ts));
       context.fillRect(
@@ -538,51 +573,27 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     return lanes[Math.floor((event.clientY - box.top) / geometry(1).lane)] ?? null;
   }
 
-  /* Every record in the window, from whichever buffer is answering for
-     it. One reader for both so a click and the paint can never disagree
-     about what is on screen. */
-  function* visible(window_) {
-    if (chosen) {
-      const cols = chosen.cols;
-      for (let index = 0; index < cols.ts.length; index += 1) {
-        const ts = chosen.from + cols.ts[index];
-        if (ts < window_.from || ts > window_.to) continue;
-        yield { ts, code: cols.code[index], cpu: cols.cpu[index],
-                a: cols.a[index], b: cols.b[index], c: cols.c[index] };
-      }
-      return;
-    }
-    const count = held_count();
-    for (let index = 0; index < count; index += 1) {
-      const at = slot(index);
-      if (held.ts[at] < window_.from || held.ts[at] > window_.to) continue;
-      yield { ts: held.ts[at], code: held.code[at], cpu: held.cpu[at],
-              a: held.a[at], b: held.b[at], c: held.c[at] };
-    }
-  }
-
   /* Nearest in time, within the lane the pointer is on and within a few
      pixels of it. Marks are two pixels wide, so demanding an exact hit
      would put the fields out of reach of a mouse — but an unbounded
      nearest answers a click on empty space with a record from the far
      side of the strip, and in a window shown as density it would answer
-     every click with the same one. */
-  function nearest(ts, lane, window_, slack) {
-    let best = null;
+     every click with the same one.
+
+     A position, so the click moves the cursor straight to it rather
+     than building a record and searching for where it came from. */
+  function nearest(rows, ts, lane, slack) {
+    let best = -1;
     let distance = slack;
-    for (const record of visible(window_)) {
-      const entry = byCode.get(record.code);
-      if (!entry) continue;
-      if (lane && entry.id !== lane) continue;
-      const gap = Math.abs(record.ts - ts);
+    for (let index = 0; index < rows.n; index += 1) {
+      if (lane && byCode.get(rows.codeAt(index)).id !== lane) continue;
+      const gap = Math.abs(rows.tsAt(index) - ts);
       if (gap <= distance) {
         distance = gap;
-        best = { entry, record };
+        best = index;
       }
     }
-    if (!best) return null;
-    return { id: best.entry.id, edge: best.entry.edge, fields: best.entry.fields || [],
-             ...best.record };
+    return best;
   }
 
   let dragFrom = null;
@@ -604,32 +615,104 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
   let picked = null; /* the record the cursor is on */
   let playing = null; /* the playback timer */
 
-  /* The records the cursor can be on: exactly the ones drawn. Filtered
-     to what the catalogue names, since that is what `bin()` draws and
-     `nearest()` clicks — an uncatalogued record would be an invisible
-     mark that a step lands on and playback stops dead at, with nothing
-     to caption it. A firmware hook ahead of this UI produces them. */
-  function laid() {
-    const window_ = bounds();
-    if (!window_) return [];
-    const rows = [];
-    for (const record of visible(window_)) {
-      if (byCode.has(record.code)) rows.push(record);
-    }
-    return rows.sort((a, b) => a.ts - b.ts);
+  /* The half-open index range covering [from,to] in whichever buffer is
+     answering. Both arrive in time order — the drain merges the rings
+     by CNTPCT and a bounded batch always advances — so a window is a
+     contiguous stretch to be found rather than a set to be filtered
+     for, and nothing here sorts. */
+  function range(count, tsAt, from, to) {
+    const seek = (want) => {
+      let low = 0;
+      let high = count;
+      while (low < high) {
+        const middle = (low + high) >> 1;
+        if (tsAt(middle) < want) low = middle + 1;
+        else high = middle;
+      }
+      return low;
+    };
+    let hi = seek(to);
+    while (hi < count && tsAt(hi) === to) hi += 1; /* `to` is inclusive */
+    return [seek(from), hi];
   }
 
-  /* Two yields of visible() are different objects for the same record,
-     so identity cannot answer this. A record is its timestamp, its kind
-     and the ring it came from. */
-  const same = (a, b) =>
-    Boolean(a) && Boolean(b) && a.ts === b.ts && a.code === b.code && a.cpu === b.cpu;
-  const positionOf = (rows) => rows.findIndex((row) => same(row, picked));
+  /* Nothing to be on. Every caller tests `n` before reading a position,
+     so there is none to answer for. */
+  const EMPTY_CURSOR = { n: 0 };
 
+  /* The marks on screen: their positions in whichever buffer is
+     answering for the window, in time order. One reader for the three
+     that ask which marks are there — a click, a gap band, and the
+     cursor — so none of them can disagree about what is drawn.
+
+     Positions, not records. A step needs a count and a place in it, so
+     one record is built — the one the cursor lands on — plus its two
+     neighbours for the caption.
+
+     Filtered to what the catalogue names, since that is what `bin()`
+     draws — an uncatalogued record would be an invisible mark that a
+     step lands on and playback stops dead at, with nothing to caption
+     it. A firmware hook ahead of this UI produces them. */
+  function onScreen() {
+    const window_ = bounds();
+    if (!window_) return EMPTY_CURSOR;
+    const cols = chosen ? chosen.cols : null;
+    const base = chosen ? chosen.from : 0;
+    const count = cols ? cols.ts.length : held_count();
+    const tsOf = cols
+      ? (index) => base + cols.ts[index]
+      : (index) => held.ts[slot(index)];
+    const codeOf = cols ? (index) => cols.code[index] : (index) => held.code[slot(index)];
+    const cpuOf = cols ? (index) => cols.cpu[index] : (index) => held.cpu[slot(index)];
+    const [lo, hi] = range(count, tsOf, window_.from, window_.to);
+    const pos = new Int32Array(hi - lo);
+    let n = 0;
+    for (let index = lo; index < hi; index += 1) {
+      if (byCode.has(codeOf(index))) pos[n++] = index;
+    }
+    const read = (at) => {
+      if (at < 0 || at >= n) return null;
+      const index = pos[at];
+      if (cols) {
+        return { ts: base + cols.ts[index], code: cols.code[index], cpu: cols.cpu[index],
+                 a: cols.a[index], b: cols.b[index], c: cols.c[index] };
+      }
+      const where = slot(index);
+      return { ts: held.ts[where], code: held.code[where], cpu: held.cpu[where],
+               a: held.a[where], b: held.b[where], c: held.c[where] };
+    };
+    return { n, read, tsAt: (at) => tsOf(pos[at]), codeAt: (at) => codeOf(pos[at]),
+             cpuAt: (at) => cpuOf(pos[at]) };
+  }
+
+  /* Where the cursor's record sits in the list as it stands now, read
+     off the buffer rather than off rebuilt objects. A record is its
+     timestamp, its kind and the ring it came from — two records can
+     share a timestamp across cores. */
+  function positionOf(rows) {
+    if (!picked) return -1;
+    for (let at = 0; at < rows.n; at += 1) {
+      if (rows.tsAt(at) !== picked.ts) continue;
+      if (rows.codeAt(at) === picked.code && rows.cpuAt(at) === picked.cpu) return at;
+    }
+    return -1;
+  }
+
+  /* A record and what the catalogue says about it. The one place the
+     two are joined, so a fact the bridge publishes per event reaches
+     every consumer of a mark by being named here once. `stop` is such a
+     fact: the catalogue names lanes the firmware has no symbol for, and
+     those cannot be halted at. */
   function named(record) {
     const entry = record && byCode.get(record.code);
     if (!entry) return null;
-    return { id: entry.id, edge: entry.edge, fields: entry.fields || [], ...record };
+    return {
+      id: entry.id,
+      edge: entry.edge,
+      stop: entry.stop,
+      fields: entry.fields || [],
+      ...record,
+    };
   }
 
   /* Move the cursor to `index` and say what is there, with what came
@@ -637,12 +720,13 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
      because the caption a reader wants is the chain — `bind -> +111 us
      inject` — and reassembling it from a bare record means keeping a
      second copy of the order somewhere. */
-  function select(index, rows = laid()) {
-    if (!rows.length) return false;
-    const at = Math.min(rows.length - 1, Math.max(0, index));
-    const record = named(rows[at]);
+  function select(index, rows = onScreen()) {
+    if (!rows.n) return false;
+    const at = Math.min(rows.n - 1, Math.max(0, index));
+    const here = rows.read(at);
+    const record = named(here);
     if (!record) return false;
-    picked = rows[at];
+    picked = here;
     marked = record;
     onSelect({
       kind: "mark",
@@ -650,12 +734,12 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
       /* True of the list this was chosen from, which is what a reader
          is looking at. Not stored: the next move recomputes it. */
       index: at,
-      total: rows.length,
-      prev: named(rows[at - 1]),
-      next: named(rows[at + 1]),
+      total: rows.n,
+      prev: named(rows.read(at - 1)),
+      next: named(rows.read(at + 1)),
       /* The gap from the previous mark, in real microseconds, whatever
          speed the cursor is being moved at. */
-      dt: at > 0 ? micros(record.ts - rows[at - 1].ts, freq) : null,
+      dt: at > 0 ? micros(record.ts - rows.tsAt(at - 1), freq) : null,
       micros: micros(record.ts - (bounds()?.from ?? record.ts), freq),
     });
     draw();
@@ -665,11 +749,11 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
   /* Returns where it landed, so playback does not rebuild the list to
      ask. Null when there was nowhere to go. */
   function step(by) {
-    const rows = laid();
-    if (!rows.length) return null;
+    const rows = onScreen();
+    if (!rows.n) return null;
     const from = positionOf(rows);
-    const at = from < 0 ? (by > 0 ? 0 : rows.length - 1) : from + by;
-    return select(at, rows) ? { rows, at: Math.min(rows.length - 1, Math.max(0, at)) } : null;
+    const at = from < 0 ? (by > 0 ? 0 : rows.n - 1) : from + by;
+    return select(at, rows) ? { rows, at: Math.min(rows.n - 1, Math.max(0, at)) } : null;
   }
 
   /* Auto-advance. Not a second renderer: it pushes the same cursor the
@@ -677,15 +761,15 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
      free and cannot disagree with the manual case. */
   function play(speed = 1) {
     stop();
-    const rows = laid();
+    const rows = onScreen();
     if (positionOf(rows) < 0) select(0, rows);
     const tick = () => {
       /* The step reports where it landed and in which list, so the
          pause is taken against the records actually there — a following
          strip grows underneath playback — without rebuilding it. */
       const landed = step(+1);
-      if (!landed || landed.at >= landed.rows.length - 1) return stop();
-      const gap = landed.rows[landed.at + 1].ts - landed.rows[landed.at].ts;
+      if (!landed || landed.at >= landed.rows.n - 1) return stop();
+      const gap = landed.rows.tsAt(landed.at + 1) - landed.rows.tsAt(landed.at);
       const real = freq ? (gap * 1000) / freq : STEP_MIN_MS;
       playing = setTimeout(tick, Math.min(STEP_MAX_MS, Math.max(STEP_MIN_MS, real / speed)));
     };
@@ -764,21 +848,18 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     /* Six pixels' worth of time: close enough to forgive a mouse,
        narrow enough that a click on empty space selects nothing. */
     const slack = ((window_.to - window_.from) / geometry(1).plot) * SLACK_PX;
-    const hit = nearest(to, laneAt(event), window_, slack);
-    if (!hit) return;
+    const rows = onScreen();
+    const index = nearest(rows, to, laneAt(event), slack);
+    if (index < 0) return;
     if (event.shiftKey && marked) {
+      const hit = named(rows.read(index));
       onSelect({ kind: "delta", from: marked, to: hit, micros: micros(hit.ts - marked.ts, freq) });
       return;
     }
     /* Through the cursor, not around it: a click is one of the three
        ways to move the same selection. */
     stop();
-    const rows = laid();
-    /* The same rule the cursor uses to find itself, rather than a
-       second comparison here that forgot which ring the record came
-       from — two records can share a timestamp across cores. */
-    const index = rows.findIndex((row) => same(row, hit));
-    if (index >= 0) select(index, rows);
+    select(index, rows);
   });
 
   /* Arrow keys walk the selection, Space plays it, Home and End are the
@@ -790,7 +871,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
       ArrowRight: () => step(+1),
       ArrowLeft: () => step(-1),
       Home: () => select(0),
-      End: () => select(laid().length - 1),
+      End: () => select(onScreen().n - 1),
       " ": () => (isPlaying() ? stop() : play()),
     }[event.key];
     if (!acted) return;

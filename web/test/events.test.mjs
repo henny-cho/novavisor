@@ -76,4 +76,20 @@ describe("event log filters", () => {
     events.cutAt(null);
     assert.deepEqual(showing(list), ["GIC", "SMP", "LIFE"]);
   });
+
+  it("keeps the badge filter and the cursor from undoing each other", () => {
+    const { events, list, filters } = harness();
+    /* The cut walks only the rows that changed side, so the rest have
+       to already say what the one predicate would say — including the
+       ones a muted badge is holding down. */
+    fire(chip(filters, "GIC"), "click");
+    events.cutAt(1.5e9);
+    assert.deepEqual(showing(list), ["LIFE"]);
+
+    events.cutAt(null);
+    assert.deepEqual(showing(list), ["SMP", "LIFE"]);
+
+    fire(chip(filters, "GIC"), "click");
+    assert.deepEqual(showing(list), ["GIC", "SMP", "LIFE"]);
+  });
 });

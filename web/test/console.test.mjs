@@ -101,6 +101,39 @@ describe("console multiplexer", () => {
     consoleView.cutAt(null);
     assert.equal(merged.children[1].hidden, false);
   });
+
+  it("keeps up with a cursor moved repeatedly, and with a line that lands past it", () => {
+    const { consoleView, logs } = harness();
+    for (let i = 1; i <= 6; i += 1) consoleView.append({ vm: null, text: `line ${i}` }, i * 1e9);
+    const merged = logs.children.find((p) => p.id === "log-all");
+    const shown = () => merged.children.map((row) => !row.hidden);
+
+    /* The cut walks out from where it last was rather than over every
+       row, so what it left behind has to still be right after it has
+       moved both ways. */
+    consoleView.cutAt(3.5e9);
+    assert.deepEqual(shown(), [true, true, true, false, false, false]);
+    consoleView.cutAt(5.5e9);
+    assert.deepEqual(shown(), [true, true, true, true, true, false]);
+    consoleView.cutAt(1.5e9);
+    assert.deepEqual(shown(), [true, false, false, false, false, false]);
+
+    /* A line printed past the cut arrives hidden: waiting for the next
+       cursor move would show the reader output from after the moment
+       they are looking at. */
+    consoleView.append({ vm: null, text: "later still" }, 7e9);
+    assert.deepEqual(shown(), [true, false, false, false, false, false, false]);
+    consoleView.cutAt(7.5e9);
+    assert.deepEqual(shown(), [true, true, true, true, true, true, true]);
+
+    /* The same, with nothing else past the cut: the boundary has to
+       begin at the arriving line, or moving the cursor forward again
+       never brings it back. */
+    consoleView.append({ vm: null, text: "beyond" }, 9e9);
+    assert.deepEqual(shown().at(-1), false);
+    consoleView.cutAt(9.5e9);
+    assert.deepEqual(shown().at(-1), true);
+  });
 });
 
 describe("console input", () => {

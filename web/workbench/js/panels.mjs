@@ -11,21 +11,17 @@
    changed topic actually feeds. */
 
 import { clear, el, elapsed, micros, stamp } from "./format.mjs";
-import { globalBitfieldPopover } from "./primitives/bitfield.mjs";
 import {
   BareCell,
   Cell,
   Cursor,
+  fmt,
   generic,
   note,
   plain,
   section,
   table,
 } from "./primitives/table.mjs";
-
-export { BareCell, Cell, Cursor, generic, note, plain, section, table };
-
-
 
 /* Which panels were open, so a reload does not undo the choice. */
 const OPEN_KEY = "nv-wb-panels";
@@ -71,7 +67,7 @@ export function createPanels({ tabs, host }) {
   function remember() {
     try {
       localStorage.setItem(OPEN_KEY, JSON.stringify([...visible]));
-    } catch (error) {
+    } catch {
       /* private mode: the choice simply lasts this session */
     }
   }
@@ -375,19 +371,9 @@ export function createPanels({ tabs, host }) {
                up only if the *list* changed, which is not a value the
                machine moved. The readings are the columns beside it. */
             registers.map((name) => [
-              plain(name.shown, "클릭하여 비트필드 분해"),
+              plain(name.shown),
               ...cpus.map((cpu) => cpu.get(name.shown)),
             ]),
-            {
-              onCellClick(cell, ev) {
-                const text = String(cell.shown || "").toLowerCase();
-                if (text.includes("sctlr")) {
-                  globalBitfieldPopover.show(ev.currentTarget, "sctlr", cell.shown);
-                } else if (text.includes("esr")) {
-                  globalBitfieldPopover.show(ev.currentTarget, "esr", cell.shown);
-                }
-              },
-            },
           ),
         );
       },
@@ -576,20 +562,16 @@ export function createPanels({ tabs, host }) {
       try {
         entry.panel.render(entry.body);
       } catch (error) {
-        /* Two different failures, said differently. A bare cell is a
-           fault in this file and would otherwise draw correctly while
-           never highlighting, so it is named rather than blamed on the
-           machine. Everything else is a shape decoded straight out of
-           live guest RAM.
-
-           Neither escapes: the scroll restore below and the caller's
-           dirty-set clear are what let the next batch draw at all, so a
-           throw here would freeze this drawer — and the board view
-           after it — for the rest of the session. */
-        const note = error instanceof BareCell
+        /* Nothing escapes: a throw here would leave the dirty set
+           uncleared and freeze this drawer for the session. What failed
+           is printed rather than guessed at — a bare cell is a fault in
+           this file, and anything else is as likely to be one as it is
+           to be a shape decoded out of live guest RAM. */
+        console.error("panel render failed", entry.panel.id, error);
+        const said = error instanceof BareCell
           ? "이 표는 값의 출처를 잃었다 — 패널 코드의 결함이다"
-          : "표시할 수 없는 값 — 다음 갱신에서 다시 그립니다";
-        entry.body.append(el("div", "pnote", note));
+          : `그리지 못했다 — ${error}`;
+        entry.body.append(el("div", "pnote", said));
       }
     }
     host.scrollLeft = left;

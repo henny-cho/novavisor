@@ -192,13 +192,15 @@ const timeline = createTimeline({
     /* The drawer's readings against the moment just picked: both are
        counter values, so the comparison is the machine's own. */
     panels.setReference(record.ts);
-    /* One catalogue, two consumers, and this is where that is repaid:
-       the moment a reader picked out of the trace is already a stop
-       point, so wanting to see the next one is a lookup and not a
-       second table. */
-    markedEvent = record.id;
-    stopHereButton.hidden = false;
-    stopHereButton.title = `다음 ${record.id}에서 정지`;
+    /* One catalogue, two consumers: the moment a reader picked out of
+       the trace is a stop point too, so offering the next one is a
+       lookup rather than a second table. Only where the catalogue says
+       the firmware has a symbol to break on — arming a lane that has
+       none clears every breakpoint and leaves the machine to be
+       interrupted wherever it happens to be. */
+    markedEvent = record.stop ? record.id : null;
+    stopHereButton.hidden = !markedEvent;
+    if (markedEvent) stopHereButton.title = `다음 ${markedEvent}에서 정지`;
     /* In a replay the selection is the whole view's cursor: the moment
        a reader picks on the strip is the moment the panels and the
        console are returned to. Live there is only now, and asking
@@ -917,7 +919,7 @@ function applyTheme(theme) {
 function storedTheme() {
   try {
     return localStorage.getItem(THEME_KEY);
-  } catch (error) {
+  } catch {
     return null;
   }
 }
@@ -927,7 +929,7 @@ themeButton.addEventListener("click", () => {
   applyTheme(next);
   try {
     localStorage.setItem(THEME_KEY, next);
-  } catch (error) {
+  } catch {
     /* private mode: the theme simply does not persist */
   }
 });

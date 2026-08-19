@@ -1,6 +1,5 @@
 import { accentOf, clear, el, stamp } from "./format.mjs";
-import { StreamLog } from "./primitives/stream_log.mjs";
-import { chipButton } from "./primitives/ui_kit.mjs";
+import { StreamLog, stampOf } from "./primitives/stream_log.mjs";
 
 const ROW_CAP = 2000;
 /* UI-local chip for lifecycle rows: not part of the bridge taxonomy. */
@@ -24,14 +23,12 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
 
   /* Whether a row is on screen. One rule, because two — a badge filter
      and a time cursor — would each decide half of it and the second to
-     run would undo the first. */
-  let cut = null;
-  /* A row with no run time is this session talking about itself —
-     "connected", "tour started" — and has no place on the run's
-     timeline, so a cursor does not cut it. */
-  const shows = (row) =>
-    !hidden(row.dataset.badge) &&
-    (cut === null || row.dataset.ts === undefined || Number(row.dataset.ts) <= cut);
+     run would undo the first. An unstamped row sits on no run clock, so
+     only the filter can hide it. */
+  const shows = (row) => {
+    const at = stampOf(row);
+    return !hidden(row.dataset.badge) && (at === null || at <= (stream.cut ?? Infinity));
+  };
 
   function refresh() {
     for (const row of list.children) {
@@ -49,25 +46,29 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
   }
 
   /* Everything after `ts` is the future of wherever the reader is
-     looking. Hidden, not dropped: the cursor moves both ways. */
+     looking. Hidden, not dropped: the cursor moves both ways.
+
+     Only the rows between the old cut and the new one changed side, and
+     the stream walks to them; the badge filter has not moved, so the
+     rest already show what `shows` would say. */
   function cutAt(ts) {
-    cut = ts;
-    refresh();
+    stream.cutTo(ts, (row) => {
+      row.hidden = !shows(row);
+    });
+    stream.dirty = true;
   }
 
   function makeChip(name) {
-    const chip = chipButton({
-      label: name,
-      accent: accent(name),
-      pressed: !muted.has(name),
-      title: `${name} 표시 전환`,
-      className: name === LIFE ? "life" : "",
-      onClick: () => {
-        if (muted.has(name)) muted.delete(name);
-        else muted.add(name);
-        chip.setAttribute("aria-pressed", String(!muted.has(name)));
-        refresh();
-      },
+    const chip = el("button", "fchip", name);
+    chip.type = "button";
+    chip.title = `${name} 표시 전환`;
+    chip.style.setProperty("--chipc", accent(name));
+    chip.setAttribute("aria-pressed", String(!muted.has(name)));
+    chip.addEventListener("click", () => {
+      if (muted.has(name)) muted.delete(name);
+      else muted.add(name);
+      chip.setAttribute("aria-pressed", String(!muted.has(name)));
+      refresh();
     });
     chips.set(name, chip);
     return chip;
@@ -90,13 +91,11 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
 
   function addRow({ ts, badge, severity, message, fields, dim, local }) {
     const name = badge ? String(badge) : "?";
-    if (list.firstElementChild && list.firstElementChild.classList.contains("empty")) clear(list);
+    if (list.firstElementChild?.classList.contains("empty")) {
+      list.removeChild(list.firstElementChild);
+    }
     const row = el("div", dim ? "erow dim" : "erow");
     row.dataset.badge = name;
-    /* When it happened, so a cursor moved into the past does not leave
-       the log showing what the machine had not done yet. Left unset for
-       this session's own remarks: they are not moments in the run. */
-    if (!local) row.dataset.ts = String(ts ?? 0);
     if (severity) row.dataset.sev = String(severity);
     row.style.setProperty("--chipc", accent(name));
     row.append(el("span", "et", stamp(ts)));
@@ -107,8 +106,12 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
         row.append(el("span", "ef", `${key}=${value}`));
       }
     }
+    /* Stamped by the stream with the moment it describes, so a cursor
+       moved into the past does not leave the log showing what the
+       machine had not done yet. This session's own remarks go unstamped:
+       they are not moments in the run. */
+    stream.append(row, local ? undefined : (ts ?? 0));
     row.hidden = !shows(row);
-    stream.append(row);
   }
 
   /* One scroll write per batch; `stick` follows the scroll listener. */
@@ -142,15 +145,13 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
   }
 
   function clearAll() {
-    clear(list);
+    stream.clear();
     placeholder();
   }
 
   resetButton.addEventListener("click", () => {
     muted.clear();
-    for (const [name, chip] of chips) {
-      chip.setAttribute("aria-pressed", "true");
-    }
+    for (const chip of chips.values()) chip.setAttribute("aria-pressed", "true");
     refresh();
   });
   clearButton.addEventListener("click", clearAll);

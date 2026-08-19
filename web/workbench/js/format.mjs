@@ -66,20 +66,6 @@ export function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
 }
 
-/* Keep a scrolled-to-bottom log pinned without fighting a reading user. */
-export function atBottom(node, slack = 12) {
-  return node.scrollHeight - node.scrollTop - node.clientHeight <= slack;
-}
-
-export function toBottom(node) {
-  node.scrollTop = node.scrollHeight;
-}
-
-/* Drop the oldest children once a log exceeds its cap. */
-export function trim(node, cap) {
-  while (node.childElementCount > cap) node.removeChild(node.firstElementChild);
-}
-
 /* A guest's VM id is the firmware slot its console lines are tagged with,
    which is not always the array position: a manifest may name a guest
    after the slot it loads into (a two-guest demo can hold vm0 and vm2).
@@ -92,12 +78,8 @@ export function vmSlot(guest, index) {
 }
 
 /* Accents a subsystem name can be given. Severity keeps its own colours,
-   so the crit red is deliberately absent from this rotation.
-
-   Shared, because the event log and the board must agree: an edge is
-   drawn in the colour of the badge whose rows explain it, and a reader
-   crossing between the two is following one colour, not two. */
-export const ACCENTS = [
+   so the crit red is deliberately absent from this rotation. */
+const ACCENTS = [
   "var(--hyp)",
   "var(--warn)",
   "var(--violet)",
@@ -108,11 +90,20 @@ export const ACCENTS = [
   "var(--vm3)",
 ];
 
+/* One accent per name, shared because the event log and the board must
+   agree: an edge is drawn in the colour of the badge whose rows explain
+   it, and a reader crossing between the two follows one colour, not two. */
 export const accentOf = (name) => ACCENTS[paletteIndex(name, ACCENTS.length)];
+
+/* Accent class for a VM slot. The classes cycle v0..v3, one per --vm
+   token in the palette, so the count is stated here beside the palette
+   and derived from it nowhere else. */
+const VM_SLOTS = 4;
+export const vmAccent = (slot) => `v${slot % VM_SLOTS}`;
 
 /* Stable string → index into a small palette (FNV-1a). Chip colours are
    derived, never mapped by name, so a vocabulary change needs no UI edit. */
-export function paletteIndex(name, size) {
+function paletteIndex(name, size) {
   if (!size) return 0;
   let hash = 0x811c9dc5;
   const text = String(name);

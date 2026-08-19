@@ -14,11 +14,10 @@
    carries and says which layer it came from; what is not observed today
    says so rather than being filled in plausibly. */
 
-import { accentOf, clear, el, stamp, vmSlot } from "./format.mjs";
+import { accentOf, clear, el, stamp, vmAccent, vmSlot } from "./format.mjs";
 
 const SIZE_KEY = "nv-wb-view-h";
 const FOLD_KEY = "nv-wb-view-folded";
-const VM_SLOTS = 4; /* accent classes v0..v3 cycle */
 const NS = "http://www.w3.org/2000/svg";
 const MIN_HEIGHT = 200;
 /* What the console keeps when the board opens itself: its header, a
@@ -177,7 +176,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     if (persist) {
       try {
         localStorage.setItem(SIZE_KEY, String(next));
-      } catch (error) {
+      } catch {
         /* private mode: the size simply does not persist */
       }
     }
@@ -212,7 +211,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     if (persist) {
       try {
         localStorage.setItem(FOLD_KEY, on ? "1" : "");
-      } catch (error) {
+      } catch {
         /* private mode */
       }
     }
@@ -829,7 +828,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     }
     const span = list.length <= 2 ? "c6" : list.length === 3 ? "c4" : "c3";
     for (const guest of list) {
-      const node = el("div", `blk vmc ${span} v${guest.slot % VM_SLOTS}`);
+      const node = el("div", `blk vmc ${span} ${vmAccent(guest.slot)}`);
       const name = String(guest.name || `vm${guest.slot}`);
       const meta = blockHead(node, `VM${guest.slot} ${name}`, "", sampled("vm.generation"));
       /* Where the guest was loaded is a property of the run, not of any
@@ -1033,7 +1032,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
       }
       if (region.kind === "hole") seg.classList.add("hole");
       if (region.slot !== undefined) {
-        seg.classList.add("vm", `v${region.slot % VM_SLOTS}`);
+        seg.classList.add("vm", vmAccent(region.slot));
       }
       const caption = region.name || KIND_TEXT[region.kind] || region.kind;
       seg.append(el("span", "sa", hex(region.base)));
@@ -1456,7 +1455,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
       setHeight(saved, false);
     }
     if (localStorage.getItem(FOLD_KEY)) setFolded(true, false);
-  } catch (error) {
+  } catch {
     /* private mode: the board opens at its default size */
   }
   if (!folded() && window.innerHeight < SHORT_WINDOW) setFolded(true, false);
@@ -1549,10 +1548,12 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
       try {
         paint(sections);
       } catch (error) {
-        /* Values decode straight out of live guest RAM; a shape the
-           board cannot walk redraws on the next tick instead of taking
-           the whole view down. The wires go rather than stay pointing
-           at a residency that was never finished being read. */
+        /* A shape the board cannot walk redraws next tick instead of
+           taking the view down, and the wires go rather than point at a
+           residency that was never finished being read. Printed,
+           because a paint that silently stops looks like a machine that
+           stopped moving. */
+        console.error("board paint failed", sections, error);
         for (const link of live.links || []) showWire(link, false);
       }
     },
