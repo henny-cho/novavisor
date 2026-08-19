@@ -75,11 +75,11 @@ def _toolchain() -> int:
 
 def _table(document: dict) -> None:
     print(f"[perf] {document['browser']}, median of {document['samples']}")
-    print(f"  {'scenario':<15}{'rate':>6}{'script':>9}{'render':>9}{'total':>9}{'core':>7}")
+    print(f"  {'scenario':<15}{'rate':>6}{'script':>9}{'render':>9}{'total':>9}{'core':>8}")
     for scenario in document["scenarios"]:
         when = "once" if scenario["once"] else f"{scenario['rate_hz']:g}Hz"
         share = scenario["share"]
-        load = "     —" if share is None else f"{share:6.1%}"
+        load = "      —" if share is None else f"{share:7.1%}"
         print(
             f"  {scenario['name']:<15}{when:>6}"
             f"{scenario['script_ms']:>9.2f}{scenario['render_ms']:>9.2f}"

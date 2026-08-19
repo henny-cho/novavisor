@@ -158,17 +158,24 @@ function scenarios() {
   ];
 }
 
-/* A session already under way, so nothing is measured against an empty
-   page: the board built, the console holding a screenful, the panels
-   drawn, the strip holding records. */
+/* A session that has been running a while: the board built, the strip
+   holding records, and both logs filled past their caps.
+
+   Filled deliberately rather than left to whatever a scenario before it
+   appended. The logs cost what they cost by the row, so a page whose
+   panes are half full answers a different question depending on which
+   scenario ran first — and the answer worth having is the steady one a
+   long session reaches and stays at. */
+const OVER_CAP = 8000;
+
 function session() {
   const drain = wire.traceDrain(2048);
   return [
     wire.topology(),
     wire.life("running", { demo: "07-shm" }),
     wire.life("booted"),
-    ...wire.consoleLines(400),
-    ...wire.events(200),
+    ...wire.consoleLines(OVER_CAP),
+    ...wire.events(OVER_CAP),
     ...Object.entries(wire.readings()).map(([topic, value]) => wire.snapshot(topic, value)),
     drain.summary,
     drain.window,
