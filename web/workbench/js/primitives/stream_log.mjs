@@ -1,17 +1,13 @@
 /* Shared scroll-pinned, capped line stream log buffer manager, and the
    cut over it: where in the run the reader is looking. */
 
-/* Reading the scroll box is layout, and capping is this file's own job,
-   so both live with the buffer rather than among the shared helpers. */
+/* Reading the scroll box is layout, and this file is the only caller,
+   so it lives with the buffer rather than among the shared helpers. */
 const atBottom = (node, slack) =>
   node.scrollHeight - node.scrollTop - node.clientHeight <= slack;
 
 const toBottom = (node) => {
   node.scrollTop = node.scrollHeight;
-};
-
-const trim = (node, cap) => {
-  while (node.childElementCount > cap) node.removeChild(node.firstElementChild);
 };
 
 /* A row's moment on the run's clock. Rows without one — a session
@@ -32,6 +28,12 @@ export class StreamLog {
        one full pass answers. */
     this.cut = null;
     this.edge = undefined;
+    /* How many rows this stream put in the container. Counted rather
+       than asked for: `childElementCount` walks the children, and the
+       append that precedes the question has just invalidated whatever
+       the engine had cached — which made capping the log cost more than
+       drawing it. */
+    this.held = 0;
 
     this.container.addEventListener("scroll", () => {
       this.stick = atBottom(this.container, this.slack);
@@ -46,8 +48,12 @@ export class StreamLog {
     if (ts !== undefined) node.dataset.ts = String(ts);
     const past = ts !== undefined && ts > (this.cut ?? Infinity);
     this.container.append(node);
+    this.held += 1;
     if (past && this.edge === null) this.edge = node;
-    trim(this.container, this.lineCap);
+    while (this.held > this.lineCap) {
+      this.container.removeChild(this.container.firstElementChild);
+      this.held -= 1;
+    }
     this.dirty = true;
     return past;
   }
@@ -127,5 +133,6 @@ export class StreamLog {
     this.dirty = false;
     this.cut = null;
     this.edge = undefined;
+    this.held = 0;
   }
 }
