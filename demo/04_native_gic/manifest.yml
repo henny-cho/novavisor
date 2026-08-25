@@ -16,5 +16,11 @@ guests:
 steps:
   - pattern: "native tick 5"
     within_seconds: 5
+  # Five ticks is what the guest counted. This is EL2 posting the PPI
+  # the guest enabled at its redistributor — the delivery half of the
+  # architecture-standard path, which no line of guest output shows.
+  - event: "vgic.private"
+    where: { vintid: 27 }
+    within_seconds: 5
   - pattern: "demo_exit code=0"
     within_seconds: 10

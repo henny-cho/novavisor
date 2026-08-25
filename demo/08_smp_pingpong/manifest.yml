@@ -52,6 +52,12 @@ variants:
         within_seconds: 28
       - pattern: "system_off"
         within_seconds: 28
+      # The line above is EL2's; this is the call that caused it. Pong
+      # retires itself over the standard conduit while its peer keeps
+      # running on the other core, which is the whole point of the two
+      # lines that follow.
+      - event: "psci.call"
+        within_seconds: 5
       - pattern: "ping: peer survived guest faults"
         within_seconds: 29
       - pattern: "fault test: pc alignment"

@@ -2,7 +2,11 @@ name: "03_ivc_pingpong"
 description: "Two VMs ping-pong 1000 rounds over the IVC shared page with doorbell vIRQs."
 phase: 7
 enabled: true
-timeout_seconds: 15
+# Budgets are wall clock, and a run with an observation step carries its
+# guest RAM in a file the reader maps rather than in anonymous memory —
+# which costs the guest time on a slow host. The rounds themselves are
+# the guests' own work and unchanged.
+timeout_seconds: 30
 
 guests:
   - name: "ping"
@@ -25,6 +29,12 @@ guests:
 
 steps:
   - pattern: "pingpong: 1000 rounds ok"
-    within_seconds: 10
+    within_seconds: 20
+  # The rounds are the guests' own count. This is the hypervisor's half
+  # of one: a doorbell hypercall from the other VM, turned into an SGI
+  # for this one.
+  - event: "ivc.doorbell"
+    where: { vm: 1 }
+    within_seconds: 5
   - pattern: "demo_exit code=0"
-    within_seconds: 15
+    within_seconds: 10

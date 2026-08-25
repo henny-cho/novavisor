@@ -29,6 +29,14 @@ steps:
     within_seconds: 5
   - pattern: "edu passthrough: 8 level irqs ok"
     within_seconds: 5
+  # The count is the guest's. These two are the passthrough contract
+  # underneath it: EL2 taking the device's physical interrupt, and the
+  # binding that makes it arrive in the guest as its own INTID.
+  - event: "gic.ack"
+    within_seconds: 5
+  - event: "vgic.bind"
+    where: { vm: 0, vintid: 37 }
+    within_seconds: 5
   - pattern: "demo_exit code=0"
     within_seconds: 5
   - pattern: "\\[dma\\] VM 0 quiesced"

@@ -18,5 +18,11 @@ guests:
 steps:
   - pattern: "timer_fired"
     within_seconds: 10
+  # The guest says it took an interrupt; this is EL2 posting one. The
+  # legacy one-shot delivers the same vINTID the native timer does, so
+  # the record is what tells the two paths apart from the console line.
+  - event: "vgic.private"
+    where: { vintid: 27 }
+    within_seconds: 5
   - pattern: "demo_exit code=0"
     within_seconds: 15

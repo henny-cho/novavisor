@@ -35,6 +35,12 @@ variants:
         within_seconds: 15
       - pattern: "guest smp: shared watchdog slot ok"
         within_seconds: 17
+      # One VM, two vCPUs, one deadline slot — and the two vCPUs are on
+      # different physical cores. So the sibling's heartbeat could not
+      # be applied where it was made: it was handed to the core that
+      # owns the slot. This is that hand-off.
+      - event: "smp.cross"
+        within_seconds: 5
       - pattern: "guest smp: remote gicr wake ok"
         within_seconds: 18
       - pattern: "guest smp: reset with vcpu1 active"

@@ -2,7 +2,7 @@ name: "05_preempt"
 description: "Time-slice preemption + wfi blocking: a non-cooperative busy guest and a wfi-driven ticker share one core."
 phase: 9
 enabled: true
-timeout_seconds: 20
+timeout_seconds: 45
 
 guests:
   - name: "busy"
@@ -23,12 +23,21 @@ guests:
 # Both guests schedule off the same virtual clock, so this order is
 # deterministic: sleeper tick 2 (0.8 s) precedes busy done (1.0 s) only
 # under preemption; ticks 3-5 (through 2.0 s) need wake-from-EL2-idle.
+# The budgets below are wall clock and pure slack over that schedule —
+# wide because an observed run maps its guest RAM through a file, which
+# costs the guest time without moving any of the moments being ordered.
 steps:
   - pattern: "wfi tick 2"
-    within_seconds: 10
+    within_seconds: 25
   - pattern: "preempt: busy done"
-    within_seconds: 12
+    within_seconds: 25
+  # Print order is what makes the two lines above evidence for
+  # preemption. This is the switch itself: the busy guest never yields,
+  # so a scheduler switch away from it happened because the slice
+  # expired and for no other reason.
+  - event: "sched.switch"
+    within_seconds: 5
   - pattern: "preempt: wfi done"
-    within_seconds: 16
+    within_seconds: 25
   - pattern: "demo_exit code=0"
-    within_seconds: 18
+    within_seconds: 20

@@ -36,6 +36,11 @@ variants:
         within_seconds: 10
       - pattern: "A: boot 2"
         within_seconds: 12
+      # A guest reboots itself over the standard conduit, so the reset
+      # above is a PSCI call this hypervisor answered — not a guest that
+      # happened to print its banner twice.
+      - event: "psci.call"
+        within_seconds: 5
       - pattern: "demo_exit code=0"
         within_seconds: 14
       - pattern: "missed its heartbeat window"

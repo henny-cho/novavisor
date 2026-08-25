@@ -60,6 +60,11 @@ variants:
         send: "pong\n"
       - pattern: "\\[vm2\\] echo: pong"
         within_seconds: 10
+      # Every tagged line above is one facade call: the mux assembles a
+      # guest's bytes into a line and emits it whole, which is what keeps
+      # two VMs printing in parallel from splicing into each other.
+      - event: "uart.line"
+        within_seconds: 5
       - pattern: "demo_exit code=0"
         within_seconds: 5
       - pattern: "all VCPUs off"
