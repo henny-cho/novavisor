@@ -22,22 +22,32 @@ guests:
 # first reset marker is followed by a second vCPU1-online line only
 # after the quiesce ACK and pristine restore. The stats line prints
 # after AFFINITY_INFO confirms CPU_OFF; the boot vCPU exits last.
-steps:
-  - pattern: "core 1 online"
-    within_seconds: 10
-  - pattern: "vcpu1 online"
-    within_seconds: 15
-  - pattern: "guest smp: shared watchdog slot ok"
-    within_seconds: 17
-  - pattern: "guest smp: remote gicr wake ok"
-    within_seconds: 18
-  - pattern: "guest smp: reset with vcpu1 active"
-    within_seconds: 20
-  - pattern: "vcpu1 online"
-    within_seconds: 22
-  - pattern: "guest smp: 100 ipi rounds ok"
-    within_seconds: 27
-  - pattern: "demo_exit code=0"
-    within_seconds: 29
-  - pattern: "all VCPUs off"
-    within_seconds: 30
+
+# The two compositions this demo must hold on: the full profile, and
+# the tier a real board closes before an IOMMU is characterized. Same
+# guest, same steps — what differs is which components are underneath.
+variants:
+  - name: "full"
+    steps: &steps
+      - pattern: "core 1 online"
+        within_seconds: 10
+      - pattern: "vcpu1 online"
+        within_seconds: 15
+      - pattern: "guest smp: shared watchdog slot ok"
+        within_seconds: 17
+      - pattern: "guest smp: remote gicr wake ok"
+        within_seconds: 18
+      - pattern: "guest smp: reset with vcpu1 active"
+        within_seconds: 20
+      - pattern: "vcpu1 online"
+        within_seconds: 22
+      - pattern: "guest smp: 100 ipi rounds ok"
+        within_seconds: 27
+      - pattern: "demo_exit code=0"
+        within_seconds: 29
+      - pattern: "all VCPUs off"
+        within_seconds: 30
+
+  - name: "standard"
+    preset: "aarch64-standard-release"
+    steps: *steps

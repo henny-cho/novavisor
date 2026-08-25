@@ -27,30 +27,40 @@ guests:
 # core 1 until the fourth run, then retires before ping consumes its
 # final restart attempt. The halt line therefore proves both VMs
 # stopped without a machine-wide panic.
-steps:
-  - pattern: "core 1 online"
-    within_seconds: 10
-  - pattern: "pong: ready"
-    within_seconds: 15
-  - pattern: "smp pingpong: 1000 rounds, avg RTT="
-    within_seconds: 25
-  - pattern: "fault test: instruction abort"
-    within_seconds: 26
-  - pattern: "guest fault in VM 0 vCPU 0"
-    within_seconds: 26
-  - pattern: "fault test: undefined instruction"
-    within_seconds: 27
-  - pattern: "fault test: breakpoint"
-    within_seconds: 27
-  - pattern: "pong: done"
-    within_seconds: 28
-  - pattern: "system_off"
-    within_seconds: 28
-  - pattern: "ping: peer survived guest faults"
-    within_seconds: 29
-  - pattern: "fault test: pc alignment"
-    within_seconds: 29
-  - pattern: "restart budget exhausted"
-    within_seconds: 29
-  - pattern: "all VCPUs off"
-    within_seconds: 30
+
+# The two compositions this demo must hold on: the full profile, and
+# the tier a real board closes before an IOMMU is characterized. Same
+# guest, same steps — what differs is which components are underneath.
+variants:
+  - name: "full"
+    steps: &steps
+      - pattern: "core 1 online"
+        within_seconds: 10
+      - pattern: "pong: ready"
+        within_seconds: 15
+      - pattern: "smp pingpong: 1000 rounds, avg RTT="
+        within_seconds: 25
+      - pattern: "fault test: instruction abort"
+        within_seconds: 26
+      - pattern: "guest fault in VM 0 vCPU 0"
+        within_seconds: 26
+      - pattern: "fault test: undefined instruction"
+        within_seconds: 27
+      - pattern: "fault test: breakpoint"
+        within_seconds: 27
+      - pattern: "pong: done"
+        within_seconds: 28
+      - pattern: "system_off"
+        within_seconds: 28
+      - pattern: "ping: peer survived guest faults"
+        within_seconds: 29
+      - pattern: "fault test: pc alignment"
+        within_seconds: 29
+      - pattern: "restart budget exhausted"
+        within_seconds: 29
+      - pattern: "all VCPUs off"
+        within_seconds: 30
+
+  - name: "standard"
+    preset: "aarch64-standard-release"
+    steps: *steps

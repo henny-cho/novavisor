@@ -25,18 +25,28 @@ guests:
 # >= 700 ms of wall time after B boots, long after A's quick exit; B's
 # second run follows its reset causally. The final halt line proves
 # SYSTEM_OFF retired B cleanly.
-steps:
-  - pattern: "A: boot 1"
-    within_seconds: 10
-  - pattern: "A: boot 2"
-    within_seconds: 12
-  - pattern: "demo_exit code=0"
-    within_seconds: 14
-  - pattern: "missed its heartbeat window"
-    within_seconds: 20
-  - pattern: "B: boot 2"
-    within_seconds: 22
-  - pattern: "B: done"
-    within_seconds: 26
-  - pattern: "all VCPUs off"
-    within_seconds: 28
+
+# The two compositions this demo must hold on: the full profile, and
+# the tier a real board closes before an IOMMU is characterized. Same
+# guest, same steps — what differs is which components are underneath.
+variants:
+  - name: "full"
+    steps: &steps
+      - pattern: "A: boot 1"
+        within_seconds: 10
+      - pattern: "A: boot 2"
+        within_seconds: 12
+      - pattern: "demo_exit code=0"
+        within_seconds: 14
+      - pattern: "missed its heartbeat window"
+        within_seconds: 20
+      - pattern: "B: boot 2"
+        within_seconds: 22
+      - pattern: "B: done"
+        within_seconds: 26
+      - pattern: "all VCPUs off"
+        within_seconds: 28
+
+  - name: "standard"
+    preset: "aarch64-standard-release"
+    steps: *steps

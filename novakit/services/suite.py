@@ -25,12 +25,7 @@ def sink(tail: Path | None = None) -> verify.Sink:
     )
 
 
-def verify_one(
-    name: str,
-    paths: report.ArtifactPaths | None = None,
-    *,
-    preset: str | None = None,
-) -> int:
+def verify_one(name: str, paths: report.ArtifactPaths | None = None) -> int:
     _, demo_manifest = manifest.load_manifest(name)
     if not demo_manifest.get("enabled", False):
         print(f"[{SCOPE}] SKIP {name} (manifest.enabled=false)")
@@ -41,7 +36,7 @@ def verify_one(
     # the shared guests list. demo/11_configurable uses this to verify
     # the same guest under two configs.
     for index, variant in enumerate(manifest.manifest_variants(demo_manifest), start=1):
-        scenario = artifacts.scenario_for(name, demo_manifest, variant, preset=preset)
+        scenario = artifacts.scenario_for(name, demo_manifest, variant)
         tail = None if paths is None else paths.verify_tail(name, index)
         rc = verify.run_scenario(scenario, sink(tail), scope=SCOPE)
         if rc != 0:
@@ -49,21 +44,17 @@ def verify_one(
     return 0
 
 
-def verify_all(
-    paths: report.ArtifactPaths | None = None,
-    *,
-    preset: str | None = None,
-) -> int:
+def verify_all(paths: report.ArtifactPaths | None = None) -> int:
     enabled = [(n, m) for n, m in manifest.iter_demos() if m.get("enabled", False)]
     if not enabled:
         print(f"[{SCOPE}] no enabled demos; nothing to verify.")
         return 0
 
     # Warm the shared artifacts once so each demo's own build stays incremental.
-    cmake.build(cmake.BuildSpec.of(preset=preset or config.HV_PRESET))
+    cmake.build(cmake.BuildSpec.of(preset=config.HV_PRESET))
     artifacts.build_demos()
 
-    failures = [name for name, _ in enabled if verify_one(name, paths, preset=preset) != 0]
+    failures = [name for name, _ in enabled if verify_one(name, paths) != 0]
     if failures:
         print(f"\n[{SCOPE}] {len(failures)} demo(s) failed: "
               f"{', '.join(failures)}", file=sys.stderr)

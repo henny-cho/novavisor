@@ -83,6 +83,22 @@ def manifest_config(manifest: dict) -> str | None:
     return manifest.get("config")
 
 
+def variant_preset(variant: dict) -> str:
+    """The composition one run is built on.
+
+    Which components a run carries is as much a property of the variant
+    as which guest table it boots — a demo that must pass on more than
+    one composition says so here, rather than in a list of demo names
+    kept beside a CI lane.
+    """
+    return variant.get("preset") or config.HV_PRESET
+
+
+def manifest_preset(manifest: dict) -> str:
+    # For run/debug (no variant loop): the first variant's, like config.
+    return variant_preset(manifest_variants(manifest)[0])
+
+
 def manifest_devices(manifest: dict, variant: dict) -> list[str]:
     """The QEMU devices one variant runs with.
 
@@ -102,6 +118,22 @@ def manifest_variants(manifest: dict) -> list[dict]:
         "config": manifest.get("config"),
         "steps": manifest.get("steps", []),
     }]
+
+
+def demo_presets() -> tuple[str, ...]:
+    """Every composition a demo asks to be verified on.
+
+    Read rather than listed: the presets a run may build are whatever
+    the manifests name, and a second list of them is the copy that goes
+    stale.
+    """
+    named = {
+        variant["preset"]
+        for _name, demo in iter_demos()
+        for variant in manifest_variants(demo)
+        if variant.get("preset")
+    }
+    return tuple(sorted(named))
 
 
 def manifest_pattern_list(manifest: dict, key: str) -> tuple[str, ...]:

@@ -19,7 +19,7 @@ def _launch(name: str) -> tuple[Path, dict, list[str]]:
     guest_config = manifest.manifest_config(demo_manifest)
     elf = cmake.build(
         cmake.BuildSpec.of(
-            preset=config.HV_PRESET,
+            preset=manifest.manifest_preset(demo_manifest),
             config_path=None if guest_config is None else config.REPO / guest_config,
             payloads_path=payloads,
         )

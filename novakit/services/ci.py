@@ -16,14 +16,9 @@ RUNTIME_PRESETS = (
     "aarch64-minimal-release",
     "aarch64-standard-release",
 )
-RECHECK_PRESET = "aarch64-standard-release"
-EVIDENCE_PRESETS = (config.HV_PRESET, RECHECK_PRESET, "aarch64-n1sdp-release")
-RUNTIME_RECHECK = (
-    "07_lifecycle",
-    "08_smp_pingpong",
-    "09_guest_smp",
-    "10_console_mux",
-)
+# Where a failing lane may have left something worth keeping: every tree
+# it builds, plus the firmware profile's.
+EVIDENCE_PRESETS = (config.HV_PRESET, *RUNTIME_PRESETS, "aarch64-n1sdp-release")
 EVIDENCE = report.ArtifactPaths(config.BUILD_ROOT / "ci-evidence")
 
 
@@ -80,13 +75,6 @@ def _demos() -> int:
     return suite.verify_all(EVIDENCE)
 
 
-def _recheck() -> int:
-    for name in RUNTIME_RECHECK:
-        if suite.verify_one(name, EVIDENCE, preset=RECHECK_PRESET) != 0:
-            return 1
-    return 0
-
-
 LANES = (
     Lane("host", (("format", _format), ("tests", _tests)), cache_scope="host", timeout_minutes=15),
     Lane("static", (("static-analysis", _static), ("manifest", _manifest)), cache_scope="target", timeout_minutes=20),
@@ -96,7 +84,6 @@ LANES = (
             ("presets", _presets),
             ("firmware", _firmware_chain),
             ("demos", _demos),
-            ("recheck", _recheck),
         ),
         need_guests=True,
         need_firmware=True,

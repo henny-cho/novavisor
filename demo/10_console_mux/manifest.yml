@@ -31,30 +31,40 @@ guests:
 # pattern before it matched: "ping" goes to the initial focus (vm0),
 # whose echo+exit precedes the focus switch (Ctrl-T = \x14) — the
 # cycle skips retired VMs, landing on vm2 — and "pong" echoes there.
-steps:
-  # No SMMU marker here: DMA isolation is demos 15-17's subject, and
-  # asserting it pinned this demo to a composition that happens to
-  # include an IOMMU.
-  - pattern: "core 1 online"
-    within_seconds: 10
-  - pattern: "\\[vm0\\] vuart up"
-    within_seconds: 10
-  - pattern: "\\[vm2\\] vuart up"
-    within_seconds: 10
-  - pattern: "\\[vm2\\] tick 4"
-    within_seconds: 15
-    send: "ping\n"
-  - pattern: "\\[vm0\\] echo: ping"
-    within_seconds: 10
-  - pattern: "demo_exit code=0"
-    within_seconds: 5
-    send: "\x14"
-  - pattern: "\\[mux\\] focus vm2"
-    within_seconds: 5
-    send: "pong\n"
-  - pattern: "\\[vm2\\] echo: pong"
-    within_seconds: 10
-  - pattern: "demo_exit code=0"
-    within_seconds: 5
-  - pattern: "all VCPUs off"
-    within_seconds: 5
+
+# The two compositions this demo must hold on: the full profile, and
+# the tier a real board closes before an IOMMU is characterized. Same
+# guest, same steps — what differs is which components are underneath.
+variants:
+  - name: "full"
+    steps: &steps
+      # No SMMU marker here: DMA isolation is demos 15-17's subject, and
+      # asserting it pinned this demo to a composition that happens to
+      # include an IOMMU.
+      - pattern: "core 1 online"
+        within_seconds: 10
+      - pattern: "\\[vm0\\] vuart up"
+        within_seconds: 10
+      - pattern: "\\[vm2\\] vuart up"
+        within_seconds: 10
+      - pattern: "\\[vm2\\] tick 4"
+        within_seconds: 15
+        send: "ping\n"
+      - pattern: "\\[vm0\\] echo: ping"
+        within_seconds: 10
+      - pattern: "demo_exit code=0"
+        within_seconds: 5
+        send: "\x14"
+      - pattern: "\\[mux\\] focus vm2"
+        within_seconds: 5
+        send: "pong\n"
+      - pattern: "\\[vm2\\] echo: pong"
+        within_seconds: 10
+      - pattern: "demo_exit code=0"
+        within_seconds: 5
+      - pattern: "all VCPUs off"
+        within_seconds: 5
+
+  - name: "standard"
+    preset: "aarch64-standard-release"
+    steps: *steps

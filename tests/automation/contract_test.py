@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 
 from novakit import cli
 from novakit.core import board, config
-from novakit.services import ci, gates, tfa
+from novakit.services import ci, gates, manifest, tfa
 from tests import REPO
 
 NOVA = REPO / "nova"
@@ -111,9 +111,9 @@ class BuildPresetContractTest(unittest.TestCase):
         required = {
             config.HV_PRESET,
             gates.HOST_PRESET,
-            ci.RECHECK_PRESET,
             *ci.RUNTIME_PRESETS,
             *ci.EVIDENCE_PRESETS,
+            *manifest.demo_presets(),
             *(profile.preset for profile in tfa.PROFILES.values()),
         }
         data = json.loads(PRESETS.read_text())

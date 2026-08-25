@@ -126,7 +126,6 @@ def scenario_for(
     *,
     demo_build: Path | None = None,
     elf_snapshot: Path | None = None,
-    preset: str | None = None,
 ) -> expect.Scenario:
     """Build everything the variant needs and state what its run must do."""
     forbidden = manifests.manifest_pattern_list(demo_manifest, "forbid")
@@ -139,7 +138,7 @@ def scenario_for(
     payloads = prepare_payload_manifest(name, demo_build, demo_manifest)
     guest_config = variant.get("config")
     elf = cmake.build(cmake.BuildSpec.of(
-        preset=preset or config.HV_PRESET,
+        preset=manifests.variant_preset(variant),
         config_path=None if guest_config is None else config.REPO / guest_config,
         payloads_path=payloads,
     ))

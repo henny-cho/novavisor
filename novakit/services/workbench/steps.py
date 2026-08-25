@@ -170,6 +170,16 @@ class Machine:
                 close()
 
 
+# A surface that is not ready yet, as against one that is wrong. A file
+# the machine has not written, a view from another image, a region EL2
+# has not opened and a copy its publisher was inside of all mean "look
+# again" — and a step failing on any of them would be failing on the
+# boot it is there to wait through. One tuple, because two handlers
+# spelling this differently is how one of them ends a run at 0.1s that
+# the other would have waited out.
+NOT_YET = (FileNotFoundError, observe.Stale, snapshot.NotPublishedYet, elfsym.TornRead)
+
+
 def _at(fields: dict, name: str) -> object:
     """One field, named by path: `el1.tcr` descends where the value does.
 
@@ -226,8 +236,8 @@ def observe_handler(machine: Machine) -> expect.StepHandler:
                 # A topic this build does not publish is a manifest that
                 # cannot be satisfied by any run, not a slow boot.
                 return expect.step_failed(str(error))
-            except (FileNotFoundError, observe.Stale, elfsym.TornRead):
-                return expect.PENDING  # live surfaces may not have settled yet
+            except NOT_YET:
+                return expect.PENDING
             entry = _select(value, where)
             if entry is None:
                 return expect.step_pending(
@@ -287,11 +297,10 @@ def walk_handler(machine: Machine) -> expect.StepHandler:
         def poll() -> expect.StepOutcome:
             try:
                 answer = machine.walk(regime, address)
-            except (FileNotFoundError, observe.Stale, snapshot.NotPublishedYet):
-                return expect.PENDING  # ordinary during boot
-            except (KeyError, ValueError, elfsym.TornRead) as error:
-                # No such regime yet, a half the guest has not enabled,
-                # or a copy the publisher was inside of.
+            except NOT_YET:
+                return expect.PENDING
+            except (KeyError, ValueError) as error:
+                # No such regime yet, or a half the guest has not enabled.
                 return expect.step_pending(str(error))
             if answer is None:
                 return expect.step_pending("this run has published no page tables")
