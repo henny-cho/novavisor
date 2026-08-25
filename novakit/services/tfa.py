@@ -15,13 +15,18 @@ from pathlib import Path
 
 from ..core import board, config, proc
 from ..image.payload import make_record
-from . import artifacts, cmake, expect, verify
+from . import artifacts, cmake, expect, manifest, verify
 
 REPOSITORY = "https://github.com/ARM-software/arm-trusted-firmware.git"
 
 # Where BL1 expects to find the FIP in the QEMU virt flash image
 # (TF-A's PLAT_QEMU_FIP_BASE, one 256 KiB bank past the start).
 FIP_FLASH_OFFSET = 256 * 1024
+
+# The guest a firmware payload carries: the smallest one that reaches
+# EL1 and exits. Named once — the payload builder loads its binary and
+# the chain scenario waits for what its own manifest waits for.
+SMOKE_DEMO = "01_hello"
 
 
 @dataclass(frozen=True)
@@ -140,7 +145,7 @@ def build_profile(name: str) -> Path:
     profile = PROFILES[name]
     artifacts.build_demos()
     record = make_record(
-        config.DEMO_BUILD_DIR / "01_hello" / "hello.bin",
+        config.DEMO_BUILD_DIR / SMOKE_DEMO / "hello.bin",
         guest=0,
         name="platform-smoke",
         load_pa=profile.load_pa,
@@ -225,28 +230,24 @@ def package_platform(
     return PACKAGERS[platform](payload, output)
 
 
-# What a real BL1 -> BL2 -> BL31 -> BL33 handoff must print, in order: the
-# firmware banner, then the hypervisor reaching the same guest exit the
-# -kernel path reaches.
-CHAIN_MARKERS = (
-    "BL31: v",
-    "NovaVisor booted",
-    "core 1 online",
-    "Hello from EL1 guest",
-    "demo_exit code=0",
-)
+# What a real BL1 -> BL2 -> BL31 -> BL33 handoff must print before the
+# guest starts. What the guest itself must print is its own demo's
+# business, so the rest of the list is that manifest's steps.
+CHAIN_MARKERS = ("BL31: v", "NovaVisor booted", "core 1 online")
 CHAIN_TIMEOUT = 120
 
 
 def _chain_scenario(flash: Path) -> expect.Scenario:
+    _, smoke = manifest.load_manifest(SMOKE_DEMO)
+    guest_steps = manifest.manifest_variants(smoke)[0]["steps"]
     return expect.Scenario(
         label="qemu-tfa chain handoff",
         phase="firmware",
         command=tuple(board.command(bios=flash, secure=True)),
         timeout_seconds=CHAIN_TIMEOUT,
         steps=tuple(
-            {"pattern": marker, "within_seconds": CHAIN_TIMEOUT}
-            for marker in CHAIN_MARKERS
+            [{"pattern": marker, "within_seconds": CHAIN_TIMEOUT} for marker in CHAIN_MARKERS]
+            + [{**step, "within_seconds": CHAIN_TIMEOUT} for step in guest_steps]
         ),
     )
 

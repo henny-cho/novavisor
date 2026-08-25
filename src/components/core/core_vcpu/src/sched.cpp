@@ -19,6 +19,7 @@
 #include "core_vcpu/core_vcpu.hpp"
 #include "hal/console.hpp"
 #include "hal/cpu.hpp"
+#include "hal/panic.hpp"
 #include "hal/timer.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/hvc_abi.h"
@@ -422,8 +423,7 @@ void schedule_after_retire(TrapContext* live) noexcept {
   // branch above, which supplies the drain's own. Arriving here without
   // one means that rule broke: report it rather than switch into null.
   if (live == nullptr) {
-    console::write("[core_vcpu] retire needs a frame outside interrupt dispatch\n");
-    halt();
+    panic::fail("retire needs a frame outside interrupt dispatch");
   }
   schedule_out(live);
 }

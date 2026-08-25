@@ -29,6 +29,8 @@ IVC_RING = REPO / "src" / "nova" / "abi" / "ivc_ring.h"
 TRACE_RING = REPO / "src" / "nova" / "abi" / "trace_ring.h"
 COMMAND_RING = REPO / "src" / "nova" / "abi" / "command_ring.h"
 TELEMETRY = REPO / "src" / "nova" / "abi" / "telemetry.h"
+HVC_ABI = REPO / "src" / "nova" / "abi" / "hvc_abi.h"
+HAL_PANIC = REPO / "src" / "hal" / "panic.hpp"
 TELEMETRY_COMPONENT = (
     REPO / "src" / "components" / "service" / "telemetry" / "include" / "telemetry" / "telemetry.hpp"
 )
@@ -182,8 +184,15 @@ def read_constexprs(
 
 
 def read_string_define(path: Path, name: str) -> str:
+    """A string constant, in whichever form its header defines it.
+
+    Assembler-visible headers spell one as a #define; a C++-only header
+    as an inline constexpr string_view. Both are the definition, and a
+    reader that knew only one would send its caller to copy the other.
+    """
     match = re.search(
-        rf'^#define\s+{re.escape(name)}\s+"([^"]+)"',
+        rf'^\s*(?:#define\s+{re.escape(name)}\s+'
+        rf'|inline constexpr std::string_view\s+{re.escape(name)}\s*=\s*)"([^"]*)"',
         _text(path),
         re.MULTILINE,
     )
@@ -201,6 +210,12 @@ MAX_VCPUS_PER_VM = LIMITS["NOVA_MAX_VCPUS_PER_VM"]
 # Every guest links against this window; its backing PA differs by slot.
 GUEST_IPA_BASE = LIMITS["NOVA_GUEST_IPA_BASE"]
 UART_KINDS = ("none", "vuart")  # UartKind (nova/abi/guest.hpp)
+
+# What the firmware prints when it has failed, and when a guest exits.
+# Read here so a verifier, a console classifier and the firmware cannot
+# hold three spellings of one string.
+PANIC_PREFIX = read_string_define(HAL_PANIC, "kPrefix")
+DEMO_EXIT_LOG = read_string_define(HVC_ABI, "NOVA_HVC_EXIT_LOG")
 
 
 def validate_guest(where: str, spec: dict) -> int:

@@ -40,10 +40,24 @@ SAMPLE = (
     # extracting a field from it would be judged stale when it is not.
     (re.compile(r".*", re.S), "7"),
 )
+# String constants the firmware composes lines from. A line built from
+# one instead of a literal would be invisible to the renderer below, and
+# every rule matching it judged stale.
+CONSTANT = re.compile(r'inline constexpr std::string_view\s+(\w+)\s*=\s*"((?:[^"\\]|\\.)*)"')
 TAG_PREFIX = re.compile(r"^\[([a-z_]+)\] ")
 # A tag always starts a line, so it also ends the one before it.
 TAG_START = re.compile(r"(?=\[[a-z_]+\] )")
 LITERAL = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
+
+
+def _constants() -> dict[str, str]:
+    found: dict[str, str] = {}
+    for path in SOURCE.rglob("*.hpp"):
+        found.update(CONSTANT.findall(path.read_text(encoding="utf-8", errors="ignore")))
+    return found
+
+
+CONSTANTS = _constants()
 
 
 def _rendered(arguments: list[str]) -> str:
@@ -62,6 +76,10 @@ def _rendered(arguments: list[str]) -> str:
             for escape, plain in ESCAPES:
                 text = text.replace(escape, plain)
             out.append(text)
+            continue
+        named = CONSTANTS.get(piece.rsplit("::", 1)[-1])
+        if named is not None:
+            out.append(named)
             continue
         for pattern, sample in SAMPLE:
             if pattern.search(piece):

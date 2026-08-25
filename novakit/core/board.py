@@ -1,4 +1,4 @@
-"""The QEMU board every run targets, and the output that always means failure.
+"""The QEMU board every run targets.
 
 One owner for the machine model: a demo, a firmware chain and a soak must
 disagree about nothing except the image they boot.
@@ -24,13 +24,6 @@ MACHINE_ARGS = (
     "none",
     "-m",
     "1024",
-)
-
-# Output that invalidates a run no matter what else was expected: the
-# isolation the demos assert is already gone by the time it prints.
-FATAL_PATTERNS = (
-    r"\[smmu\] initialization failed(?::| error=)",
-    r"\[smmu\] isolation failure:",
 )
 
 

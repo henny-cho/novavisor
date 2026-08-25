@@ -15,9 +15,9 @@
 
 #include "hal/console.hpp"
 #include "hal/cpu.hpp"
+#include "hal/panic.hpp"
 #include "hal/timer.hpp"
 #include "nova/arch/timebase.hpp"
-#include "nova/panic.hpp"
 
 namespace nova::boot_contract {
 
@@ -29,9 +29,7 @@ namespace nova::boot_contract {
 // the boot with the raw value in the report instead.
 inline void enforce() noexcept {
   if (const arch::TimebaseError error = hyp_timer::adopt_timebase(); error != arch::TimebaseError::kNone) {
-    console::line("[NOVA PANIC] timebase: ", arch::to_string(error),
-                  " (CNTFRQ_EL0=", console::Dec{hyp_timer::raw_freq()}, ")\n");
-    halt();
+    panic::fail("timebase: ", arch::to_string(error), " (CNTFRQ_EL0=", console::Dec{hyp_timer::raw_freq()}, ")");
   }
   cpu::adopt_speculation_state();
 }

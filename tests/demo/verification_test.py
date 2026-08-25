@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import NamedTuple
 from unittest import mock
 
-from novakit.core import board, config
+from novakit.core import config
 from novakit.services import (
     artifacts,
     expect,
@@ -20,6 +20,9 @@ from novakit.services import (
     surfaces,
     verify,
 )
+
+# The guard a run that is not about the panic path carries.
+FATAL = spawn.fatal_patterns(expects_panic=False)
 
 
 class FakeTimeout(Exception):
@@ -315,7 +318,7 @@ class DemoRunnerVerificationTest(ScenarioHarness):
             def expect(self, patterns, timeout):
                 self.events.append(("expect", patterns, timeout))
                 self.clock.advance(0.5)
-                return list(patterns).index(board.FATAL_PATTERNS[0])
+                return list(patterns).index(FATAL[0])
 
         clock = FakeClock()
         child = FatalChild(clock)
@@ -326,11 +329,11 @@ class DemoRunnerVerificationTest(ScenarioHarness):
             clock=clock,
             timeout_error=FakeTimeout,
             eof_error=FakeEof,
-            fatal_patterns=board.FATAL_PATTERNS,
+            fatal_patterns=FATAL,
         )
 
         self.assertEqual(result.failure, "fatal")
-        self.assertEqual(result.offender, board.FATAL_PATTERNS[0])
+        self.assertEqual(result.offender, FATAL[0])
         self.assertEqual(result.step, "/guest-ready/")
         self.assertEqual(result.elapsed_seconds, 0.5)
         self.assertEqual(child.terminate_calls, [True])
@@ -352,7 +355,7 @@ class DemoRunnerVerificationTest(ScenarioHarness):
             clock=clock,
             timeout_error=FakeTimeout,
             eof_error=FakeEof,
-            fatal_patterns=board.FATAL_PATTERNS,
+            fatal_patterns=FATAL,
             forbidden_patterns=forbidden,
         )
 

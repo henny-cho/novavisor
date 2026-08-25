@@ -185,10 +185,7 @@ void trap_handler_component::handle_lower_sync(TrapContext* ctx) noexcept {
     return;
   }
 
-  if (panic::enter() != panic::Role::kFirst) {
-    halt(); // someone else already owns the report (or we re-faulted)
-  }
-  console::write("[NOVA PANIC] inconsistent lower-EL exception class\n");
+  panic::announce("inconsistent lower-EL exception class");
   dump_trap_context(ctx);
   halt();
 }
@@ -216,23 +213,11 @@ void el2_trap_lower_sync(nova::TrapContext* ctx) noexcept {
 }
 
 // Every vector with no recovery path funnels here (vec.S TRAP_FATAL_BODY).
-// Claim the machine first: the first failure owns the console raw, every
-// other core parks — a real board's serial log must end with exactly one
-// attributable report, not an interleave of neighbors and watchdog resets.
+// The dump follows the headline, so this claims through announce() and
+// halts itself rather than through fail().
 void el2_trap_fatal(nova::TrapContext* ctx, std::uint64_t vector) noexcept {
-  switch (nova::panic::enter()) {
-  case nova::panic::Role::kRecursive:
-    // The report path itself faulted — say so raw and stop digging.
-    nova::console::write("\n[NOVA PANIC] recursive fault inside the panic path\n");
-    nova::halt();
-  case nova::panic::Role::kBystander:
-    nova::halt(); // the first failure owns the log
-  case nova::panic::Role::kFirst:
-    break;
-  }
-  nova::console::write("\n[NOVA PANIC] EL2 fatal exception: vector ");
-  nova::console::write(vector < nova::kVectorNames.size() ? nova::kVectorNames[vector] : "?");
-  nova::console::write("\n");
+  nova::panic::announce("EL2 fatal exception: vector ",
+                        vector < nova::kVectorNames.size() ? nova::kVectorNames[vector] : "?");
   nova::dump_trap_context(ctx);
   nova::halt();
 }

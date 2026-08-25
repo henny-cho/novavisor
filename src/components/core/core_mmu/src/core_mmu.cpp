@@ -16,12 +16,12 @@
 #include "hal/console.hpp"
 #include "hal/cpu.hpp"
 #include "hal/mem.hpp"
+#include "hal/panic.hpp"
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/guest_layout.h"
 #include "nova/abi/payload.hpp"
 #include "nova/arch/cpu_contract.hpp"
-#include "nova/panic.hpp"
 #include "nova/range.hpp"
 
 #include <array>
@@ -129,31 +129,19 @@ auto pristine_slot(std::size_t index) noexcept -> void* {
 }
 
 [[noreturn]] void panic_stage2(std::size_t guest_index) noexcept {
-  console::write("[NOVA PANIC] Stage 2 map failed for guest ");
-  console::write_dec64(guest_index);
-  console::write(" (range/pool constraints)\n");
-  halt();
+  panic::fail("Stage 2 map failed for guest ", console::Dec{guest_index}, " (range/pool constraints)");
 }
 
 [[noreturn]] void panic_payload(std::size_t guest_index) noexcept {
-  console::write("[NOVA PANIC] embedded payload invalid for guest ");
-  console::write_dec64(guest_index);
-  console::write("\n");
-  halt();
+  panic::fail("embedded payload invalid for guest ", console::Dec{guest_index});
 }
 
 [[noreturn]] void panic_reservation(std::size_t guest_index) noexcept {
-  console::write("[NOVA PANIC] guest window exceeds board reservation at guest ");
-  console::write_dec64(guest_index);
-  console::write("\n");
-  halt();
+  panic::fail("guest window exceeds board reservation at guest ", console::Dec{guest_index});
 }
 
 [[noreturn]] void panic_vmid(std::size_t guest_index) noexcept {
-  console::write("[NOVA PANIC] guest vmid exceeds the 8-bit VMID space (VTCR_EL2.VS=0) at guest ");
-  console::write_dec64(guest_index);
-  console::write("\n");
-  halt();
+  panic::fail("guest vmid exceeds the 8-bit VMID space (VTCR_EL2.VS=0) at guest ", console::Dec{guest_index});
 }
 
 // Refuse to program VTCR_EL2 with parameters the silicon does not
@@ -162,10 +150,7 @@ auto pristine_slot(std::size_t index) noexcept -> void* {
 void enforce_cpu_contract() noexcept {
   const arch::CpuContractError error = arch::validate_cpu_contract(cpu::id_aa64mmfr0(), mmu::kStage2Pa40);
   if (error != arch::CpuContractError::kNone) {
-    console::write("[NOVA PANIC] CPU contract: ");
-    console::write(arch::to_string(error));
-    console::write("\n");
-    halt();
+    panic::fail("CPU contract: ", arch::to_string(error));
   }
 }
 
@@ -265,8 +250,7 @@ void init_and_activate() noexcept {
   enforce_cpu_contract();
   const auto guests = guest_table();
   if (guests.empty() || guests.size() > kMaxGuests) {
-    console::write("[NOVA PANIC] guest_table size out of range\n");
-    halt();
+    panic::fail("guest_table size out of range");
   }
   validate_payloads(guests);
 

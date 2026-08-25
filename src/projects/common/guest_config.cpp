@@ -6,10 +6,10 @@
 #include "dtb_parser/fdt_model.hpp"
 #include "hal/board/active/board.hpp"
 #include "hal/console.hpp"
+#include "hal/panic.hpp"
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/payload.hpp"
-#include "nova/panic.hpp"
 
 #include <array>
 #include <cstddef>
@@ -49,10 +49,7 @@ std::array<dma::PhysicalRange, 3> g_protected_pa{};
 std::size_t                       g_protected_pa_count = 0;
 
 [[noreturn]] void panic_guest_config(std::size_t index) noexcept {
-  console::write("[NOVA PANIC] embedded guest DTB ");
-  console::write_dec64(index);
-  console::write(" invalid\n");
-  halt();
+  panic::fail("embedded guest DTB ", console::Dec{index}, " invalid");
 }
 
 } // namespace

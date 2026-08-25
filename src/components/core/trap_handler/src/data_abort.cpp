@@ -8,7 +8,7 @@
 
 #include "dispatch.hpp"
 #include "hal/console.hpp"
-#include "nova/panic.hpp"
+#include "hal/panic.hpp"
 #include "trace/trace.hpp"
 #include "trap_handler/guest_fault.hpp"
 #include "trap_handler/mmio.hpp"
@@ -23,7 +23,7 @@ void dispatch_guest_fault(TrapContext* ctx) noexcept {
   GuestFaultCall call{.ctx = ctx, .handled = false};
   cib::service<GuestFaultService>(&call);
   if (!call.handled) {
-    halt();
+    panic::fail("guest fault with no lifecycle owner to recover it");
   }
 }
 

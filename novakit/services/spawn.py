@@ -7,6 +7,7 @@ stays testable against a fake child.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 from collections.abc import Sequence
@@ -14,8 +15,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from ..core import board, proc
+from ..core import proc
+from ..image import abi
 from . import expect
+
+
+def fatal_patterns(expects_panic: bool) -> tuple[str, ...]:
+    """Output that invalidates a run whatever else it was owed.
+
+    Both strings come from the headers the firmware prints them from, so
+    a renamed report cannot leave a guard silently matching nothing. A
+    demo whose subject IS the panic path drops that line and keeps the
+    rest of the guard.
+    """
+    bad_exit = re.escape(abi.DEMO_EXIT_LOG) + "[1-9]"
+    if expects_panic:
+        return (bad_exit,)
+    return (re.escape(abi.PANIC_PREFIX), bad_exit)
 
 
 class OutputCapture:
@@ -171,7 +187,7 @@ def observe(
             eof_error=pexpect.EOF,
             on_step=on_step,
             handlers=handlers,
-            fatal_patterns=board.FATAL_PATTERNS,
+            fatal_patterns=fatal_patterns(scenario.expects_panic),
             forbidden_patterns=scenario.forbidden_patterns,
         )
     except expect.Interrupted as interrupted:

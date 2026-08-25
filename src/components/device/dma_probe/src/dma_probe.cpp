@@ -3,14 +3,13 @@
 #include "dma_device/dma_device.hpp"
 #include "hal/console.hpp"
 #include "hal/dma_device.hpp"
+#include "hal/panic.hpp"
 #include "hal/timer.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/hvc_abi.h"
 #include "nova/arch/trap_context.hpp"
-#include "nova/panic.hpp"
 #include "smmu/smmu.hpp"
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -90,8 +89,7 @@ struct ProbeResources {
 
 [[noreturn]] void fail(std::string_view reason, ProbeResources& resources) noexcept {
   static_cast<void>(release(resources));
-  console::write_parts(std::array{"[NOVA PANIC] DMA isolation probe failed: "sv, reason, "\n"sv});
-  halt();
+  panic::fail("DMA isolation probe failed: ", reason);
 }
 
 } // namespace

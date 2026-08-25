@@ -61,15 +61,15 @@ void handle_putc(TrapContext* ctx) noexcept {
   console_mux::guest_putc(vcpu::current_index(), static_cast<char>(ctx->x[1] & 0xFFU));
 }
 
-// kHvcExit: x1 = exit code. Emits the manifest-expected "demo_exit
-// code=N" line, then retires the whole VM through its owner lifecycle.
-// The line stays untagged (harness contract); a buffered partial line
-// is flushed first so nothing the guest printed is lost.
+// kHvcExit: x1 = exit code. Emits the exit line, then retires the whole
+// VM through its owner lifecycle. The line stays untagged (harness
+// contract); a buffered partial line is flushed first so nothing the
+// guest printed is lost.
 void handle_exit(TrapContext* ctx) noexcept {
   console_mux::flush(vcpu::current_index());
   // One atomic line: the verification harness greps for it, so another
   // core's log must never splice into it.
-  console::line("demo_exit code=", console::Dec{ctx->x[1]}, "\n");
+  console::line(NOVA_HVC_EXIT_LOG, console::Dec{ctx->x[1]}, "\n");
   static_cast<void>(smp::stop_vm(vm_of(vcpu::current_index()), ctx));
 }
 

@@ -3,13 +3,13 @@
 #include "core_mmu/stage2_builder.hpp"
 #include "hal/console.hpp"
 #include "hal/gic.hpp"
+#include "hal/panic.hpp"
 #include "hal/smmu.hpp"
 #include "nova/abi/dma.hpp"
 #include "nova/abi/guest.hpp"
 #include "nova/abi/guest_layout.h"
 #include "nova/arch/smmuv3/regs.hpp"
 #include "nova/fmt.hpp"
-#include "nova/panic.hpp"
 #include "nova/sync.hpp"
 #include "smmu/command_model.hpp"
 #include "smmu/dma_table_model.hpp"
@@ -100,23 +100,16 @@ CommandRing<HalHw> g_commands{
 };
 
 [[noreturn]] void fail_init(RuntimeError error, std::uint32_t idr0, std::uint32_t idr1, std::uint32_t idr5) noexcept {
-  fmt::HexBuf idr0_text{};
-  fmt::HexBuf idr1_text{};
-  fmt::HexBuf idr5_text{};
-  console::write_parts(std::array{"[smmu] initialization failed: "sv, runtime_error_name(error), " idr0=0x"sv,
-                                  fmt::to_hex64(idr0, idr0_text), " idr1=0x"sv, fmt::to_hex64(idr1, idr1_text),
-                                  " idr5=0x"sv, fmt::to_hex64(idr5, idr5_text), "\n"sv});
-  halt();
+  panic::fail("smmu initialization failed: ", runtime_error_name(error), " idr0=0x", console::Hex{idr0}, " idr1=0x",
+              console::Hex{idr1}, " idr5=0x", console::Hex{idr5});
 }
 
 [[noreturn]] void fail_init(std::string_view reason) noexcept {
-  console::write_parts(std::array{"[smmu] initialization failed: "sv, reason, "\n"sv});
-  halt();
+  panic::fail("smmu initialization failed: ", reason);
 }
 
 [[noreturn]] void fail_runtime(std::string_view reason) noexcept {
-  console::write_parts(std::array{"[smmu] isolation failure: "sv, reason, "\n"sv});
-  halt();
+  panic::fail("smmu isolation failure: ", reason);
 }
 
 // Init diagnostics for every register step of the bring-up sequence.

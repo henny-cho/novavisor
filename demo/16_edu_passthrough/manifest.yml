@@ -12,7 +12,6 @@ forbid:
   - "edu passthrough: identity mismatch"
   - "edu passthrough: interrupt mismatch"
   - "unclaimed physical IRQ"
-  - "demo_exit code=[1-9]"
 
 guests:
   - name: "edu_passthrough"

@@ -13,7 +13,6 @@ forbid:
   - "edu dma: round-trip failed"
   - "edu dma: unexpected boot generation"
   - "unclaimed physical IRQ"
-  - "demo_exit code=[1-9]"
   - "\\[smp\\] DMA fault in VM 0 sid 16 generation 3"
   - "\\[dma\\] VM 0 resumed generation 4"
 

@@ -158,4 +158,5 @@ def scenario_for(
         steps=steps,
         forbidden_patterns=forbidden,
         elf=elf,
+        expects_panic=bool(demo_manifest.get("expects_panic", False)),
     )

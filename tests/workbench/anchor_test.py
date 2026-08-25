@@ -34,8 +34,8 @@ CLASSIFY_TABLE = (
     ("[trap_handler] unclaimed MMIO access at IPA=0x9010000", Badge.TRAP, Severity.WARN, {"ipa": "9010000"}),
     ("[vgic] RAZ/WI GICD offset 0x0f30", Badge.VGIC, Severity.INFO, {}),
     ("[vuart] RAZ/WI offset 0x18", Badge.VUART, Severity.INFO, {}),
-    ("[smmu] initialization failed: stream table", Badge.SMMU, Severity.CRIT, {}),
-    ("[smmu] isolation failure: stray write", Badge.SMMU, Severity.CRIT, {}),
+    ("[NOVA PANIC] smmu initialization failed: stream table", Badge.FAULT, Severity.CRIT, {}),
+    ("[NOVA PANIC] smmu isolation failure: stray write", Badge.FAULT, Severity.CRIT, {}),
     (
         "[smmu] fault type=0x10 sid=5 iova=0x50000000",
         Badge.SMMU,

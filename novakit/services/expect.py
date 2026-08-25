@@ -34,6 +34,9 @@ class Scenario:
     steps: tuple[dict, ...]
     forbidden_patterns: tuple[str, ...] = ()
     elf: object | None = None
+    # A run whose subject is the panic path: the firmware's failure
+    # report is what it came to show, so that one guard stands down.
+    expects_panic: bool = False
 
 
 # The manifest names a step by the key it carries, so a step is exactly
@@ -227,27 +230,28 @@ def observe_output(
             **extra,
         )
 
+    # Output that must never appear is watched the same way whatever a
+    # step is waiting for, so the bands sit at the front of every
+    # monitored list and the awaited thing goes last. One layout, one
+    # classifier: a new kind of step cannot slip past the guard, and the
+    # drain after the last step watches the same bands.
+    banned = (*forbidden_patterns, *fatal_patterns)
+
+    def banned_hit(at_index: int, at: float, wait_started: float, owed: dict):
+        if at_index < len(forbidden_patterns):
+            kind_, offender = FailureKind.FORBIDDEN, forbidden_patterns[at_index]
+        elif at_index < len(banned):
+            kind_ = FailureKind.FATAL
+            offender = fatal_patterns[at_index - len(forbidden_patterns)]
+        else:
+            return None
+        return make_result(
+            kind_, at, offender=offender,
+            wait_seconds=max(0.0, at - wait_started), **owed)
+
     try:
         started_at = clock()
         deadline = started_at + scenario_timeout
-
-        # Output that must never appear is watched the same way whatever
-        # a step is waiting for, so the bands sit at the front of every
-        # monitored list and the awaited thing goes last. One layout,
-        # one classifier: a new kind of step cannot slip past the guard.
-        banned = (*forbidden_patterns, *fatal_patterns)
-
-        def banned_hit(at_index: int, at: float, wait_started: float, owed: dict):
-            if at_index < len(forbidden_patterns):
-                kind_, offender = FailureKind.FORBIDDEN, forbidden_patterns[at_index]
-            elif at_index < len(banned):
-                kind_ = FailureKind.FATAL
-                offender = fatal_patterns[at_index - len(forbidden_patterns)]
-            else:
-                return None
-            return make_result(
-                kind_, at, offender=offender,
-                wait_seconds=max(0.0, at - wait_started), **owed)
 
         def await_handled(handler, step, wait, wait_started, owed):
             """Poll a handled step, draining the console between looks.
@@ -382,16 +386,14 @@ def observe_output(
         except (Exception, SystemExit) as exc:
             termination_error = f"{type(exc).__name__}: {exc}"
 
-        if result.failure is None and termination_succeeded and forbidden_patterns:
+        if result.failure is None and termination_succeeded and banned:
             try:
-                drain_index = child.expect([*forbidden_patterns, eof_error], timeout=1.0)
-                if drain_index < len(forbidden_patterns):
-                    result = make_result(
-                        FailureKind.FORBIDDEN,
-                        clock(),
-                        offender=forbidden_patterns[drain_index],
-                        error="after every step was carried out",
-                    )
+                drain_index = child.expect([*banned, eof_error], timeout=1.0)
+                violation = banned_hit(
+                    drain_index, clock(), started_at,
+                    {"error": "after every step was carried out"})
+                if violation is not None:
+                    result = violation
             except eof_error:
                 pass
             except KeyboardInterrupt as exc:

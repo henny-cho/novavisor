@@ -17,7 +17,7 @@
 
 #include "hal/console.hpp"
 #include "hal/gic.hpp"
-#include "nova/panic.hpp"
+#include "hal/panic.hpp"
 
 #include <cib/top.hpp>
 #include <cstdint>
@@ -66,8 +66,7 @@ struct core_gic_component {
     console::line("[core_gic] GICv3 ", (gic::single_security_state() ? "single" : "two"),
                   "-security-state distributor\n");
     if (!ok) {
-      console::write("[NOVA PANIC] no usable redistributor for this PE\n");
-      halt();
+      panic::fail("no usable redistributor for this PE");
     }
   });
 

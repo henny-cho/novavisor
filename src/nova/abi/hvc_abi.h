@@ -31,6 +31,11 @@
 #define NOVA_HVC_FN_EXIT  0x1002
 #define NOVA_HVC_FN_YIELD 0x1003
 
+/* What EXIT echoes on the console, ahead of the decimal code. The
+ * hypervisor writes it and the host verifier reads it from here, so a
+ * nonzero exit is caught by the same string the firmware prints. */
+#define NOVA_HVC_EXIT_LOG "demo_exit code="
+
 /* HEARTBEAT: x1 = watchdog window in ms. Each call re-arms the caller's
  * watchdog deadline to now + window; missing the window warm-resets the
  * VM. 0 disarms. Returns 0 in x0. */

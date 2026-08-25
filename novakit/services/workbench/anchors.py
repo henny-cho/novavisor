@@ -17,8 +17,13 @@ import codecs
 import re
 from dataclasses import dataclass
 
-from ...core import board
+from ...image import abi
 from .taxonomy import Badge, Severity
+
+# The two firmware strings this module recognises, from the headers that
+# define them: the failure report's prefix and a guest's exit line.
+_PANIC = re.compile(re.escape(abi.PANIC_PREFIX))
+_DEMO_EXIT = re.compile(rf"^{re.escape(abi.DEMO_EXIT_LOG)}(\d+)$")
 
 
 class LineAssembler:
@@ -134,10 +139,8 @@ RULES: tuple[Rule, ...] = (
     Rule("watchdog", re.compile(r"^VM (?P<vm>\d+)")),
     # Untagged anchors: the boot banner and the panic path.
     Rule(None, re.compile(r"^NovaVisor booted$"), badge=Badge.BOOT, severity=Severity.INFO),
-    Rule(None, re.compile(r"\[NOVA PANIC\]"), badge=Badge.FAULT, severity=Severity.CRIT),
+    Rule(None, _PANIC, badge=Badge.FAULT, severity=Severity.CRIT),
 )
-
-_FATAL = tuple(re.compile(pattern) for pattern in board.FATAL_PATTERNS)
 
 # Severity heuristic: stems, so "fail" covers failed/failure. A rule
 # override always wins; this only sorts the long tail.
@@ -163,8 +166,6 @@ _WARN_MARKERS = (
     "exceeds",
 )
 
-_DEMO_EXIT = re.compile(r"^demo_exit code=(\d+)$")
-
 
 def split(raw: str) -> ConsoleLine:
     match = _VM_PREFIX.match(raw)
@@ -177,7 +178,7 @@ def split(raw: str) -> ConsoleLine:
 
 
 def _base_severity(line: ConsoleLine) -> Severity:
-    if any(pattern.search(line.raw) for pattern in _FATAL):
+    if _PANIC.search(line.raw):
         return Severity.CRIT
     lowered = line.text.lower()
     if any(marker in lowered for marker in _WARN_MARKERS):
@@ -220,7 +221,7 @@ def lifecycle(line: ConsoleLine) -> tuple[str, dict] | None:
     match = _DEMO_EXIT.match(line.raw)
     if match:
         return ("demo-exit", {"code": int(match.group(1))})
-    if "[NOVA PANIC]" in line.raw:
+    if _PANIC.search(line.raw):
         return ("panic", {"message": line.raw})
     if line.tag == "core_vcpu" and "all VCPUs off" in line.text:
         return ("halted", {})
