@@ -144,7 +144,7 @@ Runs the GTest suite for header-only utilities (ESR parser, Stage 2 descriptor e
 
 ### Demo verification — the phase gate
 
-Each roadmap phase is validated by a **demo** in `demo/NN_name/`. A demo consists of an EL1 guest program (or a reference OS image) plus a `manifest.yml` declaring expected UART output patterns. The demo simultaneously demonstrates the phase's feature set and gates phase completion.
+Each roadmap phase is validated by a **demo** in `demo/NN_name/`. A demo consists of an EL1 guest program (or a reference OS image) plus a `manifest.yml` saying what a run of it must show. The demo simultaneously demonstrates the phase's feature set and gates phase completion.
 
 ```bash
 ./nova demo list          # show all demos and their enabled status
@@ -154,7 +154,13 @@ Each roadmap phase is validated by a **demo** in `demo/NN_name/`. A demo consist
 ```
 
 Before a phase is complete its demo has `enabled: false` in the manifest, and
-`demo verify --all` skips it. Full details live in [`demo/README.md`](demo/README.md).
+`demo verify --all` skips it.
+
+A manifest says more than which console lines must appear: a step may
+also read a value the firmware published, name a moment it recorded,
+walk an address through the page tables it built, or issue a command and
+wait for the verdict EL2 answers with. The vocabulary, and which kind
+answers which question, is [`demo/README.md`](demo/README.md).
 
 ### Live workbench
 
@@ -253,7 +259,7 @@ Installed by both setup methods. On `git commit`:
 
 Every roadmap phase ends with its demo's `manifest.enabled` flipping from `false` to `true`. The recommended flow:
 
-1. **Scaffold** — create `demo/NN_name/{main.c, CMakeLists.txt, manifest.yml}` with `enabled: false`, and append `NN_name` to `.vscode/tasks.json` → `inputs[0].options` so the F5 `QEMU Demo Debug` picker surfaces it. (If you already did this in an earlier commit, skip.)
+1. **Scaffold** — create `demo/NN_name/{main.c, CMakeLists.txt, manifest.yml}` with `enabled: false`.
 2. **Implement** — land hypervisor features in small atomic commits. Each commit keeps `./nova ci all` green; host-testable units ship with GTest cases.
 3. **Integrate** — once `./nova demo verify NN_name` passes locally, the demo is ready.
 4. **Close** — the final commit of the phase flips `enabled: true` in the manifest. This commit is the phase-completion marker; CI now gates every future PR against this demo.

@@ -72,32 +72,15 @@
             }
         }
     ],
-    // Keep the picker in sync with the demo directories.
+    // No list here: `nova demo run` resolves an ID or a directory name
+    // and prints every demo when it cannot, so a second copy of the
+    // catalogue would only be one that goes stale.
     "inputs": [
         {
             "id": "demoName",
-            "type": "pickString",
-            "description": "Select demo to debug",
-            "options": [
-                "01_hello",
-                "02_timer",
-                "03_ivc_pingpong",
-                "04_native_gic",
-                "05_preempt",
-                "06_el1_mmu_fp",
-                "07_lifecycle",
-                "08_smp_pingpong",
-                "09_guest_smp",
-                "10_console_mux",
-                "11_configurable",
-                "12_zephyr",
-                "13_linux",
-                "14_mixed_recovery",
-                "15_dma_isolation",
-                "16_edu_passthrough",
-                "17_edu_dma"
-            ],
-            "default": "01_hello"
+            "type": "promptString",
+            "description": "Demo ID or directory name (see: nova demo list)",
+            "default": "1"
         }
     ]
 }
