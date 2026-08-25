@@ -26,6 +26,15 @@
 #define ROUNDS          100
 #define WATCHDOG_MS     300
 
+/* A burst of distinct SGIs, more of them than any GICv3 CPU interface
+ * has list registers to hold at once (the architecture allows up to 16
+ * and QEMU's virt implements four). A guest cannot read ICH_VTR_EL2 to
+ * find out, so this is chosen to exceed the maximum rather than the
+ * machine's. */
+#define SGI_BURST_BASE  3
+#define SGI_BURST_COUNT 7
+#define SGI_BURST_ALL   ((1U << SGI_BURST_COUNT) - 1U)
+
 // Outside the reset guest window, so it survives the pristine-image
 // restore while g_ready/g_done/g_pongs below return to zero.
 #define RUN_COUNT ((volatile uint64_t*)(NOVA_IVC_SHM_IPA + 0xF80))
@@ -40,6 +49,11 @@ static volatile uint32_t g_ready       = 0; // vCPU 1 is IRQ-ready
 static volatile uint32_t g_done        = 0; // vCPU 0 -> vCPU 1: retire
 static volatile uint32_t g_remote_wake = 0;
 static volatile uint64_t g_pongs       = 0; // replies seen by vCPU 0's handler
+static volatile uint32_t g_burst       = 0; // vCPU 0 -> vCPU 1: hold everything pending
+static volatile uint32_t g_burst_ready = 0; // vCPU 1 is masked and waiting
+static volatile uint32_t g_burst_sent  = 0; // vCPU 0 has sent all of them
+static volatile uint32_t g_burst_seen  = 0; // one bit per burst INTID vCPU 1 took
+static volatile uint32_t g_burst_done  = 0; // vCPU 1 took every one
 
 static inline void irq_mask(void) {
   __asm__ volatile("msr daifset, #2");
@@ -76,6 +90,8 @@ void demo_irq(uint32_t intid) {
     g_pongs = g_pongs + 1;
   } else if (intid == PPI_REMOTE_WAKE) {
     g_remote_wake = 1;
+  } else if (intid >= SGI_BURST_BASE && intid < SGI_BURST_BASE + SGI_BURST_COUNT) {
+    g_burst_seen = g_burst_seen | (1U << (intid - SGI_BURST_BASE));
   }
 }
 
@@ -92,6 +108,21 @@ static void wait_pongs(uint64_t want) {
     __asm__ volatile("wfi");
     irq_unmask(); // a pended reply is taken right here
   }
+}
+
+// Take a burst of interrupts all at once. Entered with IRQ masked, so
+// the vGIC has nowhere to put them: more arrive than the CPU interface
+// has list registers, and the rest have to wait in the hypervisor's own
+// pending set until draining ones make room. Unmasking here is what
+// makes that draining happen.
+static void take_burst(void) {
+  g_burst_ready = 1;
+  while (!g_burst_sent) {
+  }
+  irq_unmask();
+  while (g_burst_seen != SGI_BURST_ALL) {
+  }
+  g_burst_done = 1;
 }
 
 // Secondary vCPU main (from common/secondary.S, own stack, BSS shared).
@@ -113,6 +144,10 @@ void secondary_main(void) {
     if (g_done) {
       irq_unmask();
       return; // secondary.S issues CPU_OFF
+    }
+    if (g_burst && !g_burst_done) {
+      take_burst(); // stays masked until vCPU 0 has sent all of them
+      continue;
     }
     __asm__ volatile("wfi");
     irq_unmask(); // echo happens in the handler on the way through
@@ -167,7 +202,25 @@ int main(void) {
     wait_pongs(i);
   }
 
-  // Round trips done — release the sibling and prove it retired. The
+  // Round trips done. Before releasing the sibling, make it hold more
+  // interrupts pending at once than its interface can carry: it masks,
+  // vCPU 0 sends the whole burst, and only then does it unmask. The
+  // hypervisor has to queue what does not fit and refill as the guest
+  // drains — the one path in this suite that needs the underflow
+  // maintenance interrupt.
+  g_burst = 1;
+  icc_send_sgi(1U << 1, SGI_PING); // wake it out of wfi to notice
+  while (!g_burst_ready) {
+  }
+  for (uint32_t n = 0; n < SGI_BURST_COUNT; ++n) {
+    icc_send_sgi(1U << 1, SGI_BURST_BASE + n);
+  }
+  g_burst_sent = 1;
+  while (!g_burst_done) {
+  }
+  hvc_puts_lit("guest smp: sgi burst complete\n");
+
+  // Release the sibling and prove it retired. The
   // extra PING only wakes it to observe g_done (its echo is ignored).
   g_done = 1;
   icc_send_sgi(1U << 1, SGI_PING);

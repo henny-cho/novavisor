@@ -2,7 +2,7 @@ name: "09_guest_smp"
 description: "One VM as an SMP guest: reset while vCPU 1 is active, then restart it and complete 100 trapped-SGI IPI round-trips."
 phase: 13
 enabled: true
-timeout_seconds: 30
+timeout_seconds: 40
 
 # Slot 0 carries two vCPUs (guest_table: cores 0 and 1); the single
 # image serves both — vCPU 1 enters at the CPU_ON entry point, not
@@ -47,12 +47,22 @@ variants:
         within_seconds: 20
       - pattern: "vcpu1 online"
         within_seconds: 22
-      - pattern: "guest smp: 100 ipi rounds ok"
+      - pattern: "guest smp: sgi burst complete"
         within_seconds: 27
+      # More interrupts pending at once than the interface has list
+      # registers, so the vGIC had to hold the overflow and pull it in
+      # as the guest drained. That is what arms the underflow
+      # maintenance interrupt, and this is the interrupt itself
+      # reaching EL2 — nothing else in the suite makes it fire.
+      - event: "gic.ack"
+        where: { intid: 25 }
+        within_seconds: 10
+      - pattern: "guest smp: 100 ipi rounds ok"
+        within_seconds: 10
       - pattern: "demo_exit code=0"
-        within_seconds: 29
+        within_seconds: 10
       - pattern: "all VCPUs off"
-        within_seconds: 30
+        within_seconds: 10
 
   - name: "standard"
     preset: "aarch64-standard-release"
