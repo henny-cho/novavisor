@@ -56,6 +56,16 @@ static inline void psci_cpu_off(void) {
   __builtin_unreachable();
 }
 
+// Whether the firmware implements one function ID. Answers for the
+// SMCCC Arch range as well as PSCI's own — which is the probe a guest
+// Linux gates all of SMCCC 1.1 on.
+static inline int64_t psci_features(uint32_t queried) {
+  register uint64_t x0 __asm__("x0") = PSCI_FN_FEATURES;
+  register uint64_t x1 __asm__("x1") = queried;
+  __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
+  return (int64_t)x0;
+}
+
 // Power state of a sibling vCPU: ON / OFF / ON_PENDING.
 static inline int64_t psci_affinity_info(uint64_t target_mpidr) {
   register uint64_t x0 __asm__("x0") = PSCI_FN_AFFINITY_INFO;

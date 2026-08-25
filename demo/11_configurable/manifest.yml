@@ -20,10 +20,21 @@ guests:
     vcpus: 2
     uart: vuart
 
+# The whole SMCCC Arch range is claimed, so nothing in it may reach the
+# console as an unclaimed call — including the workaround IDs, whose
+# answers are this part's business and not a constant to pin.
+forbid:
+  - "\\[trap_handler\\] unknown HVC func_id=0x0*8[04]0"
+
 variants:
   - name: "small"
     config: "configs/small.yml"
     steps:
+      # Version and discovery before configuration: what a guest asks
+      # the firmware before it trusts anything to it. Contracts, not
+      # readings, so both variants pin the same line.
+      - pattern: "\\[vm0\\] smccc: version 1.1 psci_features ok arch_features ok"
+        within_seconds: 15
       - pattern: "\\[vm0\\] cfg: memory 2 MiB, cpus 1"
         within_seconds: 15
       - pattern: "demo_exit code=0"
@@ -33,6 +44,8 @@ variants:
   - name: "large"
     config: "configs/large.yml"
     steps:
+      - pattern: "\\[vm0\\] smccc: version 1.1 psci_features ok arch_features ok"
+        within_seconds: 15
       - pattern: "\\[vm0\\] cfg: memory 8 MiB, cpus 2"
         within_seconds: 15
       - pattern: "\\[vm0\\] cpu1 up"
