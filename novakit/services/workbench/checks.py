@@ -14,9 +14,15 @@ from pathlib import Path
 
 from ...core import config
 from ...image import elfsym, observe
-from . import snapshot
+from . import commands, snapshot
 from .events import EVENTS, STOPS
-from .observations import MAX_CPUS, OBSERVATIONS, asserted_names, timer_slot_labels
+from .observations import (
+    MAX_CPUS,
+    OBSERVATIONS,
+    asserted_names,
+    issued_ops,
+    timer_slot_labels,
+)
 from .paths import EDGES
 
 
@@ -157,7 +163,7 @@ def _report_census() -> None:
     how the gap between what the workbench watches and what CI re-asks
     grew unnoticed in the first place.
 
-    Both layers, always. Counting only the one this repository has
+    All three layers, always. Counting only the ones this repository has
     started asserting would make the fraction look like progress.
     """
     asserted = asserted_names()
@@ -170,3 +176,11 @@ def _report_census() -> None:
             f"[workbench] {layer}: {len(names)} observable, {held} asserted by a demo, "
             f"{len(names) - held} unasserted"
         )
+    # The host's own side: what this build will carry out, against what
+    # any run ever asks it to.
+    issued = issued_ops()
+    sent = sum(1 for op in commands.OPS if op in issued)
+    print(
+        f"[workbench] C: {len(commands.OPS)} opcodes, {sent} issued by a demo, "
+        f"{len(commands.OPS) - sent} never issued"
+    )

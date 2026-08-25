@@ -257,6 +257,23 @@ def asserted_names() -> set[str]:
     return named
 
 
+def issued_ops() -> set[str]:
+    """Every host command a demo's steps issue.
+
+    The same question `asserted_names` asks of the two observation
+    layers, asked of the one the host writes into: a build offering an
+    opcode no run ever sends is a path with no consumer, and nothing
+    else counts them.
+    """
+    return {
+        str(expect.step_subject(step)).split()[0]
+        for _name, demo in manifest.iter_demos()
+        for variant in manifest.manifest_variants(demo)
+        for step in variant.get("steps", [])
+        if expect.step_kind(step) == "command"
+    }
+
+
 def observation_rates() -> dict[str, dict]:
     """What the UI needs to say about a topic beyond its value.
 

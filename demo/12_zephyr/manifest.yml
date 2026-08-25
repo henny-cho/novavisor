@@ -74,3 +74,28 @@ variants:
         where: { stream: 16 }
         equals: { state: "translate" }
         within_seconds: 10
+      # The rest of the vocabulary, on a machine that is up and
+      # translating. Each runs code in EL2 even where the effect is one
+      # store, and each is answered on the same ring — so a refusal
+      # would be as visible here as an acceptance. `spi` is the one of
+      # the three that leaves a record of its own beside the answer.
+      - command: "mark 1"
+        within_seconds: 10
+      - command: "slice 5000"
+        within_seconds: 10
+      - command: "spi 0 33"
+        within_seconds: 10
+      - event: "vgic.spi"
+        where: { vm: 0, vintid: 33 }
+        within_seconds: 10
+      # And the reset, which runs the path this guest's own PSCI
+      # SYSTEM_RESET runs: the stream leaves its tables with the old
+      # generation and is bound again to the new one, and the OS on top
+      # of it comes back up.
+      - command: "reset 0"
+        within_seconds: 10
+      - event: "smmu.attach"
+        where: { stream: 16 }
+        within_seconds: 30
+      - pattern: "Booting Zephyr OS build"
+        within_seconds: 40
