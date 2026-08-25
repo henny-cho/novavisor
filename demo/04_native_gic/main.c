@@ -8,10 +8,14 @@
 //      priority, enable for the virtual timer PPI 27,
 //   3. initialize the CPU interface (ICC_* — hardware-virtualized ICV),
 //   4. drive a periodic timer directly from CNTV_CTL/TVAL (never
-//      trapped); each expiry arrives as vINTID 27 and the IRQ handler
-//      (vectors.S) re-arms, which also clears the hypervisor's IMASK.
+//      trapped); each expiry arrives as vINTID 27, and the handler
+//      re-arms, which also clears the hypervisor's IMASK.
 //
-// Five observed ticks prove the whole chain.
+// Five observed ticks prove the whole chain. Then the guest turns off
+// what it turned on, which is the only way it can end on a composition
+// that serves no exit hypercall: a wfi with something still deliverable
+// is architecturally a NOP, so a source left on turns the startup
+// stub's idle loop into a spin.
 
 #include "demo_hvc.h"
 #include "gic_el1.h"
@@ -41,6 +45,26 @@ static inline void cntv_arm(void) {
   __asm__ volatile("isb");
 }
 
+static inline void cntv_disarm(void) {
+  const uint64_t off = 0;
+  __asm__ volatile("msr cntv_ctl_el0, %0" ::"r"(off));
+  __asm__ volatile("isb");
+}
+
+// Called from vectors.S with the vINTID already acked. Re-arming is a
+// decision rather than a reflex: a handler that always re-arms can
+// never be the last one, and the guest would have no quiet moment to
+// wind down in.
+void demo_irq(uint32_t intid) {
+  (void)intid;
+  g_tick = g_tick + 1;
+  if (g_tick < TICKS) {
+    cntv_arm();
+  } else {
+    cntv_disarm();
+  }
+}
+
 int main(void) {
   __asm__ volatile("msr vbar_el1, %0" ::"r"(_demo_vectors));
 
@@ -63,5 +87,8 @@ int main(void) {
     hvc_putc((char)('0' + seen));
     hvc_putc('\n');
   }
+  // The timer stopped itself on the last tick; close the delivery gate
+  // too, so nothing is left pending for the idle loop below to wake on.
+  gicr_disable(VTIMER_INTID);
   return 0;
 }

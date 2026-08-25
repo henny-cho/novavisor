@@ -72,6 +72,13 @@ static inline void gicr_enable(unsigned intid) {
   gicr_enable_at(0, intid);
 }
 
+// Stop delivery of one SGI/PPI on this vCPU's frame. The per-INTID
+// enable bit is the vGIC's single delivery gate, so a guest winding
+// down closes what it opened.
+static inline void gicr_disable(unsigned intid) {
+  *gic_reg32(gicr_frame(0) + NOVA_GICR_ICENABLER0) = 1U << intid; // write-1-to-clear
+}
+
 // Pend one private interrupt in a selected sibling redistributor.
 // Enabling it later is useful for testing pending→deliverable wakeups.
 static inline void gicr_set_pending_at(unsigned vcpu, unsigned intid) {

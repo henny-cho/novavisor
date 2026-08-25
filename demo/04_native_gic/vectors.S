@@ -1,11 +1,12 @@
 // demo/04_native_gic/vectors.S — EL1 vector table for the native GIC demo.
 //
 // Only the current-EL-SPx IRQ entry (+0x280) is populated. The handler
-// performs the full architectural sequence for a periodic virtual
-// timer: ack through ICC_IAR1_EL1 (the hardware-virtualized ICV view),
-// bump g_tick, re-arm CNTV — writing CTL=ENABLE also clears the IMASK
-// the hypervisor set when forwarding this level-triggered PPI — then
-// priority-drop/deactivate through ICC_EOIR1_EL1.
+// acks through ICC_IAR1_EL1 (the hardware-virtualized ICV view), hands
+// the vINTID to the C handler (demo_irq in main.c, which decides
+// whether the periodic timer is re-armed), then priority-drops and
+// deactivates through ICC_EOIR1_EL1. Caller-saved registers are
+// preserved around the C call; the demo builds with
+// -mgeneral-regs-only, so no FP state is at risk.
 
 .macro VEC_HANG
     .align 7
@@ -44,25 +45,34 @@ _demo_vectors:
     VEC_HANG                    // +0x780 SError
 
 _demo_irq_handler:
-    stp     x0, x1, [sp, #-32]!
-    str     x2, [sp, #16]
+    sub     sp, sp, #176
+    stp     x0, x1,   [sp, #0]
+    stp     x2, x3,   [sp, #16]
+    stp     x4, x5,   [sp, #32]
+    stp     x6, x7,   [sp, #48]
+    stp     x8, x9,   [sp, #64]
+    stp     x10, x11, [sp, #80]
+    stp     x12, x13, [sp, #96]
+    stp     x14, x15, [sp, #112]
+    stp     x16, x17, [sp, #128]
+    stp     x18, x30, [sp, #144]
 
     mrs     x0, S3_0_C12_C12_0  // ICC_IAR1_EL1 (ICV view): ack, x0 = vINTID
-
-    adrp    x1, g_tick
-    add     x1, x1, :lo12:g_tick
-    ldr     x2, [x1]
-    add     x2, x2, #1
-    str     x2, [x1]
-
-    mrs     x1, cntfrq_el0      // re-arm the next ~8 ms period
-    lsr     x1, x1, #7
-    msr     cntv_tval_el0, x1
-    mov     x1, #1              // ENABLE; IMASK clear (unmask)
-    msr     cntv_ctl_el0, x1
-
+    str     x0, [sp, #160]      // keep the INTID across the C call
+    bl      demo_irq
+    ldr     x0, [sp, #160]
     msr     S3_0_C12_C12_1, x0  // ICC_EOIR1_EL1: priority drop + deactivate
+    isb
 
-    ldr     x2, [sp, #16]
-    ldp     x0, x1, [sp], #32
+    ldp     x0, x1,   [sp, #0]
+    ldp     x2, x3,   [sp, #16]
+    ldp     x4, x5,   [sp, #32]
+    ldp     x6, x7,   [sp, #48]
+    ldp     x8, x9,   [sp, #64]
+    ldp     x10, x11, [sp, #80]
+    ldp     x12, x13, [sp, #96]
+    ldp     x14, x15, [sp, #112]
+    ldp     x16, x17, [sp, #128]
+    ldp     x18, x30, [sp, #144]
+    add     sp, sp, #176
     eret
