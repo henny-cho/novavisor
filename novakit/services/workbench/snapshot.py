@@ -132,6 +132,10 @@ class SnapshotProvider(Protocol):
     # where there is no publisher, which is also where a read cannot
     # land inside one.
     period_us: int
+    # What this image carries. The manifest says what the firmware could
+    # publish; a profile composing no SMMU publishes no stream table,
+    # and the provider is where the two meet.
+    observations: Sequence[Obs]
 
     def read(
         self, obs: Obs, *, live: bool = True, since: int | None = None
@@ -186,6 +190,17 @@ class MemoryReader(Protocol):
     def read_bytes(self, pa: int, size: int) -> bytes: ...
 
 
+def _carried(view: observe.View) -> tuple[Obs, ...]:
+    """The manifest narrowed to what this image answers.
+
+    A page declared by address has no symbol to be absent, so it is
+    carried by every profile that maps it.
+    """
+    return tuple(
+        obs for obs in OBSERVATIONS if obs.pa is not None or obs.topic in view.resolved
+    )
+
+
 class ElfRamProvider:
     """Decode firmware globals straight out of the shared RAM file.
 
@@ -209,6 +224,7 @@ class ElfRamProvider:
         self._resolved = image.resolved
         self._symbols = image.symbols
         self.regimes = image.walk
+        self.observations = _carried(image)
         with ram_path.open("rb") as backing:
             self._ram = mmap.mmap(backing.fileno(), 0, prot=mmap.PROT_READ)
         highest = max(
@@ -367,6 +383,7 @@ class TelemetryProvider:
         self._resolved = view.resolved
         self._symbols = view.symbols
         self.regimes = view.walk
+        self.observations = inner.observations
 
         base = view.symbols.extent_of(TELEMETRY_REGION)[0]
         header = inner.read_bytes(base, _TLM["NOVA_TLM_HEADER_SIZE"])
@@ -418,7 +435,7 @@ class TelemetryProvider:
         # leaving one panel blank for a reason nothing states.
         self._slot: dict[str, int] = {}
         missing = []
-        for obs in OBSERVATIONS:
+        for obs in self.observations:
             if obs.pa is not None:
                 continue
             index = by_source.get(view.addresses[obs.symbol])
@@ -547,11 +564,14 @@ class SnapshotPoller:
     def __init__(
         self,
         provider: SnapshotProvider,
-        observations: Sequence[Obs] = OBSERVATIONS,
+        observations: Sequence[Obs] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ):
         self._provider = provider
-        self._observations = tuple(observations)
+        # The run's own set by default: polling a topic this image does
+        # not carry would ask the provider for a name it has already
+        # answered "absent" for, every tick.
+        self._observations = tuple(provider.observations if observations is None else observations)
         self._monotonic = monotonic
         self._due = dict.fromkeys((obs.topic for obs in self._observations), 0.0)
         self._last: dict[str, object] = {}

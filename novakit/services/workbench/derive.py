@@ -194,11 +194,14 @@ def syndrome_vocabulary(view: observe.View | None) -> dict[str, dict[int, str]]:
 
     No image yields nothing rather than failing: the topology is
     published before the first build finishes, and a class shown as its
-    number is still the truth.
+    number is still the truth. So does an image with no such enum in its
+    DWARF — an optimized build inlines away the last variable of the
+    type and the description goes with it.
     """
     if view is None:
         return {}
-    return {"esr_ec": view.enums[observe.EC_ENUM]}
+    labels = view.enums.get(observe.EC_ENUM)
+    return {"esr_ec": labels} if labels else {}
 
 
 def guest_table(value: object, info: elfsym.TypeInfo) -> object:

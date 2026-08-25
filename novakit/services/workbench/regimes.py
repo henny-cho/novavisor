@@ -138,6 +138,10 @@ def _stage2_regimes(reader, resolved: dict[str, elfsym.ResolvedSymbol]) -> list[
 
 
 def _dma_regimes(reader, resolved: dict[str, elfsym.ResolvedSymbol]) -> list[dict]:
+    # A profile composing no SMMU has no contexts and no DMA tables:
+    # nothing translates for a device because no device is isolated.
+    if observe.DMA_CONTEXTS not in resolved:
+        return []
     contexts = resolved[observe.DMA_CONTEXTS]
     pool = resolved[observe.DMA_TABLES].type.element.size
     entry = contexts.type.element
@@ -245,7 +249,9 @@ def copy_tables(reader, resolved: dict[str, elfsym.ResolvedSymbol]) -> dict | No
     words = {}
     extents = []
     for symbol in observe.TABLES:
-        entry = resolved[symbol]
+        entry = resolved.get(symbol)
+        if entry is None:
+            continue  # a table this composition never builds
         extents.append([f"{entry.address:#x}", entry.size])
         raw = reader.read_bytes(entry.address, entry.size)
         for offset in range(0, entry.size, translation.DESCRIPTOR_BYTES):

@@ -9,12 +9,14 @@ image at all.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import unittest
 from unittest import mock
 
 from novakit.image import observe
 from novakit.services.workbench import (
+    checks,
     events,
     hardware,
     observations,
@@ -238,6 +240,26 @@ class StopPointTest(unittest.TestCase):
     def test_an_absent_function_is_refused(self):
         with self.assertRaises(KeyError):
             self.symbols.address_of("nova::vgic::no_such_entry_point")
+
+
+@unittest.skipUnless(ELF.is_file(), "debug ELF not built")
+class CompositionTest(unittest.TestCase):
+    """What an absence means, and where it is allowed to mean it.
+
+    A profile composing no SMMU carries no stream table, so a subset
+    image records absences instead of failing to resolve. That is only
+    safe because this image composes every component: an absence here
+    cannot be a composition, so it is a rename — and the check that says
+    so is the one thing standing between the two readings.
+    """
+
+    def test_the_full_profile_must_carry_every_name_the_manifest_asks(self):
+        short = dataclasses.replace(shared_image.view(), absent=("smmu.stream",))
+        with mock.patch.object(checks, "_read", return_value=short):
+            self.assertEqual(checks.verify_manifest(), 1)
+
+    def test_the_image_as_built_carries_them_all(self):
+        self.assertEqual(shared_image.view().absent, ())
 
 
 class StopCatalogueTest(unittest.TestCase):

@@ -13,6 +13,7 @@ from pathlib import Path
 from novakit.services import expect, spawn
 from novakit.services.surfaces import Surfaces
 from novakit.services.workbench import snapshot, trace
+from novakit.services.workbench.observations import Obs
 from novakit.services.workbench.protocol import Clock, Envelopes
 from novakit.services.workbench.session import (
     Deps,
@@ -617,9 +618,11 @@ class PollLoopTest(Draining):
         class GoodProvider:
             def __init__(self):
                 self.closed = False
-                # No image behind it, so no page tables to publish, and
-                # no publisher behind it, so no firmware clock to quote.
+                # No image behind it, so no page tables to publish, no
+                # publisher behind it, so no firmware clock to quote, and
+                # one topic to poll — the one the drains below wait for.
                 self.regimes: dict = {}
+                self.observations = (Obs("sched.cpu", "nova::vcpu::g_sched"),)
 
             def read(self, _obs, *, live=True, since=None):
                 del live, since
@@ -665,9 +668,11 @@ class PollLoopTest(Draining):
         class Provider:
             def __init__(self):
                 self.closed = False
-                # No image behind it, so no page tables to publish, and
-                # no publisher behind it, so no firmware clock to quote.
+                # No image behind it, so no page tables to publish, no
+                # publisher behind it, so no firmware clock to quote, and
+                # one topic to poll — the one the drains below wait for.
                 self.regimes: dict = {}
+                self.observations = (Obs("sched.cpu", "nova::vcpu::g_sched"),)
 
             def read(self, _obs, *, live=True, since=None):
                 del live, since

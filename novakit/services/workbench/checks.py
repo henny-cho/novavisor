@@ -45,9 +45,10 @@ def _read(what: str, elf: Path | None) -> observe.View | None:
 
 
 def describe_symbols(elf: Path | None = None) -> int:
-    """Print where every observation lives in the image.
+    """Print where every observation lives in the image, and what it lacks.
 
-    The terminal twin of the S layer: the same answers the poller reads.
+    The terminal twin of the S layer: the same answers the poller reads,
+    including which topics this composition has no component to publish.
     """
     view = _read("symbols", elf)
     if view is None:
@@ -58,6 +59,8 @@ def describe_symbols(elf: Path | None = None) -> int:
             layout = snapshot.PAGE_LAYOUTS[obs.layout]
             rows.append((obs.topic, obs.pa, layout.size, obs.rate_hz, _shape(layout)))
             continue
+        if obs.topic in view.absent:
+            continue
         resolved = view.resolved[obs.topic]
         picked = obs.fields and f" -> {','.join(obs.fields)}" or ""
         rows.append(
@@ -67,6 +70,8 @@ def describe_symbols(elf: Path | None = None) -> int:
     print(f"{'topic':<{width}}  {'address':>10}  {'size':>6}  {'hz':>4}  shape")
     for topic, address, size, rate, shape in rows:
         print(f"{topic:<{width}}  {address:#010x}  {size:>6}  {rate:>4g}  {shape}")
+    if view.absent:
+        print(f"\nnot in this composition: {', '.join(sorted(view.absent))}")
     return 0
 
 
@@ -76,6 +81,18 @@ def verify_manifest(elf: Path | None = None) -> int:
     if view is None:
         return 1
     failures = 0
+
+    # This is the image the full profile links, so it carries every
+    # component and every name the manifest asks for. An absence here is
+    # therefore a rename or a deletion, not a composition — which is
+    # what makes a subset profile free to record absences without any
+    # of them going unnoticed.
+    if view.absent:
+        failures += 1
+        print(
+            f"[workbench] the full profile does not carry {sorted(view.absent)}",
+            file=sys.stderr,
+        )
 
     # Declared by hand because guest memory carries no debug information,
     # so nothing above has checked that the name means anything.

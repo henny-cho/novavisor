@@ -18,9 +18,11 @@ find_program(CMAKE_READELF aarch64-none-elf-readelf HINTS "${TOOLCHAIN_BIN_DIR}"
 find_program(CMAKE_NM aarch64-none-elf-nm HINTS "${TOOLCHAIN_BIN_DIR}" REQUIRED)
 
 # Bare-metal codegen flags common to C/C++/ASM.
-# Optimization level and -g are deliberately omitted: CMake's
-# CMAKE_{C,CXX}_FLAGS_{DEBUG,RELEASE} apply those so CMAKE_BUILD_TYPE is
-# honored (Debug = -O0 -g, Release = -O3 -DNDEBUG).
+# Optimization level is deliberately omitted: CMake's
+# CMAKE_{C,CXX}_FLAGS_{DEBUG,RELEASE} apply it so CMAKE_BUILD_TYPE is
+# honored (Debug = -O0, Release = -O3 -DNDEBUG). Debug information is
+# not here either — these seed the cache once, so a tree configured
+# before a change never sees it; the root CMakeLists carries -g.
 # -ffreestanding is NOT used here because cib transitively brings in fmt
 # (via cpp-std-extensions non-freestanding path), whose format.cc pulls
 # <locale>/<system_error> — headers that omit __throw_* declarations when

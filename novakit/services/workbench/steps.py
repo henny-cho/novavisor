@@ -44,6 +44,7 @@ class Machine:
         # run. One read, two audiences: a screen showing a different
         # value from the one that was judged would be a second reader.
         self._on_reading = on_reading
+        self._view: observe.View | None = None
         self._provider = None
         self._capture: regimes.Capture | None = None
         self._tracer: trace.TraceReader | None = None
@@ -55,13 +56,15 @@ class Machine:
     def board(self) -> dict[str, int]:
         return hardware.platform()
 
+    def view(self) -> observe.View:
+        if self._view is None:
+            self._view = observe.view_of(self._elf)
+        return self._view
+
     def provider(self):
         if self._provider is None:
             self._provider = open_provider(
-                self._elf,
-                self._shm,
-                self.board["NOVA_BOARD_PHYS_RAM_BASE"],
-                observe.view_of(self._elf),
+                self._elf, self._shm, self.board["NOVA_BOARD_PHYS_RAM_BASE"], self.view()
             )
         return self._provider
 
@@ -73,6 +76,8 @@ class Machine:
         scenario asks what a topic reads, and two steps of one run may
         be asking about the same one.
         """
+        if topic in self.view().absent:
+            raise KeyError(f"this composition does not publish {topic}")
         for obs in OBSERVATIONS:
             if obs.topic == topic:
                 value = self.provider().read(obs).value

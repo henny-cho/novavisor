@@ -123,11 +123,17 @@ class View:
     is four milliseconds, which is why the walk belongs to the build.
 
     `walk` is keyed by symbol rather than topic: the page tables feed no
-    observation, and the memory map wants extents, not a reading.
+    observation, and the memory map wants extents, not a reading. Both
+    hold only what this image carries; `absent` names the rest.
     """
 
     resolved: dict[str, elfsym.ResolvedSymbol]
     symbols: elfsym.SymbolTable
+    # Every name the manifest asked for that this image does not carry —
+    # topic, table or vocabulary. A hole with a reason, so a reader can
+    # say "this composition does not publish it" instead of failing to
+    # find a name it was told to expect.
+    absent: tuple[str, ...] = ()
     walk: dict[str, elfsym.ResolvedSymbol] = field(default_factory=dict)
     # Where each observed global lives, for matching against what the
     # firmware says it publishes. Keyed by symbol because that is what a
@@ -161,21 +167,46 @@ def resolve(elf: Path) -> View:
     Reads the ELF and returns data — runnable anywhere, including a build
     step, which calls it once.
 
-    A question with no answer raises rather than yielding a hole: a
-    dropped enum turns exception classes into bare numbers and a renamed
-    global blanks a panel, both silently.
+    A name the image does not carry is recorded as absent, not raised:
+    a profile composing no SMMU has no stream table, and an optimized
+    build inlines away the last variable of an enum's type so DWARF
+    stops describing it. Both are facts about the image rather than a
+    broken manifest. A name it does carry is proven whole — a renamed
+    member still resolves, so the members are checked too — and the
+    manifest check holds the reference image, which composes everything
+    and is built unoptimized, to having no absences at all. That is
+    where a rename is caught.
     """
     stat = elf.stat()
     index = _index(elf, (stat.st_mtime_ns, stat.st_size))
-    resolved = {want.topic: index.resolve(want.symbol) for want in OBSERVED}
+    resolved, absent = {}, []
     for want in OBSERVED:
-        _prove(want, resolved[want.topic])
+        try:
+            entry = index.resolve(want.symbol)
+        except KeyError:
+            absent.append(want.topic)
+            continue
+        _prove(want, entry)
+        resolved[want.topic] = entry
+    walk = {}
+    for symbol in WALK:
+        try:
+            walk[symbol] = index.resolve(symbol)
+        except KeyError:
+            absent.append(symbol)
+    enums = {}
+    for name in ENUMS:
+        try:
+            enums[name] = index.enum_labels(name)
+        except KeyError:
+            absent.append(name)
     return View(
         resolved,
         index.symbols,
-        {symbol: index.resolve(symbol) for symbol in WALK},
-        {want.symbol: resolved[want.topic].address for want in OBSERVED},
-        {name: index.enum_labels(name) for name in ENUMS},
+        tuple(absent),
+        walk,
+        {want.symbol: resolved[want.topic].address for want in OBSERVED if want.topic in resolved},
+        enums,
     )
 
 
@@ -203,7 +234,7 @@ def _prove(want: Want, entry: elfsym.ResolvedSymbol) -> None:
 
 # What the reader below speaks. Bumped when the document's shape changes;
 # an older reader refuses rather than interpreting a shape it predates.
-FORMAT = 1
+FORMAT = 2
 
 
 class Stale(Exception):
@@ -247,6 +278,7 @@ def dumps(view: View, elf: Path) -> str:
             "image": image_id(elf),
             "request": request_id(),
             "resolved": {topic: _symbol_json(entry) for topic, entry in view.resolved.items()},
+            "absent": list(view.absent),
             "walk": {name: _symbol_json(entry) for name, entry in view.walk.items()},
             "addresses": view.addresses,
             "enums": {
@@ -305,6 +337,7 @@ def _view_of(document: dict) -> View:
         elfsym.SymbolTable(
             {name: tuple(extent) for name, extent in document["symbols"].items()}
         ),
+        tuple(document["absent"]),
         {name: _symbol_of(entry) for name, entry in document["walk"].items()},
         document["addresses"],
         {
@@ -390,10 +423,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         view = resolve(args.elf)
     except (KeyError, ValueError) as error:
+        # A name this image does not carry is absence; reaching here
+        # means one it does carry has changed shape under the manifest.
         # KeyError reprs its argument, which here is already a sentence.
         print(
             f"[observe] {args.elf.name}: {error.args[0]}\n"
-            f"[observe] the observation manifest asks for a name this image does not have",
+            f"[observe] the observation manifest asks for a member this image does not have",
             file=sys.stderr,
         )
         return 1
@@ -401,9 +436,10 @@ def main(argv: list[str] | None = None) -> int:
     args.out.write_text(dumps(view, args.elf))
     if args.depfile is not None:
         args.depfile.write_text(inputs.depfile(args.out))
+    absent = f", {len(view.absent)} absent" if view.absent else ""
     print(
         f"[observe] {len(view.resolved)} topics, {len(view.walk)} tables, "
-        f"{len(view.enums)} vocabularies, {len(view.symbols.entries)} symbols"
+        f"{len(view.enums)} vocabularies, {len(view.symbols.entries)} symbols{absent}"
     )
     return 0
 

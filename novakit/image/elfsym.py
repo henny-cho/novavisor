@@ -216,7 +216,7 @@ class ElfIndex:
         The firmware's own enum is the vocabulary. A table of the same
         names kept anywhere else drifts the first time a class is added,
         and nothing notices — whereas a type that stops existing fails
-        here.
+        here, and the resolve above records that as an absence.
         """
         labels = self._enums().get(qualified)
         if labels is None:
