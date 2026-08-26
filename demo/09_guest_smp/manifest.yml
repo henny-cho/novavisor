@@ -49,11 +49,10 @@ variants:
         within_seconds: 22
       - pattern: "guest smp: sgi burst complete"
         within_seconds: 27
-      # More interrupts pending at once than the interface has list
-      # registers, so the vGIC had to hold the overflow and pull it in
-      # as the guest drained. That is what arms the underflow
-      # maintenance interrupt, and this is the interrupt itself
-      # reaching EL2 — nothing else in the suite makes it fire.
+      # More pending at once than there are list registers, so the vGIC
+      # held the overflow and pulled it in as the guest drained — which
+      # arms the underflow maintenance interrupt. This is that interrupt
+      # reaching EL2; nothing else in the suite makes it fire.
       - event: "gic.ack"
         where: { intid: 25 }
         within_seconds: 10

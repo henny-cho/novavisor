@@ -65,9 +65,9 @@ def describe_symbols(elf: Path | None = None) -> int:
             layout = snapshot.PAGE_LAYOUTS[obs.layout]
             rows.append((obs.topic, obs.pa, layout.size, obs.rate_hz, _shape(layout)))
             continue
-        if obs.topic in view.absent:
-            continue
-        resolved = view.resolved[obs.topic]
+        resolved = view.resolved.get(obs.topic)
+        if resolved is None:
+            continue  # this composition publishes no such global
         picked = obs.fields and f" -> {','.join(obs.fields)}" or ""
         rows.append(
             (obs.topic, resolved.address, resolved.size, obs.rate_hz, _shape(resolved.type) + picked)
@@ -88,11 +88,9 @@ def verify_manifest(elf: Path | None = None) -> int:
         return 1
     failures = 0
 
-    # This is the image the full profile links, so it carries every
-    # component and every name the manifest asks for. An absence here is
-    # therefore a rename or a deletion, not a composition — which is
-    # what makes a subset profile free to record absences without any
-    # of them going unnoticed.
+    # The full profile links every component, so an absence here is a
+    # rename or a deletion rather than a composition. That is what lets
+    # a subset profile carry absences without any going unnoticed.
     if view.absent:
         failures += 1
         print(

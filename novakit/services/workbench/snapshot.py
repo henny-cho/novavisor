@@ -190,17 +190,6 @@ class MemoryReader(Protocol):
     def read_bytes(self, pa: int, size: int) -> bytes: ...
 
 
-def _carried(view: observe.View) -> tuple[Obs, ...]:
-    """The manifest narrowed to what this image answers.
-
-    A page declared by address has no symbol to be absent, so it is
-    carried by every profile that maps it.
-    """
-    return tuple(
-        obs for obs in OBSERVATIONS if obs.pa is not None or obs.topic in view.resolved
-    )
-
-
 class ElfRamProvider:
     """Decode firmware globals straight out of the shared RAM file.
 
@@ -224,7 +213,11 @@ class ElfRamProvider:
         self._resolved = image.resolved
         self._symbols = image.symbols
         self.regimes = image.walk
-        self.observations = _carried(image)
+        # What this image answers. A page declared by address has no
+        # symbol to be absent, so every profile mapping it carries it.
+        self.observations = tuple(
+            obs for obs in OBSERVATIONS if obs.pa is not None or obs.topic in image.resolved
+        )
         with ram_path.open("rb") as backing:
             self._ram = mmap.mmap(backing.fileno(), 0, prot=mmap.PROT_READ)
         highest = max(

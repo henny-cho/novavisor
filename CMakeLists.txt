@@ -52,13 +52,9 @@ if(CMAKE_CROSSCOMPILING)
     # Enforced post-link by novakit/image/fp_free.sh on novavisor.elf.
     add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-mgeneral-regs-only>)
     # Every image describes itself, whatever it is optimized for: the
-    # observation manifest is resolved against the linked ELF, so a
-    # profile built without this is a profile nothing can read and whose
-    # demos can only judge it by what it prints. Free at run time —
-    # debug sections are not allocated, so novavisor.bin and every LOAD
-    # segment are byte-identical without it. Directory-wide rather than
-    # a toolchain CMAKE_<LANG>_FLAGS_INIT, which seeds the cache once
-    # and would leave an already-configured tree silently unreadable.
+    # observation manifest resolves against the linked ELF. Costs disk
+    # only — debug sections are not allocated. Here rather than in the
+    # toolchain file, whose FLAGS_INIT seeds the cache once.
     add_compile_options(-g)
 endif()
 

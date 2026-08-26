@@ -123,17 +123,12 @@ class View:
     is four milliseconds, which is why the walk belongs to the build.
 
     `walk` is keyed by symbol rather than topic: the page tables feed no
-    observation, and the memory map wants extents, not a reading. Both
-    hold only what this image carries; `absent` names the rest.
+    observation, and the memory map wants extents, not a reading. Each
+    mapping holds only what this image carries.
     """
 
     resolved: dict[str, elfsym.ResolvedSymbol]
     symbols: elfsym.SymbolTable
-    # Every name the manifest asked for that this image does not carry —
-    # topic, table or vocabulary. A hole with a reason, so a reader can
-    # say "this composition does not publish it" instead of failing to
-    # find a name it was told to expect.
-    absent: tuple[str, ...] = ()
     walk: dict[str, elfsym.ResolvedSymbol] = field(default_factory=dict)
     # Where each observed global lives, for matching against what the
     # firmware says it publishes. Keyed by symbol because that is what a
@@ -141,6 +136,19 @@ class View:
     addresses: dict[str, int] = field(default_factory=dict)
     # Enumerator names by the enum's qualified name, then by value.
     enums: dict[str, dict[int, str]] = field(default_factory=dict)
+
+    @property
+    def absent(self) -> tuple[str, ...]:
+        """What the manifest asked for and this image does not carry.
+
+        Derived, not recorded: missing is exactly what did not resolve,
+        and a second list of it is one that can disagree.
+        """
+        return (
+            *(want.topic for want in OBSERVED if want.topic not in self.resolved),
+            *(symbol for symbol in WALK if symbol not in self.walk),
+            *(name for name in ENUMS if name not in self.enums),
+        )
 
 
 @functools.lru_cache(maxsize=1)
@@ -167,43 +175,35 @@ def resolve(elf: Path) -> View:
     Reads the ELF and returns data — runnable anywhere, including a build
     step, which calls it once.
 
-    A name the image does not carry is recorded as absent, not raised:
-    a profile composing no SMMU has no stream table, and an optimized
-    build inlines away the last variable of an enum's type so DWARF
-    stops describing it. Both are facts about the image rather than a
-    broken manifest. A name it does carry is proven whole — a renamed
-    member still resolves, so the members are checked too — and the
-    manifest check holds the reference image, which composes everything
-    and is built unoptimized, to having no absences at all. That is
-    where a rename is caught.
+    A name this image does not carry is left out rather than raised — a
+    profile composing no SMMU has no stream table, and -O3 inlines away
+    the last variable of an enum's type. A name it does carry is proven
+    whole; `View.absent` is the difference, and the manifest check holds
+    the reference image to having none.
     """
     stat = elf.stat()
     index = _index(elf, (stat.st_mtime_ns, stat.st_size))
-    resolved, absent = {}, []
+    resolved, walk, enums = {}, {}, {}
     for want in OBSERVED:
         try:
             entry = index.resolve(want.symbol)
         except KeyError:
-            absent.append(want.topic)
             continue
         _prove(want, entry)
         resolved[want.topic] = entry
-    walk = {}
     for symbol in WALK:
         try:
             walk[symbol] = index.resolve(symbol)
         except KeyError:
-            absent.append(symbol)
-    enums = {}
+            pass
     for name in ENUMS:
         try:
             enums[name] = index.enum_labels(name)
         except KeyError:
-            absent.append(name)
+            pass
     return View(
         resolved,
         index.symbols,
-        tuple(absent),
         walk,
         {want.symbol: resolved[want.topic].address for want in OBSERVED if want.topic in resolved},
         enums,
@@ -234,7 +234,7 @@ def _prove(want: Want, entry: elfsym.ResolvedSymbol) -> None:
 
 # What the reader below speaks. Bumped when the document's shape changes;
 # an older reader refuses rather than interpreting a shape it predates.
-FORMAT = 2
+FORMAT = 1
 
 
 class Stale(Exception):
@@ -278,7 +278,6 @@ def dumps(view: View, elf: Path) -> str:
             "image": image_id(elf),
             "request": request_id(),
             "resolved": {topic: _symbol_json(entry) for topic, entry in view.resolved.items()},
-            "absent": list(view.absent),
             "walk": {name: _symbol_json(entry) for name, entry in view.walk.items()},
             "addresses": view.addresses,
             "enums": {
@@ -337,7 +336,6 @@ def _view_of(document: dict) -> View:
         elfsym.SymbolTable(
             {name: tuple(extent) for name, extent in document["symbols"].items()}
         ),
-        tuple(document["absent"]),
         {name: _symbol_of(entry) for name, entry in document["walk"].items()},
         document["addresses"],
         {

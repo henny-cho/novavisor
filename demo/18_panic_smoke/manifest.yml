@@ -4,8 +4,7 @@ phase: 25
 enabled: true
 timeout_seconds: 15
 payload_mode: embedded
-# EL2 자기 폴트가 이 데모의 주제다 — 다른 모든 런을 무효화하는 패닉 보고가
-# 여기서는 기대 출력이므로, 그 감시만 내려놓는다.
+# EL2 자기 폴트가 이 데모의 주제다: 패닉 보고가 기대 출력이므로 그 감시만 내린다.
 expects_panic: true
 
 guests:

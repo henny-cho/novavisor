@@ -170,13 +170,10 @@ class Machine:
                 close()
 
 
-# A surface that is not ready yet, as against one that is wrong. A file
-# the machine has not written, a view from another image, a region EL2
-# has not opened and a copy its publisher was inside of all mean "look
-# again" — and a step failing on any of them would be failing on the
-# boot it is there to wait through. One tuple, because two handlers
-# spelling this differently is how one of them ends a run at 0.1s that
-# the other would have waited out.
+# A surface that is not ready yet, as against one that is wrong: all of
+# these mean "look again", and a step failing on one would be failing on
+# the boot it is there to wait through. One tuple, because two handlers
+# spelling it differently ended a run at 0.1s that the other waited out.
 NOT_YET = (FileNotFoundError, observe.Stale, snapshot.NotPublishedYet, elfsym.TornRead)
 
 

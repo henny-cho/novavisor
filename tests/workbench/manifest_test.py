@@ -254,7 +254,12 @@ class CompositionTest(unittest.TestCase):
     """
 
     def test_the_full_profile_must_carry_every_name_the_manifest_asks(self):
-        short = dataclasses.replace(shared_image.view(), absent=("smmu.stream",))
+        # Drop a resolved entry rather than claiming an absence: the
+        # absence is what not resolving means.
+        view = shared_image.view()
+        short = dataclasses.replace(
+            view, resolved={k: v for k, v in view.resolved.items() if k != "smmu.stream"}
+        )
         with mock.patch.object(checks, "_read", return_value=short):
             self.assertEqual(checks.verify_manifest(), 1)
 

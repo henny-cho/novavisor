@@ -1,12 +1,9 @@
 // demo/04_native_gic/vectors.S — EL1 vector table for the native GIC demo.
 //
-// Only the current-EL-SPx IRQ entry (+0x280) is populated. The handler
-// acks through ICC_IAR1_EL1 (the hardware-virtualized ICV view), hands
-// the vINTID to the C handler (demo_irq in main.c, which decides
-// whether the periodic timer is re-armed), then priority-drops and
-// deactivates through ICC_EOIR1_EL1. Caller-saved registers are
-// preserved around the C call; the demo builds with
-// -mgeneral-regs-only, so no FP state is at risk.
+// Only the current-EL-SPx IRQ entry (+0x280) is populated: ack through
+// ICC_IAR1_EL1 (the ICV view), hand the vINTID to demo_irq in main.c,
+// then priority-drop through ICC_EOIR1_EL1. Caller-saved registers are
+// preserved around the C call; -mgeneral-regs-only, so no FP is at risk.
 
 .macro VEC_HANG
     .align 7

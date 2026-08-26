@@ -73,8 +73,7 @@ static inline void gicr_enable(unsigned intid) {
 }
 
 // Stop delivery of one SGI/PPI on this vCPU's frame. The per-INTID
-// enable bit is the vGIC's single delivery gate, so a guest winding
-// down closes what it opened.
+// enable bit is the vGIC's single delivery gate.
 static inline void gicr_disable(unsigned intid) {
   *gic_reg32(gicr_frame(0) + NOVA_GICR_ICENABLER0) = 1U << intid; // write-1-to-clear
 }

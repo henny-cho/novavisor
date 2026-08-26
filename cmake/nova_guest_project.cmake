@@ -102,9 +102,8 @@ function(nova_add_guest_project)
 
     # The observation view: the manifest resolved against this image, so
     # whoever observes the machine reads an answer instead of walking the
-    # debug section for it. Every profile gets one — a name this
-    # composition does not carry is recorded as absent, so a subset
-    # profile is readable rather than unreadable.
+    # debug section for it. Every profile gets one; a name a composition
+    # does not carry is simply not in it.
     #
     # An OUTPUT rule and not a POST_BUILD step: this produces something,
     # and POST_BUILD declares no inputs — the manifest is the second

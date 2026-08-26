@@ -75,10 +75,9 @@ variants:
         equals: { state: "translate" }
         within_seconds: 10
       # The rest of the vocabulary, on a machine that is up and
-      # translating. Each runs code in EL2 even where the effect is one
-      # store, and each is answered on the same ring — so a refusal
-      # would be as visible here as an acceptance. `spi` is the one of
-      # the three that leaves a record of its own beside the answer.
+      # translating. Each runs code in EL2 and is answered on the same
+      # ring, so a refusal would be as visible as an acceptance. `spi`
+      # is the one that leaves a record of its own beside the answer.
       - command: "mark 1"
         within_seconds: 10
       - command: "slice 5000"
@@ -90,8 +89,7 @@ variants:
         within_seconds: 10
       # And the reset, which runs the path this guest's own PSCI
       # SYSTEM_RESET runs: the stream leaves its tables with the old
-      # generation and is bound again to the new one, and the OS on top
-      # of it comes back up.
+      # generation, binds again to the new one, and the OS comes back.
       - command: "reset 0"
         within_seconds: 10
       - event: "smmu.attach"

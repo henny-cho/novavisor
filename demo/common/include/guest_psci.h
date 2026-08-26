@@ -56,9 +56,8 @@ static inline void psci_cpu_off(void) {
   __builtin_unreachable();
 }
 
-// Whether the firmware implements one function ID. Answers for the
-// SMCCC Arch range as well as PSCI's own — which is the probe a guest
-// Linux gates all of SMCCC 1.1 on.
+// Whether the firmware implements one function ID — PSCI's range and
+// the SMCCC Arch range both. Guest Linux gates all of SMCCC 1.1 on it.
 static inline int64_t psci_features(uint32_t queried) {
   register uint64_t x0 __asm__("x0") = PSCI_FN_FEATURES;
   register uint64_t x1 __asm__("x1") = queried;

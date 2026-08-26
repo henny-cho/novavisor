@@ -231,10 +231,9 @@ def observe_output(
         )
 
     # Output that must never appear is watched the same way whatever a
-    # step is waiting for, so the bands sit at the front of every
-    # monitored list and the awaited thing goes last. One layout, one
-    # classifier: a new kind of step cannot slip past the guard, and the
-    # drain after the last step watches the same bands.
+    # step waits for: the bands sit at the front of every monitored list
+    # and the awaited thing goes last. The drain after the last step
+    # watches the same bands, so no step kind slips past the guard.
     banned = (*forbidden_patterns, *fatal_patterns)
 
     def banned_hit(at_index: int, at: float, wait_started: float, owed: dict):

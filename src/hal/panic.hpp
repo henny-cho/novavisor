@@ -3,18 +3,9 @@
 // hal/panic.hpp
 //
 // First-failure panic protocol, and the one way a fatal EL2 path ends.
-// A fatal path claims the machine before reporting: the first claimant
-// owns the console raw (the normal lock may be held by a core that will
-// never release it), every other core's console output is dropped, and
-// a stop SGI asks the remaining PEs to park at their next trap — so the
-// serial log ends with exactly one attributable failure report instead
-// of an interleaved stream of watchdog resets and guest output.
-//
-// fail() is that whole sequence, so no caller writes the report prefix
-// or the claim itself. The prefix is defined once here because a host
-// verifier reads it from this header to know what a failed run looks
-// like: a second spelling anywhere would be a guard that stops matching
-// without anything failing to build.
+// The first claimant owns the console raw, other cores' output is
+// dropped, and a stop SGI parks them — one attributable report per log.
+// fail() is that sequence; the host verifier reads kPrefix from here.
 
 #include "hal/console.hpp"
 #include "hal/cpu.hpp"
@@ -44,13 +35,11 @@ inline auto enter() noexcept -> Role {
   return expected == me ? Role::kRecursive : Role::kBystander;
 }
 
-// The report line every fatal path starts with. Read by the host
-// verifier out of this header; never spelled a second time.
 inline constexpr std::string_view kPrefix = "[NOVA PANIC] ";
 
 // Claim the machine and emit the headline. Returns only to the first
 // claimant, so a path with more to say (a register dump) adds it and
-// then halts; everything else ends in fail() instead.
+// then halts; everything else ends in fail().
 template <typename... Parts>
 inline void announce(Parts... parts) noexcept {
   switch (enter()) {

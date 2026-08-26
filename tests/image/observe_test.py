@@ -49,7 +49,6 @@ def _view() -> observe.View:
             "sched.cpu": elfsym.ResolvedSymbol("nova::vcpu::g_sched", 0x4008_1000, 8, _U64),
         },
         elfsym.SymbolTable({"_ZN4nova4vcpu7g_schedE": (0x4008_1000, 8)}),
-        ("smmu.stream", "nova::smmu::(anonymous)::g_dma_tables"),
         {"nova::(anonymous)::g_vttbr": elfsym.ResolvedSymbol("g_vttbr", 0x4008_2000, 8, _U64)},
         {"nova::vcpu::g_sched": 0x4008_1000},
         {observe.EC_ENUM: {0x16: "kHvcAa64", 0x24: "kDataAbortLower"}},
@@ -58,7 +57,6 @@ def _view() -> observe.View:
 
 def _same(case: unittest.TestCase, left: observe.View, right: observe.View) -> None:
     case.assertEqual(left.resolved, right.resolved)
-    case.assertEqual(left.absent, right.absent)
     case.assertEqual(left.walk, right.walk)
     case.assertEqual(left.addresses, right.addresses)
     case.assertEqual(left.enums, right.enums)
@@ -100,14 +98,6 @@ class RoundTripTest(unittest.TestCase):
         self.artifact.write_text("{not json")
         with self.assertRaises(observe.Stale):
             observe.load(self.artifact, self.elf)
-
-    def test_an_absence_travels_so_a_reader_can_name_it(self):
-        """A subset profile's view says which topics it does not carry;
-        a reader that lost the list would report a missing name as a
-        broken manifest instead of a composition."""
-        self.write()
-        back = observe.load(self.artifact, self.elf)
-        self.assertEqual(back.absent, ("smmu.stream", "nova::smmu::(anonymous)::g_dma_tables"))
 
     def test_a_document_missing_what_it_claims_to_carry_is_refused(self):
         """Past the three names, so it says it is this document. A
@@ -170,8 +160,10 @@ class AgainstTheImageTest(unittest.TestCase):
             with mock.patch.object(observe, "OBSERVED", asked):
                 self.assertEqual(observe.main(["--elf", str(ELF), "--out", str(out)]), 0)
                 view = observe.load(out, ELF)
-            self.assertIn("sched.ghost", view.absent)
-            self.assertNotIn("sched.ghost", view.resolved)
+                # Absence is relative to the manifest in force, so it is
+                # read where that manifest is.
+                self.assertIn("sched.ghost", view.absent)
+                self.assertNotIn("sched.ghost", view.resolved)
 
     def test_a_member_the_image_no_longer_has_stops_the_build(self):
         """The rename that still resolves: the global is there and the

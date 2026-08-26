@@ -238,8 +238,14 @@ CHAIN_TIMEOUT = 120
 
 
 def _chain_scenario(flash: Path) -> expect.Scenario:
+    # Pattern steps only: this boots a flash image with no observation
+    # surfaces attached, so a step that reads the machine cannot run.
     _, smoke = manifest.load_manifest(SMOKE_DEMO)
-    guest_steps = manifest.manifest_variants(smoke)[0]["steps"]
+    guest_steps = [
+        step
+        for step in manifest.manifest_variants(smoke)[0]["steps"]
+        if expect.step_kind(step) == "pattern"
+    ]
     return expect.Scenario(
         label="qemu-tfa chain handoff",
         phase="firmware",
