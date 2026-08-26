@@ -282,10 +282,12 @@ class ElfIndex:
 
     def _type_of(self, die) -> TypeInfo:
         # The two-DIE pattern: the defining DIE holds the location, the
-        # declaring DIE (via DW_AT_specification) holds the type.
+        # declaring DIE (via DW_AT_specification) holds the type. A shape
+        # this cannot describe raises ValueError, not KeyError: KeyError
+        # means "not in this image", and a reader may skip that.
         while "DW_AT_type" not in die.attributes:
             if "DW_AT_specification" not in die.attributes:
-                raise KeyError("variable DIE has neither type nor specification")
+                raise ValueError("variable DIE has neither type nor specification")
             die = die.get_DIE_from_attribute("DW_AT_specification")
         return self._resolve_type(die.get_DIE_from_attribute("DW_AT_type"))
 
@@ -332,7 +334,7 @@ class ElfIndex:
             return TypeInfo("array", element.size * count, element=element, count=count)
         if tag in ("DW_TAG_structure_type", "DW_TAG_class_type"):
             return self._build_struct(die)
-        raise KeyError(f"unsupported DWARF type tag: {tag}")
+        raise ValueError(f"unsupported DWARF type tag: {tag}")
 
     def _build_struct(self, die) -> TypeInfo:
         size = die.attributes.get("DW_AT_byte_size")

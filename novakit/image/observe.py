@@ -19,6 +19,7 @@ import functools
 import hashlib
 import json
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -169,6 +170,21 @@ def _index(elf: Path, stamp: tuple[int, int]) -> elfsym.ElfIndex:
     return elfsym.ElfIndex(elf)
 
 
+def _carried(names, answer: Callable[..., object]) -> dict:
+    """Of these names, the ones this image answers for.
+
+    KeyError alone means "not in this composition"; whether what it does
+    carry is well formed is _prove's question, and its own type.
+    """
+    found = {}
+    for name in names:
+        try:
+            found[name] = answer(name)
+        except KeyError:
+            continue
+    return found
+
+
 def resolve(elf: Path) -> View:
     """Answer every question above against one image.
 
@@ -183,40 +199,24 @@ def resolve(elf: Path) -> View:
     """
     stat = elf.stat()
     index = _index(elf, (stat.st_mtime_ns, stat.st_size))
-    resolved, walk, enums = {}, {}, {}
-    for want in OBSERVED:
-        try:
-            entry = index.resolve(want.symbol)
-        except KeyError:
-            continue
+    answered = _carried(OBSERVED, lambda want: index.resolve(want.symbol))
+    for want, entry in answered.items():
         _prove(want, entry)
-        resolved[want.topic] = entry
-    for symbol in WALK:
-        try:
-            walk[symbol] = index.resolve(symbol)
-        except KeyError:
-            pass
-    for name in ENUMS:
-        try:
-            enums[name] = index.enum_labels(name)
-        except KeyError:
-            pass
     return View(
-        resolved,
+        {want.topic: entry for want, entry in answered.items()},
         index.symbols,
-        walk,
-        {want.symbol: resolved[want.topic].address for want in OBSERVED if want.topic in resolved},
-        enums,
+        _carried(WALK, index.resolve),
+        {want.symbol: entry.address for want, entry in answered.items()},
+        _carried(ENUMS, index.enum_labels),
     )
 
 
 def _prove(want: Want, entry: elfsym.ResolvedSymbol) -> None:
     """Hold one answer to the question that asked for it.
 
-    Resolving proves the name. A renamed member still resolves — the
-    global is there — so the members are checked too, and decoding a
-    zero-filled extent asks the same of the decoder: a layout it cannot
-    walk would fail per reading at run time.
+    A renamed member still resolves — the global is there — so the
+    members are checked too. Raises ValueError, never KeyError: KeyError
+    is what an image not carrying a name raises, and that one is skipped.
     """
     members = entry.type
     while members.kind == "array":
@@ -224,7 +224,7 @@ def _prove(want: Want, entry: elfsym.ResolvedSymbol) -> None:
     have = {field.name for field in members.fields} if members.kind == "struct" else set()
     missing = sorted(set(want.fields) - have)
     if missing:
-        raise KeyError(f"{want.symbol}: no member named {missing}")
+        raise ValueError(f"{want.symbol}: no member named {missing}")
     elfsym.decode(entry.type, bytes(entry.size), fields=want.fields)
 
 
@@ -420,13 +420,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         view = resolve(args.elf)
-    except (KeyError, ValueError) as error:
-        # A name this image does not carry is absence; reaching here
-        # means one it does carry has changed shape under the manifest.
-        # KeyError reprs its argument, which here is already a sentence.
+    except ValueError as error:
+        # A name this image lacks is an absence and never reaches here.
+        # This is a name it carries whose shape the manifest cannot read.
         print(
             f"[observe] {args.elf.name}: {error.args[0]}\n"
-            f"[observe] the observation manifest asks for a member this image does not have",
+            f"[observe] a name this image carries is not the shape the manifest reads",
             file=sys.stderr,
         )
         return 1
