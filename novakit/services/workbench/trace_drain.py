@@ -33,6 +33,11 @@ TRACE_TURN_SECONDS = 0.008
 # make a turn shorter than the budget, never longer, so it cannot bring
 # back the stall it is here to prevent.
 TRACE_DRAIN_FLOOR = 64
+# How long the tail drain waits for cursors to reach heads that have
+# stopped moving. Sized well above the work — a full ring at the measured
+# decode rate is tens of milliseconds — because exceeding it means the
+# heads were not still after all, which is a wrong answer, not a slow one.
+TAIL_DEADLINE_S = 2.0
 
 
 class TraceDrain:
@@ -56,6 +61,7 @@ class TraceDrain:
 
         self.tracer: trace.TraceReader | None = None
         self.tracer_run: int | None = None
+        self.ledger = trace.RunLedger()
         self.budget: trace.Budget | None = None
         self.drain_limit = TRACE_DRAIN_FLOOR
         self.trace_state = ""
@@ -94,6 +100,7 @@ class TraceDrain:
             # change clears the history: a read that failed mid-run must
             # not cost that run its records.
             self.history.reset()
+            self.ledger = trace.RunLedger()
             self.tracer_run = session.run_id
         if self.tracer is not None:
             return True
@@ -162,23 +169,66 @@ class TraceDrain:
         self.budget.looked(records, arrived)
         if not records:
             return False
-        hist = self.history
-        hist.append(records)
-        if self.recorder is not None:
-            self.recorder.drained(records)
+        self.consume(records)
         self.store.publish(
             Topic.TRACE,
             Kind.EVENT,
             trace.summarise(records)
             | {
                 "count": len(records),
-                "span": hist.span().as_dict(),
+                "span": self.history.span().as_dict(),
                 "budget": self.budget.as_dict(),
             },
             src=Src.TRACE,
         )
         self.pace(time.monotonic() - arrived, capped=waiting > self.drain_limit)
         return bool(self.tracer.pending())
+
+    def consume(self, records: list[trace.Record]) -> None:
+        """The one way a record reaches history, the recording and the ledger.
+
+        Both the periodic drain and the terminal flush go through here, so
+        a record the run ended on is counted exactly like every other.
+        """
+        if not records:
+            return
+        self.history.append(records)
+        self.ledger.consume(records)
+        if self.recorder is not None:
+            self.recorder.drained(records)
+
+    def drain_to_head(self, producer_dead: bool) -> trace.RunTotals:
+        """Everything the rings still hold, once the producer is gone.
+
+        Not a quiesce: the gdb stub owns stopping the machine, so this
+        waits for a machine that has already stopped rather than stopping
+        one. Without that confirmation the heads keep moving and there is
+        nothing to drain up to, so the run seals incomplete instead.
+
+        Reaching the heads is not the whole of it. A lapped ring's count
+        is held until a surviving record can carry it, and with the
+        producer gone none is coming — flush_held turns those into gap
+        records so the loss is in the stream rather than in the reader.
+
+        The deadline only bounds the wait; missing it seals incomplete
+        rather than raising.
+        """
+        if not producer_dead:
+            return self.ledger.seal(producer_dead=False, tail_drained=False)
+        if self.tracer is None and not self.attach():
+            # No ring in the image is not a failed measurement; no ring
+            # where one was expected is.
+            return self.ledger.seal(
+                producer_dead=True, tail_drained=False, absent=not self._image_has_tracing()
+            )
+        deadline = time.monotonic() + TAIL_DEADLINE_S
+        heads = self.tracer.snapshot_heads()
+        while self.tracer.behind(heads) and time.monotonic() < deadline:
+            self.pump()
+        self.consume(self.tracer.flush_held())
+        return self.ledger.seal(
+            producer_dead=True, tail_drained=not self.tracer.behind(heads)
+        )
 
     def pace(self, took: float, capped: bool) -> None:
         """Move the allowance so a turn keeps landing inside its budget."""

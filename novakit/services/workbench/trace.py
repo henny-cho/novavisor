@@ -25,7 +25,7 @@ import mmap
 import struct
 import sys
 import time
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -671,8 +671,138 @@ class TraceReader:
             )
         return records
 
+    def snapshot_heads(self) -> tuple[int, ...]:
+        """Where every ring's writer stood at one instant.
+
+        Taken once the producer is gone, so the values do not move again
+        and "drained" becomes a question with an answer.
+        """
+        return tuple(self._head(ring) for ring in range(self.geometry.rings))
+
+    def behind(self, heads: tuple[int, ...]) -> bool:
+        """Whether any cursor still trails the heads it was given."""
+        return any(
+            cursor < head for cursor, head in zip(self._cursor, heads, strict=True)
+        )
+
+    def held_losses(self) -> int:
+        """Counted losses no record has been able to carry out yet."""
+        return sum(self._pending) + self._early_pending
+
+    def flush_held(self) -> list[Record]:
+        """Turn the held losses into gap records, once, at the end.
+
+        A held count needs a surviving record to sit beside: `_drain_one`
+        defers it until one arrives, and `_with_early` folds the
+        pre-placement drops into the first batch that has one. With the
+        producer gone and every cursor at its head, no record is coming,
+        so the count would be lost with the reader.
+
+        Emitted here instead, through the same record shape the drain
+        uses, so history, the recording and the ledger see one kind of
+        fact and not two. The hole opens where this ring last handed out
+        a record and does not close: nothing follows it.
+        """
+        held: list[Record] = []
+        for ring, missed in enumerate(self._pending):
+            if not missed:
+                continue
+            at = self._last_ts[ring]
+            held.append(
+                Record(ts=at, code=GAP_CODE, cpu=ring, a=min(missed, _MAX_COUNT), b=at, c=0)
+            )
+        self._pending = [0] * self.geometry.rings
+        if self._early_pending:
+            early, self._early_pending = self._early_pending, 0
+            # It precedes every record this reader saw, so it anchors on
+            # the earliest timestamp any ring has handed out.
+            at = min(self._last_ts)
+            held.insert(
+                0, Record(ts=at, code=GAP_CODE, cpu=0, a=min(early, _MAX_COUNT), b=0, c=0)
+            )
+        return held
+
     def close(self) -> None:
         self._ram.close()
+
+
+@dataclass(frozen=True)
+class RunTotals:
+    """What one run's records add up to, and whether that is all of them.
+
+    `lost` is every gap record's count summed — pre-placement drops, a
+    lapped ring, and the terminal flush alike. The kinds are not told
+    apart because completeness does not need them told apart: an early
+    hole and a first lap can be written identically in the raw stream
+    (both carry b=0 when nothing precedes them), so a reader that claimed
+    to distinguish them would be claiming more than the records say.
+
+    `absent` is a different axis from `complete`: an image built without
+    a trace ring was never measured, which is not the same as measured
+    and found wanting.
+
+    Three of the fields are raw and the rest follow from them and the
+    records. Kept together because a run's completeness is one
+    description: split across the wire and a file, the two would answer
+    differently about the same run.
+    """
+
+    events: dict[int, int]
+    lost: int
+    producer_dead: bool
+    tail_drained: bool
+    absent: bool = False
+
+    #: The facts the records cannot recover on their own, so the only
+    #: ones a recording has to carry for its totals to be re-derived.
+    RAW = ("producer_dead", "tail_drained", "absent")
+
+    @property
+    def complete(self) -> bool:
+        return not self.absent and self.lost == 0 and self.tail_drained
+
+    def raw(self) -> dict:
+        """What a file must store; everything else follows from the records."""
+        return {name: getattr(self, name) for name in self.RAW}
+
+    def as_dict(self) -> dict:
+        return {
+            "events": {str(code): count for code, count in sorted(self.events.items())},
+            "lost": self.lost,
+            **self.raw(),
+            "complete": self.complete,
+        }
+
+
+class RunLedger:
+    """One run's totals, accumulated from the records as they are consumed.
+
+    Beside the per-batch summary rather than instead of it: the batch
+    counts are what the UI draws and are scoped to a frame, while this
+    answers what the whole run did. One stream of records, two readings.
+    """
+
+    def __init__(self) -> None:
+        self._events: Counter[int] = Counter()
+        self._lost = 0
+
+    def consume(self, records: list[Record]) -> None:
+        for record in records:
+            if record.code == GAP_CODE:
+                self._lost += record.a
+                continue
+            self._events[record.code] += 1
+
+    def seal(
+        self, *, producer_dead: bool, tail_drained: bool, absent: bool = False
+    ) -> RunTotals:
+        return RunTotals(
+            events=dict(self._events),
+            lost=self._lost,
+            producer_dead=producer_dead,
+            tail_drained=tail_drained,
+            absent=absent,
+        )
 
 
 def dropped_in(records: list[Record]) -> int:
