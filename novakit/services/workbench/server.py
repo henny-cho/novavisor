@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio  # noqa: TID251 — the event loop lives here
 import signal
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -64,6 +65,7 @@ __all__ = [
     "QuerySlot",
     "Request",
     "TraceDrain",
+    "measure",
     "replay",
     "serve",
 ]
@@ -230,15 +232,37 @@ class Bridge:
         self._server = await websocket_server.serve(
             self._handler, host, port, process_request=process_request
         )
-        self._flusher = asyncio.create_task(self._flush_loop())
+        self._ensure_flusher()
         if self.session.surfaces is not None:
             # Beside the sockets, so the CLI twin that already globs for
             # a session can ask this bridge for its history instead of
             # reading the firmware's rings over its shoulder.
             self.session.surfaces.port_path.write_text(str(self.port))
-            self.spawn(self._poll_loop())
-            self._trace_task = asyncio.create_task(self._trace_loop())
-            self.session.on_run_end = self.finalize_run
+        self.watch_machine()
+
+    def _ensure_flusher(self) -> None:
+        """The 50 ms loop that empties the store, for either reason.
+
+        It serves the wire and the file both — connections get frames,
+        the recorder gets its roll and its write — and either alone is
+        reason enough to run it.
+        """
+        if self._flusher is None:
+            self._flusher = asyncio.create_task(self._flush_loop())
+
+    def watch_machine(self) -> None:
+        """Start the loops that follow the machine, socket or no socket.
+
+        Apart from open() because the rings fill whether or not anybody
+        is connected: a measurement that wants only the records would
+        otherwise have to bind a port to be allowed to read them.
+        """
+        if self.session.surfaces is None or self._trace_task is not None:
+            return
+        self._ensure_flusher()
+        self.spawn(self._poll_loop())
+        self._trace_task = asyncio.create_task(self._trace_loop())
+        self.session.on_run_end = self.finalize_run
 
     @property
     def port(self) -> int:
@@ -314,6 +338,11 @@ class Bridge:
             return sealed
         totals = self._trace_service.drain_to_head(producer_dead)
         self._sealed[run] = totals
+        if self._recorder is not None:
+            # Only the raw facts. The counts are re-derived from the
+            # records the file already holds, so a stored total is one
+            # more thing free to disagree with the stream.
+            self._recorder.note(**totals.raw())
         self.store.publish(
             Topic.LIFE,
             Kind.EVENT,
@@ -845,6 +874,68 @@ async def _serve_forever(
     finally:
         await bridge.close()
         surfaces.release()
+
+
+# How often the measurement looks to see whether the machine has ended
+# its own run. Matched to the flush loop: a finer look would learn
+# nothing sooner, since the phase it reads changes on that same loop.
+_MEASURE_POLL_SECONDS = FLUSH_INTERVAL_SECONDS
+
+
+async def _until_gone(session: Session, seconds: float) -> None:
+    """Wait for the machine to end its run, or for its time to be up.
+
+    Bounded by the demo's own declared timeout rather than a number
+    here, so a demo that runs until it is stopped and one that finishes
+    are both measured for exactly as long as the demo says it takes.
+    """
+    deadline = time.monotonic() + seconds
+    while session.phase is Phase.RUNNING and time.monotonic() < deadline:
+        await asyncio.sleep(_MEASURE_POLL_SECONDS)
+
+
+async def _measure_forever(*, target: Target, record: Path, runs: int) -> None:
+    """Run one demo `runs` times, recording each, then stop.
+
+    One bridge and repeated selects rather than a process per run: the
+    recorder rolls to a new directory on a run change, and going through
+    the same boundary the UI does means the measurement is of the code
+    paths that actually ship.
+    """
+    surfaces = make_surfaces()
+    try:
+        recorder = recording.Recorder(
+            record,
+            {"demo": target.demo, "variant": target.variant, "board": hardware.DEFAULT_BOARD},
+        )
+        bridge = Bridge(ui_root=config.WORKBENCH_UI_DIR, surfaces=surfaces, recorder=recorder)
+        try:
+            bridge.store.adopt_topology(initial_topology())
+            bridge.watch_machine()
+            for number in range(1, runs + 1):
+                await bridge.session.select(target)
+                if bridge.session.phase is not Phase.RUNNING:
+                    raise SystemExit(f"[measure] run {number} did not start")
+                scenario = bridge.session.scenario
+                print(f"[measure] run {number}/{runs}: {target.demo}")
+                await _until_gone(bridge.session, scenario.timeout_seconds if scenario else 30.0)
+        finally:
+            await bridge.close()
+    finally:
+        surfaces.release()
+
+
+def measure(*, target: Target, record: Path, runs: int) -> int:
+    """Record `runs` runs of one demo, for a report to read afterwards."""
+    try:
+        asyncio.run(_measure_forever(target=target, record=record, runs=runs))
+    except KeyboardInterrupt:
+        # The runs already written are still evidence; the report says
+        # how many it found rather than assuming it got what it asked for.
+        pass
+    except OSError as error:
+        raise SystemExit(f"[measure] {error}") from error
+    return 0
 
 
 async def _replay_forever(*, host: str, port: int, ui_root: Path, directory: Path) -> None:

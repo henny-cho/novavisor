@@ -383,6 +383,7 @@ class SealOnceTest(unittest.TestCase):
         def __init__(self, totals: trace.RunTotals):
             self._sealed: dict[int, trace.RunTotals] = {}
             self._totals = totals
+            self._recorder = None
             self.drains = 0
 
         finalize_run = server.Bridge.finalize_run
