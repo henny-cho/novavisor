@@ -71,6 +71,30 @@ class Event:
     # it needs it back, and knowing which entry that is belongs here
     # with every other per-event fact.
     reply: bool = False
+    # Which of `fields` a run's totals are broken down by, when counting
+    # the event as one kind is too coarse to act on: a thousand traps is
+    # a number, a thousand traps that are all one EC is a cause. Named
+    # rather than indexed, so the declaration cannot drift from the
+    # layout beside it.
+    group: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.group:
+            return
+        if self.group not in self.fields:
+            raise ValueError(
+                f"{self.id}: group {self.group!r} is not one of its fields {self.fields}"
+            )
+        if "|" in self.group:
+            raise ValueError(
+                f"{self.id}: {self.group!r} is a packed pair, so grouping by it would "
+                "count packings rather than values; unpacking belongs in decode()"
+            )
+
+    @property
+    def group_index(self) -> int:
+        """Which record word holds the breakdown, or -1 for none."""
+        return self.fields.index(self.group) if self.group else -1
 
     @property
     def stop(self) -> bool:
@@ -111,7 +135,7 @@ EVENTS: tuple[Event, ...] = (
           fields=("slot", "intids", "generation")),
     Event("trap", "nova::trap_handler_component::handle_lower_sync", paths.EDGE_TRAP, (),
           "EL1에서 EL2로 동기 예외", code=_CODES["NOVA_TRACE_EV_TRAP"],
-          fields=("ec", "esr", "far")),
+          fields=("ec", "esr", "far"), group="ec"),
     Event("mmio", "nova::trap::dispatch_data_abort", paths.EDGE_MMIO, (),
           "게스트 MMIO 접근 트랩", code=_CODES["NOVA_TRACE_EV_MMIO"],
           fields=("access", "ipa", "value")),
@@ -124,7 +148,7 @@ EVENTS: tuple[Event, ...] = (
     # would claim certainty for the ordinary case it never watched.
     Event("gic.ack", "nova::core_gic::drain", "phys", ("intid",),
           "물리 IRQ를 EL2가 수신", code=_CODES["NOVA_TRACE_EV_GIC_ACK"],
-          fields=("intid", "", "")),
+          fields=("intid", "", ""), group="intid"),
     Event("smp.cross", "nova::smp::invoke_vm_owner", "cross", ("vm", "owner"),
           "다른 코어에 소유권 호출 전달", code=_CODES["NOVA_TRACE_EV_CROSS_CALL"],
           fields=("vm", "owner", "")),

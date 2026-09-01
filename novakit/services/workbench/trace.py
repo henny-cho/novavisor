@@ -747,7 +747,7 @@ class RunTotals:
     differently about the same run.
     """
 
-    events: dict[int, int]
+    events: dict[tuple[int, int], int]
     lost: int
     producer_dead: bool
     tail_drained: bool
@@ -767,7 +767,9 @@ class RunTotals:
 
     def as_dict(self) -> dict:
         return {
-            "events": {str(code): count for code, count in sorted(self.events.items())},
+            "events": {
+                f"{code}:{arg}": count for (code, arg), count in sorted(self.events.items())
+            },
             "lost": self.lost,
             **self.raw(),
             "complete": self.complete,
@@ -783,7 +785,7 @@ class RunLedger:
     """
 
     def __init__(self) -> None:
-        self._events: Counter[int] = Counter()
+        self._events: Counter[tuple[int, int]] = Counter()
         self._lost = 0
 
     def consume(self, records: list[Record]) -> None:
@@ -791,7 +793,7 @@ class RunLedger:
             if record.code == GAP_CODE:
                 self._lost += record.a
                 continue
-            self._events[record.code] += 1
+            self._events[key_of(record)] += 1
 
     def seal(
         self, *, producer_dead: bool, tail_drained: bool, absent: bool = False
@@ -803,6 +805,27 @@ class RunLedger:
             tail_drained=tail_drained,
             absent=absent,
         )
+
+
+# Which record word each code's totals are broken down by, derived from
+# the catalogue rather than restated: the fields' meaning has one owner,
+# and a second list here is what lets the ABI and the report disagree.
+_GROUP_WORD = {
+    event.code: event.group_index for event in events.EVENTS if event.code and event.group
+}
+
+
+def key_of(record: Record) -> tuple[int, int]:
+    """The dimension a record is counted under.
+
+    An event the catalogue gives no breakdown counts under its code
+    alone, which is the same key shape with the argument fixed at zero —
+    so a reader never has to ask which kind of key it is holding.
+    """
+    word = _GROUP_WORD.get(record.code)
+    if word is None:
+        return (record.code, 0)
+    return (record.code, (record.a, record.b, record.c)[word])
 
 
 def dropped_in(records: list[Record]) -> int:

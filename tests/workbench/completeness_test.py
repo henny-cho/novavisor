@@ -18,7 +18,7 @@ import time
 import unittest
 from unittest import mock
 
-from novakit.services.workbench import server, trace, trace_drain
+from novakit.services.workbench import events, server, trace, trace_drain
 from novakit.services.workbench.session import Deps, Prepared, Session, Target
 from tests.workbench.session_test import FakeLive, deps_for, scenario, store
 from tests.workbench.trace_test import BIND, Region
@@ -87,6 +87,57 @@ class LedgerTest(unittest.TestCase):
         totals = self.ledger().seal(producer_dead=True, tail_drained=False, absent=True)
         self.assertTrue(totals.absent)
         self.assertFalse(totals.complete)
+
+
+class CountingDimensionTest(unittest.TestCase):
+    """Which word a run's totals break an event down by, and who decides.
+
+    The catalogue does. A branch here naming "trap" and reading `a` would
+    keep answering after the catalogue moved the EC to another word, so
+    every expectation below is read out of the catalogue itself.
+    """
+
+    def record(self, code: int) -> trace.Record:
+        """Distinguishable words, so the wrong one cannot pass as the right one."""
+        return trace.Record(ts=1, code=code, cpu=0, a=11, b=22, c=33)
+
+    def test_the_word_counted_is_the_one_the_catalogue_names(self):
+        grouped = [event for event in events.EVENTS if event.code and event.group]
+        self.assertTrue(grouped, "no event declares a breakdown: the dimension is gone")
+        for event in grouped:
+            with self.subTest(event=event.id):
+                record = self.record(event.code)
+                expected = (record.a, record.b, record.c)[event.group_index]
+                self.assertEqual(trace.key_of(record), (event.code, expected))
+
+    def test_an_event_with_no_breakdown_counts_under_its_code_alone(self):
+        plain = next(event for event in events.EVENTS if event.code and not event.group)
+        self.assertEqual(trace.key_of(self.record(plain.code)), (plain.code, 0))
+
+    def test_the_breakdown_map_is_exactly_what_the_catalogue_declares(self):
+        self.assertEqual(
+            set(trace._GROUP_WORD),
+            {event.code for event in events.EVENTS if event.code and event.group},
+        )
+
+    def test_the_two_breakdowns_the_audit_asked_for_are_declared(self):
+        """A trap count is a number; a trap count per EC is a cause."""
+        self.assertEqual(events.BY_ID["trap"].group, "ec")
+        self.assertEqual(events.BY_ID["gic.ack"].group, "intid")
+
+    def test_one_code_with_two_argument_values_is_two_totals(self):
+        trap = events.BY_ID["trap"]
+        book = trace.RunLedger()
+        book.consume(
+            [
+                trace.Record(ts=1, code=trap.code, cpu=0, a=0x16, b=0, c=0),
+                trace.Record(ts=2, code=trap.code, cpu=0, a=0x16, b=0, c=0),
+                trace.Record(ts=3, code=trap.code, cpu=0, a=0x24, b=0, c=0),
+            ]
+        )
+        totals = book.seal(producer_dead=True, tail_drained=True)
+        self.assertEqual(totals.events, {(trap.code, 0x16): 2, (trap.code, 0x24): 1})
+        self.assertEqual(totals.as_dict()["events"], {f"{trap.code}:22": 2, f"{trap.code}:36": 1})
 
 
 class FlushHeldTest(unittest.TestCase):
