@@ -24,6 +24,7 @@ def run(
     capture: bool = False,
     check: bool = True,
     timeout: float | None = None,
+    stdin: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = [str(arg) for arg in argv]
     log(command)
@@ -35,6 +36,7 @@ def run(
         text=True,
         capture_output=capture,
         timeout=timeout,
+        input=stdin,
     )
 
 
