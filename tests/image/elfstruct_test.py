@@ -17,9 +17,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
+import tempfile
 import unittest
+from pathlib import Path
 
+from novakit.core import proc
 from novakit.image import elfstruct
+from novakit.services import ci
 from tests import REPO
 
 FIXTURE_SOURCE = REPO / "tests" / "fixtures" / "elf" / "callgraph.S"
@@ -166,6 +171,66 @@ class AgainstTheFixtureTest(unittest.TestCase):
         functions = elfstruct.analyse(BUILT).functions
         self.assertNotIn("fx_marker", functions)
         self.assertNotIn("fx_data", functions)
+
+
+# The runtime lane's own preset set is the single source of which images
+# ship; reading it here keeps this test from growing a second list.
+IMAGES = tuple(
+    (preset, REPO / "build" / preset / "novavisor.elf") for preset in ci.RUNTIME_PRESETS
+)
+FIELDS = ("roots", "functions", "edges", "indirect_sites", "reachable", "unproven")
+
+
+@unittest.skipUnless(importlib.util.find_spec("elftools"), "pyelftools is not installed")
+class AgainstTheShippedImagesTest(unittest.TestCase):
+    """The rules survive the images that ship, not only the fixture.
+
+    One subtest per preset, each skipped where that tree is not built, so
+    the host lane reports honestly and the runtime lane — which builds all
+    three — actually exercises them.
+    """
+
+    def test_every_shipped_image_answers_every_field(self):
+        for preset, elf in IMAGES:
+            with self.subTest(preset=preset):
+                if not elf.is_file():
+                    self.skipTest(f"{preset} not built")
+                report = elfstruct.analyse(elf).as_dict()
+                for field in FIELDS:
+                    self.assertIn(field, report)
+                self.assertTrue(report["functions"], "an image with no sized functions")
+                # Roots are derived, so an image whose chains went unfound
+                # would still report — and silently resolve almost nothing.
+                self.assertIn("_vector_table", report["roots"])
+                self.assertTrue(
+                    any(name.startswith("_Z") for name in report["roots"]),
+                    "no cib chain among the roots: the slot patterns stopped matching",
+                )
+                self.assertEqual(
+                    set(report["reachable"]) | set(report["unproven"]),
+                    set(report["functions"]),
+                    "every function is either reachable or unproven",
+                )
+
+    def test_the_same_image_answers_the_same_twice(self):
+        for preset, elf in IMAGES:
+            with self.subTest(preset=preset):
+                if not elf.is_file():
+                    self.skipTest(f"{preset} not built")
+                self.assertEqual(
+                    elfstruct.analyse(elf).as_dict(), elfstruct.analyse(elf).as_dict()
+                )
+
+    def test_a_stripped_image_is_refused_not_answered(self):
+        built = next((elf for _, elf in IMAGES if elf.is_file()), None)
+        if built is None:
+            self.skipTest("no image built")
+        with tempfile.TemporaryDirectory() as directory:
+            stripped = Path(directory) / "stripped.elf"
+            shutil.copy(built, stripped)
+            proc.run(["aarch64-none-elf-strip", "-s", str(stripped)])
+            with self.assertRaises(elfstruct.ContractViolation):
+                elfstruct.analyse(stripped)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from typing import Annotated
 
 import typer  # noqa: TID251 — typer stops at this layer
 
-from ..services import webperf
+from ..services import firmperf, webperf
 
 app = typer.Typer(
     help="Measure what the interfaces cost.",
@@ -27,6 +27,14 @@ Samples = Annotated[
 AsJson = Annotated[
     bool,
     typer.Option("--json", help="Print the measurement document instead of a table."),
+]
+Preset = Annotated[
+    str,
+    typer.Option("--preset", help="Built tree to read. Must already be configured."),
+]
+Rebuild = Annotated[
+    bool,
+    typer.Option("--rebuild", help="Build the preset first instead of reading what is there."),
 ]
 Check = Annotated[
     bool,
@@ -52,5 +60,26 @@ def web(samples: Samples = 21, as_json: AsJson = False, check: Check = False) ->
     apart, because a fix for one is not a fix for the other.
     """
     code = webperf.measure(samples=samples, as_json=as_json, check=check)
+    if code:
+        raise typer.Exit(code)
+
+
+@app.command()
+def firmware(
+    preset: Preset = "aarch64-release",
+    as_json: AsJson = False,
+    rebuild: Rebuild = False,
+) -> None:
+    """Report the built EL2 image's structure: size, edges, reachability.
+
+    Half of a cost. How often each path runs belongs to a run and arrives
+    beside this later as its own column — the two are never multiplied,
+    because a shared prefix would be counted twice and the instructions a
+    path executes depend on the branch it took.
+
+    `unproven` is not dead code. The static rules cannot follow an address
+    that was stored rather than branched to, so it names what to review.
+    """
+    code = firmperf.structure(preset, as_json=as_json, rebuild=rebuild)
     if code:
         raise typer.Exit(code)
