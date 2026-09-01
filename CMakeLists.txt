@@ -152,6 +152,11 @@ if(CMAKE_CROSSCOMPILING)
     include(cmake/nova_guest_project.cmake)
     add_subdirectory("${NOVA_PROJECT_DIR}" "${CMAKE_BINARY_DIR}/platform/project")
 
+    # Oracle fixture for the ELF structure analyser: a hand-written call
+    # graph the analyser is checked against. Cross-only — the host lane has
+    # no toolchain and skips the oracle case.
+    add_subdirectory(tests/fixtures/elf "${CMAKE_BINARY_DIR}/tests/fixtures/elf")
+
 else()
     # ===========================================================================
     # Host GTest suite (native build) — header-only utilities that depend

@@ -17,6 +17,7 @@
 #include "nova/arch/mpidr.h"
 
 .global _start
+.type   _start, @function
 .section .text.boot
 
 _start:
@@ -112,11 +113,13 @@ _start:
     adr x0, .Lmsg_not_boot_pe
     bl  boot_puts
     b   .Lhang
+.size _start, . - _start
 
 // x0 = NUL-terminated string. Clobbers x0-x4, x30. MMU state agnostic.
 // The TX-full wait counts iterations rather than time: this runs before
 // the boot contract adopts a timebase, and one of the failures it has to
 // report is that timebase being unusable.
+.type boot_puts, @function
 boot_puts:
     ldr x1, =NOVA_BOARD_UART0_BASE
     ldr w4, [x1, #NOVA_PL011_CR]
@@ -133,6 +136,7 @@ boot_puts:
 21: str  w2, [x1, #NOVA_PL011_DR]
     b    1b
 3:  ret
+.size boot_puts, . - boot_puts
 
 .section .rodata
 .Lmsg_not_el2:     .asciz "[boot] halt: not entered at EL2\n"
