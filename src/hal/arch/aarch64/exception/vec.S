@@ -34,6 +34,7 @@
 #include "nova/arch/trap_context_offsets.h"
 
 .global _vector_table
+.type   _vector_table, @function
 .section .text.vec, "ax", @progbits
 
 // ---------------------------------------------------------------------------
@@ -124,6 +125,7 @@ _vector_table:
     TRAP_ENTRY _handle_fatal_13       // +0x680 IRQ
     TRAP_ENTRY _handle_fatal_14       // +0x700 FIQ
     TRAP_ENTRY _handle_fatal_15       // +0x780 SError
+.size _vector_table, . - _vector_table
 
 // ---------------------------------------------------------------------------
 // _handle_lower_sync — Lower EL AArch64 synchronous exception
@@ -132,10 +134,12 @@ _vector_table:
 // INST_ABORT_LOWER.
 // ---------------------------------------------------------------------------
 
+.type _handle_lower_sync, @function
 _handle_lower_sync:
     TRAP_SAVE_CONTEXT               // x0 = TrapContext*
     bl el2_trap_lower_sync          // C++ handler (may advance ELR for HVC)
     b  _trap_restore_and_eret
+.size _handle_lower_sync, . - _handle_lower_sync
 
 // ---------------------------------------------------------------------------
 // _handle_lower_irq — physical IRQ taken from the guest (HCR_EL2.IMO=1)
@@ -143,10 +147,12 @@ _handle_lower_sync:
 // Acks the GIC, dispatches IrqService, EOIs, and returns to the guest.
 // ---------------------------------------------------------------------------
 
+.type _handle_lower_irq, @function
 _handle_lower_irq:
     TRAP_SAVE_CONTEXT               // x0 = TrapContext*
     bl el2_trap_irq                 // C++ handler (the core_gic component)
     b  _trap_restore_and_eret
+.size _handle_lower_irq, . - _handle_lower_irq
 
 // ---------------------------------------------------------------------------
 // _handle_fatal_<n> — every vector with no recovery path (EL2 self-traps,
@@ -157,11 +163,13 @@ _handle_lower_irq:
 // ---------------------------------------------------------------------------
 
 .macro TRAP_FATAL_BODY index
+    .type _handle_fatal_\index, @function
 _handle_fatal_\index:
     TRAP_SAVE_CONTEXT               // x0 = TrapContext*
     mov x1, #\index
     bl el2_trap_fatal               // C++ handler (claims panic, dumps, halts)
     b .
+    .size _handle_fatal_\index, . - _handle_fatal_\index
 .endm
 
     TRAP_FATAL_BODY 0
@@ -187,6 +195,7 @@ _handle_fatal_\index:
 // Note: ESR_EL2 and FAR_EL2 are read-only system registers; not restored.
 // ---------------------------------------------------------------------------
 
+.type _trap_restore_and_eret, @function
 _trap_restore_and_eret:
     // Restore ELR_EL2 and SPSR_EL2
     ldp x0, x1, [sp, #NOVA_CTX_OFF_ELR]
@@ -218,3 +227,4 @@ _trap_restore_and_eret:
     add sp, sp, #NOVA_TRAP_CTX_SIZE
 
     eret
+.size _trap_restore_and_eret, . - _trap_restore_and_eret

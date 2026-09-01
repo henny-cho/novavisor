@@ -1,0 +1,70 @@
+{
+  "_comment": [
+    "Hand-written expectation for callgraph.S — the analyser is checked",
+    "against this, never against its own output. Sizes are instruction",
+    "counts x 4 read off the fixture source; addresses are deliberately",
+    "absent so a layout change cannot invalidate the oracle.",
+    "",
+    "roots: e_entry (fx_entry), the vector table itself (hardware enters",
+    "it), and the branch targets of its slots.",
+    "unproven: fx_indirect_target is reached only through an address load",
+    "+ blr, and fx_orphan* by nothing at all. Neither is dead code —",
+    "unproven means the static rules could not prove reachability."
+  ],
+  "roots": [
+    "_vector_table",
+    "fx_entry",
+    "fx_slot_irq",
+    "fx_slot_sync"
+  ],
+  "functions": {
+    "_vector_table": 256,
+    "fx_direct": 8,
+    "fx_entry": 20,
+    "fx_from_sync": 4,
+    "fx_indirect_target": 4,
+    "fx_orphan": 8,
+    "fx_orphan_callee": 4,
+    "fx_slot_irq": 4,
+    "fx_slot_sync": 8,
+    "fx_tail_from_entry": 8,
+    "fx_tail_target": 4
+  },
+  "edges": {
+    "_vector_table": [
+      "fx_slot_irq",
+      "fx_slot_sync"
+    ],
+    "fx_entry": [
+      "fx_direct",
+      "fx_tail_from_entry"
+    ],
+    "fx_orphan": [
+      "fx_orphan_callee"
+    ],
+    "fx_slot_sync": [
+      "fx_from_sync"
+    ],
+    "fx_tail_from_entry": [
+      "fx_tail_target"
+    ]
+  },
+  "indirect_sites": {
+    "fx_entry": 1
+  },
+  "reachable": [
+    "_vector_table",
+    "fx_direct",
+    "fx_entry",
+    "fx_from_sync",
+    "fx_slot_irq",
+    "fx_slot_sync",
+    "fx_tail_from_entry",
+    "fx_tail_target"
+  ],
+  "unproven": [
+    "fx_indirect_target",
+    "fx_orphan",
+    "fx_orphan_callee"
+  ]
+}
