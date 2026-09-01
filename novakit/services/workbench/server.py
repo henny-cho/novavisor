@@ -119,6 +119,14 @@ class Bridge:
         self._ui_root = ui_root
         self._connections: set = set()
         self._tasks: set[asyncio.Task] = set()
+        # Kept out of _tasks: the general workers hold the session lock
+        # for a build or a verify, and cancelling them has to wait for
+        # that. The trace loop must outlive the stop instead, so the
+        # tail of a run is still there to drain.
+        self._trace_task: asyncio.Task | None = None
+        # Run ids already sealed. finalize_run is reached from three
+        # places that can race, and a run's totals are decided once.
+        self._sealed: dict[int, trace.RunTotals] = {}
         self._closing = False
         self._dispatcher = Dispatcher(
             HANDLERS,
@@ -229,7 +237,8 @@ class Bridge:
             # reading the firmware's rings over its shoulder.
             self.session.surfaces.port_path.write_text(str(self.port))
             self.spawn(self._poll_loop())
-            self.spawn(self._trace_loop())
+            self._trace_task = asyncio.create_task(self._trace_loop())
+            self.session.on_run_end = self.finalize_run
 
     @property
     def port(self) -> int:
@@ -274,7 +283,13 @@ class Bridge:
             self._server.close()
             await self._server.wait_closed()
         self._release()
+        # Before the trace loop is cancelled: stopping the machine is
+        # what fixes the ring heads, and session.stop() calls back into
+        # finalize_run to drain up to them. Cancelling first would close
+        # the reader on whatever the run last wrote.
         await self.session.stop()
+        if self._trace_task is not None:
+            self._trace_task.cancel()
         if self._recorder is not None:
             # After the session, so the last frames of a shutdown are in
             # the file the run is judged by.
@@ -285,6 +300,30 @@ class Bridge:
                 f"[workbench] recorded {len(written)} run(s) to {self._recorder.root} "
                 f"({total / 1e6:.1f} MB): {', '.join(run.name for run in written)}"
             )
+
+    def finalize_run(self, run: int, producer_dead: bool) -> trace.RunTotals:
+        """Seal one run's totals, once, whichever boundary got here first.
+
+        The three run boundaries — the bridge closing, a target being
+        replaced, and the machine exiting on its own — can arrive in any
+        order and more than once. The first caller drains the rings up to
+        the heads the dead writer left; the rest are handed what it found.
+        """
+        sealed = self._sealed.get(run)
+        if sealed is not None:
+            return sealed
+        totals = self._trace_service.drain_to_head(producer_dead)
+        self._sealed[run] = totals
+        self.store.publish(
+            Topic.LIFE,
+            Kind.EVENT,
+            {"phase": "run-sealed", "run_id": run, **totals.as_dict()},
+            # Not replayed: it describes a run whose records a late
+            # joiner never received. The recording still holds it — the
+            # recorder outlives the session by one step in close().
+            replay=False,
+        )
+        return totals
 
     def _live_state(self) -> dict:
         """Session truth a late joiner cannot recover from the backlog:

@@ -235,6 +235,10 @@ class Session:
         # Bumped on every RUNNING transition: snapshot readers key their
         # resolved state on it, since a rebuild moves symbols.
         self.run_id = 0
+        # Set by the bridge: what to tell when a run's writer is gone.
+        # Injected rather than imported so the session keeps knowing only
+        # about the machine it owns, and its answer is discarded here.
+        self.on_run_end: Callable[[int, bool], object] | None = None
 
     def regrade_paths(self, tracing: bool) -> None:
         """Republish the board with the paths this run can now witness.
@@ -327,6 +331,17 @@ class Session:
         out, since a replay adopts the world the run last published.
         """
         self._store.set_topology(self._store.topology | {"memory": captured})
+
+    def _end_run(self, run: int | None, producer_dead: bool) -> None:
+        """Announce that this run's writer is gone, once per run.
+
+        A run ends on three paths — the bridge closing, a target being
+        replaced, and the machine exiting on its own — and each has to
+        hand the same fact to whoever finalises the run. Idempotence is
+        the finaliser's; this only reports.
+        """
+        if run is not None and self.on_run_end is not None:
+            self.on_run_end(run, producer_dead)
 
     def _set_phase(self, phase: Phase, **data) -> None:
         self.phase = phase
@@ -481,7 +496,12 @@ class Session:
         for raw in self._assembler.feed(text.encode("utf-8")):
             self._ingest(raw)
 
-    async def stop(self) -> None:
+    async def stop(self) -> bool:
+        """Stop the machine and say whether it is confirmed gone.
+
+        The answer matters downstream: a reader can only drain a ring up
+        to a fixed head, and the heads stop moving when the writer does.
+        """
         child, self._verify_child = self._verify_child, None
         if child is not None:
             # A verify run holds the lock for its whole scenario; ending
@@ -489,15 +509,17 @@ class Session:
             # back now instead of at the scenario timeout.
             await asyncio.get_running_loop().run_in_executor(None, _kill, child)
         async with self._lock:
-            await self._stop_locked()
+            return await self._stop_locked()
 
-    async def _stop_locked(self) -> None:
+    async def _stop_locked(self) -> bool:
         if self._live is None:
-            return
+            return True  # nothing running: no writer to outlive the reader
+        run = self.run_id
         self._detach_reader()
         live, self._live = self._live, None
         # terminate() blocks on the child's demise; keep the loop alive.
         dead = await asyncio.get_running_loop().run_in_executor(None, live.terminate)
+        self._end_run(run, dead)
         if not dead:
             # A child that survived SIGKILL keeps its RAM backend pinned
             # in tmpfs; say so instead of pretending the slate is clean.
@@ -509,6 +531,7 @@ class Session:
             )
         self.paused = False
         self._set_phase(Phase.IDLE)
+        return dead
 
     def send_bytes(self, data: bytes) -> str | None:
         """Forward console input; the rejection reason is the reply."""
@@ -549,6 +572,9 @@ class Session:
                 # which sleeps inside this reader callback.
                 future = asyncio.get_running_loop().run_in_executor(None, live.terminate)
                 future.add_done_callback(lambda done: done.exception())
+            # A reaped exit code is the confirmation; a pty error with the
+            # child still alive is not, and the run seals as incomplete.
+            self._end_run(self.run_id, code is not None)
             self._set_phase(Phase.EXITED, code=code)
             return
         for raw in self._assembler.feed(chunk):
