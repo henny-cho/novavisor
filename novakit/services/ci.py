@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..core import actions, config, proc
-from . import cmake, gates, report, suite, tfa
+from . import cmake, firmperf, gates, report, suite, tfa
 from .workbench import checks
 
 RUNTIME_PRESETS = (
@@ -64,6 +64,12 @@ def _presets() -> int:
     return 0
 
 
+def _structure() -> int:
+    # After presets: the analyser reads the images that step builds, and
+    # its suite skips wherever they are absent.
+    return firmperf.gate()
+
+
 def _firmware_chain() -> int:
     tfa.build_profile("n1sdp")
     return tfa.verify_chain(build_only=False)
@@ -82,6 +88,7 @@ LANES = (
         "runtime",
         (
             ("presets", _presets),
+            ("structure", _structure),
             ("firmware", _firmware_chain),
             ("demos", _demos),
         ),
