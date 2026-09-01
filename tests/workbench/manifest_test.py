@@ -273,3 +273,20 @@ class StopCatalogueTest(unittest.TestCase):
     def test_ids_are_unique(self):
         ids = [event.id for event in events.EVENTS]
         self.assertEqual(len(set(ids)), len(ids))
+
+    def test_a_group_names_one_of_the_entry_s_own_fields(self):
+        for event in events.EVENTS:
+            with self.subTest(event=event.id):
+                if not event.group:
+                    self.assertEqual(event.group_index, -1)
+                    continue
+                self.assertEqual(event.fields[event.group_index], event.group)
+
+    def test_a_group_that_names_nothing_in_the_table_is_refused(self):
+        """At construction, not at the first record it miscounts."""
+        with self.assertRaises(ValueError):
+            events.Event("x", "sym", fields=("ec", "esr", "far"), group="intid")
+
+    def test_a_packed_word_cannot_be_grouped_by(self):
+        with self.assertRaises(ValueError):
+            events.Event("x", "sym", fields=("slot", "vintid|lr", ""), group="vintid|lr")
