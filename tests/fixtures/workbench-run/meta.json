@@ -1,10 +1,13 @@
 {
-  "v": 4,
+  "v": 5,
   "started": "2026-08-07T14:14:02+00:00",
   "complete": true,
   "demo": "10_console_mux",
   "variant": null,
   "board": "qemu_virt",
   "freq_hz": 62500000,
-  "run_id": 1
+  "run_id": 1,
+  "producer_dead": false,
+  "tail_drained": false,
+  "absent": false
 }

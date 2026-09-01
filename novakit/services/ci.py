@@ -70,6 +70,29 @@ def _structure() -> int:
     return firmperf.gate()
 
 
+# The demo one measurement is taken of. Short and single-guest, because
+# what this step proves is that a machine writes what the report reads —
+# not anything about the workload, which the demos step already runs.
+MEASURED_DEMO = "01_hello"
+
+
+def _measurement() -> int:
+    """One real run through the whole report, and the same answer twice.
+
+    The unit tests build recordings by hand, so they can only show the
+    rules hold for what they wrote. Whether a machine actually records
+    what those rules assume needs a machine, which is this lane.
+    """
+    preset = firmperf.demo_preset(MEASURED_DEMO)
+    into = cmake.preset_dir(preset) / "measurements" / MEASURED_DEMO
+    shutil.rmtree(into, ignore_errors=True)  # the lane's own scratch
+    firmperf.measure(MEASURED_DEMO, runs=2)
+    firmperf.structure(preset, recorded=into)
+    if firmperf.report(preset, recorded=into) != firmperf.report(preset, recorded=into):
+        raise SystemExit("[ci] the same recording reported differently twice")
+    return 0
+
+
 def _firmware_chain() -> int:
     tfa.build_profile("n1sdp")
     return tfa.verify_chain(build_only=False)
@@ -89,6 +112,7 @@ LANES = (
         (
             ("presets", _presets),
             ("structure", _structure),
+            ("measurement", _measurement),
             ("firmware", _firmware_chain),
             ("demos", _demos),
         ),

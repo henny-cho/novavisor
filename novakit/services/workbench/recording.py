@@ -9,7 +9,8 @@ One directory per run, numbered in the order they were recorded:
 
     DIR/
       run-1/
-        meta.json   what this is: version, demo, clock, board, complete
+        meta.json   what this is: version, demo, clock, board, and how
+                    both the file and the run's trace ended
         wire.jsonl  one envelope per line, in publish order
         trace.bin   drained records, arrival order, gap records included
 
@@ -40,7 +41,12 @@ from .protocol import Topic
 # 4: a verify frame carries the step's kind and subject in place of the
 #    pattern it used to assume, so a replayed run describes steps that
 #    are not console patterns.
-VERSION = 4
+# 5: meta carries how the run's trace ended and the topology names the
+#    image by content, so a run's totals can be re-derived and refused
+#    when they belong to a different build. A version 4 file can answer
+#    neither, and a report that guessed at both would be a wrong table
+#    rather than a missing one.
+VERSION = 5
 META = "meta.json"
 WIRE = "wire.jsonl"
 RECORDS = "trace.bin"
@@ -176,9 +182,12 @@ class Recorder:
     def _write_meta(self, *, complete: bool) -> dict:
         """Write what this recording is, as of now.
 
-        `complete` is the only fact the two data files cannot answer: a
-        killed run looks exactly like a finished one minus its last line.
-        False until close() rewrites it.
+        `complete` is about the file, not the run: a killed one looks
+        exactly like a finished one minus its last line, and False until
+        close() rewrites it. Whether the *trace* is whole is a separate
+        question with its own fields, written by whoever seals the run —
+        overlapping the two would make a truncated file indistinguishable
+        from a lapped ring.
         """
         meta = {
             "v": VERSION,
@@ -287,6 +296,31 @@ class Recording:
         fill(self, "topics", _topics_of(self.frames))
         fill(self, "drains", _drains_of(self.frames))
 
+    @property
+    def image(self) -> str:
+        """The build this run was of, by content, or "" if it never said.
+
+        Read off the last topology, the same frame a replay adopts, so
+        the identity and the world it describes cannot come apart.
+        """
+        for frame in reversed(self.frames):
+            if frame.get("topic") == TOPO:
+                return (frame.get("data") or {}).get("image") or ""
+        return ""
+
+    def totals(self) -> trace.RunTotals:
+        """What this run's records add up to, re-derived on every read.
+
+        The file stores none of this. It stores only what the records
+        cannot answer about themselves — whether the writer was
+        confirmed gone, whether the reader reached its heads, whether
+        there was a ring at all — and the counts follow from the stream,
+        so there is nothing saved that can disagree with it.
+        """
+        book = trace.RunLedger()
+        book.consume(self.records)
+        return book.seal(**{name: bool(self.meta.get(name)) for name in trace.RunTotals.RAW})
+
     def wire_ts(self, cntpct: int) -> int:
         """When the bridge learned of a record stamped `cntpct`.
 
@@ -349,6 +383,29 @@ def _run_index(directory: Path) -> tuple[int, str]:
     return (int(suffix), "") if suffix.isdigit() else (-1, directory.name)
 
 
+def load_all(directory: Path) -> list[Recording]:
+    """Every run under a `--record` directory, in the order recorded.
+
+    A measurement repeats a demo to see the spread, so the runs are read
+    as a set. A directory that is itself one run reads as a set of one,
+    which is what lets a caller hand over either.
+
+    Ordered by the number the recorder assigned, not by mtime: a
+    recording is a thing people copy, and a copy re-stamps every mtime
+    in whatever order the directory was walked.
+    """
+    directory = Path(directory)
+    if (directory / META).is_file():
+        return [load(directory)]
+    runs = sorted(
+        (child for child in directory.glob("run-*") if (child / META).is_file()),
+        key=_run_index,
+    )
+    if not runs:
+        raise Unreadable(f"{directory} holds no {META}")
+    return [load(run) for run in runs]
+
+
 def load(directory: Path) -> Recording:
     """Read a recording whole, in the order it was written.
 
@@ -361,18 +418,9 @@ def load(directory: Path) -> Recording:
     meta_path = directory / META
     if not meta_path.is_file():
         # A `--record` directory holds one subdirectory per run, so what
-        # a reader has in hand is as often the root as a single run.
-        #
-        # Ordered by the number the recorder assigned, not by mtime: a
-        # recording is a thing people copy, and a copy re-stamps every
-        # mtime in whatever order the directory was walked.
-        runs = sorted(
-            (child for child in directory.glob("run-*") if (child / META).is_file()),
-            key=_run_index,
-        )
-        if runs:
-            return load(runs[-1])
-        raise Unreadable(f"{directory} holds no {META}")
+        # a reader has in hand is as often the root as a single run. The
+        # newest is the one a replay wants.
+        return load_all(directory)[-1]
     try:
         meta = json.loads(meta_path.read_text())
     except json.JSONDecodeError as error:

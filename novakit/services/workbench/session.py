@@ -104,16 +104,14 @@ def image_capability(view: observe.View | None, tracing: bool = False) -> set[st
     return events.observable(None if view is None else view.symbols, tracing)
 
 
-def initial_topology() -> dict:
-    """What a client sees before any target runs: the pickable world.
+def _world(view: observe.View | None, elf: Path | None) -> dict:
+    """What every topology says regardless of which target is running.
 
-    The board map rides along, so the hardware picture is drawable
-    before anything boots — it describes the machine, not the run.
+    One place, because these are answers about the machine and the
+    image rather than about the run, and two copies of them would let a
+    pre-run world and a running one describe different hardware.
     """
-    view = image_answers()
     return {
-        "demo": None,
-        "guests": [],
         "board": hardware.board_map(direct=image_capability(view)),
         "catalog": _catalog(),
         "stops": events.catalogue(),
@@ -121,6 +119,24 @@ def initial_topology() -> dict:
         "timer_slots": timer_slot_labels(),
         "observations": observation_rates(),
         "limits": {"buckets": MAX_BUCKETS},
+        # Which build this is, by content. A report joining a run's
+        # counts to an image's structure has to be able to refuse two
+        # different images, and a path cannot tell them apart: a rebuild
+        # writes the same one.
+        "image": observe.image_id(elf) if elf is not None and elf.is_file() else "",
+    }
+
+
+def initial_topology() -> dict:
+    """What a client sees before any target runs: the pickable world.
+
+    The board map rides along, so the hardware picture is drawable
+    before anything boots — it describes the machine, not the run.
+    """
+    return {
+        "demo": None,
+        "guests": [],
+        **_world(image_answers(), cmake.default_image()),
     }
 
 
@@ -142,7 +158,8 @@ def prepare(target: Target) -> Prepared:
     scenario = artifacts.scenario_for(name, demo_manifest, variant)
     # After the build, so what the image can show is read from the image
     # this run will use rather than from whatever preceded it.
-    view = image_answers()
+    elf = Path(scenario.elf) if scenario.elf else cmake.default_image()
+    view = image_answers(elf)
     topology = {
         "demo": name,
         "variant": target.variant,
@@ -160,13 +177,7 @@ def prepare(target: Target) -> Prepared:
             }
             for guest in demo_manifest.get("guests", [])
         ],
-        "board": hardware.board_map(direct=image_capability(view)),
-        "catalog": _catalog(),
-        "stops": events.catalogue(),
-        "taxonomy": vocabulary() | derive.syndrome_vocabulary(view),
-        "timer_slots": timer_slot_labels(),
-        "observations": observation_rates(),
-        "limits": {"buckets": MAX_BUCKETS},
+        **_world(view, elf),
     }
     return Prepared(scenario, topology)
 
