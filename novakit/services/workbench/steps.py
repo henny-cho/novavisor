@@ -170,11 +170,11 @@ class Machine:
                 close()
 
 
-# A surface that is not ready yet, as against one that is wrong: all of
-# these mean "look again", and a step failing on one would be failing on
-# the boot it is there to wait through. One tuple, because two handlers
-# spelling it differently ended a run at 0.1s that the other waited out.
-NOT_YET = (FileNotFoundError, observe.Stale, snapshot.NotPublishedYet, elfsym.TornRead)
+# Not ready yet, as against wrong: these mean "look again", and one tuple
+# because two handlers spelling it differently ended a run at 0.1s the
+# other waited out. observe.Stale is wrong, not early — all of them say
+# "rebuild" — so polling it only delayed the same answer by the wait.
+NOT_YET = (FileNotFoundError, snapshot.NotPublishedYet, elfsym.TornRead)
 
 
 def _at(fields: dict, name: str) -> object:

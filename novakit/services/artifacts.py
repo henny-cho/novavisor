@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from ..core import board, config, proc
+from ..image import observe
 from ..image.payload import make_record
 from . import cmake, expect
 from . import manifest as manifests
@@ -143,10 +144,15 @@ def scenario_for(
         payloads_path=payloads,
     ))
     if elf_snapshot is not None:
-        # A soak rebuilds between attempts; the snapshot keeps the exact
-        # image an attempt ran so the evidence matches the failure.
+        # The snapshot keeps the exact image an attempt ran, so evidence
+        # matches the failure. The observation view goes with it: it is
+        # found by name beside the ELF, and no observe or walk step can
+        # read an image that arrived without one.
         elf_snapshot.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(elf, elf_snapshot)
+        view = observe.artifact_of(elf)
+        if view.is_file():
+            shutil.copy2(view, observe.artifact_of(elf_snapshot))
         elf = elf_snapshot
 
     return expect.Scenario(
