@@ -27,6 +27,8 @@ function(nova_add_guest_project)
     else()
         set(nova_dtb_psci_flag "--no-psci")
     endif()
+    nova_cpu_profile_field(runtime "${NOVA_CPU_RUNTIME_PROFILE}" presented_identity
+                           nova_cpu_presented_identity)
     nova_python_module(nova_dtb_command image.dtb)
     add_custom_command(
         OUTPUT ${guest_dtb_dir}/guest_dtbs.S
@@ -35,6 +37,7 @@ function(nova_add_guest_project)
                 ${guest_config_file}
                 -o ${guest_dtb_dir}
                 --board-layout ${NOVA_BOARD_INCLUDE_DIR}/hal/board/active/board_layout.h
+                --cpu-compatible ${nova_cpu_presented_identity}
                 --inventory ${NOVA_BOARD_DIR}/device_inventory.yml
                 --payloads ${guest_payload_file}
                 --depfile ${guest_dtb_dir}/guest_dtbs.S.d
@@ -115,6 +118,8 @@ function(nova_add_guest_project)
         COMMAND ${nova_observe_command}
                 --elf $<TARGET_FILE:novavisor.elf>
                 --out ${observe_view}
+                --build-cpu ${NOVA_CPU_BUILD_PROFILE}
+                --runtime-cpu ${NOVA_CPU_RUNTIME_PROFILE}
                 --depfile ${observe_view}.d
         DEPENDS novavisor.elf
         DEPFILE ${observe_view}.d

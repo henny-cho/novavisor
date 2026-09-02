@@ -20,9 +20,10 @@ import hashlib
 import json
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from ..core import cpu_profiles
 from . import elfsym, inputs
 
 
@@ -137,6 +138,11 @@ class View:
     addresses: dict[str, int] = field(default_factory=dict)
     # Enumerator names by the enum's qualified name, then by value.
     enums: dict[str, dict[int, str]] = field(default_factory=dict)
+    # Which CPU pairing configure settled on. It rides the view because
+    # the view is already bound to the image by content hash; a sidecar
+    # of its own could end up describing a different build.
+    build_cpu: str = ""
+    runtime_cpu: str = ""
 
     @property
     def absent(self) -> tuple[str, ...]:
@@ -234,7 +240,7 @@ def _prove(want: Want, entry: elfsym.ResolvedSymbol) -> None:
 
 # What the reader below speaks. Bumped when the document's shape changes;
 # an older reader refuses rather than interpreting a shape it predates.
-FORMAT = 1
+FORMAT = 2
 
 
 class Stale(Exception):
@@ -285,6 +291,8 @@ def dumps(view: View, elf: Path) -> str:
                 for name, labels in view.enums.items()
             },
             "symbols": {name: list(extent) for name, extent in view.symbols.entries.items()},
+            "build_cpu": view.build_cpu,
+            "runtime_cpu": view.runtime_cpu,
         },
         separators=(",", ":"),
     )
@@ -342,6 +350,8 @@ def _view_of(document: dict) -> View:
             name: {int(value): label for value, label in labels.items()}
             for name, labels in document["enums"].items()
         },
+        document["build_cpu"],
+        document["runtime_cpu"],
     )
 
 
@@ -416,7 +426,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--elf", required=True, type=Path, help="the linked image to resolve against")
     parser.add_argument("--out", required=True, type=Path, help="where to write the view")
     parser.add_argument("--depfile", type=Path, help="where to write what this read")
+    # The pairing configure settled on, so the view is the one place a
+    # consumer asks what an image was built for and what runs it.
+    parser.add_argument("--build-cpu", required=True, help="build CPU profile name")
+    parser.add_argument("--runtime-cpu", required=True, help="runtime CPU profile name")
     args = parser.parse_args(argv)
+
+    try:
+        cpu_profiles.require_compatible(
+            cpu_profiles.build_profile(args.build_cpu),
+            cpu_profiles.runtime_profile(args.runtime_cpu),
+        )
+    except (cpu_profiles.UnknownProfile, cpu_profiles.Incompatible) as refusal:
+        print(f"[observe] {refusal.args[0]}", file=sys.stderr)
+        return 1
 
     try:
         view = resolve(args.elf)
@@ -430,6 +453,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    view = replace(view, build_cpu=args.build_cpu, runtime_cpu=args.runtime_cpu)
     args.out.write_text(dumps(view, args.elf))
     if args.depfile is not None:
         args.depfile.write_text(inputs.depfile(args.out))

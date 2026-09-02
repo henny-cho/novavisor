@@ -41,7 +41,6 @@
 #define NOVA_BOARD_PRISTINE_SIZE 0x06F00000 /* up to the guest windows */
 
 /* Guest CPU node exposed by the generated DT. */
-#define NOVA_BOARD_GUEST_CPU_COMPATIBLE "arm,cortex-a57"
 
 #define NOVA_BOARD_SMP_CPUS       2
 #define NOVA_BOARD_BOOT_MPIDR     0x0

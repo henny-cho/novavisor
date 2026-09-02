@@ -147,6 +147,14 @@ class ScenarioHarness(unittest.TestCase):
 
 
 class DemoRunnerVerificationTest(ScenarioHarness):
+    def setUp(self):
+        super().setUp()
+        # These cases compose a command from a manifest, with no built
+        # image behind the path. Which CPU runs it is read from the
+        # image's own view and proven where that view is written.
+        self.enterContext(
+            mock.patch.object(artifacts, "runtime_cpu", return_value="cortex-a57"))
+
     def verify(self, child, steps, timeout=10):
         return expect.observe_output(
             child,

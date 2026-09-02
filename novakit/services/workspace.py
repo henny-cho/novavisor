@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..core import board, proc
-from . import cmake
+from . import artifacts, cmake
 from .workbench import checks
 
 INSPECTORS: dict[str, Callable[[Path], list[str]]] = {
@@ -33,7 +33,7 @@ def clean() -> int:
 
 def run(spec: cmake.BuildSpec, *, debug: bool = False) -> int:
     elf = cmake.resolve_elf(spec, rebuild=True)
-    command = board.command(kernel=elf)
+    command = board.command(kernel=elf, cpu_model=artifacts.runtime_cpu(elf))
     if debug:
         command += ["-s", "-S"]
         print("==> Launching QEMU with GDB stub on :1234 (CPU halted).")

@@ -120,6 +120,12 @@ class RoundTripTest(unittest.TestCase):
                 observe.load(self.artifact, self.elf)
 
 
+# The generator records which CPU pairing configure settled on, so
+# every invocation here states one. The default board's is enough: what
+# these cases are about is the walk, not the pairing.
+CPU_PAIR = ("--build-cpu", "a57-baseline", "--runtime-cpu", "a57")
+
+
 @unittest.skipUnless(ELF.is_file(), "debug ELF not built")
 @unittest.skipUnless(importlib.util.find_spec("elftools"), "pyelftools is not installed")
 class AgainstTheImageTest(unittest.TestCase):
@@ -137,7 +143,8 @@ class AgainstTheImageTest(unittest.TestCase):
             out = Path(directory) / "novavisor.observe.json"
             depfile = Path(directory) / "novavisor.observe.json.d"
             code = observe.main(
-                ["--elf", str(ELF), "--out", str(out), "--depfile", str(depfile)]
+                ["--elf", str(ELF), "--out", str(out), "--depfile", str(depfile),
+                 *CPU_PAIR]
             )
             self.assertEqual(code, 0)
             self.assertEqual(observe.load(out, ELF).enums, shared_image.view().enums)
@@ -158,7 +165,7 @@ class AgainstTheImageTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory) / "novavisor.observe.json"
             with mock.patch.object(observe, "OBSERVED", asked):
-                self.assertEqual(observe.main(["--elf", str(ELF), "--out", str(out)]), 0)
+                self.assertEqual(observe.main(["--elf", str(ELF), "--out", str(out), *CPU_PAIR]), 0)
                 view = observe.load(out, ELF)
                 # Absence is relative to the manifest in force, so it is
                 # read where that manifest is.
@@ -176,7 +183,7 @@ class AgainstTheImageTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory) / "novavisor.observe.json"
             with mock.patch.object(observe, "OBSERVED", asked):
-                self.assertEqual(observe.main(["--elf", str(ELF), "--out", str(out)]), 1)
+                self.assertEqual(observe.main(["--elf", str(ELF), "--out", str(out), *CPU_PAIR]), 1)
             self.assertFalse(out.exists(), "a refused resolve left a view behind")
 
     def test_every_enum_the_ui_speaks_is_in_the_view(self):

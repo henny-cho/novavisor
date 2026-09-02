@@ -12,11 +12,12 @@ from collections.abc import Sequence
 from pathlib import Path
 
 QEMU = os.environ.get("NOVA_QEMU", "qemu-system-aarch64")
+# The CPU is not here: which core a run presents belongs to the image
+# that will run on it, and a default would be the one thing able to
+# disagree with what the compiler emitted.
 MACHINE_ARGS = (
     "-machine",
     "virt,virtualization=on,gic-version=3,iommu=smmuv3,highmem-ecam=off",
-    "-cpu",
-    "cortex-a57",
     "-smp",
     "2",
     "-nographic",
@@ -29,14 +30,20 @@ MACHINE_ARGS = (
 
 def command(
     *,
+    cpu_model: str,
     kernel: Path | None = None,
     bios: Path | None = None,
     secure: bool = False,
 ) -> list[str]:
+    """One QEMU command line. `cpu_model` comes from the image's own view.
+
+    Required rather than defaulted: a default is what let a build tuned
+    for one core be executed on another with nothing to notice.
+    """
     args = list(MACHINE_ARGS)
     if secure:
         args[1] = f"{args[1]},secure=on"
-    argv = [QEMU, *args]
+    argv = [QEMU, *args, "-cpu", cpu_model]
     if kernel is not None:
         argv += ["-kernel", str(kernel)]
     if bios is not None:

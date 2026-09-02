@@ -53,8 +53,8 @@ class DevicePolicyTest(unittest.TestCase):
         inventory, guests, assigned = self.load()
         self.assertEqual(guests[0]["devices"], [])
         self.assertEqual(len(guests[1]["devices"]), 1)
-        self.assertNotIn(b"qemu,edu\0", dtb.build_guest_dtb(guests[0], self.layout))
-        owner_blob = dtb.build_guest_dtb(guests[1], self.layout)
+        self.assertNotIn(b"qemu,edu\0", dtb.build_guest_dtb(guests[0], self.layout, "arm,cortex-a57"))
+        owner_blob = dtb.build_guest_dtb(guests[1], self.layout, "arm,cortex-a57")
         self.assertIn(b"qemu,edu\0", owner_blob)
         self.assertIn(b"nova,dma-window\0", owner_blob)
 
