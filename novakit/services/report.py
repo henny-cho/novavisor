@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from ..core import actions, board, config, proc
+from . import artifacts
 from .expect import FailureKind, RepeatAttempt, VerificationResult
 
 
@@ -181,10 +182,23 @@ class Evidence:
             shutil.copy2(src, dest)
             self.collected.append(dest)
 
+    def keep_image(self, elf: Path, rename: str | None = None) -> None:
+        """An image, meaning the ELF and whatever answers for it.
+
+        What that includes is `artifacts.copy_image`'s to decide; this
+        only registers what it produced. Restating the policy here is
+        how a snapshot and an evidence bundle come to hold different
+        ideas of what an image is.
+        """
+        if elf.is_file():
+            self.collected.extend(
+                artifacts.copy_image(elf, self.root / (rename or elf.name)))
+
     def keep_preset(self, preset: str) -> None:
         """The inputs and output of one build preset, tagged with its name."""
         preset_dir = config.BUILD_ROOT / preset
-        for name in ("novavisor.elf", "active_config.yml", "active_payloads.yml"):
+        self.keep_image(preset_dir / "novavisor.elf", f"{preset}-novavisor.elf")
+        for name in ("active_config.yml", "active_payloads.yml"):
             self.keep(preset_dir / name, f"{preset}-{name}")
         for dtb in sorted((preset_dir / "guest_dtb").glob("*.dtb")):
             self.keep(dtb, f"{preset}-{dtb.name}")
@@ -210,7 +224,7 @@ def collect_evidence(
     """Everything one demo's failure investigation needs, next to its tails."""
     evidence = Evidence(artifacts)
     for index, snapshot in enumerate(elf_snapshots, start=1):
-        evidence.keep(snapshot, f"variant-{index}-novavisor.elf")
+        evidence.keep_image(snapshot, f"variant-{index}-novavisor.elf")
     preset_dir = config.BUILD_ROOT / config.HV_PRESET
     evidence.keep(preset_dir / "active_config.yml")
     evidence.keep(preset_dir / "active_payloads.yml")
