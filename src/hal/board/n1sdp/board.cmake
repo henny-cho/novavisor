@@ -1,5 +1,6 @@
 set(NOVA_BOARD_ARCH "aarch64")
-set(NOVA_BOARD_REQUIRED_CPU "neoverse-n1")
+set(NOVA_BOARD_BUILD_CPU_PROFILE "n1-tuned")
+set(NOVA_BOARD_RUNTIME_CPU_PROFILE "n1")
 set(NOVA_BOARD_CAPABILITIES
     gicv3
     smmuv3

@@ -4,7 +4,8 @@
 # qemu_virt profile runs, but exercises the firmware handoff contract
 # (EL2 entry state, PSCI SMC conduit served by BL31).
 set(NOVA_BOARD_ARCH "aarch64")
-set(NOVA_BOARD_REQUIRED_CPU "cortex-a57")
+set(NOVA_BOARD_BUILD_CPU_PROFILE "a57-baseline")
+set(NOVA_BOARD_RUNTIME_CPU_PROFILE "a57")
 set(NOVA_BOARD_CAPABILITIES
     gicv3
     smmuv3

@@ -228,7 +228,8 @@ class PlatformContractTests(unittest.TestCase):
         )
         (self.board / "board.cmake").write_text(
             'set(NOVA_BOARD_ARCH "test_arch")\n'
-            'set(NOVA_BOARD_REQUIRED_CPU "test_cpu")\n'
+            'set(NOVA_BOARD_BUILD_CPU_PROFILE "a57-baseline")\n'
+            'set(NOVA_BOARD_RUNTIME_CPU_PROFILE "a57")\n'
             "set(NOVA_BOARD_CAPABILITIES gicv3 smmuv3 dma)\n"
         )
         (self.board / "device_inventory.yml").write_text("devices: []\n")
