@@ -29,21 +29,23 @@ find_program(CMAKE_NM aarch64-none-elf-nm HINTS "${TOOLCHAIN_BIN_DIR}" REQUIRED)
 # -f{function,data}-sections gives --gc-sections per-symbol granularity;
 # linker.ld keeps mandatory sections via KEEP(.text.boot/.text.vec) and
 # matches the split names with *(.text*)/*(.data*) wildcards.
-# -mcpu must name the selected board's core: a toolchain default could
-# silently compile a new board with the previous board's ISA. The board
-# manifest is the single source — read it here (the toolchain file runs
-# before the project, so NOVA_BOARD_REQUIRED_CPU is not yet in scope) and
-# let an explicit -DNOVA_BOARD_CPU override for experiments.
-list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES NOVA_BOARD NOVA_BOARD_CPU)
-if(NOT DEFINED NOVA_BOARD_CPU AND DEFINED NOVA_BOARD)
+# -mcpu names a build profile's core, never a free string: a toolchain
+# default could silently compile a new board with the previous board's
+# ISA, and an arbitrary override could emit instructions the running CPU
+# lacks. The board manifest picks a profile and the profile owns the
+# flag — read here because the toolchain file runs before the project.
+list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES NOVA_BOARD NOVA_CPU_BUILD_PROFILE)
+include("${CMAKE_CURRENT_LIST_DIR}/nova_cpu_profiles.cmake")
+if(NOT DEFINED NOVA_CPU_BUILD_PROFILE AND DEFINED NOVA_BOARD)
     include("${CMAKE_CURRENT_LIST_DIR}/../src/hal/board/${NOVA_BOARD}/board.cmake" OPTIONAL)
-    set(NOVA_BOARD_CPU "${NOVA_BOARD_REQUIRED_CPU}")
+    set(NOVA_CPU_BUILD_PROFILE "${NOVA_BOARD_BUILD_CPU_PROFILE}")
 endif()
-if(NOT NOVA_BOARD_CPU MATCHES "^[A-Za-z0-9_.+-]+$")
-    message(FATAL_ERROR "NOVA_BOARD_CPU could not be resolved for board '${NOVA_BOARD}'")
+if(NOT NOVA_CPU_BUILD_PROFILE)
+    message(FATAL_ERROR "No build CPU profile for board '${NOVA_BOARD}'")
 endif()
+nova_cpu_profile_field(build "${NOVA_CPU_BUILD_PROFILE}" mcpu NOVA_CPU_MCPU)
 
-set(COMMON_FLAGS "-mcpu=${NOVA_BOARD_CPU} -mstrict-align -ffunction-sections -fdata-sections")
+set(COMMON_FLAGS "-mcpu=${NOVA_CPU_MCPU} -mstrict-align -ffunction-sections -fdata-sections")
 
 set(CMAKE_C_FLAGS_INIT   "${COMMON_FLAGS}")
 set(CMAKE_CXX_FLAGS_INIT "${COMMON_FLAGS}")

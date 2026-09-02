@@ -1,0 +1,25 @@
+{
+  "_comment": "Which instruction set the compiler may emit, and which one the CPU underneath provides. Tooling data, not a firmware ABI: CMake reads it with string(JSON) and Python with json, so neither side needs a parser for the other's syntax. Capabilities are codegen contract tokens rather than CPU names, because a build is compatible with a runtime when the runtime provides everything the build requires - an inclusion, which a name comparison cannot express.",
+  "build": {
+    "a57-baseline": {
+      "mcpu": "cortex-a57",
+      "requires": ["cortex-a57-codegen"]
+    },
+    "n1-tuned": {
+      "mcpu": "neoverse-n1",
+      "requires": ["cortex-a57-codegen", "neoverse-n1-codegen"]
+    }
+  },
+  "runtime": {
+    "a57": {
+      "qemu": "cortex-a57",
+      "provides": ["cortex-a57-codegen"],
+      "presented_identity": "arm,cortex-a57"
+    },
+    "n1": {
+      "qemu": "neoverse-n1",
+      "provides": ["cortex-a57-codegen", "neoverse-n1-codegen"],
+      "presented_identity": "arm,neoverse-n1"
+    }
+  }
+}

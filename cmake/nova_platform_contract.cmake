@@ -1,5 +1,9 @@
 # Build-time contract for selectable architecture, board, and project profiles.
 
+# Included here rather than left to the caller: this file calls into it, and
+# a load order that happens to work is not a contract.
+include("${CMAKE_CURRENT_LIST_DIR}/nova_cpu_profiles.cmake")
+
 function(nova_validate_selection_paths)
     foreach(kind IN ITEMS ARCH BOARD PROJECT)
         if(NOT EXISTS "${NOVA_${kind}_DIR}/CMakeLists.txt")
@@ -20,7 +24,8 @@ endfunction()
 function(nova_validate_platform_manifest)
     foreach(variable IN ITEMS
             NOVA_BOARD_ARCH
-            NOVA_BOARD_REQUIRED_CPU
+            NOVA_BOARD_BUILD_CPU_PROFILE
+            NOVA_BOARD_RUNTIME_CPU_PROFILE
             NOVA_PROJECT_ARCH
             NOVA_PROJECT_BOARD)
         if(NOT DEFINED ${variable} OR "${${variable}}" STREQUAL "")
@@ -36,6 +41,9 @@ function(nova_validate_platform_manifest)
         message(FATAL_ERROR
             "Project '${NOVA_PROJECT}' requires arch=${NOVA_PROJECT_ARCH}, board=${NOVA_PROJECT_BOARD}")
     endif()
+    nova_resolve_cpu_profiles()
+    nova_validate_cpu_profiles("${NOVA_CPU_BUILD_PROFILE}" "${NOVA_CPU_RUNTIME_PROFILE}")
+
     if(NOT NOVA_COMPONENTS)
         message(FATAL_ERROR "Project '${NOVA_PROJECT}' selected no components")
     endif()
