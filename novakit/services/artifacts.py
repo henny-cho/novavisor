@@ -12,7 +12,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from ..core import board, config, proc
+from ..core import board, config, cpu_profiles, proc
 from ..image import observe
 from ..image.payload import make_record
 from . import cmake, expect
@@ -108,7 +108,7 @@ def build_qemu_cmd(
     variant: dict | None = None,
 ) -> list[str]:
     manifests.validate(demo_name, manifest)
-    cmd = board.command(kernel=elf)
+    cmd = board.command(kernel=elf, cpu_model=runtime_cpu(elf))
     for device in manifests.manifest_devices(manifest, variant or {}):
         cmd += ["-device", device]
     if manifests.payload_mode(manifest) == "embedded":
@@ -118,6 +118,17 @@ def build_qemu_cmd(
         binary = resolve_guest_binary(demo_name, demo_build, guest)
         cmd += ["-device", f"loader,file={binary},addr={guest['load_addr']:#x},force-raw=on"]
     return cmd
+
+
+def runtime_cpu(elf: Path) -> str:
+    """The QEMU CPU model this image was configured to run on.
+
+    Read from the image's own view rather than defaulted: the view is
+    bound to the image by content hash, so it cannot name the CPU of a
+    different build. A missing or stale view fails here by name instead
+    of silently falling back to the baseline core.
+    """
+    return cpu_profiles.runtime_profile(observe.view_of(elf).runtime_cpu).qemu
 
 
 def copy_image(source: Path, destination: Path) -> tuple[Path, ...]:

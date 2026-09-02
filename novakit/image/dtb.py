@@ -67,8 +67,6 @@ def read_layout(path: Path, board_layout: Path) -> dict[str, int | str]:
             "NOVA_BOARD_SMMU_EVENT_INTID", "NOVA_BOARD_SMMU_CMD_INTID",
             "NOVA_BOARD_SMMU_ERROR_INTID",
         ])
-        values["NOVA_BOARD_GUEST_CPU_COMPATIBLE"] = abi.read_string_define(
-            board_layout, "NOVA_BOARD_GUEST_CPU_COMPATIBLE")
     except ValueError as error:
         sys.exit(f"nova dtb: {error}")
     return values
@@ -152,7 +150,12 @@ PHANDLE_CLK = 2
 GIC_SPI, GIC_PPI, EDGE_RISING, LEVEL_HIGH = 0, 1, 1, 4
 
 
-def build_guest_dtb(guest: dict, layout: dict[str, int], serves_psci: bool = True) -> bytes:
+def build_guest_dtb(
+    guest: dict,
+    layout: dict[str, int],
+    cpu_compatible: str,
+    serves_psci: bool = True,
+) -> bytes:
     ipa_base = layout["NOVA_GUEST_IPA_BASE"]
     w = FdtWriter()
     w.begin_node("")
@@ -179,7 +182,7 @@ def build_guest_dtb(guest: dict, layout: dict[str, int], serves_psci: bool = Tru
     for n in range(guest["vcpus"]):
         w.begin_node(f"cpu@{n}")
         w.prop_str("device_type", "cpu")
-        w.prop_str("compatible", layout["NOVA_BOARD_GUEST_CPU_COMPATIBLE"])
+        w.prop_str("compatible", cpu_compatible)
         w.prop_u32("reg", n)
         if serves_psci:
             w.prop_str("enable-method", "psci")
@@ -726,6 +729,11 @@ def main() -> int:
                          "the cpu enable-method that depends on it")
     ap.add_argument("--payloads", type=Path, required=True,
                     help="resolved guest binary payload manifest")
+    # The core a guest is told it runs on. Passed in because it belongs
+    # to the runtime CPU profile this build selected, not to the board's
+    # numeric layout — the two change on different axes.
+    ap.add_argument("--cpu-compatible", required=True,
+                    help="device-tree compatible string for the guest CPUs")
     ap.add_argument("--depfile", type=Path, help="where to write what this read")
     args = ap.parse_args()
 
@@ -742,7 +750,8 @@ def main() -> int:
     if shutil.which("dtc") is None:
         sys.exit("nova dtb: dtc is missing; run ./bootstrap")
     for i, guest in enumerate(guests):
-        blob = build_guest_dtb(guest, layout, serves_psci=not args.no_psci)
+        blob = build_guest_dtb(
+            guest, layout, args.cpu_compatible, serves_psci=not args.no_psci)
         if len(blob) > layout["NOVA_GUEST_DTB_SIZE"]:
             sys.exit(f"nova dtb: {guest['name']}: DTB {len(blob)} bytes exceeds the "
                      f"{layout['NOVA_GUEST_DTB_SIZE']:#x} guest window reservation")

@@ -52,7 +52,7 @@ class PublicCommandContractTest(unittest.TestCase):
                 self.assertEqual(RUNNER.invoke(cli.app, ["demo", operation, "1", "--all"]).exit_code, 2)
 
     def test_workbench_attachment_leaves_the_board_model_frozen(self):
-        base = board.command(kernel=Path("novavisor.elf"))
+        base = board.command(kernel=Path("novavisor.elf"), cpu_model="cortex-a57")
         # The list handed over is the one checked afterwards. Passing a
         # throwaway copy asked whether `command()` is deterministic, and
         # a rewrite of the caller's argument went unnoticed.
@@ -76,7 +76,7 @@ class PublicCommandContractTest(unittest.TestCase):
         # the model it was built from and the frozen tuple are all left
         # as they were.
         self.assertEqual(given, base)
-        self.assertEqual(base, board.command(kernel=Path("novavisor.elf")))
+        self.assertEqual(base, board.command(kernel=Path("novavisor.elf"), cpu_model="cortex-a57"))
         self.assertNotIn("memory-backend", " ".join(board.MACHINE_ARGS))
 
     def test_a_backend_that_cannot_fit_is_refused_rather_than_launched(self):
@@ -90,7 +90,7 @@ class PublicCommandContractTest(unittest.TestCase):
             with mock.patch.object(board.shutil, "disk_usage", return_value=room):
                 with self.assertRaises(SystemExit) as refused:
                     board.attach_workbench(
-                        board.command(kernel=Path("novavisor.elf")),
+                        board.command(kernel=Path("novavisor.elf"), cpu_model="cortex-a57"),
                         shm_path=Path(directory) / "guest-ram",
                         qmp_path=Path(directory) / "qmp.sock",
                     )
@@ -101,7 +101,7 @@ class PublicCommandContractTest(unittest.TestCase):
     def test_the_aperture_is_read_back_from_the_command_itself(self):
         """Whoever places the backing file needs the size the machine
         will actually be given, not a second copy of it."""
-        self.assertEqual(board.aperture_bytes(board.command()), 1024 << 20)
+        self.assertEqual(board.aperture_bytes(board.command(cpu_model="cortex-a57")), 1024 << 20)
 
 
 class BuildPresetContractTest(unittest.TestCase):

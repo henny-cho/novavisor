@@ -97,6 +97,11 @@ def prepare_source() -> Path:
     return source
 
 
+def _profile_image(name: str) -> Path:
+    """The hypervisor image a firmware profile boots into."""
+    return cmake.preset_dir(PROFILES[name].preset) / "novavisor.elf"
+
+
 def _require_payload(path: Path) -> Path:
     payload = path.resolve()
     if not payload.is_file():
@@ -237,7 +242,7 @@ CHAIN_MARKERS = ("BL31: v", "NovaVisor booted", "core 1 online")
 CHAIN_TIMEOUT = 120
 
 
-def _chain_scenario(flash: Path) -> expect.Scenario:
+def _chain_scenario(flash: Path, cpu_model: str) -> expect.Scenario:
     # Pattern steps only: this boots a flash image with no observation
     # surfaces attached, so a step that reads the machine cannot run.
     _, smoke = manifest.load_manifest(SMOKE_DEMO)
@@ -249,7 +254,7 @@ def _chain_scenario(flash: Path) -> expect.Scenario:
     return expect.Scenario(
         label="qemu-tfa chain handoff",
         phase="firmware",
-        command=tuple(board.command(bios=flash, secure=True)),
+        command=tuple(board.command(bios=flash, secure=True, cpu_model=cpu_model)),
         timeout_seconds=CHAIN_TIMEOUT,
         steps=tuple(
             [{"pattern": marker, "within_seconds": CHAIN_TIMEOUT} for marker in CHAIN_MARKERS]
@@ -274,7 +279,9 @@ def verify_chain(
     diagnostics.unlink(missing_ok=True)
     with (output / "smoke.log").open("w", encoding="utf-8") as log:
         return verify.run_scenario(
-            _chain_scenario(flash),
+            # The chain boots a flash image, so the CPU comes from the
+            # profile's own image rather than from the payload handed in.
+            _chain_scenario(flash, artifacts.runtime_cpu(_profile_image("qemu-tfa"))),
             verify.Sink(stream=log, diagnostics=diagnostics),
             scope="nova firmware",
         )

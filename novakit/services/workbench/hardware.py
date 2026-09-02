@@ -226,7 +226,12 @@ def _blocks(values: dict, inventory: dict) -> list[dict]:
     return blocks
 
 
-def board_map(board: str = DEFAULT_BOARD, direct: Iterable[str] = ()) -> dict:
+def board_map(
+    board: str = DEFAULT_BOARD,
+    direct: Iterable[str] = (),
+    *,
+    cpu_compatible: str = "",
+) -> dict:
     """The drawable machine description for one board.
 
     Every value is looked up in a header or the device inventory; a
@@ -236,6 +241,11 @@ def board_map(board: str = DEFAULT_BOARD, direct: Iterable[str] = ()) -> dict:
     `direct` names the paths the caller can actually witness this run —
     see events.observable(). Empty means nothing is watching, which is a
     picture the board is still entitled to be drawn in.
+
+    `cpu_compatible` is the core a guest is told it runs on, which the
+    run's CPU profile owns rather than the board's numeric layout. Empty
+    where no image has been built yet: unknown, and said so, rather than
+    a baseline core the run may not be using.
     """
     layout_header = board_layout_header(board)
     values = dict(dtb.read_layout(abi.GUEST_LAYOUT, layout_header))
@@ -254,7 +264,7 @@ def board_map(board: str = DEFAULT_BOARD, direct: Iterable[str] = ()) -> dict:
     return {
         "name": name,
         "cpus": values["NOVA_BOARD_SMP_CPUS"],
-        "cpu": values["NOVA_BOARD_GUEST_CPU_COMPATIBLE"],
+        "cpu": cpu_compatible,
         # Flat vCPU slots are a fixed stride, so the UI maps a scheduler
         # slot back to (vm, index) without a table of its own.
         "max_guests": abi.MAX_GUESTS,

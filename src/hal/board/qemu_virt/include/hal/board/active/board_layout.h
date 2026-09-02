@@ -44,7 +44,6 @@
 #define NOVA_BOARD_PRISTINE_SIZE 0x0EF00000 /* up to the end of physical RAM */
 
 /* Guest CPU node exposed by the generated DT. */
-#define NOVA_BOARD_GUEST_CPU_COMPATIBLE "arm,cortex-a57"
 
 /* Physical CPU count (QEMU -smp must match) and the EL2 stack carved
  * out per core by the linker script; core i's SP starts at

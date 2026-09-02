@@ -16,7 +16,7 @@ class QemuCommandTests(unittest.TestCase):
         # The rest of the command is the frozen board model, asserted
         # where that model is owned. Secure world is the one thing only
         # a firmware chain asks for, and BL1 will not run without it.
-        command = board.command(bios=Path("/tmp/flash.bin"), secure=True)
+        command = board.command(bios=Path("/tmp/flash.bin"), secure=True, cpu_model="cortex-a57")
 
         self.assertIn("secure=on", command[2])
 

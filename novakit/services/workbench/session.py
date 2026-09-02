@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from ...core import board
+from ...core import board, cpu_profiles
 from ...image import observe
 from .. import artifacts, cmake, expect, manifest, spawn, verify
 from ..surfaces import Surfaces
@@ -111,8 +111,14 @@ def _world(view: observe.View | None, elf: Path | None) -> dict:
     image rather than about the run, and two copies of them would let a
     pre-run world and a running one describe different hardware.
     """
+    identity = (
+        cpu_profiles.runtime_profile(view.runtime_cpu).presented_identity
+        if view is not None and view.runtime_cpu
+        else ""
+    )
     return {
-        "board": hardware.board_map(direct=image_capability(view)),
+        "board": hardware.board_map(
+            direct=image_capability(view), cpu_compatible=identity),
         "catalog": _catalog(),
         "stops": events.catalogue(),
         "taxonomy": vocabulary() | derive.syndrome_vocabulary(view),
