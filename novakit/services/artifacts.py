@@ -120,6 +120,28 @@ def build_qemu_cmd(
     return cmd
 
 
+def copy_image(source: Path, destination: Path) -> tuple[Path, ...]:
+    """Copy an image and everything that answers questions about it.
+
+    An image is not only its ELF. The observation view sits beside it
+    under a name only `observe.artifact_of` decides, and `observe` and
+    `walk` steps read an image through it — one that travelled alone is
+    an image no such step can read.
+
+    A source without a view copies the ELF alone rather than inventing
+    one; `observe.view_of` then reports the real absence by name.
+    """
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    copied = [destination]
+    view = observe.artifact_of(source)
+    if view.is_file():
+        beside = observe.artifact_of(destination)
+        shutil.copy2(view, beside)
+        copied.append(beside)
+    return tuple(copied)
+
+
 def scenario_for(
     name: str,
     demo_manifest: dict,
@@ -144,15 +166,9 @@ def scenario_for(
         payloads_path=payloads,
     ))
     if elf_snapshot is not None:
-        # The snapshot keeps the exact image an attempt ran, so evidence
-        # matches the failure. The observation view goes with it: it is
-        # found by name beside the ELF, and no observe or walk step can
-        # read an image that arrived without one.
-        elf_snapshot.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(elf, elf_snapshot)
-        view = observe.artifact_of(elf)
-        if view.is_file():
-            shutil.copy2(view, observe.artifact_of(elf_snapshot))
+        # A soak rebuilds between attempts; the snapshot keeps the exact
+        # image an attempt ran so the evidence matches the failure.
+        copy_image(elf, elf_snapshot)
         elf = elf_snapshot
 
     return expect.Scenario(
