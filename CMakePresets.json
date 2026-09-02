@@ -60,6 +60,28 @@
       }
     },
     {
+      "name": "aarch64-a57-on-n1-release",
+      "displayName": "Baseline codegen on an N1 core (subset on superset)",
+      "inherits": "aarch64-base",
+      "binaryDir": "${sourceDir}/build/aarch64-a57-on-n1-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NOVA_CPU_BUILD_PROFILE": "a57-baseline",
+        "NOVA_CPU_RUNTIME_PROFILE": "n1"
+      }
+    },
+    {
+      "name": "aarch64-n1-on-n1-release",
+      "displayName": "N1 codegen on an N1 core",
+      "inherits": "aarch64-base",
+      "binaryDir": "${sourceDir}/build/aarch64-n1-on-n1-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NOVA_CPU_BUILD_PROFILE": "n1-tuned",
+        "NOVA_CPU_RUNTIME_PROFILE": "n1"
+      }
+    },
+    {
       "name": "aarch64-qemu-tfa-release",
       "displayName": "QEMU TF-A Chain Release",
       "description": "BL33 image for the real TF-A chain on QEMU virt (firmware handoff smoke)",
@@ -112,6 +134,14 @@
     {
       "name": "aarch64-standard-release",
       "configurePreset": "aarch64-standard-release"
+    },
+    {
+      "name": "aarch64-a57-on-n1-release",
+      "configurePreset": "aarch64-a57-on-n1-release"
+    },
+    {
+      "name": "aarch64-n1-on-n1-release",
+      "configurePreset": "aarch64-n1-on-n1-release"
     },
     {
       "name": "aarch64-qemu-tfa-release",
