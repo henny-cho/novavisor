@@ -16,8 +16,24 @@ guests:
     memory_size: 0x00100000
     vcpus: 1
 
-steps:
+steps: &steps
   - pattern: "Hello from EL1 guest!"
     within_seconds: 5
   - pattern: "demo_exit code=0"
     within_seconds: 10
+
+# The CPU pairings a build and a run may be composed from. The default
+# variant is the board's own; the two below are the ones that show the
+# contract is set inclusion — a baseline binary reaching EL1 on an N1
+# core, and N1 codegen doing the same.
+variants:
+  - name: "default"
+    steps: *steps
+
+  - name: "a57-on-n1"
+    preset: "aarch64-a57-on-n1-release"
+    steps: *steps
+
+  - name: "n1-on-n1"
+    preset: "aarch64-n1-on-n1-release"
+    steps: *steps

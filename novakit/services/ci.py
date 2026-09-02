@@ -7,7 +7,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from ..core import actions, config, proc
+from ..core import actions, config, cpu_profiles, proc
+from ..image import observe
 from . import cmake, firmperf, gates, report, suite, tfa
 from .workbench import checks
 
@@ -15,6 +16,11 @@ RUNTIME_PRESETS = (
     "aarch64-release",
     "aarch64-minimal-release",
     "aarch64-standard-release",
+    # The two CPU pairings a QEMU run can prove. In this tuple and not a
+    # separate one, so their images get the same build, structure and ELF
+    # analysis as every other shipped image rather than a narrower check.
+    "aarch64-a57-on-n1-release",
+    "aarch64-n1-on-n1-release",
 )
 # Where a failing lane may have left something worth keeping: every tree
 # it builds, plus the firmware profile's.
@@ -61,6 +67,50 @@ def _manifest() -> int:
 def _presets() -> int:
     for preset in RUNTIME_PRESETS:
         cmake.build(cmake.BuildSpec.of(preset=preset))
+    return 0
+
+
+# What each CPU pairing must have compiled to. Two runs of one demo
+# would pass just as happily on two identical binaries, so the flag is
+# read back before the runs are believed.
+CPU_PAIRINGS = (
+    ("aarch64-a57-on-n1-release", "cortex-a57"),
+    ("aarch64-n1-on-n1-release", "neoverse-n1"),
+)
+
+
+def _cpu_profiles() -> int:
+    """That the pairings differ where they claim to, and that a bad one is refused.
+
+    The demos step runs 01_hello on both N1 pairings through their own
+    variants. This checks the premise those runs rest on — the images
+    really were built for different cores — and the negative the runs
+    cannot show, because a refused pairing never reaches QEMU.
+    """
+    for preset, expected in CPU_PAIRINGS:
+        elf = cmake.preset_dir(preset) / "novavisor.elf"
+        view = observe.view_of(elf)
+        built = cpu_profiles.build_profile(view.build_cpu)
+        if built.mcpu != expected:
+            raise SystemExit(
+                f"[ci] {preset} was built for {built.mcpu}, expected {expected}")
+        cpu_profiles.require_compatible(built, cpu_profiles.runtime_profile(view.runtime_cpu))
+        print(f"[ci] {preset}: -mcpu={built.mcpu} on {view.runtime_cpu}")
+
+    # N1 codegen on a baseline core: refused at configure, so QEMU is
+    # never handed a machine that would fault on an unknown instruction.
+    refused = proc.run(
+        [
+            "cmake", "-S", str(config.REPO), "-B", str(config.BUILD_ROOT / "cpu-negative"),
+            f"-DCMAKE_TOOLCHAIN_FILE={config.REPO / 'cmake' / 'toolchain-aarch64.cmake'}",
+            "-DNOVA_ARCH=aarch64", "-DNOVA_BOARD=qemu_virt", "-DNOVA_PROJECT=qemu_virt_arm64",
+            "-DNOVA_CPU_BUILD_PROFILE=n1-tuned", "-DNOVA_CPU_RUNTIME_PROFILE=a57",
+        ],
+        capture=True, check=False,
+    )
+    if refused.returncode == 0 or "neoverse-n1-codegen" not in (refused.stdout + refused.stderr):
+        raise SystemExit("[ci] an N1 build on a baseline core was not refused by name")
+    print("[ci] n1-tuned on a57: refused at configure")
     return 0
 
 
@@ -111,6 +161,7 @@ LANES = (
         "runtime",
         (
             ("presets", _presets),
+            ("cpu-profiles", _cpu_profiles),
             ("structure", _structure),
             ("measurement", _measurement),
             ("firmware", _firmware_chain),
