@@ -326,16 +326,16 @@ class Recording:
 
         `key` is the row the totals count under — code and the catalogue's
         breakdown word — so a late slice and a late watchdog are separate
-        samples, not one pool. Each record is one sample: `ts - b`, done
-        minus due. None when the run is not complete: a lost record is a
-        lost sample, and a quantile over holes is the overstatement the
-        completeness judgment refuses. None too for a point event, whose
-        `b` is an argument rather than a start.
+        samples, not one pool. Each record is one sample: the end the
+        catalogue names, minus `b`. None when the run is not complete: a
+        lost record is a lost sample, and a quantile over holes is the
+        overstatement the completeness judgment refuses. None too for a
+        point event, whose `b` is an argument rather than a start.
         """
         entry = events.BY_CODE.get(key[0])
         if entry is None or not entry.span or not self.totals().complete:
             return None
-        samples = [r.ts - r.b for r in self.records if trace.key_of(r) == key]
+        samples = [entry.span_end(r) - r.b for r in self.records if trace.key_of(r) == key]
         return trace.quantile(samples, permille) if samples else None
 
     def wire_ts(self, cntpct: int) -> int:

@@ -72,6 +72,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
 
   let byCode = new Map(); /* record code -> catalogue entry */
   let byId = new Map(); /* event id -> catalogue entry */
+  let endByCode = new Map(); /* record code -> where its band ends */
   let order = []; /* catalogue order, for stable lane placement */
   const lanes = []; /* event ids seen this run, in catalogue order */
   let freq = 0; /* CNTFRQ, for the microsecond axis */
@@ -101,14 +102,27 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     if (limits && limits.buckets) ceiling = limits.buckets;
   }
 
+  /* Where a record's band ends: its own stamp, or the argument word the
+     catalogue names for an end the firmware did not write it at. Read
+     once per code so the paint loop asks a number, not a name. */
+  function bandEnd(entry) {
+    if (!entry.span) return null;
+    if (entry.span === "ts") return (record) => record.ts;
+    const word = ["a", "b", "c"][entry.fields.indexOf(entry.span)];
+    return (record) => record[word];
+  }
+
   function setCatalogue(stops) {
     byCode = new Map();
     byId = new Map();
+    endByCode = new Map();
     order = [];
     for (const stop of stops || []) {
       if (!stop.code) continue;
       byCode.set(stop.code, stop);
       byId.set(stop.id, stop);
+      const ends = bandEnd(stop);
+      if (ends) endByCode.set(stop.code, ends);
       order.push(stop.id);
     }
     indexLanes();
@@ -538,12 +552,13 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     const rows = onScreen();
     for (let index = 0; index < rows.n; index += 1) {
       const code = rows.codeAt(index);
-      if (!byCode.get(code).span) continue;
+      const ends = endByCode.get(code);
+      if (!ends) continue;
       const lane = laneByCode.get(code);
       if (lane === undefined) continue;
       const record = rows.read(index);
       const from = Math.max(at.gutter, record.b ? x(record.b) : at.gutter);
-      const to = Math.min(at.gutter + at.plot, x(record.ts));
+      const to = Math.min(at.gutter + at.plot, x(ends(record)));
       context.fillRect(
         from,
         lane * at.lane + 2 * at.scale,

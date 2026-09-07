@@ -1023,13 +1023,12 @@ def decode(record: Record) -> dict:
             "a": record.b,
             "b": record.c,
         }
-    elif entry.id == "timer.late":
-        out |= {"slot": record.a, "ticks": record.ts - record.b}
-    elif entry.id == "trace.gap":
+    elif entry.span:
         # The width, not the far end: `b` is a raw counter value, which
-        # is the one thing no reader can use. Zero when the hole opened
-        # before anything was recorded, so it has no measurable start.
-        out |= {"count": record.a, "ticks": record.ts - record.b if record.b else 0}
+        # is the one thing no reader can use. A start of zero is a
+        # stretch that opened before anything was recorded, so it has none.
+        out |= {entry.fields[0]: record.a,
+                "ticks": entry.span_end(record) - record.b if record.b else 0}
     return out
 
 

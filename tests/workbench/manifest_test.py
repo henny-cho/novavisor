@@ -22,6 +22,7 @@ from novakit.services.workbench import (
     observations,
     snapshot,
     steps,
+    trace,
 )
 from tests.support import image as shared_image
 
@@ -290,3 +291,23 @@ class StopCatalogueTest(unittest.TestCase):
     def test_a_packed_word_cannot_be_grouped_by(self):
         with self.assertRaises(ValueError):
             events.Event("x", "sym", fields=("slot", "vintid|lr", ""), group="vintid|lr")
+
+    def test_a_span_ends_at_its_stamp_or_at_a_word_it_holds(self):
+        for event in events.EVENTS:
+            with self.subTest(event=event.id):
+                if event.span and event.span != "ts":
+                    self.assertIn(event.span, event.fields)
+
+    def test_a_span_ending_where_the_record_holds_nothing_is_refused(self):
+        """At construction: a band drawn to a word that is not there
+        would run to zero, and zero is a time."""
+        with self.assertRaises(ValueError):
+            events.Event("x", "sym", fields=("slot", "deadline", ""), span="entry")
+
+    def test_a_measured_end_is_read_from_its_word_not_from_the_stamp(self):
+        """The stamp is when EL2 wrote the record, which for a guest's
+        own measurement is after the moment being reported."""
+        entry = events.Event("x", "sym", fields=("vintid", "deadline", "entry"), span="entry")
+        record = trace.Record(ts=900, code=0, cpu=0, a=27, b=100, c=300)
+        self.assertEqual(entry.span_end(record), 300)
+        self.assertEqual(events.BY_ID["timer.late"].span_end(record), 900)

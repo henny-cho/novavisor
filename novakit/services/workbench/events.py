@@ -61,11 +61,11 @@ class Event:
     # A packed word is named as the pair it is — splitting it belongs in
     # decode(), the one place that knows the packing.
     fields: tuple[str, str, str] = ("", "", "")
-    # Whether the record describes a stretch of time rather than an
-    # instant. Almost nothing does; a hole in the stream is the whole
-    # exception, and drawn as a tick it would claim the axis around it
-    # was watched.
-    span: bool = False
+    # Which word holds the end of the stretch this record covers, "" for
+    # an instant and "ts" when the record was written at the end. A
+    # measured end is an argument: the stamp stays the moment EL2 wrote
+    # the record, or the ring it sits in stops being sorted.
+    span: str = ""
     # Whether the record answers something the host asked for, rather
     # than reporting something the machine did. The control that issued
     # it needs it back, and knowing which entry that is belongs here
@@ -79,6 +79,11 @@ class Event:
     group: str = ""
 
     def __post_init__(self) -> None:
+        if self.span and self.span != "ts" and self.span not in self.fields:
+            raise ValueError(
+                f"{self.id}: a span ending at {self.span!r} names neither the stamp "
+                f"('ts') nor one of its fields {self.fields}"
+            )
         if not self.group:
             return
         if self.group not in self.fields:
@@ -90,6 +95,16 @@ class Event:
                 f"{self.id}: {self.group!r} is a packed pair, so grouping by it would "
                 "count packings rather than values; unpacking belongs in decode()"
             )
+
+    def span_end(self, record) -> int:
+        """When the stretch this record covers ended; its start is `b`.
+
+        Every reader of a span asks here, so an end that is not the
+        stamp is this entry's business rather than each reader's.
+        """
+        if self.span == "ts":
+            return record.ts
+        return (record.a, record.b, record.c)[self.fields.index(self.span)]
 
     @property
     def group_index(self) -> int:
@@ -191,7 +206,7 @@ EVENTS: tuple[Event, ...] = (
     # late slice is told apart from a late watchdog.
     Event("timer.late", "nova::soft_timer::(anonymous)::drain_expired", "", (),
           "소프트 타이머 슬롯 지연 처리", code=_CODES["NOVA_TRACE_EV_TIMER_LATE"],
-          fields=("slot", "deadline", ""), span=True, group="slot"),
+          fields=("slot", "deadline", ""), span="ts", group="slot"),
     # Not a moment in the firmware but a statement about the stream:
     # written by the reader where the records it could not recover
     # would have been. No symbol, so it is never offered as a stop
@@ -199,7 +214,7 @@ EVENTS: tuple[Event, ...] = (
     # this — a stretch nothing was watching is evidence for no path.
     Event("trace.gap", "", "", label="관측되지 않은 구간",
           code=_HOST_CODES["NOVA_TRACE_HOST_EV_GAP"],
-          fields=("count", "from", ""), span=True),
+          fields=("count", "from", ""), span="ts"),
 )
 
 # Where the machine can actually be stopped. The catalogue is one list
@@ -255,10 +270,10 @@ def catalogue() -> list[dict]:
             # clicks a mark. Named here so the UI never learns a layout
             # the bridge already knows.
             "fields": list(event.fields),
-            # Whether this entry can be armed, and whether its records
-            # cover a stretch rather than an instant. The UI builds a
-            # picker and a lane from one list, and these are what let it
-            # do both without a copy of the catalogue's exceptions.
+            # Whether this entry can be armed, and where its records'
+            # stretch ends when they cover one. The UI builds a picker
+            # and a lane from one list, and these are what let it do
+            # both without a copy of the catalogue's exceptions.
             "stop": event.stop,
             "span": event.span,
         }
