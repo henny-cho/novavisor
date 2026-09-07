@@ -47,7 +47,10 @@ enum class Route : std::uint8_t { kLocked, kRaw, kDrop };
 }
 } // namespace detail
 
-inline void write(std::string_view sv) noexcept {
+// Every write below is noinline. The body carries routing, a lock and
+// an MMIO store that 174 call sites each copied inline; one copy costs
+// a call, which is nothing beside the store, and saves a quarter of .text.
+[[gnu::noinline]] inline void write(std::string_view sv) noexcept {
   const auto route = detail::route();
   if (route == detail::Route::kDrop) {
     return;
@@ -61,12 +64,12 @@ inline void write(std::string_view sv) noexcept {
 }
 
 // Null-terminated C strings (extern "C" boundaries, __func__-style values).
-inline void write(const char* str) noexcept {
+[[gnu::noinline]] inline void write(const char* str) noexcept {
   write(std::string_view{str});
 }
 
 // Emit one logical line from preformatted fragments under one lock.
-inline void write_parts(std::span<const std::string_view> parts) noexcept {
+[[gnu::noinline]] inline void write_parts(std::span<const std::string_view> parts) noexcept {
   const auto route = detail::route();
   if (route == detail::Route::kDrop) {
     return;
@@ -127,13 +130,13 @@ inline void line(Parts... parts) noexcept {
 }
 
 // 16 zero-padded lowercase hex digits, no "0x" prefix.
-inline void write_hex64(std::uint64_t v) noexcept {
+[[gnu::noinline]] inline void write_hex64(std::uint64_t v) noexcept {
   fmt::HexBuf buf{};
   write(fmt::to_hex64(v, buf));
 }
 
 // Base 10, no leading zeros.
-inline void write_dec64(std::uint64_t v) noexcept {
+[[gnu::noinline]] inline void write_dec64(std::uint64_t v) noexcept {
   fmt::DecBuf buf{};
   write(fmt::to_dec64(v, buf));
 }
