@@ -108,5 +108,6 @@ add_subdirectory(15_dma_isolation)
 add_subdirectory(16_edu_passthrough)
 add_subdirectory(17_edu_dma)
 add_subdirectory(18_panic_smoke)      # Phase 25
+add_subdirectory(19_irq_latency)      # measurement workload
 # Real-OS demos (Zephyr/Linux, Phase 16+) reference external images and
 # need no cmake subdir.

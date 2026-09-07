@@ -1,0 +1,26 @@
+name: "19_irq_latency"
+description: "Interrupt-latency sample volume: the guest times its own timer interrupts and reports both endpoints, a hundred thousand times."
+enabled: false
+# The run lasts exactly this long: a machine with no VCPU left keeps
+# QEMU alive, so the measurement ends when the time is up. Twenty
+# seconds is the workload; the rest is room for a slower machine, which
+# free-runs the timer to catch up rather than falling short of samples.
+timeout_seconds: 35
+
+# No phase: this is not a milestone demonstration but the workload the
+# measurement lane runs, and it is not in the demo suite.
+
+guests:
+  - name: "irq_latency"
+    binary: "irq_latency.bin"
+    load_addr:   0x50000000
+    ipa_base:    0x50000000
+    entry:       0x50000000
+    memory_size: 0x00100000
+    vcpus: 1
+
+steps:
+  - pattern: "irq_latency: 100000"
+    within_seconds: 30
+  - pattern: "demo_exit code=0"
+    within_seconds: 33
