@@ -22,6 +22,7 @@ different build is refused rather than joined.
 from __future__ import annotations
 
 import json
+import re
 import statistics
 import sys
 from pathlib import Path
@@ -29,7 +30,7 @@ from pathlib import Path
 from ..core import proc
 from ..image import elfstruct, observe
 from . import cmake, manifest
-from .workbench import events, recording, server, session
+from .workbench import events, protocol, recording, server, session, trace
 
 
 class Mismatch(Exception):
@@ -232,6 +233,58 @@ def measure(demo: str, *, runs: int) -> Path:
             f"{taken}: it holds a measurement already; move or remove it to take another"
         ) from None
     return into
+
+
+def _said(run: recording.Recording, pattern: re.Pattern) -> int | None:
+    """The number the guest itself printed, or None if it never did.
+
+    Read off the console frames the recorder tee'd, not off the live
+    window: the window sheds console frames under load, and the count
+    that arrives at the gate has to be the one the guest sent.
+    """
+    for frame in run.frames:
+        if frame.get("topic") != protocol.Topic.CONSOLE:
+            continue
+        found = pattern.search(str((frame.get("data") or {}).get("text", "")))
+        if found:
+            return int(found.group(1))
+    return None
+
+
+def _require(ok: bool, where: str, why: str) -> None:
+    if not ok:
+        raise SystemExit(f"[measure] {where}: {why}")
+
+
+def verify(
+    runs: list[recording.Recording],
+    *,
+    key: tuple[int, int],
+    samples: int,
+    reported: re.Pattern,
+) -> None:
+    """Refuse a measurement that did not measure what the table implies.
+
+    The table prints what it found; these are what a reader of it may
+    assume. The guest's own tally is the independent half — a record the
+    ring lost leaves two counts of one set of interrupts disagreeing,
+    which completeness alone can miss when the loss predates the region.
+    """
+    _require(bool(runs), "measurement", "no runs to verify")
+    for run in runs:
+        where, totals = run.directory.name, run.totals()
+        counted, said = totals.events.get(key, 0), _said(run, reported)
+        rows = [record for record in run.records if trace.key_of(record) == key]
+        _require(totals.complete, where, "its trace is not whole")
+        _require(totals.lost == 0, where, f"{totals.lost} record(s) lost")
+        _require(counted >= samples, where, f"{counted} samples, {samples} asked for")
+        _require(counted == said, where, f"the guest counted {said}, the recording holds {counted}")
+        _require(
+            all(record.b <= record.c <= record.ts for record in rows),
+            where,
+            "a sample is entered before it was due, or written before it was entered",
+        )
+        _require(run.latency(key, 999) is not None, where, "no p99.9 could be claimed")
 
 
 def gate() -> int:

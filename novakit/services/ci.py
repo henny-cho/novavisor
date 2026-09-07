@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..core import actions, config, cpu_profiles, proc
-from ..image import observe
+from ..image import abi, observe
 from . import cmake, firmperf, gates, report, suite, tfa
-from .workbench import checks
+from .workbench import checks, events, recording
 
 RUNTIME_PRESETS = (
     "aarch64-release",
@@ -120,10 +121,18 @@ def _structure() -> int:
     return firmperf.gate()
 
 
-# The demo one measurement is taken of. Short and single-guest, because
-# what this step proves is that a machine writes what the report reads —
-# not anything about the workload, which the demos step already runs.
-MEASURED_DEMO = "01_hello"
+# The workload a measurement is taken of, and the line it closes with.
+# The floor is the isolation protocol's rather than the guest's count:
+# a workload that produced more would still be measuring the same thing.
+MEASURED_DEMO = "19_irq_latency"
+SAMPLES = 100_000
+REPORTED = re.compile(r"irq_latency: (\d+)")
+# The row judged — the guest's samples, split by the vINTID they came
+# from. Both halves out of the headers both sides compile against.
+LATENCY_ROW = (
+    events.BY_ID["irq.latency"].code,
+    abi.read_define(abi.HVC_ABI, "NOVA_TIMER_VINTID"),
+)
 
 
 def _measurement() -> int:
@@ -137,6 +146,9 @@ def _measurement() -> int:
     into = cmake.preset_dir(preset) / "measurements" / MEASURED_DEMO
     shutil.rmtree(into, ignore_errors=True)  # the lane's own scratch
     firmperf.measure(MEASURED_DEMO, runs=2)
+    firmperf.verify(
+        recording.load_all(into), key=LATENCY_ROW, samples=SAMPLES, reported=REPORTED
+    )
     firmperf.structure(preset, recorded=into)
     if firmperf.report(preset, recorded=into) != firmperf.report(preset, recorded=into):
         raise SystemExit("[ci] the same recording reported differently twice")

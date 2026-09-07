@@ -32,9 +32,14 @@ steps:
   - pattern: "preempt: busy done"
     within_seconds: 25
   # Print order is what makes the two lines above evidence for
-  # preemption. This is the switch itself: the busy guest never yields,
-  # so a scheduler switch away from it happened because the slice
-  # expired and for no other reason.
+  # preemption. These two are the mechanism, in the order the ring holds
+  # them: the scheduler's own slot came due, and a switch followed. The
+  # busy guest never yields and never waits, so nothing but that slot can
+  # take the core from it — but a step finds the first match after the
+  # last, so this is a sequence and not an adjacency.
+  - event: "timer.late"
+    where: { slot: 0 }
+    within_seconds: 5
   - event: "sched.switch"
     within_seconds: 5
   - pattern: "preempt: wfi done"

@@ -13,6 +13,7 @@ to check.
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,6 +31,7 @@ TRAP = events.BY_ID["trap"].code
 
 
 WHOLE = {"producer_dead": True, "tail_drained": True, "absent": False}
+TORN = {"producer_dead": True, "tail_drained": False, "absent": False}
 
 
 def record(root: Path, runs: list[tuple[dict, list[trace.Record]]], *, image: str = "abc") -> None:
@@ -296,3 +298,79 @@ class CommandTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VerifyTest(Recorded):
+    """The measurement gate: what a run must show before its table counts.
+
+    Every refusal here is one a real run could produce, and each is the
+    only thing that catches it — completeness does not notice a guest
+    that stopped early, and a count does not notice a sample that ends
+    before it starts.
+    """
+
+    LATENCY = events.BY_ID["irq.latency"].code
+    ROW = (LATENCY, 27)
+    SAID = re.compile(r"irq_latency: (\d+)")
+
+    def sample(self, due: int, entry: int, wrote: int) -> trace.Record:
+        return trace.Record(ts=wrote, code=self.LATENCY, cpu=0, a=27, b=due, c=entry)
+
+    def written(self, *, sealed: dict = WHOLE, rows=(), said: str | None = None):
+        recorder = recording.Recorder(self.root, {"demo": "test", "board": "qemu_virt"})
+        recorder.for_run(1)
+        recorder.frame({"topic": "topo", "seq": 1, "ts": 1, "data": {"demo": "test", "image": "abc"}})
+        if said is not None:
+            recorder.frame({"topic": "console", "seq": 2, "ts": 2, "data": {"vm": 0, "text": said}})
+        recorder.drained(list(rows))
+        recorder.note(**sealed)
+        recorder.close()
+        return recording.load_all(self.root)
+
+    def check(self, runs, samples: int = 2) -> None:
+        firmperf.verify(runs, key=self.ROW, samples=samples, reported=self.SAID)
+
+    def refused(self, runs, samples: int = 2) -> str:
+        with self.assertRaises(SystemExit) as caught:
+            self.check(runs, samples)
+        return str(caught.exception)
+
+    def test_a_whole_run_of_agreeing_counts_passes(self):
+        self.check(self.written(
+            rows=[self.sample(100, 150, 200), self.sample(200, 260, 300)],
+            said="irq_latency: 2",
+        ))
+
+    def test_nothing_measured_is_not_a_measurement(self):
+        self.assertIn("no runs", self.refused([]))
+
+    def test_a_torn_trace_is_refused(self):
+        runs = self.written(sealed=TORN, rows=[self.sample(1, 2, 3), self.sample(4, 5, 6)],
+                            said="irq_latency: 2")
+        self.assertIn("not whole", self.refused(runs))
+
+    def test_too_few_samples_for_a_quantile_are_refused(self):
+        runs = self.written(rows=[self.sample(1, 2, 3)], said="irq_latency: 1")
+        self.assertIn("asked for", self.refused(runs, samples=2))
+
+    def test_a_guest_counting_more_than_the_ring_holds_is_refused(self):
+        """The independent tally: what the guest said, against what arrived."""
+        runs = self.written(rows=[self.sample(1, 2, 3), self.sample(4, 5, 6)],
+                            said="irq_latency: 3")
+        self.assertIn("the guest counted 3", self.refused(runs))
+
+    def test_a_run_whose_guest_said_nothing_is_refused(self):
+        runs = self.written(rows=[self.sample(1, 2, 3), self.sample(4, 5, 6)])
+        self.assertIn("the guest counted None", self.refused(runs))
+
+    def test_a_sample_entered_before_its_deadline_is_refused(self):
+        """Entry precedes due only if the conversion into the ring's clock
+        is wrong, which no quantile of the result would reveal."""
+        runs = self.written(rows=[self.sample(100, 150, 200), self.sample(200, 190, 300)],
+                            said="irq_latency: 2")
+        self.assertIn("before it was due", self.refused(runs))
+
+    def test_a_sample_written_before_it_was_entered_is_refused(self):
+        runs = self.written(rows=[self.sample(100, 150, 200), self.sample(200, 260, 250)],
+                            said="irq_latency: 2")
+        self.assertIn("before it was entered", self.refused(runs))
