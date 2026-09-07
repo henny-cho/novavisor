@@ -96,10 +96,26 @@ def _dynamic(runs: list[recording.Recording]) -> dict:
                 "median": statistics.median_low(samples),
                 "min": min(samples),
                 "max": max(samples),
+                **_latency(runs, key),
             }
             for key, samples in sorted(per_key.items(), key=lambda item: -max(item[1]))
         },
     }
+
+
+def _latency(runs: list[recording.Recording], key: tuple[int, int]) -> dict:
+    """The SLO's own aggregate for a span event: the worst p99.9 over runs.
+
+    Worst rather than pooled, with no outlier removal, because the
+    SLO judges a run set by its worst member. Runs that cannot claim a
+    quantile contribute nothing and are counted, so a table showing one
+    sample out of ten says so.
+    """
+    entry = events.BY_CODE.get(key[0])
+    if entry is None or not entry.span:
+        return {}
+    claimed = [q for q in (run.latency(key, 999) for run in runs) if q is not None]
+    return {"p99_9_ticks": max(claimed) if claimed else None, "p99_9_runs": len(claimed)}
 
 
 def _joinable(runs: list[recording.Recording], elf: Path) -> None:
@@ -146,6 +162,8 @@ def _table(preset: str, report: dict) -> str:
     lines += [
         f"    {name:<{name_width}}  {spread['median']:>8}  "
         f"[{spread['min']}..{spread['max']}]"
+        + (f"  p99.9={spread['p99_9_ticks']} ticks over {spread['p99_9_runs']} run(s)"
+           if spread.get("p99_9_ticks") is not None else "")
         for name, spread in dynamic["events"].items()
     ]
     lines.append("    the two columns are never multiplied: a shared prefix counts twice.")

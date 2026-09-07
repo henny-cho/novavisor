@@ -815,6 +815,21 @@ _GROUP_WORD = {
 }
 
 
+def quantile(samples: list[int], permille: int) -> int:
+    """x[ceil(p·n)] of the sorted samples, 1-based, no interpolation.
+
+    The isolation SLO fixes this formula so two implementations cannot
+    pass the same run differently. Permille rather than a float: 0.999·n
+    lands on either side of an integer depending on rounding, and the
+    ceiling would then pick a neighbour the rule does not name.
+    """
+    if not samples:
+        raise ValueError("a quantile of nothing")
+    ordered = sorted(samples)
+    rank = -(-permille * len(ordered) // 1000)  # ceil without floats
+    return ordered[max(rank, 1) - 1]
+
+
 def key_of(record: Record) -> tuple[int, int]:
     """The dimension a record is counted under.
 

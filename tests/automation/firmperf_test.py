@@ -173,6 +173,93 @@ class JoinTest(Recorded):
             self.joined("")
 
 
+LATE = events.BY_ID["timer.late"].code
+
+
+class QuantileTest(unittest.TestCase):
+    """The SLO's formula, exactly: x[ceil(p·n)], 1-based, no interpolation."""
+
+    def test_p999_of_a_thousand_is_the_999th_not_the_1000th(self):
+        """0.999·1000 in floating point can land past 999; the integer
+        ceiling cannot, so the rank the spec names is the one picked."""
+        self.assertEqual(trace.quantile(list(range(1, 1001)), 999), 999)
+
+    def test_a_single_sample_is_its_own_quantile(self):
+        self.assertEqual(trace.quantile([42], 999), 42)
+
+    def test_order_of_arrival_does_not_matter(self):
+        self.assertEqual(trace.quantile([5, 1, 4, 2, 3], 500), 3)
+
+    def test_no_interpolation_between_neighbours(self):
+        """Two samples at p50: rank ceil(1.0) = 1, the lower one — never 15."""
+        self.assertEqual(trace.quantile([10, 20], 500), 10)
+
+    def test_nothing_has_no_quantile(self):
+        with self.assertRaises(ValueError):
+            trace.quantile([], 999)
+
+
+class LatencyTest(Recorded):
+    """A latency quantile is claimed only from a whole run of span records."""
+
+    def late(self, ts: int, due: int) -> trace.Record:
+        return trace.Record(ts=ts, code=LATE, cpu=0, a=1, b=due, c=0)
+
+    def one(self, sealed: dict, records: list[trace.Record]) -> recording.Recording:
+        record(self.root, [(sealed, records)])
+        return recording.load(self.root / "run-1")
+
+    def test_each_span_record_is_one_sample_of_done_minus_due(self):
+        run = self.one(WHOLE, [self.late(110, 100), self.late(230, 200), self.late(305, 300)])
+        self.assertEqual(run.latency((LATE, 1), 999), 30)
+        self.assertEqual(run.latency((LATE, 1), 500), 10)
+
+    def test_an_incomplete_run_claims_no_quantile(self):
+        """A lost record is a lost sample; a quantile over holes overstates."""
+        run = self.one({"producer_dead": True, "tail_drained": False, "absent": False},
+                       [self.late(110, 100)])
+        self.assertIsNone(run.latency((LATE, 1), 999))
+
+    def test_a_point_event_has_no_latency(self):
+        """Its `b` is an argument, not a start."""
+        run = self.one(WHOLE, [trace.Record(ts=5, code=BIND, cpu=0, a=0, b=1, c=0)])
+        self.assertIsNone(run.latency((BIND, 0), 999))
+
+    def test_a_run_without_the_event_claims_nothing(self):
+        self.assertIsNone(self.one(WHOLE, []).latency((LATE, 1), 999))
+
+
+class WorstAcrossRunsTest(Recorded):
+    """The report aggregates the SLO's way: the worst run, none removed."""
+
+    def test_the_worst_complete_run_is_reported_and_incomplete_ones_are_counted_out(self):
+        record(self.root, [
+            (WHOLE, [trace.Record(ts=105, code=LATE, cpu=0, a=1, b=100, c=0)]),   # p99.9 = 5
+            (WHOLE, [trace.Record(ts=190, code=LATE, cpu=0, a=1, b=100, c=0)]),   # p99.9 = 90
+            ({"producer_dead": True, "tail_drained": False, "absent": False},     # cannot claim
+             [trace.Record(ts=1000, code=LATE, cpu=0, a=1, b=100, c=0)]),
+        ])
+        row = firmperf._dynamic(recording.load_all(self.root))["events"]["timer.late=0x1"]
+        self.assertEqual(row["p99_9_ticks"], 90)
+        self.assertEqual(row["p99_9_runs"], 2)
+
+    def test_two_slots_in_one_run_are_two_samples_not_a_pool(self):
+        """The breakdown is the point: a late watchdog must not lend its
+        tail to the slice's row. Slot 1 is late by 5, slot 22 by 900."""
+        record(self.root, [(WHOLE, [
+            trace.Record(ts=105, code=LATE, cpu=0, a=1, b=100, c=0),
+            trace.Record(ts=1000, code=LATE, cpu=0, a=22, b=100, c=0),
+        ])])
+        rows = firmperf._dynamic(recording.load_all(self.root))["events"]
+        self.assertEqual(rows["timer.late=0x1"]["p99_9_ticks"], 5)
+        self.assertEqual(rows["timer.late=0x16"]["p99_9_ticks"], 900)
+
+    def test_a_point_event_row_carries_no_latency_keys(self):
+        record(self.root, [(WHOLE, [trace.Record(ts=1, code=BIND, cpu=0, a=0, b=0, c=0)])])
+        row = firmperf._dynamic(recording.load_all(self.root))["events"]["vgic.bind"]
+        self.assertNotIn("p99_9_ticks", row)
+
+
 class CommandTest(unittest.TestCase):
     """What the command refuses before it runs anything."""
 
