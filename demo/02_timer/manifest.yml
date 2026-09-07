@@ -21,6 +21,13 @@ steps:
   # The guest says it took an interrupt; this is EL2 posting one. The
   # legacy one-shot delivers the same vINTID the native timer does, so
   # the record is what tells the two paths apart from the console line.
+  # The one-shot the guest armed is the legacy slot, and it expires
+  # exactly once. The record is the latency sample: from the deadline
+  # it was armed for to the moment the drain reached it. It precedes
+  # the post below in the stream, and steps read the stream forward.
+  - event: "timer.late"
+    where: { slot: 1 }
+    within_seconds: 5
   - event: "vgic.private"
     where: { vintid: 27 }
     within_seconds: 5

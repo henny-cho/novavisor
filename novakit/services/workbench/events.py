@@ -186,6 +186,12 @@ EVENTS: tuple[Event, ...] = (
     Event("command", "nova::command::execute", "", (),
           "호스트 명령을 EL2가 실행", code=_CODES["NOVA_TRACE_EV_COMMAND"],
           fields=("op|result", "a", "b"), reply=True),
+    # A latency sample. The band the UI draws from `b` to `ts` is how late
+    # the slot was serviced, and the totals break it down per slot so a
+    # late slice is told apart from a late watchdog.
+    Event("timer.late", "nova::soft_timer::(anonymous)::drain_expired", "", (),
+          "소프트 타이머 슬롯 지연 처리", code=_CODES["NOVA_TRACE_EV_TIMER_LATE"],
+          fields=("slot", "deadline", ""), span=True, group="slot"),
     # Not a moment in the firmware but a statement about the stream:
     # written by the reader where the records it could not recover
     # would have been. No symbol, so it is never offered as a stop

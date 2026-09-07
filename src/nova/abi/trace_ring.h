@@ -153,6 +153,11 @@
  * a command and the effects it caused on one axis in one clock. */
 #define NOVA_TRACE_EV_COMMAND 17
 
+/* A soft-timer slot serviced late. `a` names the slot, `b` is the deadline
+ * it was armed for, and `ts` is when the drain reached it — so the record
+ * is a span from due to done, and its width is the latency sample. */
+#define NOVA_TRACE_EV_TIMER_LATE 18
+
 /* Codes the host writes into the same stream, far above the firmware's
  * numbering and read as a separate family, so one can never be mistaken
  * for an unimplemented hook.

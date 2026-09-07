@@ -29,8 +29,10 @@ template <std::size_t N>
 class TimerQueue {
 public:
   struct Expired {
-    Callback      fn  = nullptr;
-    std::uint64_t arg = 0;
+    Callback      fn       = nullptr;
+    std::uint64_t arg      = 0;
+    std::size_t   slot     = 0;
+    std::uint64_t deadline = 0;
   };
 
   // Out-of-range slots are ignored: callers compute base + offset
@@ -76,7 +78,7 @@ public:
       return false;
     }
     slots_[due_idx].armed = false;
-    out                   = Expired{.fn = slots_[due_idx].fn, .arg = slots_[due_idx].arg};
+    out = Expired{.fn = slots_[due_idx].fn, .arg = slots_[due_idx].arg, .slot = due_idx, .deadline = due_deadline};
     return true;
   }
 

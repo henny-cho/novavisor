@@ -11,6 +11,7 @@
 #include "hal/cpu.hpp"
 #include "hal/gic.hpp"
 #include "hal/timer.hpp"
+#include "trace/trace.hpp"
 
 #include <array>
 #include <cstddef>
@@ -53,6 +54,9 @@ void drain_expired(TrapContext* ctx) noexcept {
   TimerQueue<kSlotCount>::Expired due;
   const std::uint64_t             now = hyp_timer::now();
   while (queue.pop_expired(now, due)) {
+    // Due-to-done as one record: the reader never has to pair two halves
+    // across a lapped ring, and a lost record is exactly one lost sample.
+    trace_emit(NOVA_TRACE_EV_TIMER_LATE, static_cast<std::uint32_t>(due.slot), due.deadline);
     due.fn(ctx, due.arg);
   }
   reprogram();
