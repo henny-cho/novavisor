@@ -72,6 +72,12 @@
  * policy as DMA_FAULT_INJECT). */
 #define NOVA_HVC_FN_DIAG_EL2_FAULT 0x1400
 
+/* DIAG_IRQ_SAMPLE: x1 = the vINTID the guest acked, x2 = the deadline it
+ * armed, x3 = the counter it read on handler entry, both in its own
+ * virtual time. EL2 rebases them and writes one record. Served by
+ * demo_hvc, so the surface exists in demo builds only. Returns nothing. */
+#define NOVA_HVC_FN_DIAG_IRQ_SAMPLE 0x1401
+
 /* Virtual timer PPI as the guest sees it — delivered on TIMER_SET
  * expiry and on native CNTV expiry alike. A guest must enable it at its
  * redistributor before expecting delivery. */

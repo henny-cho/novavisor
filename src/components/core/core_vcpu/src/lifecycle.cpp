@@ -124,6 +124,13 @@ void seed_boot(std::size_t slot) noexcept {
 
 } // namespace
 
+// Out of line beside the storage it reads: components outside this one
+// convert guest timestamps with it, and a second inline copy of the
+// load is how the two orderings drift apart.
+auto cntvoff(std::size_t vm) noexcept -> std::uint64_t {
+  return g_cntvoff[vm].load(std::memory_order_acquire);
+}
+
 auto vm_on(std::size_t vm) noexcept -> bool {
   return vm < guest_table().size() && vm_has_live(vm);
 }

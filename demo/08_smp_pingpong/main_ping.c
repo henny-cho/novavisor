@@ -36,16 +36,6 @@ static inline uint64_t read_cntvct(void) {
   return v;
 }
 
-static void print_dec(uint64_t v) {
-  char buf[20];
-  int  i = sizeof(buf);
-  do {
-    buf[--i] = (char)('0' + v % 10);
-    v /= 10;
-  } while (v != 0);
-  hvc_puts(&buf[i], sizeof(buf) - (size_t)i);
-}
-
 static void spin_ms(uint64_t ms) {
   const uint64_t until = read_cntvct() + read_cntfrq() * ms / 1000;
   while (read_cntvct() < until) {
@@ -119,7 +109,7 @@ int main(void) {
 
     const uint64_t avg_ns = total_ticks * 1000000000ULL / read_cntfrq() / ROUNDS;
     hvc_puts_lit("smp pingpong: 1000 rounds, avg RTT=");
-    print_dec(avg_ns);
+    hvc_put_dec(avg_ns);
     hvc_puts_lit(" ns\n");
   }
 

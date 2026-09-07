@@ -18,18 +18,6 @@
 extern char _secondary_start[]; // common/secondary.S
 extern char __stack_top[];      // linker script (boot vCPU's stack)
 
-static void put_dec(uint32_t v) {
-  char     buf[10];
-  unsigned n = 0;
-  do {
-    buf[n++] = (char)('0' + (v % 10U));
-    v /= 10U;
-  } while (v != 0U);
-  while (n != 0U) {
-    hvc_putc(buf[--n]);
-  }
-}
-
 // The firmware interface a guest discovers before it trusts anything to
 // it. Version and the two discovery answers are contracts, not readings
 // of this silicon, so the harness pins them: guest Linux gates all of
@@ -37,9 +25,9 @@ static void put_dec(uint32_t v) {
 static void report_firmware(void) {
   const uint64_t version = (uint64_t)smccc_call(SMCCC_FN_VERSION, 0);
   hvc_puts_lit("smccc: version ");
-  put_dec((uint32_t)(version >> 16));
+  hvc_put_dec((uint32_t)(version >> 16));
   hvc_putc('.');
-  put_dec((uint32_t)(version & 0xFFFFU));
+  hvc_put_dec((uint32_t)(version & 0xFFFFU));
   // hvc_puts_lit takes sizeof of its argument, and a ternary between two
   // literals is a pointer — so these pass the length themselves.
   hvc_puts_lit(" psci_features ");
@@ -77,9 +65,9 @@ int main(unsigned long dtb) {
   report_firmware();
 
   hvc_puts_lit("cfg: memory ");
-  put_dec((uint32_t)(cfg.mem_size >> 20));
+  hvc_put_dec((uint32_t)(cfg.mem_size >> 20));
   hvc_puts_lit(" MiB, cpus ");
-  put_dec(cfg.cpus);
+  hvc_put_dec(cfg.cpus);
   hvc_putc('\n');
 
   if (cfg.cpus == 2U) {

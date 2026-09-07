@@ -142,10 +142,6 @@ inline void publish_cntvoff(std::size_t vm, std::uint64_t value) noexcept {
   g_cntvoff[vm].store(value, std::memory_order_release);
 }
 
-[[nodiscard]] inline auto cntvoff(std::size_t vm) noexcept -> std::uint64_t {
-  return g_cntvoff[vm].load(std::memory_order_acquire);
-}
-
 // Scheduler services the lifecycle transitions reach (sched.cpp).
 void reschedule_slice() noexcept;
 void seed_fp_trap(bool trap) noexcept;

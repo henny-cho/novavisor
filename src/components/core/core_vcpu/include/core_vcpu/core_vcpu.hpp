@@ -83,6 +83,11 @@ enum class PowerState : std::uint8_t { kOff, kOnPending, kOn };
 auto current() noexcept -> Vcpu&;
 auto current_index() noexcept -> std::size_t;
 
+// A VM's virtual-counter offset (CNTVCT = CNTPCT - offset). Guest values
+// crossing into EL2 are in virtual time and the trace ring is physical,
+// so whoever carries one across rebases it through this.
+auto cntvoff(std::size_t vm) noexcept -> std::uint64_t;
+
 // Round-robin to the next kReady VCPU; no-op when none is ready.
 // `live` is the trap frame of the calling guest (return values for the
 // yielding guest must be written into it BEFORE calling).

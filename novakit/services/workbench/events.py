@@ -207,6 +207,13 @@ EVENTS: tuple[Event, ...] = (
     Event("timer.late", "nova::soft_timer::(anonymous)::drain_expired", "", (),
           "소프트 타이머 슬롯 지연 처리", code=_CODES["NOVA_TRACE_EV_TIMER_LATE"],
           fields=("slot", "deadline", ""), span="ts", group="slot"),
+    # The one span the firmware does not write at the end of: both ends
+    # are the guest's own counter reads, and the stamp is the hypercall
+    # that carried them out. Grouped by vINTID, because two timers on one
+    # guest are two lines to hold to the SLO, not one pool.
+    Event("irq.latency", "nova::demo_hvc_component::handle_hvc", "", (),
+          "게스트 IRQ 진입 지연", code=_CODES["NOVA_TRACE_EV_IRQ_LATENCY"],
+          fields=("vintid", "deadline", "entry"), span="entry", group="vintid"),
     # Not a moment in the firmware but a statement about the stream:
     # written by the reader where the records it could not recover
     # would have been. No symbol, so it is never offered as a stop

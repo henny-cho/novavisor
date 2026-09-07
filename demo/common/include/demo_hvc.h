@@ -28,7 +28,8 @@ enum {
   // EL2-owned DMA test device
   HVC_DMA_FAULT_INJECT = NOVA_HVC_FN_DMA_FAULT_INJECT,
   // Diagnostics (demo builds only)
-  HVC_DIAG_EL2_FAULT = NOVA_HVC_FN_DIAG_EL2_FAULT,
+  HVC_DIAG_EL2_FAULT  = NOVA_HVC_FN_DIAG_EL2_FAULT,
+  HVC_DIAG_IRQ_SAMPLE = NOVA_HVC_FN_DIAG_IRQ_SAMPLE,
 };
 
 static inline void hvc_putc(char c) {
@@ -47,11 +48,35 @@ static inline void hvc_puts(const char* s, size_t n) {
 // Convenience: print a C string literal whose length the compiler knows.
 #define hvc_puts_lit(s) hvc_puts((s), sizeof(s) - 1)
 
+// Decimal, no padding. Here rather than in each guest that counts
+// something: three copies of this loop were three chances to disagree
+// about what a number looks like in the log a test greps.
+static inline void hvc_put_dec(uint64_t v) {
+  char   buf[20];
+  size_t i = sizeof(buf);
+  do {
+    buf[--i] = (char)('0' + (v % 10U));
+    v /= 10U;
+  } while (v != 0U);
+  hvc_puts(&buf[i], sizeof(buf) - i);
+}
+
 static inline void hvc_exit(int code) {
   register uint64_t x0 __asm__("x0") = HVC_EXIT;
   register uint64_t x1 __asm__("x1") = (uint64_t)code;
   __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
   __builtin_unreachable();
+}
+
+// Report one interrupt-latency sample: the deadline this guest armed and
+// the counter it read on handler entry, both virtual. Called after the
+// read, so the hypercall's own cost is outside the sample.
+static inline void hvc_irq_sample(uint64_t vintid, uint64_t deadline, uint64_t entry) {
+  register uint64_t x0 __asm__("x0") = HVC_DIAG_IRQ_SAMPLE;
+  register uint64_t x1 __asm__("x1") = vintid;
+  register uint64_t x2 __asm__("x2") = deadline;
+  register uint64_t x3 __asm__("x3") = entry;
+  __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x3) : "memory");
 }
 
 // Ask EL2 to fault itself (panic-path smoke). Never returns.

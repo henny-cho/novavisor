@@ -14,6 +14,7 @@
 #include "nova/abi/hvc_abi.h"
 #include "nova/arch/trap_context.hpp"
 #include "smp/smp.hpp"
+#include "trace/trace.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -24,10 +25,11 @@ namespace {
 
 // Function IDs from the ABI header shared with the guest-side stubs.
 enum : std::uint16_t {
-  kHvcPuts         = NOVA_HVC_FN_PUTS,
-  kHvcPutc         = NOVA_HVC_FN_PUTC,
-  kHvcExit         = NOVA_HVC_FN_EXIT,
-  kHvcDiagEl2Fault = NOVA_HVC_FN_DIAG_EL2_FAULT,
+  kHvcPuts          = NOVA_HVC_FN_PUTS,
+  kHvcPutc          = NOVA_HVC_FN_PUTC,
+  kHvcExit          = NOVA_HVC_FN_EXIT,
+  kHvcDiagEl2Fault  = NOVA_HVC_FN_DIAG_EL2_FAULT,
+  kHvcDiagIrqSample = NOVA_HVC_FN_DIAG_IRQ_SAMPLE,
 };
 
 // Upper bound on bytes we will copy out of guest memory for kHvcPuts.
@@ -84,6 +86,15 @@ void handle_diag_el2_fault() noexcept {
   *probe      = 0; // permission fault → EL2 fatal vector
 }
 
+// kHvcDiagIrqSample: x1 = the vINTID the guest acked, x2 = the deadline
+// it armed, x3 = the counter it read on handler entry. Both endpoints
+// are virtual time and the ring is physical, so they are rebased here —
+// the one place that knows which VM asked, and the only conversion.
+void handle_irq_sample(TrapContext* ctx) noexcept {
+  const std::uint64_t off = vcpu::cntvoff(vm_of(vcpu::current_index()));
+  trace_emit(NOVA_TRACE_EV_IRQ_LATENCY, static_cast<std::uint32_t>(ctx->x[1]), ctx->x[2] + off, ctx->x[3] + off);
+}
+
 } // namespace
 
 void demo_hvc_component::handle_hvc(HvcCall* call) noexcept {
@@ -106,6 +117,10 @@ void demo_hvc_component::handle_hvc(HvcCall* call) noexcept {
   case kHvcDiagEl2Fault:
     call->handled = true;
     handle_diag_el2_fault();
+    return;
+  case kHvcDiagIrqSample:
+    call->handled = true;
+    handle_irq_sample(call->ctx);
     return;
   default:
     // Not ours — leave unclaimed for other HvcService subscribers.

@@ -158,6 +158,12 @@
  * is a span from due to done, and its width is the latency sample. */
 #define NOVA_TRACE_EV_TIMER_LATE 18
 
+/* How long a guest took to reach its interrupt handler. Both endpoints
+ * are the guest's: `b` is the deadline it armed and `c` the counter it
+ * read on entry, rebased to CNTPCT by EL2. `ts` stays the moment EL2
+ * wrote the record, which is after both, so the ring stays sorted. */
+#define NOVA_TRACE_EV_IRQ_LATENCY 19
+
 /* Codes the host writes into the same stream, far above the firmware's
  * numbering and read as a separate family, so one can never be mistaken
  * for an unimplemented hook.
