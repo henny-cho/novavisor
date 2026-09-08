@@ -216,6 +216,12 @@ EVENTS: tuple[Event, ...] = (
           ("stream",),
           "스트림을 VM의 Stage 2 테이블에 결속", code=_CODES["NOVA_TRACE_EV_SMMU_ATTACH"],
           fields=("stream", "root", "vmid"), hex=("root",)),
+    # The table's other runtime writer: a quarantine after a fault, or a
+    # detach. No edge, like smmu.fault — a stream being shut is not
+    # evidence about the path a working translation takes.
+    Event("smmu.abort", "nova::smmu::(anonymous)::abort_stream", "", ("stream", "vmid"),
+          "스트림을 차단 STE로", code=_CODES["NOVA_TRACE_EV_SMMU_ABORT"],
+          fields=("stream", "vmid", "")),
     # EL2 acknowledges a command by emitting this and nothing else,
     # which puts an instruction and its consequences on one axis in one
     # clock and makes a refusal as visible as an acceptance.

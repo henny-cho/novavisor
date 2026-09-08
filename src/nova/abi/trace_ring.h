@@ -191,6 +191,11 @@
 #define NOVA_TRACE_LC_DMA_FAILED   3
 #define NOVA_TRACE_LC_ISOLATED     4
 
+/* A stream's STE set to abort: quarantined after a fault, or detached.
+ * The counterpart of SMMU_ATTACH, and the other runtime writer of the
+ * table. `a` is the stream, `b` the VMID it was serving. */
+#define NOVA_TRACE_EV_SMMU_ABORT 21
+
 /* Codes the host writes into the same stream, far above the firmware's
  * numbering and read as a separate family, so one can never be mistaken
  * for an unimplemented hook.

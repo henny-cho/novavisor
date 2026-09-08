@@ -669,6 +669,8 @@ class DecodeTest(unittest.TestCase):
                       "address": "0x700000021", "bytes": 30064771200},
         "smmu.attach": {"event": "smmu.attach", "cpu": 3, "ts": 30064771328, "stream": 258,
                         "root": "0x700000021", "vmid": 30064771200},
+        "smmu.abort": {"event": "smmu.abort", "cpu": 3, "ts": 30064771328, "stream": 258,
+                       "vmid": 30064771105},
         "command": {"event": "command", "cpu": 3, "ts": 30064771328, "op": "mark",
                     "result": "state", "a": 30064771105, "b": 30064771200},
         "timer.late": {"event": "timer.late", "cpu": 3, "ts": 30064771328, "slot": 258,

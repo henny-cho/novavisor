@@ -43,7 +43,13 @@ steps:
     within_seconds: 5
   - pattern: "\\[dma\\] VM 0 resumed generation 4"
     within_seconds: 5
-  # The fault first, so the re-attach below is anchored after it. Without
+  # EL2 shuts the stream before it reports the fault, so this is the
+  # first of the three and the order below is the recovery itself: the
+  # route is taken away, the cause is named, the route comes back.
+  - event: "smmu.abort"
+    where: { stream: 16, vmid: 1 }
+    within_seconds: 5
+  # The fault next, so the re-attach below is anchored after it. Without
   # that anchor the step would be satisfied by the attach at boot, and
   # would assert nothing about recovery at all.
   - event: "smmu.fault"

@@ -59,6 +59,11 @@ variants:
         within_seconds: 10
       - command: "stop 0"
         within_seconds: 10
+      # EL2's own record of the stop taking the route away, matched from
+      # after the command was issued so no older abort can satisfy it.
+      - event: "smmu.abort"
+        where: { stream: 16, vmid: 1 }
+        within_seconds: 10
       # No fault happened, so EL2's own recovery never ran: the only
       # thing that could have moved this entry is the command above.
       - observe: "smmu.stream"

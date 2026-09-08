@@ -199,6 +199,11 @@ CommandRing<HalHw> g_commands{
 }
 
 [[nodiscard]] auto abort_stream(std::uint32_t stream_id, std::uint16_t vmid) noexcept -> bool {
+  // The stream losing its route, recorded before the write like the
+  // attach below: the submit that follows can still fail, so what is
+  // witnessed either way is the intent.
+  trace_emit(NOVA_TRACE_EV_SMMU_ABORT, stream_id, vmid);
+
   g_stream_table[stream_id][0] = make_abort_ste()[0];
   hw::publish_memory();
   const std::array commands{make_cfgi_ste(stream_id), make_tlbi_s12_vmall(vmid)};
