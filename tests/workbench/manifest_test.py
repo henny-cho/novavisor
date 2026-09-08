@@ -53,20 +53,50 @@ class ManifestJoinTest(unittest.TestCase):
 class ObservationWireTest(unittest.TestCase):
     """What the topology says about a topic beyond its value.
 
-    Three facts the UI cannot work out for itself: how coarse the sample
-    is, whether any run is held to it, and which topic dates it when the
-    memory shadows hardware. A panel-and-column schema travelled here
-    too, read by nothing at either end; a wire field no reader consumes
-    is a contract that cannot fail and so never gets fixed.
+    Facts the UI cannot work out for itself: how coarse the sample is,
+    whether any run is held to it, which topic dates it when the memory
+    shadows hardware, and which of its numbers are counter values. A
+    panel-and-column schema travelled here too, read by nothing at
+    either end; a wire field no reader consumes is a contract that
+    cannot fail and so never gets fixed.
     """
+
+    WORDS = {
+        "timer.queue": {"stamps": ["deadline"]},
+        "timer.programmed": {"stamps": [""]},
+        "dev.dma": {"stamps": ["deadline"]},
+        "sched.cpu": {"stamps": ["since"]},
+        "sched.slice": {"durations": [""]},
+        "timer.cntvoff": {"durations": [""]},
+    }
 
     def test_only_what_a_reader_consumes_travels(self):
         wire = observations.observation_rates()
-        self.assertEqual(set(wire["sched.cpu"]), {"rate", "asserted"})
+        self.assertEqual(set(wire["sched.run"]), {"rate", "asserted"})
         self.assertEqual(wire["ctx.el1"]["as_of"], "ctx.synced")
         for topic, info in wire.items():
             with self.subTest(topic=topic):
-                self.assertLessEqual(set(info), {"rate", "asserted", "as_of"})
+                self.assertLessEqual(
+                    set(info), {"rate", "asserted", "as_of", "stamps", "durations"}
+                )
+
+    def test_a_counter_value_says_whether_it_is_a_moment_or_a_length(self):
+        """A tick count is a moment or a length, and the two read alike.
+
+        Nothing in the image separates them — the DWARF reader folds a
+        typedef into its underlying type — so the words are declared,
+        like `hex`, and only the declaration can be checked. Not against
+        the join's field list either: that list narrows a DWARF struct
+        to the members that travel, is empty for four of these six, and
+        a shape rewrites a row's keys before the wire.
+        """
+        wire = observations.observation_rates()
+        for topic, words in self.WORDS.items():
+            with self.subTest(topic=topic):
+                self.assertEqual({key: wire[topic][key] for key in words}, words)
+        for topic in ("sched.run", "vgic.lr", "ctx.syndrome"):
+            self.assertNotIn("stamps", wire[topic])
+            self.assertNotIn("durations", wire[topic])
 
 
 class StepFieldTest(unittest.TestCase):

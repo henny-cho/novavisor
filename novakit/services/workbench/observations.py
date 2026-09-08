@@ -54,6 +54,13 @@ class Obs:
     # carrying when that shadow last became true. The publish stamp
     # dates the copy, which is a different question.
     as_of: str = ""
+    # Which of the reading's fields hold a CNTPCT instant, and which a
+    # count of ticks. No ELF can say it — the DWARF reader folds a
+    # typedef into its underlying type — so it is declared here beside
+    # `hex`. `""` names the reading itself; a name, a row's field at any
+    # depth of the shaped value.
+    stamps: tuple[str, ...] = ()
+    durations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -64,6 +71,11 @@ class Policy:
     hex: bool = False
     shape: derive.Shape | None = None
     as_of: str = ""
+    # A u64 that is a moment and a u64 that is a length read alike, and
+    # neither reads as a time at all. The pair of `hex`: a presentation
+    # word the image cannot answer. See `Obs` for what the names mean.
+    stamps: tuple[str, ...] = ()
+    durations: tuple[str, ...] = ()
 
 
 
@@ -76,16 +88,18 @@ PUBLISH_HZ = 1_000_000 / abi.read_constexprs(abi.TELEMETRY_COMPONENT, wanted={"k
 
 POLICY: dict[str, Policy] = {
     # Scheduler panel
-    "sched.cpu": Policy(rate_hz=20, shape=derive.none_if_unset),
+    # `since` is when the core's current vCPU became resident, so the
+    # panel can say how long it has been there rather than at what tick.
+    "sched.cpu": Policy(rate_hz=20, shape=derive.none_if_unset, stamps=("since",)),
     "sched.slots": Policy(rate_hz=20),
     "sched.run": Policy(rate_hz=20),
     "sched.affinity": Policy(rate_hz=2),
     "sched.valid": Policy(rate_hz=2),
-    "sched.slice": Policy(rate_hz=10),
+    "sched.slice": Policy(rate_hz=10, durations=("",)),
     # Timer panel
-    "timer.queue": Policy(shape=derive.timer_armed),
-    "timer.programmed": Policy(shape=derive.none_if_unset),
-    "timer.cntvoff": Policy(rate_hz=2),
+    "timer.queue": Policy(shape=derive.timer_armed, stamps=("deadline",)),
+    "timer.programmed": Policy(shape=derive.none_if_unset, stamps=("",)),
+    "timer.cntvoff": Policy(rate_hz=2, durations=("",)),
     "vm.generation": Policy(rate_hz=2),
     # Context panel — the whole trap frame, twice a second.
     "ctx.trap": Policy(rate_hz=2, hex=True, as_of="ctx.synced"),
@@ -115,7 +129,7 @@ POLICY: dict[str, Policy] = {
     "vgic.capacity": Policy(rate_hz=2),
     # Devices panel
     "dev.uart": Policy(rate_hz=5),
-    "dev.dma": Policy(rate_hz=5, shape=derive.none_if_unset),
+    "dev.dma": Policy(rate_hz=5, shape=derive.none_if_unset, stamps=("deadline",)),
     # Polled rather than read once with the tables it points at: a fault
     # quarantines a stream, and the entry that changes is this one. At
     # the firmware's own rate because a stream's transit through
@@ -152,6 +166,8 @@ def _joined() -> tuple[Obs, ...]:
                 hex=POLICY[want.topic].hex,
                 shape=POLICY[want.topic].shape,
                 as_of=POLICY[want.topic].as_of,
+                stamps=POLICY[want.topic].stamps,
+                durations=POLICY[want.topic].durations,
             )
             for want in observe.OBSERVED
         )
@@ -269,6 +285,10 @@ def observation_rates() -> dict[str, dict]:
         info: dict = {"rate": obs.rate_hz, "asserted": obs.topic in asserted}
         if obs.as_of:
             info["as_of"] = obs.as_of
+        if obs.stamps:
+            info["stamps"] = list(obs.stamps)
+        if obs.durations:
+            info["durations"] = list(obs.durations)
         out[obs.topic] = info
     return out
 

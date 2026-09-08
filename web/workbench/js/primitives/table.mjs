@@ -5,31 +5,51 @@ import { el } from "../format.mjs";
 
 /* How a decoded value reads: a flag as a mark, anything structured as
    its JSON, absent as an em dash. */
-export function fmt(shown) {
+function fmt(shown) {
   if (typeof shown === "boolean") return shown ? "●" : "·";
   if (shown !== null && typeof shown === "object") return JSON.stringify(shown);
   return String(shown ?? "—");
 }
 
-/* One cell: what to show, and whether it moved. */
+/* One cell: what to show, and whether it moved. `text` is the words a
+   converted value reads as, with `title` keeping the raw reading. */
 export class Cell {
   constructor(shown, moved = false) {
     this.shown = shown;
     this.moved = Boolean(moved);
+    this.text = null;
+    this.title = "";
   }
 }
 
-/* A reading and the mask of what moved in it, walked together. */
+/* What a cell reads as: its own words where it has them, else the value. */
+export const read = (cell) => cell.text ?? fmt(cell.shown);
+
+/* A reading and the mask of what moved in it, walked together.
+
+   `unit` is how this topic's numbers read as time — the manifest's own
+   words for it, since a counter value carries no unit — asked for by
+   the key the walk arrived at. Handed down the walk, so every cell of
+   the reading gets it wherever a renderer picks it up. */
 export class Cursor extends Cell {
-  constructor(shown, mask) {
+  constructor(shown, mask, unit = null, key = "") {
     super(shown, mask === true);
     this.mask = mask;
+    this.unit = unit;
+    const said = unit?.(key, shown);
+    if (said) {
+      this.text = said.text;
+      this.title = said.title;
+    }
   }
 
   /* A child by key or index. true at a node means the node itself changed shape. */
   get(key) {
     const inner = this.mask === true ? true : this.mask?.[String(key)];
-    return new Cursor(this.shown?.[key], inner);
+    /* An element of an array is one of the reading's own values, which
+       the manifest names ""; a member of a record is its named field. */
+    const named = Array.isArray(this.shown) ? "" : String(key);
+    return new Cursor(this.shown?.[key], inner, this.unit, named);
   }
 
   /* An array's elements, as cursors. */
@@ -59,20 +79,26 @@ export function table(headers, rows, options = {}) {
       if (!(cell instanceof Cell)) {
         throw new BareCell(`table cell is neither a cursor nor plain(): ${String(cell)}`);
       }
-      row.append(el("td", cell.moved ? "moved" : "", fmt(cell.shown)));
+      const shown = el("td", cell.moved ? "moved" : "", read(cell));
+      if (cell.title) shown.title = cell.title;
+      row.append(shown);
     }
     node.append(row);
   }
   return node;
 }
 
-export function section(title, moved = false) {
-  return el("div", moved ? "psec-h moved" : "psec-h", title);
-}
+/* A line of text carrying the provenance mark, and the raw reading
+   behind it where the words on screen are a conversion of one. */
+const line = (className, text, moved, hint) => {
+  const node = el("div", moved ? `${className} moved` : className, text);
+  if (hint) node.title = hint;
+  return node;
+};
 
-export function note(text, moved = false) {
-  return el("div", moved ? "pnote moved" : "pnote", text);
-}
+export const section = (title, moved = false, hint = "") => line("psec-h", title, moved, hint);
+
+export const note = (text, moved = false, hint = "") => line("pnote", text, moved, hint);
 
 /* Every field name the records in a list carry, in first-seen order. */
 const columnsOf = (items) => [
@@ -114,5 +140,5 @@ export function generic(cursor) {
       cursor.keys().map((key) => [plain(key), cursor.get(key)]),
     );
   }
-  return note(fmt(held), cursor.moved);
+  return note(read(cursor), cursor.moved, cursor.title);
 }

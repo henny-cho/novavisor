@@ -67,6 +67,18 @@ export const RATES = {
   "smp.mode": 2, "smp.mail": 2, "smp.budget": 2, "vgic.synced": 10, "vm.table": 2,
 };
 
+/* Which of a topic's numbers are counter values, as the manifest
+   declares it: the drawer converts these to times, and a page fed
+   without them measures a table that skips the conversion. */
+const WORDS = {
+  "sched.cpu": { stamps: ["since"] },
+  "sched.slice": { durations: [""] },
+  "timer.queue": { stamps: ["deadline"] },
+  "timer.programmed": { stamps: [""] },
+  "timer.cntvoff": { durations: [""] },
+  "dev.dma": { stamps: ["deadline"] },
+};
+
 /* Which topic dates which shadow of hardware, as the manifest declares
    it: the drawer draws these as no row of their own, so a page fed
    without them renders two rows the bridge's own topology would not. */
@@ -98,7 +110,7 @@ export function topology() {
     observations: Object.fromEntries(
       Object.entries(RATES).map(([topic, rate]) => [
         topic,
-        { rate, asserted: false, ...(AGES[topic] ? { as_of: AGES[topic] } : {}) },
+        { rate, asserted: false, ...(AGES[topic] ? { as_of: AGES[topic] } : {}), ...WORDS[topic] },
       ]),
     ),
     taxonomy: { badges: ["TRAP", "IRQ", "VGIC", "GIC", "SCHED", "SMP", "PSCI", "DMA", "SMMU", "WDG", "BOOT", "MUX", "VUART", "FAULT"],
@@ -146,8 +158,8 @@ const trapCtx = {
 export function readings() {
   const slots = 8;
   return {
-    "sched.cpu": [{ current: 0, fp: 0, fp_trap: false, idling: false },
-                  { current: 4, fp: null, fp_trap: false, idling: true }],
+    "sched.cpu": [{ current: 0, since: 3_990_000, fp: 0, fp_trap: false, idling: false },
+                  { current: 4, since: 3_995_000, fp: null, fp_trap: false, idling: true }],
     "sched.run": Array.from({ length: slots }, (_, i) => (i % 4 ? null : { state: "kRunning" })),
     "sched.slots": Array.from({ length: slots }, (_, i) => (i % 4 ? "kOff" : "kOn")),
     "sched.slice": 10,
@@ -167,12 +179,12 @@ export function readings() {
                   { ctlr: "0x0", group1: [32, 33], enabled: [], pending: [] }],
     "vgic.token": [[{ pintid: 48 }], []],
     "vgic.synced": Array.from({ length: slots }, () => ({ synced_at: 4000 })),
-    "timer.queue": [[{ slot: 1, deadline: "0x1234" }], [{ slot: 0, deadline: "0x99" }]],
-    "timer.programmed": ["0x5000", "0x6000"],
-    "timer.cntvoff": [0, 0],
+    "timer.queue": [[{ slot: 1, deadline: 4_010_000 }], [{ slot: 0, deadline: 4_002_000 }]],
+    "timer.programmed": [4_002_000, 4_010_000],
+    "timer.cntvoff": [625_000, 0],
     "dev.uart": [{ count: 3, head: 1, imsc: "0x10" }, { count: 0, head: 0, imsc: "0x0" }],
     "dev.dma": { entries_: [{ device_id: 0, owner_vm: 0, state: "kAssigned", generation: 1,
-                              deadline: "0x0", bus_master_blocked: false }], count_: 1 },
+                              deadline: 0, bus_master_blocked: false }], count_: 1 },
     "dev.watchdog": [7, 7],
     "ivc.page": { a2b: { widx: "0x5", ridx: "0x2", slots: [0, 0, 0, 0] } },
     "smp.online": [true, true],

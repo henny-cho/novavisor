@@ -17,15 +17,15 @@
    reader's call, not a fixed cap. Only visible drawers render, and only
    those a changed topic actually feeds. */
 
-import { clear, el, elapsed, micros, stamp } from "./format.mjs";
+import { clear, ecName, el, elapsed, micros, signed, stamp } from "./format.mjs";
 import {
   BareCell,
   Cell,
   Cursor,
-  fmt,
   generic,
   note,
   plain,
+  read,
   section,
   table,
 } from "./primitives/table.mjs";
@@ -62,6 +62,9 @@ export function createPanels({ tabs, host }) {
   const dirty = new Set(); // drawers whose topics changed since the last settle
   let timerSlots = [];
   let observations = {};
+  /* The firmware's own vocabulary, for naming a code the bridge decoded
+     out of a register rather than decoding one here. */
+  let taxonomy = {};
   let ctxSlot = 0;
 
   /* The drawers a previous session left open, of those that exist. Read
@@ -98,7 +101,28 @@ export function createPanels({ tabs, host }) {
            the cursor forward costs nothing — but that value must not be
            what the panel draws here. */
         new Cursor(undefined, undefined)
-      : new Cursor(latest.get(topic)?.value, moved.get(topic));
+      : new Cursor(latest.get(topic)?.value, moved.get(topic), counterWords(topic));
+
+  /* How a topic's counter values read, in the manifest's own words: a
+     stamp is an instant, placed against the same reference the header
+     is, and a duration is the length it counts. The raw ticks stay in
+     the tooltip, and stay in the cell until the clock's rate is known —
+     a division by no frequency is wrong by whatever it turns out to be. */
+  function counterWords(topic) {
+    const { stamps = [], durations = [] } = observations[topic] || {};
+    if (!stamps.length && !durations.length) return null;
+    const against = reference ?? newestInstant();
+    return (key, shown) => {
+      const instant = stamps.includes(key);
+      if (typeof shown !== "number" || !(instant || durations.includes(key))) return null;
+      /* Nothing has been at a stamp of zero, and no stamp can be placed
+         at all until some reading carries an instant of its own. */
+      if (instant && (!shown || against === null)) return null;
+      const us = micros(instant ? shown - against : shown, counterHz);
+      if (us === null) return null;
+      return { text: instant ? signed(us) : elapsed(us), title: `${shown}틱` };
+    };
+  }
 
   /* Drawings a drawer does itself, keyed by the drawer they belong to.
      Each is a join — the Scheduler cross-joins four topics into one
@@ -117,12 +141,15 @@ export function createPanels({ tabs, host }) {
         body.append(section("pCPU"));
         body.append(
           table(
-            ["cpu", "current", "fp", "fp_trap", "idling"],
+            /* `since` is when `current` became resident, so the pair
+               reads as which vCPU is on this core and for how long. */
+            ["cpu", "current", "since", "fp", "fp_trap", "idling"],
             at("sched.cpu")
               .rows()
               .map((cpu, index) => [
                 plain(index),
                 cpu.get("current"),
+                cpu.get("since"),
                 cpu.get("fp"),
                 cpu.get("fp_trap"),
                 cpu.get("idling"),
@@ -150,7 +177,7 @@ export function createPanels({ tabs, host }) {
         );
         const slice = at("sched.slice");
         if (slice.shown !== undefined) {
-          body.append(note(`slice ticks: ${fmt(slice.shown)}`, slice.moved));
+          body.append(note(`slice: ${read(slice)}`, slice.moved, slice.title));
         }
       },
     },
@@ -165,7 +192,9 @@ export function createPanels({ tabs, host }) {
           .rows()
           .forEach((slots, cpu) => {
             const armed = programmed.get(cpu);
-            body.append(section(`cpu${cpu} — programmed ${fmt(armed.shown)}`, armed.moved));
+            body.append(
+              section(`cpu${cpu} — programmed ${read(armed)}`, armed.moved, armed.title),
+            );
             body.append(
               table(
                 ["slot", "owner", "deadline"],
@@ -194,12 +223,13 @@ export function createPanels({ tabs, host }) {
     {
       id: "ctx",
       title: "Context",
-      draws: ["ctx.trap", "ctx.el1"],
+      draws: ["ctx.trap", "ctx.el1", "ctx.syndrome"],
       reads: ["sched.valid"],
       render(body) {
         const valid = at("sched.valid");
         const traps = at("ctx.trap");
         const banks = at("ctx.el1");
+        const hits = at("ctx.syndrome");
         /* Both shadow registers that live in hardware, so the heading
            carries when this slot's copy last became true rather than a
            sentence about when that usually happens. */
@@ -208,7 +238,10 @@ export function createPanels({ tabs, host }) {
           return age ? ` — ${age}` : "";
         };
         const picker = el("div", "pslots");
-        const count = Math.max(traps.rows().length, banks.rows().length);
+        /* Every reading of a slot offers it: the frame is polled at a
+           tenth the rate of the syndrome, so a picker built from the
+           frame alone would have no slots to pick early in a run. */
+        const count = Math.max(traps.rows().length, banks.rows().length, hits.rows().length);
         for (let slot = 0; slot < count; slot += 1) {
           const pick = el("button", "pslot", `s${slot}`);
           pick.type = "button";
@@ -238,6 +271,21 @@ export function createPanels({ tabs, host }) {
           }
           body.append(section(`s${ctxSlot} TrapContext${aged("ctx.trap")}`));
           body.append(table(["reg", "value", "reg", "value"], rows));
+        }
+        /* Why the trap was taken, as one line: the bridge split the
+           syndrome into its words and the topology names the class, so
+           nothing here reads a bit of it. */
+        const hit = hits.get(ctxSlot);
+        if (hit.shown) {
+          const ec = hit.get("ec").shown;
+          const said = [
+            `EC 0x${ec.toString(16)} ${ecName(taxonomy, ec)}`.trim(),
+            `IL ${read(hit.get("il"))}`,
+            `ISS ${read(hit.get("iss"))}`,
+            `FAR ${read(hit.get("far"))}`,
+            `ELR ${read(hit.get("elr"))}`,
+          ].join(" · ");
+          body.append(note(said, hit.moved));
         }
         const bank = banks.get(ctxSlot).get("el1");
         if (bank.shown) {
@@ -576,7 +624,7 @@ export function createPanels({ tabs, host }) {
     if (mine === null || against === null) return null;
     const us = micros(mine - against, counterHz);
     if (us === null) return null;
-    return `${reference === null ? "최신" : "선택"} ${us >= 0 ? "+" : "-"}${elapsed(us)}`;
+    return `${reference === null ? "최신" : "선택"} ${signed(us)}`;
   }
 
   function render(id) {
@@ -714,6 +762,7 @@ export function createPanels({ tabs, host }) {
     setTopology(topo) {
       timerSlots = Array.isArray(topo.timer_slots) ? topo.timer_slots : [];
       observations = topo.observations || {};
+      taxonomy = topo.taxonomy && typeof topo.taxonomy === "object" ? topo.taxonomy : {};
       /* The manifest states what is published, and its topic names say
          which drawer each reading is drawn in. */
       project();

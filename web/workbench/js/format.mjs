@@ -53,6 +53,11 @@ export function elapsed(us) {
   return size >= 1000 ? `${(size / 1000).toFixed(1)}ms` : `${size}us`;
 }
 
+/* A duration with the direction it points, for a value placed against
+   a reference instant: what a reader wants of a deadline is which side
+   of now it falls on. */
+export const signed = (us) => `${us >= 0 ? "+" : "-"}${elapsed(us)}`;
+
 /* Firmware identifiers with the k trimmed: kHvcAa64 reads as HvcAa64.
    Trimming a prefix is a rule; a table of prettier names would be a
    second vocabulary to keep in step with the first. */

@@ -103,8 +103,8 @@ describe("panel drawer", () => {
 
     const cores = findAll(host, "ptable")[0];
     assert.deepEqual(rowsOf(cores), [
-      ["0", "3", "●", "·", "·"],
-      ["1", "7", "·", "·", "●"],
+      ["0", "3", "—", "●", "·", "·"],
+      ["1", "7", "—", "·", "·", "●"],
     ]);
     /* The row number is computed here, so it never lights however much
        the reading beside it moved. */
@@ -198,21 +198,21 @@ describe("drawers from the manifest", () => {
         "ctx.trap": { as_of: "ctx.synced" },
         "ctx.el1": { as_of: "ctx.synced" },
         "ctx.synced": {},
-        "ctx.syndrome": { as_of: "ctx.synced" },
+        "ctx.novel": {},
       }),
     );
     panels.apply(snapshot("ctx.el1", [{ el1: { sctlr: "0x1" } }]));
-    panels.apply(snapshot("ctx.syndrome", [{ ec: 36, far: "0x9000000" }]));
+    panels.apply(snapshot("ctx.novel", [{ ec: 36, far: "0x9000000" }]));
     panels.settle();
 
-    /* The slot picker is the override speaking; the syndrome is a topic
-       no renderer claims, and it lands under `ctx` structured rather
-       than in a fallback drawer. */
+    /* The slot picker is the override speaking; a topic no renderer
+       claims lands under `ctx` structured rather than in a fallback
+       drawer. */
     const order = walk(host).filter(
       (node) => node.classes.has("pslots") || node.classes.has("psec-h"),
     );
     assert.equal(order[0].classes.has("pslots"), true);
-    assert.equal(order.at(-1).textContent, "ctx.syndrome");
+    assert.equal(order.at(-1).textContent, "ctx.novel");
     assert.deepEqual(rowsOf(findAll(host, "ptable").at(-1)), [["0", "36", "0x9000000"]]);
   });
 
@@ -298,6 +298,116 @@ describe("drawers from the manifest", () => {
     panels.setTopology(TOPO({ "novel.thing": {} }));
     assert.equal(chipNamed(tabs, "Context").getAttribute("aria-pressed"), "true");
     assert.equal(chipNamed(tabs, "novel").getAttribute("aria-pressed"), "false");
+  });
+});
+
+/* A counter value as the time it names.
+
+   The published copies are stamped with CNTPCT and nothing in the image
+   can say whether one of its u64s is a moment or a length — the DWARF
+   reader folds the typedef away — so the manifest declares it, and the
+   drawer is what turns the declaration into a reading a person can use.
+   What is tested is that the two words reach every table, an override's
+   and a derived one alike, and that a tick count with no clock behind
+   it stays a tick count. */
+describe("a counter value as the time it names", () => {
+  const WORDS = {
+    "timer.queue": { rate: 10, stamps: ["deadline"] },
+    "timer.programmed": { rate: 10, stamps: [""] },
+    "sched.slice": { rate: 10, durations: [""] },
+    "novel.dma": { rate: 5, stamps: ["deadline"] },
+  };
+  const TIMER = { observations: WORDS, timer_slots: ["slice"] };
+
+  /* A stamped reading, so the drawer has an instant to place the
+     others against — the same reference its header uses. */
+  const stamped = (topic, values, at) => ({
+    kind: "snapshot",
+    topic,
+    ts: 1e9,
+    src: "S",
+    data: { values, ts: at },
+  });
+
+  it("places a stamp against the reference and keeps the ticks behind it", () => {
+    const { panels, host } = harness(["timer"]);
+    panels.setTopology(TIMER);
+    panels.setClock(1e6); // a microsecond a tick, so the arithmetic is readable
+    panels.apply(stamped("timer.queue", [[{ slot: 0, deadline: 5_014_200 }]], 5_000_000));
+    panels.settle();
+
+    const cell = findAll(host, "ptable")[0].children[1].children[2];
+    assert.equal(cell.textContent, "+14.2ms");
+    assert.equal(cell.title, "5014200틱");
+  });
+
+  it("keeps a tick count as itself until the clock's rate arrives", () => {
+    const { panels, host } = harness(["timer"]);
+    panels.setTopology(TIMER);
+    panels.apply(stamped("timer.queue", [[{ slot: 0, deadline: 5_014_200 }]], 5_000_000));
+    panels.settle();
+
+    // A difference between two counter values is not a duration yet.
+    assert.equal(findAll(host, "ptable")[0].children[1].children[2].textContent, "5014200");
+  });
+
+  it("reads the whole reading where the manifest names no field", () => {
+    const { panels, host } = harness(["timer", "sched"]);
+    panels.setTopology(TIMER);
+    panels.setClock(1e6);
+    panels.apply(stamped("timer.queue", [[]], 5_000_000));
+    panels.apply(stamped("timer.programmed", [4_998_000], 5_000_000));
+    panels.apply(stamped("sched.slice", 10_000, 5_000_000));
+    panels.settle();
+
+    /* "" is the value itself: one core's programmed deadline is a
+       stamp, and the slice is the length it lasts. */
+    const head = findAll(host, "psec-h").find((line) => line.textContent.includes("programmed"));
+    assert.equal(head.textContent, "cpu0 — programmed -2.0ms");
+    const slice = findAll(host, "pnote").find((line) => line.textContent.startsWith("slice"));
+    assert.equal(slice.textContent, "slice: 10.0ms");
+    assert.equal(slice.title, "10000틱");
+  });
+
+  it("gives a derived table the same words as an override's", () => {
+    const { panels, tabs, host } = harness();
+    panels.setTopology(TIMER);
+    panels.setClock(1e6);
+    fire(chipNamed(tabs, "novel"), "click");
+    panels.apply(stamped("novel.dma", [{ deadline: 5_001_000 }], 5_000_000));
+    panels.settle();
+
+    /* No renderer claims this topic, and the generic table it falls to
+       still says what its numbers mean — the point of declaring them at
+       the manifest rather than at each table. */
+    assert.deepEqual(rowsOf(findAll(host, "ptable").at(-1)), [["0", "+1.0ms"]]);
+  });
+
+  it("names the class of the trap the picked slot took", () => {
+    const { panels, host } = harness(["ctx"]);
+    panels.setTopology({
+      observations: { "ctx.syndrome": { rate: 10 } },
+      taxonomy: { esr_ec: { 22: "kHvcAa64" } },
+    });
+    panels.apply(
+      snapshot("ctx.syndrome", [
+        null,
+        { esr: "0x5a000000", ec: 22, il: 1, iss: "0x0", far: "0x80b0100", elr: "0x50000214" },
+      ]),
+    );
+    panels.settle();
+
+    /* The bridge split the syndrome and the topology names the class,
+       so the drawer decodes nothing — and it answers for the slot the
+       reader picked, not for slot 0. */
+    const line = () =>
+      findAll(host, "pnote").find((node) => node.textContent.startsWith("EC "));
+    assert.equal(line(), undefined, "slot 0 has never trapped");
+    fire(findAll(host, "pslot")[1], "click");
+    assert.equal(
+      line().textContent,
+      "EC 0x16 HvcAa64 · IL 1 · ISS 0x0 · FAR 0x80b0100 · ELR 0x50000214",
+    );
   });
 });
 
