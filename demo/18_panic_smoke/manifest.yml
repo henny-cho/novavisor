@@ -25,3 +25,7 @@ steps:
     within_seconds: 10
   - pattern: "data abort \\(EL2\\)"
     within_seconds: 10
+  # The report and the record reach the verifier by different routes, so
+  # the ring is what places the panic against what the machine last did.
+  - event: panic
+    within_seconds: 10

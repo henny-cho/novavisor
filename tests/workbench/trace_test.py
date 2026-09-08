@@ -679,6 +679,7 @@ class DecodeTest(unittest.TestCase):
                         "ticks": 95},
         "vm.lifecycle": {"event": "vm.lifecycle", "cpu": 3, "ts": 30064771328, "ticks": 223,
                          "vm": 258, "outcome": "restarted", "generation": 7},
+        "panic": {"event": "panic", "cpu": 3, "ts": 30064771328, "caller": "0x700000021"},
         "trace.gap": {"event": "trace.gap", "cpu": 3, "ts": 30064771328, "count": 258,
                       "ticks": 223},
     }

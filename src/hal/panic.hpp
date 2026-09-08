@@ -10,6 +10,7 @@
 #include "hal/console.hpp"
 #include "hal/cpu.hpp"
 #include "hal/gic.hpp"
+#include "hal/trace.hpp"
 #include "nova/panic.hpp"
 
 #include <atomic>
@@ -51,6 +52,9 @@ inline void announce(Parts... parts) noexcept {
   case Role::kFirst:
     break;
   }
+  // The record precedes the report, so the ring holds the panic even if the
+  // console does not finish; a bystander and a recursive fault emit nothing.
+  trace_emit(NOVA_TRACE_EV_PANIC, 0, reinterpret_cast<std::uint64_t>(__builtin_return_address(0)));
   console::line("\n", kPrefix, parts..., "\n");
 }
 

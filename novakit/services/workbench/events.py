@@ -249,6 +249,12 @@ EVENTS: tuple[Event, ...] = (
           "VM 수명주기 종결", code=_CODES["NOVA_TRACE_EV_VM_LIFECYCLE"],
           fields=("vm", "since", "outcome|generation"), span="ts", group="vm",
           names={"outcome": "NOVA_TRACE_LC_"}),
+    # The first failure. Console text and the ring cannot be ordered
+    # against each other, so this is what says which records the machine
+    # wrote before it died. No symbol: announce() is a header template
+    # whose only instantiations carry template arguments, so no stop.
+    Event("panic", "", "", (), "EL2 패닉", code=_CODES["NOVA_TRACE_EV_PANIC"],
+          fields=("", "caller", ""), hex=("caller",)),
     # Not a moment in the firmware but a statement about the stream:
     # written by the reader where the records it could not recover
     # would have been. No symbol, so it is never offered as a stop

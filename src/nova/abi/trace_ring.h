@@ -196,6 +196,11 @@
  * table. `a` is the stream, `b` the VMID it was serving. */
 #define NOVA_TRACE_EV_SMMU_ABORT 21
 
+/* The first failure claiming the machine. `b` is the return address of
+ * the claimant, which is the one thing every fatal path has — what it
+ * failed on follows in the console report. `a`, `c` unused. */
+#define NOVA_TRACE_EV_PANIC 22
+
 /* Codes the host writes into the same stream, far above the firmware's
  * numbering and read as a separate family, so one can never be mistaken
  * for an unimplemented hook.
