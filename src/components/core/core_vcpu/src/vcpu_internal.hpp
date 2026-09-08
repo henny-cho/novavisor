@@ -58,7 +58,10 @@ inline constexpr std::size_t kNoVcpu = ~std::size_t{0};
 // core's FP register file, and a mirror of the last CPTR_EL2.TFP value
 // written so the switch path can skip the common no-change case.
 struct CpuSched {
-  std::size_t   current = kNoVcpu;
+  std::size_t current = kNoVcpu;
+  // When `current` last changed, on the clock the trace ring stamps
+  // with, so a switch record can say how long the outgoing vCPU stayed.
+  std::uint64_t since = 0;
   fp::Ownership fp;
   bool          fp_trap = false; // meaningless until seed_fp_trap runs on this core
   bool          idling  = false; // inside schedule_out's wfi+drain loop (see schedule_after_retire)

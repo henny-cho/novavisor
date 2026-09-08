@@ -172,9 +172,12 @@ EVENTS: tuple[Event, ...] = (
     Event("mmio", "nova::trap::dispatch_data_abort", paths.EDGE_MMIO, (),
           "게스트 MMIO 접근 트랩", code=_CODES["NOVA_TRACE_EV_MMIO"],
           fields=("access", "ipa", "value"), hex=("ipa", "value")),
+    # The record is the outgoing vCPU's residency, so a run reads as a
+    # gantt of who held which core. The first residency on a core has a
+    # start like every other: enter_cpu stamps it on the first entry.
     Event("sched.switch", "nova::vcpu::(anonymous)::switch_to", "", ("", "next"),
           "vCPU 전환", code=_CODES["NOVA_TRACE_EV_SCHED_SWITCH"],
-          fields=("next", "prev", "")),
+          fields=("next", "since", "prev"), span="ts"),
     # The moments that used to be read off console text or inferred from
     # a snapshot delta. Each sits on the normal path, not on an error
     # branch: an edge whose evidence only appears when something breaks

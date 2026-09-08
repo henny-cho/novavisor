@@ -165,7 +165,7 @@ auto pick_next() noexcept -> std::size_t {
 void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
   CpuSched& cs   = me();
   Vcpu&     next = g_vcpus[next_idx];
-  trace_emit(NOVA_TRACE_EV_SCHED_SWITCH, static_cast<std::uint32_t>(next_idx), cs.current);
+  trace_emit(NOVA_TRACE_EV_SCHED_SWITCH, static_cast<std::uint32_t>(next_idx), cs.since, cs.current);
 
   if (cs.current != kNoVcpu) {
     Vcpu& cur     = g_vcpus[cs.current];
@@ -193,6 +193,7 @@ void switch_to(TrapContext* live, std::size_t next_idx) noexcept {
 
   next.state = sched::State::kRunning;
   cs.current = next_idx;
+  cs.since   = hyp_timer::now_relaxed();
   reschedule_slice();
 }
 
@@ -364,6 +365,7 @@ auto current_index() noexcept -> std::size_t {
       seed_fp_trap(cs.fp.trap_needed(next)); // unconditional: a secondary's CPTR is untouched until here
       v.state    = sched::State::kRunning;
       cs.current = next;
+      cs.since   = hyp_timer::now_relaxed();
       reschedule_slice();
       nova_vcpu_enter(v.ctx.elr, v.ctx.sp, v.ctx.spsr, v.ctx.x[0]);
     }

@@ -187,7 +187,7 @@ class ManifestResolutionTest(unittest.TestCase):
         sched = resolved["sched.cpu"]
         self.assertEqual(sched.type.count, observations.MAX_CPUS)
         names = [member.name for member in sched.type.element.fields]
-        self.assertEqual(names, ["current", "fp", "fp_trap", "idling"])
+        self.assertEqual(names, ["current", "since", "fp", "fp_trap", "idling"])
 
         published = resolved["sched.slots"]
         self.assertEqual(published.type.count, observations.MAX_VCPUS)

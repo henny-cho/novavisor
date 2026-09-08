@@ -306,7 +306,9 @@ auto retire_vcpu(std::size_t slot) noexcept -> bool {
     g_alive.fetch_sub(1, std::memory_order_acq_rel);
   }
   if (was_current) {
-    me().current = kNoVcpu;
+    CpuSched& cs = me();
+    cs.current   = kNoVcpu;
+    cs.since     = hyp_timer::now_relaxed();
     vgic::vacate();
     reschedule_slice();
   }

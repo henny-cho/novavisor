@@ -46,7 +46,11 @@ from .protocol import Topic
 #    when they belong to a different build. A version 4 file can answer
 #    neither, and a report that guessed at both would be a wrong table
 #    rather than a missing one.
-VERSION = 5
+# 6: sched.switch's second word became when the outgoing vCPU was
+#    switched in rather than which vCPU it was, so a version 5 file's
+#    switches would draw as spans of nonsense width and count as
+#    latency samples.
+VERSION = 6
 META = "meta.json"
 WIRE = "wire.jsonl"
 RECORDS = "trace.bin"

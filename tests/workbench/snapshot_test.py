@@ -235,8 +235,9 @@ class ElfRamProviderTest(unittest.TestCase):
                 # the manifest, so neither is a number typed in here.
                 ram.truncate(_observed_top() - RAM_BASE)
                 ram.seek(sched.address - RAM_BASE)
-                # CpuSched: current=1, fp=kNoOwner, fp_trap=1, idling=0
-                ram.write(struct.pack("<QQ??6x", 1, (1 << 64) - 1, True, False))
+                # CpuSched: current=1, since=0x2000, fp=kNoOwner,
+                # fp_trap=1, idling=0
+                ram.write(struct.pack("<QQQ??6x", 1, 0x2000, (1 << 64) - 1, True, False))
 
             # The one place the provider is left to resolve the image
             # itself, which is what `view=None` means. Everything else
@@ -252,11 +253,11 @@ class ElfRamProviderTest(unittest.TestCase):
         # reader would have to recognise.
         self.assertEqual(
             cpus[0],
-            {"current": 1, "fp": None, "fp_trap": True, "idling": False},
+            {"current": 1, "since": 0x2000, "fp": None, "fp_trap": True, "idling": False},
         )
         self.assertEqual(
             cpus[1],
-            {"current": 0, "fp": 0, "fp_trap": False, "idling": False},
+            {"current": 0, "since": 0, "fp": 0, "fp_trap": False, "idling": False},
         )
 
     def test_a_short_backend_is_rejected(self):

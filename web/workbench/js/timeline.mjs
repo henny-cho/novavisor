@@ -76,6 +76,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
   let order = []; /* catalogue order, for stable lane placement */
   const lanes = []; /* event ids seen this run, in catalogue order */
   let freq = 0; /* CNTFRQ, for the microsecond axis */
+  let cpus = 1; /* cores the board published; a span lane holds one sub-lane each */
   let ceiling = FALLBACK_BUCKETS; /* what the bridge will answer in */
   let span = null; /* what the bridge still holds */
   /* A chosen window is kept apart from the follow tail. The tail is
@@ -100,6 +101,13 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
 
   function setLimits(limits) {
     if (limits && limits.buckets) ceiling = limits.buckets;
+  }
+
+  /* How many cores to split a span lane across. The board publishes the
+     count, so a run on a wider machine divides its lanes differently
+     without a number being retyped here. */
+  function setBoard(board) {
+    cpus = Math.max(1, Number(board && board.cpus) || 1);
   }
 
   /* Where a record's band ends: its own stamp, or the argument word the
@@ -362,18 +370,19 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     return {
       ink: style.getPropertyValue("--ink3").trim() || "#888",
       line: style.getPropertyValue("--line").trim() || "#333",
-      warn: style.getPropertyValue("--warn").trim() || "#a8770a",
       cpu: CPU_COLOURS.map((name) => style.getPropertyValue(name).trim() || "#888"),
       font: style.getPropertyValue("--mono").trim() || "monospace",
     };
   }
 
-  /* Diagonal hatching, built once per colour. A gap is the one thing on
-     this strip that is not an observation, and a solid band would read
-     as one — the stripes say "nothing was here to draw". */
-  let hatchFor = null;
+  /* Diagonal hatching, built once per colour and kept, since a band's
+     colour now changes per record. A stretch covers an interval rather
+     than a moment, and stripes say so where a solid fill would read as
+     one very wide mark. */
+  const hatchFor = new Map();
   function hatch(colour, ratio) {
-    if (hatchFor && hatchFor.colour === colour && hatchFor.ratio === ratio) return hatchFor.pattern;
+    const key = `${colour}@${ratio}`;
+    if (hatchFor.has(key)) return hatchFor.get(key);
     const step = Math.max(4, Math.round(5 * ratio));
     const tile = document.createElement("canvas");
     tile.width = tile.height = step;
@@ -387,8 +396,9 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     pen.moveTo(0, step * 2);
     pen.lineTo(step * 2, 0);
     pen.stroke();
-    hatchFor = { colour, ratio, pattern: context.createPattern(tile, "repeat") };
-    return hatchFor.pattern;
+    const pattern = context.createPattern(tile, "repeat");
+    hatchFor.set(key, pattern);
+    return pattern;
   }
 
   /* Always from the held records, never from what is already painted:
@@ -540,6 +550,11 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
      watching, and a two-pixel tick at its far end says the opposite —
      that the strip either side of it is continuous.
 
+     A lane is split into one sub-lane per core, hatched in that core's
+     colour. Stretches on different cores overlap in time, so one band
+     per lane would stack them and a run of switches would read as a
+     solid block rather than a gantt of who held which core.
+
      Painted before the marks, so a mark that survived inside a busy
      window still sits on top. A `from` of zero means the hole opened
      before anything was recorded, so the band runs off the left edge
@@ -548,8 +563,8 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
     if (!lanes.some((id) => byId.get(id)?.span)) return;
     const width = Math.max(1, window_.to - window_.from);
     const x = (ts) => at.gutter + ((ts - window_.from) / width) * at.plot;
-    context.fillStyle = hatch(colours.warn, at.scale);
     const rows = onScreen();
+    const sub = (at.lane - 4 * at.scale) / cpus;
     for (let index = 0; index < rows.n; index += 1) {
       const code = rows.codeAt(index);
       const ends = endByCode.get(code);
@@ -559,11 +574,15 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
       const record = rows.read(index);
       const from = Math.max(at.gutter, record.b ? x(record.b) : at.gutter);
       const to = Math.min(at.gutter + at.plot, x(ends(record)));
+      /* Clamped because the count is 1 until a topology arrives, and a
+         band has to stay inside its own lane. */
+      const cpu = Math.min(record.cpu, cpus - 1);
+      context.fillStyle = hatch(colours.cpu[cpu % colours.cpu.length], at.scale);
       context.fillRect(
         from,
-        lane * at.lane + 2 * at.scale,
+        lane * at.lane + 2 * at.scale + cpu * sub,
         Math.max(1, to - from),
-        at.lane - 4 * at.scale,
+        Math.max(1, sub),
       );
     }
   }
@@ -929,6 +948,7 @@ export function createTimeline({ strip, canvas, foldButton, followButton, reques
   return {
     setCatalogue,
     setLimits,
+    setBoard,
     note,
     apply,
     reset,

@@ -37,10 +37,16 @@ steps:
   # busy guest never yields and never waits, so nothing but that slot can
   # take the core from it — but a step finds the first match after the
   # last, so this is a sequence and not an adjacency.
+  #
+  # The switch names both ends, so which way it went is asserted too:
+  # off the busy guest (slot 0) and onto the sleeper (slot 2). Its width
+  # is not — that is how long busy held the core, which is however long
+  # the sleeper's wfi lasted.
   - event: "timer.late"
     where: { slot: 0 }
     within_seconds: 5
   - event: "sched.switch"
+    where: { next: 2, prev: 0 }
     within_seconds: 5
   - pattern: "preempt: wfi done"
     within_seconds: 25

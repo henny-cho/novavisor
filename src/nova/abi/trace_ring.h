@@ -143,7 +143,13 @@
 #define NOVA_TRACE_EV_VGIC_PRIVATE 4
 #define NOVA_TRACE_EV_VGIC_INJECT  5
 #define NOVA_TRACE_EV_VGIC_EOI     6
+
+/* A core changed hands. `a` is the incoming vCPU and `c` the outgoing
+ * one; `b` is when that outgoing vCPU came in, so the record is a span
+ * of its residency. An outgoing kNoVcpu (~0) means the core stood empty
+ * from the moment its last guest retired. */
 #define NOVA_TRACE_EV_SCHED_SWITCH 7
+
 #define NOVA_TRACE_EV_MMIO         8
 #define NOVA_TRACE_EV_GIC_ACK      9
 #define NOVA_TRACE_EV_CROSS_CALL   10

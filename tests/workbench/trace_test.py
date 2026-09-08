@@ -651,8 +651,9 @@ class DecodeTest(unittest.TestCase):
                  "esr": "0x700000021", "far": "0x700000080"},
         "mmio": {"event": "mmio", "cpu": 3, "ts": 30064771328, "size": 2, "write": True,
                  "ipa": "0x700000021", "value": "0x700000080"},
+        # Deliberate: `b` became the residency start, so this is a span now.
         "sched.switch": {"event": "sched.switch", "cpu": 3, "ts": 30064771328, "next": 258,
-                         "prev": 30064771105},
+                         "prev": 30064771200, "ticks": 223},
         "gic.ack": {"event": "gic.ack", "cpu": 3, "ts": 30064771328, "intid": 258},
         "smp.cross": {"event": "smp.cross", "cpu": 3, "ts": 30064771328, "vm": 258,
                       "owner": 30064771105},

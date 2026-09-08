@@ -480,6 +480,7 @@ function onTopo(data) {
   setStops(topo.stops);
   timeline.setCatalogue(topo.stops);
   timeline.setLimits(topo.limits);
+  timeline.setBoard(topo.board);
   /* Connect-time session state: the life events that built this picture
      may already be evicted from the backlog, so the fresh topo is the
      only reliable carrier for a late joiner. */
