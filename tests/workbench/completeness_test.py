@@ -16,12 +16,26 @@ from __future__ import annotations
 import asyncio  # noqa: TID251 — the boundaries under test are loop callbacks
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
-from novakit.services.workbench import events, server, trace, trace_drain
+from novakit.services.workbench import (
+    events,
+    history,
+    recording,
+    server,
+    trace,
+    trace_drain,
+)
 from novakit.services.workbench.session import Deps, Prepared, Session, Target
+from tests.support import bridge as support
 from tests.workbench.session_test import FakeLive, deps_for, scenario, store
 from tests.workbench.trace_test import BIND, Region
+
+# The span record these tests sample, named by the catalogue rather than
+# spelled here: `BIND` beside it is the point event, and neither number
+# is this file's to know.
+LATE = events.BY_ID["timer.late"].code
 
 
 class LedgerTest(unittest.TestCase):
@@ -87,6 +101,112 @@ class LedgerTest(unittest.TestCase):
         totals = self.ledger().seal(producer_dead=True, tail_drained=False, absent=True)
         self.assertTrue(totals.absent)
         self.assertFalse(totals.complete)
+
+
+class SpanSampleTest(unittest.TestCase):
+    """The samples a run's span records are, and the quantile they support.
+
+    Kept by the ledger rather than re-walked per question: the counts and
+    the quantile are two readings of one stream, and a second walk is a
+    second chance to disagree about which records were in it.
+    """
+
+    def late(self, ts: int, due: int, slot: int = 1) -> trace.Record:
+        return trace.Record(ts=ts, code=LATE, cpu=0, a=slot, b=due, c=0)
+
+    def ledger(self, *records: trace.Record) -> trace.RunLedger:
+        book = trace.RunLedger()
+        book.consume(list(records))
+        return book
+
+    def test_a_whole_run_seals_the_quantile_its_samples_support(self):
+        book = self.ledger(self.late(110, 100), self.late(230, 200), self.late(305, 300))
+        totals = book.seal(producer_dead=True, tail_drained=True)
+        self.assertEqual(totals.latency, {(LATE, 1): 30})
+        self.assertEqual(totals.as_dict()["latency"], {f"{LATE}:1": 30})
+
+    def test_any_permille_is_answered_from_the_kept_samples(self):
+        """The wire carries the SLO's own quantile; a report may ask for
+        another, and both read the samples this one walk collected."""
+        book = self.ledger(self.late(110, 100), self.late(230, 200), self.late(305, 300))
+        book.seal(producer_dead=True, tail_drained=True)
+        self.assertEqual(book.quantile_of((LATE, 1), 500), 10)
+        self.assertEqual(book.quantile_of((LATE, 1), trace.SLO_PERMILLE), 30)
+
+    def test_an_incomplete_run_seals_no_quantile(self):
+        """A lost record is a lost sample; a quantile over holes overstates."""
+        book = self.ledger(self.late(110, 100), self.late(230, 200))
+        totals = book.seal(producer_dead=True, tail_drained=False)
+        self.assertEqual(totals.latency, {})
+        self.assertIsNone(book.quantile_of((LATE, 1), trace.SLO_PERMILLE))
+
+    def test_a_point_event_keeps_no_sample(self):
+        """Its `b` is an argument, not a start."""
+        book = self.ledger(trace.Record(ts=5, code=BIND, cpu=0, a=0, b=1, c=0))
+        self.assertEqual(book.seal(producer_dead=True, tail_drained=True).latency, {})
+        self.assertIsNone(book.quantile_of((BIND, 0), trace.SLO_PERMILLE))
+
+    def test_a_record_with_no_start_is_counted_but_not_sampled(self):
+        """A stretch that opened before anything was recorded has no
+        width; sampled, one record would read as the whole counter."""
+        book = self.ledger(self.late(110, 0), self.late(230, 200))
+        totals = book.seal(producer_dead=True, tail_drained=True)
+        self.assertEqual(totals.events, {(LATE, 1): 2})
+        self.assertEqual(totals.latency, {(LATE, 1): 30})
+
+    def test_each_breakdown_is_its_own_pool(self):
+        """A late slice and a late watchdog are not one distribution."""
+        book = self.ledger(self.late(110, 100, slot=1), self.late(500, 100, slot=2))
+        totals = book.seal(producer_dead=True, tail_drained=True)
+        self.assertEqual(totals.latency, {(LATE, 1): 10, (LATE, 2): 400})
+
+    def test_a_recording_answers_both_questions_from_one_ledger(self):
+        run = recording.Recording(
+            directory=Path("nowhere"),
+            meta={"producer_dead": True, "tail_drained": True},
+            records=[self.late(110, 100), self.late(230, 200)],
+        )
+        self.assertIs(run.totals(), run.ledger.sealed)
+        self.assertEqual(run.totals().latency, {(LATE, 1): 30})
+        self.assertEqual(run.latency((LATE, 1), 500), 10)
+
+
+class SealedWireTest(unittest.TestCase):
+    """What a sealed run says on the wire, and where a late joiner reads it."""
+
+    def totals(self) -> trace.RunTotals:
+        book = trace.RunLedger()
+        book.consume(
+            [trace.Record(ts=ts, code=LATE, cpu=0, a=1, b=ts - 20, c=0) for ts in (100, 200)]
+        )
+        return book.seal(producer_dead=True, tail_drained=True)
+
+    def test_the_frame_carries_the_quantile_and_the_clock_it_is_in(self):
+        """Ticks alone would need a second frame joined against them."""
+        made = support.bridge()
+        made._history.freq_hz = 1_000_000
+        data = made._sealed_data(4, self.totals())
+        self.assertEqual(data["phase"], "run-sealed")
+        self.assertEqual(data["run_id"], 4)
+        self.assertEqual(data["freq_hz"], 1_000_000)
+        self.assertEqual(data["latency"], {f"{LATE}:1": 20})
+        self.assertEqual(data["events"], {f"{LATE}:1": 2})
+
+    def test_the_last_seal_rides_the_connect_topology(self):
+        """The life event is not replayed and a frame window evicts, so a
+        browser that reloads after a run ended has nowhere else to read
+        the summary."""
+        made = support.bridge()
+        made._sealed[4] = self.totals()
+        topo = made.store.connect_frames(made._live_state())[0]
+        self.assertEqual(topo["data"]["sealed"], made._sealed_data(4, self.totals()))
+
+    def test_a_bridge_with_nothing_sealed_says_so_rather_than_omitting_it(self):
+        """The replay strip removes exactly the names live state carries;
+        a key that appeared only on some bridges would survive into one."""
+        state = support.bridge()._live_state()
+        self.assertIn("sealed", state)
+        self.assertIsNone(state["sealed"])
 
 
 class CountingDimensionTest(unittest.TestCase):
@@ -384,9 +504,11 @@ class SealOnceTest(unittest.TestCase):
             self._sealed: dict[int, trace.RunTotals] = {}
             self._totals = totals
             self._recorder = None
+            self._history = history.History(1)
             self.drains = 0
 
         finalize_run = server.Bridge.finalize_run
+        _sealed_data = server.Bridge._sealed_data
 
         @property
         def _trace_service(self):

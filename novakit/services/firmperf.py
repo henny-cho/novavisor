@@ -115,7 +115,9 @@ def _latency(runs: list[recording.Recording], key: tuple[int, int]) -> dict:
     entry = events.BY_CODE.get(key[0])
     if entry is None or not entry.span:
         return {}
-    claimed = [q for q in (run.latency(key, 999) for run in runs) if q is not None]
+    claimed = [
+        q for q in (run.latency(key, trace.SLO_PERMILLE) for run in runs) if q is not None
+    ]
     return {"p99_9_ticks": max(claimed) if claimed else None, "p99_9_runs": len(claimed)}
 
 
@@ -284,7 +286,9 @@ def verify(
             where,
             "a sample is entered before it was due, or written before it was entered",
         )
-        _require(run.latency(key, 999) is not None, where, "no p99.9 could be claimed")
+        _require(
+            run.latency(key, trace.SLO_PERMILLE) is not None, where, "no p99.9 could be claimed"
+        )
 
 
 def gate() -> int:

@@ -53,6 +53,66 @@ export function elapsed(us) {
   return size >= 1000 ? `${(size / 1000).toFixed(1)}ms` : `${size}us`;
 }
 
+/* Firmware identifiers with the k trimmed: kHvcAa64 reads as HvcAa64.
+   Trimming a prefix is a rule; a table of prettier names would be a
+   second vocabulary to keep in step with the first. */
+export function ecName(taxonomy, ec) {
+  return String(taxonomy?.esr_ec?.[ec] || "").replace(/^k/, "");
+}
+
+/* The raw facts of a seal, chipped only when they are not what a whole
+   run shows: a chip for the normal value would ride every run. */
+const RAW_CHIP = {
+  tail_drained: [true, "꼬리", "미회수"],
+  producer_dead: [true, "기록자", "생존"],
+  absent: [false, "링", "없음"],
+};
+
+/* The word a counted key is broken down by, as a reader can name it.
+   Keyed by catalogue id, so an event whose breakdown has a vocabulary
+   in the topology gets it and every other number reads as itself. */
+const GROUP_WORD = {
+  trap: (arg, { taxonomy }) => ecName(taxonomy, arg) || `EC ${arg}`,
+  "timer.late": (arg, { slots }) => slots[arg] || `slot ${arg}`,
+  "vm.lifecycle": (arg) => `vm${arg}`,
+};
+
+/* One counted key — the code and the word it was broken down by — as
+   the catalogue names it. An unknown code keeps its number: a build the
+   reader does not know an event of is a newer build, not an error. */
+function keyLabel(key, byCode, world) {
+  const [code, arg] = String(key).split(":").map(Number);
+  const id = byCode.get(code)?.id || `code ${code}`;
+  const word = GROUP_WORD[id] ? GROUP_WORD[id](arg, world) : arg ? String(arg) : "";
+  return word ? `${id} ${word}` : id;
+}
+
+/* A sealed run as event-log chips: whether its trace is whole, what it
+   counted, and the quantile its span samples support. Pure, so the row
+   is pinned by a test rather than by opening a browser after a run. */
+export function sealedFields(data = {}, stops = [], taxonomy = {}, timerSlots = []) {
+  const world = { taxonomy, slots: Array.isArray(timerSlots) ? timerSlots : [] };
+  const byCode = new Map(
+    (Array.isArray(stops) ? stops : []).map((entry) => [entry.code, entry]),
+  );
+  const fields = { 트레이스: data.complete ? "완전" : "불완전" };
+  if (data.lost) fields.유실 = `${data.lost}건`;
+  for (const [name, [normal, key, text]] of Object.entries(RAW_CHIP)) {
+    if (Boolean(data[name]) !== normal) fields[key] = text;
+  }
+  for (const [key, count] of Object.entries(data.events || {})) {
+    fields[keyLabel(key, byCode, world)] = count;
+  }
+  for (const [key, ticks] of Object.entries(data.latency || {})) {
+    /* Ticks until the clock is known: a duration computed at a
+       frequency of zero would be wrong by whatever it turns out to be. */
+    const us = micros(ticks, data.freq_hz);
+    fields[`${keyLabel(key, byCode, world)} p99.9`] =
+      us === null ? `${ticks}틱` : elapsed(us);
+  }
+  return fields;
+}
+
 /* Element factory: text always lands in textContent, so firmware output
    can never be parsed as markup. */
 export function el(tag, className, text) {

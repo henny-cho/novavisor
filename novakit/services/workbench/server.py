@@ -198,10 +198,10 @@ class Bridge:
         for frame in reversed(rec.frames):
             if frame.get("topic") == Topic.TOPO.value:
                 # The world, without the session state the recorded run
-                # merged into it on the way out. Phase, pause and run
-                # identity are facts about a connection to a machine,
-                # and this connection is to a file — carried over, they
-                # would tell the reader the machine is still running.
+                # merged into it on the way out. Phase, pause, run
+                # identity and the last seal are facts about a connection
+                # to a machine, and this connection is to a file: a
+                # replay seals from its own recorded frames.
                 session_keys = set(self._live_state())
                 world = {
                     key: value
@@ -346,7 +346,7 @@ class Bridge:
         self.store.publish(
             Topic.LIFE,
             Kind.EVENT,
-            {"phase": "run-sealed", "run_id": run, **totals.as_dict()},
+            self._sealed_data(run, totals),
             # Not replayed: it describes a run whose records a late
             # joiner never received. The recording still holds it — the
             # recorder outlives the session by one step in close().
@@ -354,15 +354,36 @@ class Bridge:
         )
         return totals
 
+    def _sealed_data(self, run: int, totals: trace.RunTotals) -> dict:
+        """One run's summary as the wire states it.
+
+        Spelled once for the life event and the connect topology alike.
+        `freq_hz` travels with it so the sealed ticks read as durations
+        without a second frame to join against.
+        """
+        return {
+            "phase": "run-sealed",
+            "run_id": run,
+            "freq_hz": self._history.freq_hz,
+            **totals.as_dict(),
+        }
+
     def _live_state(self) -> dict:
         """Session truth a late joiner cannot recover from the backlog:
-        life events are evictable, so phase and pause state ride the
-        connect topo instead."""
+        life events are evictable, so phase, pause state and the last
+        run's summary ride the connect topo instead.
+
+        `sealed` is always a key, even with nothing sealed yet: the
+        replay strip removes exactly the names this returns, and a key
+        that appeared only on some bridges would survive into a replay.
+        """
+        last = next(reversed(self._sealed.items()), None)
         return {
             "session": self._token,
             "phase": self.session.phase.value,
             "paused": self.session.paused,
             "run_id": self.session.run_id,
+            "sealed": self._sealed_data(*last) if last else None,
         }
 
     def _connect_payload(self) -> list[dict]:

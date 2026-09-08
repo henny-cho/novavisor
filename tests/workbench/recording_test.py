@@ -467,6 +467,19 @@ class IdentityTest(Recorded):
             bridge.store.topology["board"]["edges"], [{"id": "post", "grade": "direct"}]
         )
 
+    def test_a_replay_does_not_adopt_the_recorded_session_seal(self):
+        """A connect topology carries the live session's last seal, and
+        the recorder tees it. Adopted, a replay would show a summary of
+        the machine that made the file — it seals from its own frames."""
+        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        recorder.frame({"seq": 1, "topic": "topo", "kind": "snapshot", "ts": 1,
+                        "data": {"image": "abc", "sealed": {"run_id": 3}, "phase": "running"}})
+        recorder.close()
+
+        bridge = support.bridge(ui_root=self.ui)
+        bridge.load_replay(recording.load(self.directory))
+        self.assertEqual(bridge.store.topology, {"image": "abc"})
+
     def test_a_connect_topology_is_not_replayed_to_the_next_joiner(self):
         """It describes the session as it stood for the one client that
         caused it, and every connect after gets its own. Kept, a stale

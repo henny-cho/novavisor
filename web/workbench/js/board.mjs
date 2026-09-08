@@ -14,7 +14,7 @@
    carries and says which layer it came from; what is not observed today
    says so rather than being filled in plausibly. */
 
-import { accentOf, clear, el, stamp, vmAccent, vmSlot } from "./format.mjs";
+import { accentOf, clear, ecName, el, stamp, vmAccent, vmSlot } from "./format.mjs";
 
 const SIZE_KEY = "nv-wb-view-h";
 const FOLD_KEY = "nv-wb-view-folded";
@@ -161,11 +161,6 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     }
     return badge;
   };
-  /* Firmware identifiers with the k trimmed: kHvcAa64 reads as HvcAa64.
-     Trimming a prefix is a rule; a table of prettier names would be a
-     second vocabulary to keep in step with the first. */
-  const className = (ec) => (topology?.taxonomy?.esr_ec?.[ec] || "").replace(/^k/, "");
-
   /* ---------------- geometry: split, fold, fit ---------------- */
 
   function setHeight(px, persist = true) {
@@ -1226,7 +1221,9 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     if (!seen.length) return { lines: ["트랩 관측 없음"], title: "" };
     const lines = seen
       .slice(0, 2)
-      .map((hit) => `s${hit.slot} EC 0x${hit.ec.toString(16)} ${className(hit.ec)}`.trim());
+      .map((hit) =>
+        `s${hit.slot} EC 0x${hit.ec.toString(16)} ${ecName(topology?.taxonomy, hit.ec)}`.trim(),
+      );
     if (seen.length > 2) lines[1] += ` +${seen.length - 2}`;
     return {
       lines,

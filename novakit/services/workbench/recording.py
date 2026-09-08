@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import events, trace
+from . import trace
 from .protocol import Topic
 
 # 2: meta gained `complete` and dropped the frame and record totals.
@@ -292,6 +292,10 @@ class Recording:
     # move of the cursor.
     topics: tuple[str, ...] = ()
     drains: tuple[tuple[int, int], ...] = ()
+    # This run's records, consumed once and sealed. Both readings of the
+    # stream — the counts and any quantile — come from this one ledger,
+    # so a run is walked on load rather than per question asked of it.
+    ledger: trace.RunLedger | None = None
 
     def __post_init__(self) -> None:
         fill = object.__setattr__  # frozen to callers; derived fields are ours
@@ -299,6 +303,13 @@ class Recording:
             fill(self, "marks", fold(self.frames))
         fill(self, "topics", _topics_of(self.frames))
         fill(self, "drains", _drains_of(self.frames))
+        book = trace.RunLedger()
+        book.consume(self.records)
+        # The file stores only what the records cannot answer about
+        # themselves; everything else follows from the stream, so there
+        # is nothing saved that can disagree with it.
+        book.seal(**{name: bool(self.meta.get(name)) for name in trace.RunTotals.RAW})
+        fill(self, "ledger", book)
 
     @property
     def image(self) -> str:
@@ -313,34 +324,18 @@ class Recording:
         return ""
 
     def totals(self) -> trace.RunTotals:
-        """What this run's records add up to, re-derived on every read.
-
-        The file stores none of this. It stores only what the records
-        cannot answer about themselves — whether the writer was
-        confirmed gone, whether the reader reached its heads, whether
-        there was a ring at all — and the counts follow from the stream,
-        so there is nothing saved that can disagree with it.
-        """
-        book = trace.RunLedger()
-        book.consume(self.records)
-        return book.seal(**{name: bool(self.meta.get(name)) for name in trace.RunTotals.RAW})
+        """What this run's records add up to, sealed on load."""
+        return self.ledger.sealed
 
     def latency(self, key: tuple[int, int], permille: int) -> int | None:
-        """A quantile of how late one span row ran, or None if it cannot be claimed.
+        """A quantile of how late one span row ran, or None if unclaimable.
 
-        `key` is the row the totals count under — code and the catalogue's
-        breakdown word — so a late slice and a late watchdog are separate
-        samples, not one pool. Each record is one sample: the end the
-        catalogue names, minus `b`. None when the run is not complete: a
-        lost record is a lost sample, and a quantile over holes is the
-        overstatement the completeness judgment refuses. None too for a
-        point event, whose `b` is an argument rather than a start.
+        `key` is the row the totals count under — code and the
+        catalogue's breakdown word — so a late slice and a late watchdog
+        are separate samples, not one pool. The ledger holds both the
+        samples and the rule about which runs may claim one.
         """
-        entry = events.BY_CODE.get(key[0])
-        if entry is None or not entry.span or not self.totals().complete:
-            return None
-        samples = [entry.span_end(r) - r.b for r in self.records if trace.key_of(r) == key]
-        return trace.quantile(samples, permille) if samples else None
+        return self.ledger.quantile_of(key, permille)
 
     def wire_ts(self, cntpct: int) -> int:
         """When the bridge learned of a record stamped `cntpct`.

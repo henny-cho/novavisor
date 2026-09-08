@@ -26,7 +26,7 @@ import struct
 import sys
 import time
 from collections import Counter, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ...image import abi
@@ -769,6 +769,10 @@ class RunTotals:
     producer_dead: bool
     tail_drained: bool
     absent: bool = False
+    # The SLO quantile of each span row, in counter ticks. Computed, not
+    # raw: the samples stay in the ledger, which the run is dropped with,
+    # while these travel and are kept for the session.
+    latency: dict[tuple[int, int], int] = field(default_factory=dict)
 
     #: The facts the records cannot recover on their own, so the only
     #: ones a recording has to carry for its totals to be re-derived.
@@ -784,9 +788,8 @@ class RunTotals:
 
     def as_dict(self) -> dict:
         return {
-            "events": {
-                f"{code}:{arg}": count for (code, arg), count in sorted(self.events.items())
-            },
+            "events": {wire_key(key): count for key, count in sorted(self.events.items())},
+            "latency": {wire_key(key): ticks for key, ticks in sorted(self.latency.items())},
             "lost": self.lost,
             **self.raw(),
             "complete": self.complete,
@@ -803,25 +806,67 @@ class RunLedger:
 
     def __init__(self) -> None:
         self._events: Counter[tuple[int, int]] = Counter()
+        self._samples: dict[tuple[int, int], list[int]] = {}
         self._lost = 0
+        self._sealed: RunTotals | None = None
 
     def consume(self, records: list[Record]) -> None:
         for record in records:
             if record.code == GAP_CODE:
                 self._lost += record.a
                 continue
-            self._events[key_of(record)] += 1
+            key = key_of(record)
+            self._events[key] += 1
+            entry = _SPANS.get(record.code)
+            # One span record is one sample of what it covered. A start
+            # of zero opened before anything was recorded, so it has no
+            # width to sample — the same reading decode() takes.
+            if entry is not None and record.b:
+                self._samples.setdefault(key, []).append(entry.span_end(record) - record.b)
+
+    @property
+    def sealed(self) -> RunTotals | None:
+        """The totals as last sealed, for a reader that did not seal them."""
+        return self._sealed
+
+    def quantile_of(self, key: tuple[int, int], permille: int) -> int | None:
+        """A quantile of one span row's samples, or None if it cannot be claimed.
+
+        None before the run is sealed and for a run that is not complete:
+        a lost record is a lost sample, and a quantile over holes is the
+        overstatement completeness refuses. None too for a point event,
+        which keeps no samples at all.
+        """
+        samples = self._samples.get(key)
+        if not samples or self._sealed is None or not self._sealed.complete:
+            return None
+        return quantile(samples, permille)
 
     def seal(
         self, *, producer_dead: bool, tail_drained: bool, absent: bool = False
     ) -> RunTotals:
-        return RunTotals(
+        """The counts, and the quantile the run's own samples support.
+
+        In two steps because the second needs the first: whether a
+        quantile may be claimed at all is completeness, which is the
+        totals' rule rather than a copy of it here.
+        """
+        self._sealed = RunTotals(
             events=dict(self._events),
             lost=self._lost,
             producer_dead=producer_dead,
             tail_drained=tail_drained,
             absent=absent,
         )
+        self._sealed = replace(
+            self._sealed,
+            latency={
+                key: value
+                for key in self._samples
+                if (value := self.quantile_of(key, SLO_PERMILLE)) is not None
+            },
+        )
+        return self._sealed
 
 
 # Which record word each code's totals are broken down by, derived from
@@ -830,6 +875,14 @@ class RunLedger:
 _GROUP_WORD = {
     event.code: event.group_index for event in events.EVENTS if event.code and event.group
 }
+
+# The entries whose records cover a stretch, so the ledger knows which
+# ones are a latency sample without asking the catalogue per record.
+_SPANS = {event.code: event for event in events.EVENTS if event.code and event.span}
+
+# The quantile the isolation SLO is stated at, so the number a run seals
+# and the number a report judges cannot be two different rules.
+SLO_PERMILLE = 999
 
 
 def quantile(samples: list[int], permille: int) -> int:
@@ -858,6 +911,11 @@ def key_of(record: Record) -> tuple[int, int]:
     if word is None:
         return (record.code, 0)
     return (record.code, (record.a, record.b, record.c)[word])
+
+
+def wire_key(key: tuple[int, int]) -> str:
+    """A counted key as the wire spells it, for both totals that carry one."""
+    return f"{key[0]}:{key[1]}"
 
 
 def dropped_in(records: list[Record]) -> int:

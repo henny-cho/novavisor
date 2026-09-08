@@ -2,7 +2,7 @@
    the two pieces of UI state the wire does not carry — the theme and how
    much of the stream was lost. */
 
-import { MAX_VM_SLOT, clear, clockLabel, describeStep, el } from "./format.mjs";
+import { MAX_VM_SLOT, clear, clockLabel, describeStep, el, sealedFields } from "./format.mjs";
 import { connect } from "./net.mjs";
 import { createBoard } from "./board.mjs";
 import { createCards } from "./cards.mjs";
@@ -71,6 +71,9 @@ let wireFault = null;
 /* Snapshots may arrive out of order during connect replay; the highest
    sequence is the current world. */
 let topoSeq = 0;
+/* Runs whose seal has already been logged. The summary arrives as a
+   life event and again on every connect topology, and it is one fact. */
+const sealedRuns = new Set();
 let wire = { send: () => false, ask: () => false };
 
 const events = createEvents({
@@ -209,12 +212,16 @@ const timeline = createTimeline({
   },
 });
 
-/* The catalogue the bridge published this run, so a path can be turned
-   into the recorded moments that light it without a second table. */
-let catalogue = [];
+/* The world the bridge published this run: the catalogue a path is
+   turned into recorded moments with, and the vocabularies a run's
+   summary is named with. One copy, so neither is a second table. */
+let world = {};
+const stopsOf = () => (Array.isArray(world.stops) ? world.stops : []);
 
 function startTour(edge) {
-  const ids = catalogue.filter((stop) => stop.edge === edge).map((stop) => stop.id);
+  const ids = stopsOf()
+    .filter((stop) => stop.edge === edge)
+    .map((stop) => stop.id);
   if (!ids.length) {
     /* A path with no recorded moment is drawn from structure alone.
        Saying so beats a tour that starts and shows nothing. */
@@ -464,8 +471,22 @@ lossBadge.addEventListener("click", () => {
 
 const exitSeverity = (code) => (Number(code) === 0 ? "INFO" : "WARN");
 
-function onTopo(data) {
+/* What a run added up to, once per run: how many of each event, whether
+   that is all of them, and the quantile its span samples support. The
+   catalogue and the vocabularies it is named with are the topology's. */
+function noteSealed(ts, sealed) {
+  const run = sealed.run_id;
+  if (sealedRuns.has(run)) return;
+  sealedRuns.add(run);
+  events.addNotice(ts, `런 ${run} 봉인`, {
+    severity: sealed.complete ? "INFO" : "WARN",
+    fields: sealedFields(sealed, stopsOf(), world.taxonomy, world.timer_slots),
+  });
+}
+
+function onTopo(ts, data) {
   const topo = data && typeof data === "object" ? data : {};
+  world = topo;
   topology.render(topo);
   const guests = Array.isArray(topo.guests) ? topo.guests : [];
   consoleView.setGuests(guests);
@@ -476,7 +497,6 @@ function onTopo(data) {
   boardView.setTopology(topo);
   memory.setWorld(topo.memory);
   drive.setWorld(topo);
-  catalogue = Array.isArray(topo.stops) ? topo.stops : [];
   setStops(topo.stops);
   timeline.setCatalogue(topo.stops);
   timeline.setLimits(topo.limits);
@@ -498,6 +518,9 @@ function onTopo(data) {
     }
     rerunButton.hidden = phase !== "exited" && phase !== "failed";
   }
+  /* The life event is not replayed, so a browser that joined after the
+     seal reads the summary here — the same shape, noticed once. */
+  if (topo.sealed) noteSealed(ts, topo.sealed);
   if (topo.run_id !== undefined) {
     /* A run that started while this client was away: its panels and
        counters describe the previous machine. */
@@ -741,6 +764,9 @@ function onLife(ts, data) {
     case "query-cancelled":
       events.addNotice(ts, `질문 취소: ${data.reason || "?"}`, { severity: "WARN" });
       break;
+    case "run-sealed":
+      noteSealed(ts, data);
+      break;
     case "frames-dropped":
       /* The seq holes the eviction left already count these frames;
          adding the bridge's number would double them. */
@@ -763,7 +789,7 @@ function onFrame(frame) {
     case "topo":
       if (frame.seq >= topoSeq) {
         topoSeq = frame.seq;
-        onTopo(data);
+        onTopo(frame.ts, data);
       }
       break;
     case "console":
@@ -886,6 +912,7 @@ function onReset() {
   armRun(true);
   rerunButton.hidden = true;
   currentRun = null;
+  sealedRuns.clear();
   setPaused(false);
   topoSeq = 0;
   clockText = "";
