@@ -120,7 +120,8 @@ void flush(std::size_t index) noexcept {
       // The generation says whether a physical interrupt is behind this
       // one: refill moves the token here, so its presence is the answer.
       trace_emit(NOVA_TRACE_EV_VGIC_INJECT, static_cast<std::uint32_t>(index),
-                 lr_vintid(cpu.lr[i]) | (static_cast<std::uint64_t>(i) << 32U), cpu.lr_token[i].generation);
+                 lr_vintid(cpu.lr[i]) | (static_cast<std::uint64_t>(i) << NOVA_TRACE_PAIR_SHIFT),
+                 cpu.lr_token[i].generation);
     }
   }
   const std::uint64_t hcr = gic_virt::kIchHcrBase | (overflow ? gic_virt::kIchHcrUie : 0U);
@@ -161,7 +162,8 @@ void drain_eois(std::size_t index) noexcept {
   }
   for (std::size_t i = 0; i < harvest.count; ++i) {
     trace_emit(NOVA_TRACE_EV_VGIC_EOI, static_cast<std::uint32_t>(index),
-               harvest.tokens[i].virtual_intid | (static_cast<std::uint64_t>(harvest.tokens[i].physical_intid) << 32U),
+               harvest.tokens[i].virtual_intid |
+                   (static_cast<std::uint64_t>(harvest.tokens[i].physical_intid) << NOVA_TRACE_PAIR_SHIFT),
                harvest.tokens[i].generation);
     VirtualEoiCall call{
         .slot          = index,
@@ -397,7 +399,7 @@ auto post_spi_tracked(std::size_t vm, std::uint32_t vintid, std::uint32_t physic
   // Both INTIDs in one word, physical in the high half: the binding is
   // the whole content of this event.
   trace_emit(NOVA_TRACE_EV_VGIC_BIND, static_cast<std::uint32_t>(vm),
-             vintid | (static_cast<std::uint64_t>(physical_intid) << 32U), generation);
+             vintid | (static_cast<std::uint64_t>(physical_intid) << NOVA_TRACE_PAIR_SHIFT), generation);
   request_reevaluate(target);
   return true;
 }

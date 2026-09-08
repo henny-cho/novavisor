@@ -127,6 +127,13 @@
  * implausible `rings` is checked against. */
 #define NOVA_TRACE_MAX_RINGS 4
 
+/* How a record word carries two values: the first in its low half, the
+ * second above this shift. The catalogue spells such a word `x|y`, and
+ * the packing is declared once here so the writer and the reader cannot
+ * disagree about which half is which. */
+#define NOVA_TRACE_PAIR_SHIFT 32
+#define NOVA_TRACE_PAIR_MASK  0xFFFFFFFF
+
 /* Event kinds. The bridge's event catalogue names the same moments for
  * its breakpoints; a stop point and a trace hook are one fact about the
  * firmware, so the numbering here and the names there stay together. */

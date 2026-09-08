@@ -44,6 +44,8 @@ _LAYOUT = abi.read_defines(
         "NOVA_TRACE_TS_OFF",
         "NOVA_TRACE_MAX_RINGS",
         "NOVA_TRACE_HORIZON_MS",
+        "NOVA_TRACE_PAIR_SHIFT",
+        "NOVA_TRACE_PAIR_MASK",
     ],
 )
 MAGIC = _LAYOUT["NOVA_TRACE_MAGIC"]
@@ -55,6 +57,10 @@ REC_SIZE = _LAYOUT["NOVA_TRACE_REC_SIZE"]
 _HEADER_SIZE = _LAYOUT["NOVA_TRACE_HEADER_SIZE"]
 _HEAD_OFF = _LAYOUT["NOVA_TRACE_HEAD_OFF"]
 _RECORDS_OFF = _LAYOUT["NOVA_TRACE_RECORDS_OFF"]
+# How a word carrying two values splits, read from the header the writer
+# packs by, so a catalogue field spelled `x|y` unpacks the way it was packed.
+_PAIR_SHIFT = _LAYOUT["NOVA_TRACE_PAIR_SHIFT"]
+_PAIR_MASK = _LAYOUT["NOVA_TRACE_PAIR_MASK"]
 
 # The code this reader writes where records should have been. Taken from
 # the catalogue rather than the ABI header a second time: one entry names
@@ -962,73 +968,45 @@ def window(
 def decode(record: Record) -> dict:
     """A record as the event it is, with its arguments named.
 
-    The firmware packs the two INTIDs of a binding into one word — high
-    half physical — because that pairing is the whole content of the
-    event. Unpacking here keeps the packing a detail of the wire between
-    EL2 and this file.
+    The catalogue's field spellings are the decode: a plain name takes
+    its word, `x|y` splits one at the ABI's pair shift, and a span
+    reports its width. Only mmio's flag word and command's name lookup
+    are not expressible as a spelling.
     """
     entry = events.BY_CODE.get(record.code)
     out: dict = {"event": entry.id if entry else str(record.code), "cpu": record.cpu, "ts": record.ts}
     if entry is None:
         return out
-    if entry.id == "vgic.bind":
-        out |= {
-            "vm": record.a,
-            "vintid": record.b & 0xFFFF_FFFF,
-            "pintid": record.b >> 32,
-            "generation": record.c,
-        }
-    elif entry.id == "vgic.eoi":
-        out |= {
-            "slot": record.a,
-            "vintid": record.b & 0xFFFF_FFFF,
-            "pintid": record.b >> 32,
-            "generation": record.c,
-        }
-    elif entry.id == "vgic.inject":
-        out |= {"slot": record.a, "vintid": record.b & 0xFFFF_FFFF, "lr": record.b >> 32,
-                "generation": record.c}
-    elif entry.id in ("vgic.spi", "vgic.private"):
-        out |= {"vm" if entry.id == "vgic.spi" else "slot": record.a, "vintid": record.b}
-    elif entry.id == "trap":
-        out |= {"ec": record.a, "esr": f"{record.b:#x}", "far": f"{record.c:#x}"}
-    elif entry.id == "mmio":
-        out |= {"size": record.a & 0xFF, "write": bool(record.a & 0x100),
-                "ipa": f"{record.b:#x}", "value": f"{record.c:#x}"}
-    elif entry.id == "sched.switch":
-        out |= {"next": record.a, "prev": record.b}
-    elif entry.id == "gic.ack":
-        out |= {"intid": record.a}
-    elif entry.id == "smp.cross":
-        out |= {"vm": record.a, "owner": record.b}
-    elif entry.id == "ivc.doorbell":
-        out |= {"vm": record.a, "vintid": record.b}
-    elif entry.id == "psci.call":
-        out |= {"func": f"{record.a:#x}", "arg": f"{record.b:#x}", "action": record.c}
-    elif entry.id == "uart.line":
-        out |= {"slot": record.a, "bytes": record.b}
-    elif entry.id == "smmu.fault":
-        out |= {"stream": record.a, "vm": record.b, "generation": record.c}
-    elif entry.id == "smmu.attach":
-        out |= {"stream": record.a, "root": f"{record.b:#x}", "vmid": record.c}
-    elif entry.id == "dma.start":
-        out |= {"vm": record.a, "address": f"{record.b:#x}", "bytes": record.c}
-    elif entry.id == "command":
+    if entry.span:
+        # The width, not the far end: `b` is a raw counter value, which
+        # is the one thing no reader can use. A start of zero is a
+        # stretch that opened before anything was recorded, so it has none.
+        return out | {entry.fields[0]: record.a,
+                      "ticks": entry.span_end(record) - record.b if record.b else 0}
+    if entry.id == "command":
         # EL2 packs the opcode and the verdict into one word; the halves
         # and their names both come from the ABI header, so a refusal
         # says what kind it was rather than which number it was.
-        out |= {
+        return out | {
             "op": commands.op_name(record.a & commands.ANSWER_MASK),
             "result": commands.result_name(record.a >> commands.ANSWER_SHIFT),
             "a": record.b,
             "b": record.c,
         }
-    elif entry.span:
-        # The width, not the far end: `b` is a raw counter value, which
-        # is the one thing no reader can use. A start of zero is a
-        # stretch that opened before anything was recorded, so it has none.
-        out |= {entry.fields[0]: record.a,
-                "ticks": entry.span_end(record) - record.b if record.b else 0}
+    words = list(zip((record.a, record.b, record.c), entry.fields, strict=True))
+    if entry.id == "mmio":
+        # The access is a flag word rather than a value: width in the low
+        # byte, direction in the bit above it. The other two words are regular.
+        out |= {"size": record.a & 0xFF, "write": bool(record.a & 0x100)}
+        words = words[1:]
+    for word, name in words:
+        if not name:
+            continue
+        if "|" in name:
+            low, high = name.split("|")
+            out[low], out[high] = word & _PAIR_MASK, word >> _PAIR_SHIFT
+        else:
+            out[name] = f"{word:#x}" if name in entry.hex else word
     return out
 
 

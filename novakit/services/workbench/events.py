@@ -58,9 +58,12 @@ class Event:
     # What the record's three argument words hold, in order. A separate
     # list from `args`, which names the AAPCS64 registers a breakpoint
     # reads: a stop sees the call, a record sees what was written down.
-    # A packed word is named as the pair it is — splitting it belongs in
-    # decode(), the one place that knows the packing.
+    # A packed word is spelled `x|y` for the pair it holds, and decode()
+    # splits it at the pair shift the ABI header declares.
     fields: tuple[str, str, str] = ("", "", "")
+    # Which of `fields` travel as hex strings: addresses and bit
+    # patterns, which read as nothing in decimal (the pair of Policy.hex).
+    hex: tuple[str, ...] = ()
     # Which word holds the end of the stretch this record covers, "" for
     # an instant and "ts" when the record was written at the end. A
     # measured end is an argument: the stamp stays the moment EL2 wrote
@@ -84,6 +87,11 @@ class Event:
                 f"{self.id}: a span ending at {self.span!r} names neither the stamp "
                 f"('ts') nor one of its fields {self.fields}"
             )
+        for name in self.hex:
+            if name not in self.fields:
+                raise ValueError(
+                    f"{self.id}: hex names {name!r}, not one of its fields {self.fields}"
+                )
         if not self.group:
             return
         if self.group not in self.fields:
@@ -134,7 +142,7 @@ EVENTS: tuple[Event, ...] = (
         ("vm", "vintid", "pintid", "generation"),
         "물리 SPI를 가상 INTID에 결속",
         code=_CODES["NOVA_TRACE_EV_VGIC_BIND"],
-        fields=("vm", "intids", "generation"),
+        fields=("vm", "vintid|pintid", "generation"),
     ),
     Event("vgic.spi", "nova::vgic::post_spi", paths.EDGE_POST, ("vm", "vintid"),
           "하이퍼바이저가 SPI 생성", code=_CODES["NOVA_TRACE_EV_VGIC_POST"],
@@ -147,13 +155,13 @@ EVENTS: tuple[Event, ...] = (
           fields=("slot", "vintid|lr", "generation")),
     Event("vgic.eoi", "nova::vgic::(anonymous)::drain_eois", paths.EDGE_INJECT, ("slot",),
           "게스트가 인터럽트 완료", code=_CODES["NOVA_TRACE_EV_VGIC_EOI"],
-          fields=("slot", "intids", "generation")),
+          fields=("slot", "vintid|pintid", "generation")),
     Event("trap", "nova::trap_handler_component::handle_lower_sync", paths.EDGE_TRAP, (),
           "EL1에서 EL2로 동기 예외", code=_CODES["NOVA_TRACE_EV_TRAP"],
-          fields=("ec", "esr", "far"), group="ec"),
+          fields=("ec", "esr", "far"), hex=("esr", "far"), group="ec"),
     Event("mmio", "nova::trap::dispatch_data_abort", paths.EDGE_MMIO, (),
           "게스트 MMIO 접근 트랩", code=_CODES["NOVA_TRACE_EV_MMIO"],
-          fields=("access", "ipa", "value")),
+          fields=("access", "ipa", "value"), hex=("ipa", "value")),
     Event("sched.switch", "nova::vcpu::(anonymous)::switch_to", "", ("", "next"),
           "vCPU 전환", code=_CODES["NOVA_TRACE_EV_SCHED_SWITCH"],
           fields=("next", "prev", "")),
@@ -172,7 +180,7 @@ EVENTS: tuple[Event, ...] = (
           fields=("vm", "vintid", "")),
     Event("psci.call", "nova::psci_component::handle_hvc", "psci", ("func", "arg"),
           "게스트 전원 제어 호출", code=_CODES["NOVA_TRACE_EV_PSCI"],
-          fields=("func", "arg", "action")),
+          fields=("func", "arg", "action"), hex=("func", "arg")),
     Event("uart.line", "nova::console_mux::(anonymous)::emit", "uart", ("slot", "bytes"),
           "게스트 콘솔 한 줄 방출", code=_CODES["NOVA_TRACE_EV_UART_LINE"],
           fields=("slot", "bytes", "")),
@@ -190,11 +198,11 @@ EVENTS: tuple[Event, ...] = (
     Event("dma.start", "nova::dma_device::start_dma", paths.EDGE_DMA,
           ("", "vm", "generation", "source"),
           "장치가 전송을 시작", code=_CODES["NOVA_TRACE_EV_DMA_START"],
-          fields=("vm", "address", "bytes")),
+          fields=("vm", "address", "bytes"), hex=("address",)),
     Event("smmu.attach", "nova::smmu::(anonymous)::install_stream", paths.EDGE_WALK,
           ("stream",),
           "스트림을 VM의 Stage 2 테이블에 결속", code=_CODES["NOVA_TRACE_EV_SMMU_ATTACH"],
-          fields=("stream", "root", "vmid")),
+          fields=("stream", "root", "vmid"), hex=("root",)),
     # EL2 acknowledges a command by emitting this and nothing else,
     # which puts an instruction and its consequences on one axis in one
     # clock and makes a refusal as visible as an acceptance.

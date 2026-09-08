@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 
 from novakit.image import abi
-from novakit.services.workbench import events, trace
+from novakit.services.workbench import commands, events, trace
 
 L = abi.read_defines(
     abi.TRACE_RING,
@@ -605,6 +605,93 @@ class SummaryTest(unittest.TestCase):
     def test_an_unknown_code_is_skipped_rather_than_invented(self):
         summary = trace.summarise([trace.Record(ts=1, code=999, cpu=0, a=0, b=0, c=0)])
         self.assertEqual(summary["edges"], {})
+
+
+class DecodeTest(unittest.TestCase):
+    """Every record kind, decoded, against what it decoded to before the
+    catalogue's field names were the decode.
+
+    One synthetic record per code rather than a recorded run: the
+    fixture holds four kinds and two of those are the irregular ones, so
+    it cannot say whether the other sixteen still read the same.
+    """
+
+    # One triple for every code, chosen so no field reads as zero: `a`
+    # carries mmio's flag byte (2 bytes, a write), `b` is a packed pair,
+    # and `ts`/`c` sit above `b` so a span comes out a positive width.
+    TS, A, B, C = 0x7_0000_0100, 0x102, 0x7_0000_0021, 0x7_0000_0080
+    # `command` alone: its first word is two vocabulary codes, so a
+    # value shared with the others would name no opcode.
+    FIRST_WORD = {
+        "command": commands.OPS["mark"] | commands.RESULTS["state"] << commands.ANSWER_SHIFT,
+    }
+
+    EXPECTED = {
+        "vgic.bind": {"event": "vgic.bind", "cpu": 3, "ts": 30064771328, "vm": 258,
+                      "vintid": 33, "pintid": 7, "generation": 30064771200},
+        "vgic.spi": {"event": "vgic.spi", "cpu": 3, "ts": 30064771328, "vm": 258,
+                     "vintid": 30064771105},
+        "vgic.private": {"event": "vgic.private", "cpu": 3, "ts": 30064771328, "slot": 258,
+                         "vintid": 30064771105},
+        "vgic.inject": {"event": "vgic.inject", "cpu": 3, "ts": 30064771328, "slot": 258,
+                        "vintid": 33, "lr": 7, "generation": 30064771200},
+        "vgic.eoi": {"event": "vgic.eoi", "cpu": 3, "ts": 30064771328, "slot": 258,
+                     "vintid": 33, "pintid": 7, "generation": 30064771200},
+        "trap": {"event": "trap", "cpu": 3, "ts": 30064771328, "ec": 258,
+                 "esr": "0x700000021", "far": "0x700000080"},
+        "mmio": {"event": "mmio", "cpu": 3, "ts": 30064771328, "size": 2, "write": True,
+                 "ipa": "0x700000021", "value": "0x700000080"},
+        "sched.switch": {"event": "sched.switch", "cpu": 3, "ts": 30064771328, "next": 258,
+                         "prev": 30064771105},
+        "gic.ack": {"event": "gic.ack", "cpu": 3, "ts": 30064771328, "intid": 258},
+        "smp.cross": {"event": "smp.cross", "cpu": 3, "ts": 30064771328, "vm": 258,
+                      "owner": 30064771105},
+        "ivc.doorbell": {"event": "ivc.doorbell", "cpu": 3, "ts": 30064771328, "vm": 258,
+                         "vintid": 30064771105},
+        "psci.call": {"event": "psci.call", "cpu": 3, "ts": 30064771328, "func": "0x102",
+                      "arg": "0x700000021", "action": 30064771200},
+        "uart.line": {"event": "uart.line", "cpu": 3, "ts": 30064771328, "slot": 258,
+                      "bytes": 30064771105},
+        "smmu.fault": {"event": "smmu.fault", "cpu": 3, "ts": 30064771328, "stream": 258,
+                       "vm": 30064771105, "generation": 30064771200},
+        "dma.start": {"event": "dma.start", "cpu": 3, "ts": 30064771328, "vm": 258,
+                      "address": "0x700000021", "bytes": 30064771200},
+        "smmu.attach": {"event": "smmu.attach", "cpu": 3, "ts": 30064771328, "stream": 258,
+                        "root": "0x700000021", "vmid": 30064771200},
+        "command": {"event": "command", "cpu": 3, "ts": 30064771328, "op": "mark",
+                    "result": "state", "a": 30064771105, "b": 30064771200},
+        "timer.late": {"event": "timer.late", "cpu": 3, "ts": 30064771328, "slot": 258,
+                       "ticks": 223},
+        "irq.latency": {"event": "irq.latency", "cpu": 3, "ts": 30064771328, "vintid": 258,
+                        "ticks": 95},
+        "trace.gap": {"event": "trace.gap", "cpu": 3, "ts": 30064771328, "count": 258,
+                      "ticks": 223},
+    }
+
+    def test_every_record_kind_decodes_as_it_did(self):
+        for entry in events.EVENTS:
+            with self.subTest(event=entry.id):
+                record = trace.Record(
+                    ts=self.TS,
+                    code=entry.code,
+                    cpu=3,
+                    a=self.FIRST_WORD.get(entry.id, self.A),
+                    b=self.B,
+                    c=self.C,
+                )
+                self.assertEqual(trace.decode(record), self.EXPECTED[entry.id])
+
+    def test_the_golden_names_every_catalogued_kind(self):
+        """A kind added with no row here would be decoded by rules
+        nothing held to an output."""
+        self.assertEqual(set(self.EXPECTED), {entry.id for entry in events.EVENTS})
+
+    def test_a_span_that_opened_before_the_records_has_no_width(self):
+        """`b` is a counter value, so zero is not a start: measured from
+        it the width would be the whole uptime."""
+        record = trace.Record(ts=self.TS, code=events.BY_ID["timer.late"].code, cpu=0,
+                              a=1, b=0, c=0)
+        self.assertEqual(trace.decode(record)["ticks"], 0)
 
 
 class CatalogueTest(unittest.TestCase):
