@@ -6,17 +6,21 @@ import { clear, el, vmAccent, vmSlot } from "./format.mjs";
 
 const TARGET_KEY = "nv-wb-target";
 
+/* The whole launch choice, not only the demo: which variant to build and
+   whether to verify are as much a part of what to run as its name. An
+   older stored value (a bare demo name) does not parse and reads as none. */
 function stored() {
   try {
-    return localStorage.getItem(TARGET_KEY) || "";
+    const held = JSON.parse(localStorage.getItem(TARGET_KEY));
+    return held && typeof held === "object" ? held : {};
   } catch {
-    return "";
+    return {};
   }
 }
 
-function remember(demo) {
+function remember(choice) {
   try {
-    localStorage.setItem(TARGET_KEY, demo);
+    localStorage.setItem(TARGET_KEY, JSON.stringify(choice));
   } catch {
     /* private mode: the picker still works for this session */
   }
@@ -24,23 +28,52 @@ function remember(demo) {
 
 export function createTopology({
   select,
+  variantSelect,
+  verifyBox,
   runButton,
   rerunButton,
   pane,
   send,
+  stops,
   onStart,
   onNotice,
 }) {
   let catalogKey = null;
-  let lastTarget = stored();
+  const held = stored();
+  let lastTarget = held.demo || "";
+  const variants = new Map();
+  verifyBox.checked = Boolean(held.verify);
+
+  const variantsOf = (item) =>
+    (Array.isArray(item && item.variants) ? item.variants : []).map(String);
+
+  /* A demo's own variants, or nothing to pick between: the catalogue
+     names only real ones, so a plain manifest hides the picker. */
+  function fillVariants(demo) {
+    const names = variants.get(String(demo || "")) || [];
+    const keep = variantSelect.value || (demo === held.demo ? held.variant : "");
+    clear(variantSelect);
+    for (const name of names) {
+      const option = el("option", "", name);
+      option.value = name;
+      variantSelect.append(option);
+    }
+    /* Said rather than left to the browser's default selection: this is
+       the value `start` sends, so it has to be the one on screen. */
+    variantSelect.value = names.includes(keep) ? keep : names[0] || "";
+    variantSelect.hidden = !names.length;
+  }
 
   function fillPicker(catalog) {
     const list = Array.isArray(catalog) ? catalog : [];
-    const key = list.map((item) => `${item && item.id}:${item && item.name}`).join("|");
+    const key = list
+      .map((item) => `${item && item.id}:${item && item.name}:${variantsOf(item)}`)
+      .join("|");
     if (key === catalogKey) return;
     catalogKey = key;
     const keep = select.value || lastTarget;
     clear(select);
+    variants.clear();
     for (const item of list) {
       const name = String((item && item.name) || "");
       if (!name) continue;
@@ -48,9 +81,11 @@ export function createTopology({
       const option = el("option", "", `${id} · ${name}`);
       option.value = name;
       select.append(option);
+      variants.set(name, variantsOf(item));
     }
     if (keep) select.value = keep;
     if (!select.value && select.options.length) select.selectedIndex = 0;
+    fillVariants(select.value);
   }
 
   function describe(topo, catalog) {
@@ -110,15 +145,23 @@ export function createTopology({
       onNotice?.("실행할 타깃이 없습니다");
       return;
     }
-    if (!send("target", { demo: target, variant: null })) {
+    /* Three knobs the uplink has always taken and the page never sent:
+       which variant to build, whether to run the verification scenario
+       instead of an interactive machine, and a stop armed at launch —
+       before the guest can reach the event and pass it by. */
+    const data = { demo: target, variant: variantSelect.value || null, verify: verifyBox.checked };
+    const armed = stops?.() || [];
+    if (armed.length) data.stops = armed;
+    if (!send("target", data)) {
       onNotice?.("브리지에 연결되지 않아 실행 요청을 보내지 못했습니다");
       return;
     }
     lastTarget = target;
-    remember(target);
+    remember({ demo: target, variant: data.variant, verify: data.verify });
     onStart?.(target);
   }
 
+  select.addEventListener("change", () => fillVariants(select.value));
   runButton.addEventListener("click", () => start(select.value));
   rerunButton.addEventListener("click", () => start(lastTarget || select.value));
 

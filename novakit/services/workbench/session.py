@@ -55,8 +55,18 @@ class Prepared:
 
 
 def _catalog() -> list[dict]:
+    # Named variants only: a manifest without a `variants:` block gets one
+    # synthetic unnamed variant, which is nothing for a picker to offer.
     return [
-        {"id": manifest.demo_id(name), "name": name}
+        {
+            "id": manifest.demo_id(name),
+            "name": name,
+            "variants": [
+                variant["name"]
+                for variant in manifest.manifest_variants(demo_manifest)
+                if variant.get("name")
+            ],
+        }
         for name, demo_manifest in manifest.iter_demos()
         if demo_manifest.get("enabled", False)
     ]

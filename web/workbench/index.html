@@ -21,6 +21,13 @@
     <div class="launch">
       <label class="lb" for="target">타깃</label>
       <select id="target" class="pick" aria-label="실행할 데모 선택"></select>
+      <!-- The variants the chosen demo declares, from the same catalogue
+           entry as its name; hidden when a demo has none to pick between. -->
+      <select id="variant" class="pick sm" aria-label="변형 선택" hidden></select>
+      <label class="lb chk" for="verify"
+             title="대화형 머신 대신 이 데모의 검증 시나리오를 실행한다">
+        <input id="verify" type="checkbox">검증
+      </label>
       <button id="run" class="btn primary" type="button">실행</button>
       <button id="rerun" class="btn" type="button" hidden>재실행</button>
       <button id="pause" class="btn" type="button" hidden

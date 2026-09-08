@@ -21,6 +21,7 @@ from novakit.services.workbench.session import (
     Prepared,
     Session,
     Target,
+    _catalog,
 )
 from novakit.services.workbench.store import StateStore
 from novakit.services.workbench.trace_drain import (
@@ -524,6 +525,22 @@ class SurfaceSweepTest(unittest.TestCase):
             self.assertTrue(live.exists(), "an answering QMP socket marks a live bridge")
             self.assertTrue(young.exists(), "a starting bridge is never swept")
             self.assertTrue(idle.exists(), "an idle bridge holds no RAM file to reclaim")
+
+
+class CatalogTest(unittest.TestCase):
+    """What the picker may offer, read from the manifests themselves."""
+
+    def entry(self, demo_id):
+        (found,) = [item for item in _catalog() if item["id"] == demo_id]
+        return found
+
+    def test_a_demos_named_variants_are_offered(self):
+        self.assertEqual(self.entry("12")["variants"], ["heartbeat", "dma"])
+
+    def test_a_demo_without_variants_offers_none(self):
+        # The synthetic variant behind a plain manifest has no name, so
+        # there is nothing to pick between and the picker stays hidden.
+        self.assertEqual(self.entry("02")["variants"], [])
 
 
 # initial_topology resolves observation symbols, so it needs the parser.

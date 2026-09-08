@@ -5,8 +5,15 @@ const NS_PER_SECOND = 1e9;
 
 /* Console lines carry a firmware-tagged VM slot; anything the board
    cannot host is guest text that merely looks like a tag, and must not
-   mint tabs or cards. */
-export const MAX_VM_SLOT = 8;
+   mint tabs or cards. How many slots exist is the board's own answer, so
+   nothing is hostable before a topology arrives. */
+let guestSlots = 0;
+
+export function setGuestSlots(board) {
+  guestSlots = Number(board && board.max_guests) || 0;
+}
+
+export const hostsGuest = (vm) => Number.isInteger(vm) && vm >= 0 && vm < guestSlots;
 
 /* One carried verification step as a line. A kind this build does not
    name still reads as itself rather than as a blank label, so the bridge

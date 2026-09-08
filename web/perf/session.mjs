@@ -93,9 +93,9 @@ export function topology() {
   return frame("topo", {
     session: "perf", run_id: 1, phase: "running", demo: "07-shm", variant: null,
     description: "공유 메모리 부트 카운터",
-    catalog: [{ id: "07", name: "07-shm" }],
+    catalog: [{ id: "07", name: "07-shm", variants: [] }],
     guests: GUESTS,
-    board: { name: "qemu-virt", cpus: 2, cpu: "cortex-a57", vcpu_stride: 4,
+    board: { name: "qemu-virt", cpus: 2, cpu: "cortex-a57", vcpu_stride: 4, max_guests: 4,
              blocks: BLOCKS, edges: EDGES,
              regions: {
                pa: [{ base: 0x40000000, size: 0x8000000, kind: "el2", name: "EL2" },

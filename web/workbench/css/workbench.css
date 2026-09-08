@@ -65,6 +65,9 @@ b{font-weight:700}
 .launch .lb{
   font-size:var(--fs-label);letter-spacing:.09em;text-transform:uppercase;color:var(--ink3);font-weight:650
 }
+/* A label that is also the control: the box and its word stay one target. */
+.launch .chk{display:inline-flex;align-items:center;gap:4px;cursor:pointer}
+.launch .chk input{accent-color:var(--hyp);margin:0}
 .pick{
   max-width:250px;min-width:150px;
   background:var(--sunken);border:1px solid var(--line2);border-radius:7px;

@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createConsole } from "../workbench/js/console.mjs";
+import { setGuestSlots } from "../workbench/js/format.mjs";
 import { StreamLog } from "../workbench/js/primitives/stream_log.mjs";
 import { element, findAll, fire, gesture, installDom } from "./dom.mjs";
 
@@ -70,6 +71,7 @@ describe("console multiplexer", () => {
 
   it("dynamically manages guest tabs from topology", () => {
     const { consoleView, tabs, logs } = harness();
+    setGuestSlots({ max_guests: 4 });
     consoleView.setGuests([{ name: "linux", vcpus: 1 }, { name: "zephyr", vcpus: 1 }]);
 
     const guestTabs = findAll(tabs, "tab");
@@ -85,6 +87,19 @@ describe("console multiplexer", () => {
     assert.ok(vm1Pane);
     assert.equal(vm0Pane.children.length, 1);
     assert.equal(vm1Pane.children.length, 1);
+  });
+
+  it("mints nothing for a slot the board cannot host", () => {
+    const { consoleView, tabs, logs } = harness();
+    /* The tag is a firmware field, but a line claiming a slot this
+       machine has no room for is guest text that looks like one. */
+    setGuestSlots({ max_guests: 2 });
+    consoleView.append({ vm: 5, text: "[vm5] a line that only looks tagged" }, 1e9);
+    consoleView.settle();
+
+    assert.equal(findAll(tabs, "tab").length, 1); // the merged log alone
+    const merged = logs.children.find((pane) => pane.id === "log-all");
+    assert.equal(merged.children.length, 1);
   });
 
   it("cuts future output when cursor moves into past", () => {

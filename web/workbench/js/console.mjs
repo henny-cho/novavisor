@@ -1,4 +1,4 @@
-import { MAX_VM_SLOT, clear, el, vmAccent, vmSlot } from "./format.mjs";
+import { clear, el, hostsGuest, vmAccent, vmSlot } from "./format.mjs";
 import { StreamLog } from "./primitives/stream_log.mjs";
 
 
@@ -118,7 +118,7 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
     push(merged(), vm, line.text, ts);
     /* A tab is a slot the board can host; guest text that merely looks
        like a tag stays in the merged log and mints nothing. */
-    if (vm !== null && vm >= 0 && vm < MAX_VM_SLOT) push(guestView(vm), vm, line.text, ts);
+    if (hostsGuest(vm)) push(guestView(vm), vm, line.text, ts);
   }
 
   /* Session divider in the merged log, so two runs never read as one. */

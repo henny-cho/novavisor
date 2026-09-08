@@ -2,7 +2,15 @@
    the two pieces of UI state the wire does not carry — the theme and how
    much of the stream was lost. */
 
-import { MAX_VM_SLOT, clear, clockLabel, describeStep, el, sealedFields } from "./format.mjs";
+import {
+  clear,
+  clockLabel,
+  describeStep,
+  el,
+  hostsGuest,
+  sealedFields,
+  setGuestSlots,
+} from "./format.mjs";
 import { connect } from "./net.mjs";
 import { createBoard } from "./board.mjs";
 import { createCards } from "./cards.mjs";
@@ -311,10 +319,15 @@ const consoleView = createConsole({
 
 const topology = createTopology({
   select: ref("target"),
+  variantSelect: ref("variant"),
+  verifyBox: ref("verify"),
   runButton: ref("run"),
   rerunButton,
   pane: ref("topo"),
   send: (topic, data) => wire.send(topic, data),
+  /* The stepper's own read of the stop picker, so a stop armed at launch
+     and one advanced to are always the same chosen event. */
+  stops: () => chosen(),
   onStart: (demo) => {
     rerunButton.hidden = true;
     /* One start per click storm: the next terminal phase (or a
@@ -391,6 +404,11 @@ pauseButton.addEventListener("click", () => {
 function setStops(stops) {
   const previous = stopPick.value;
   clear(stopPick);
+  /* No stop is a choice, not merely the initial state: it is what
+     launches a run that is meant to keep going. */
+  const none = el("option", "", "정지 없음");
+  none.value = "";
+  stopPick.append(none);
   for (const stop of stops || []) {
     /* One catalogue, two uses. Everything in it names a lane; only the
        entries backed by a firmware function name a place to halt, and
@@ -405,6 +423,17 @@ function setStops(stops) {
 }
 
 const chosen = () => (stopPick.value ? [stopPick.value] : []);
+
+/* Advancing needs an event to advance to: with nothing armed the machine
+   would run on until the wait budget expired and stop nowhere. */
+function runTo(extra = {}) {
+  const stops = chosen();
+  if (!stops.length) {
+    say("정지 지점을 선택하세요");
+    return false;
+  }
+  return halt({ cmd: "run", stops, ...extra });
+}
 
 function setAuto(next) {
   autoRunning = next;
@@ -429,7 +458,7 @@ function halt(data) {
 }
 
 advanceButton.addEventListener("click", () => {
-  halt({ cmd: "run", stops: chosen() });
+  runTo();
 });
 
 /* Instructions, not events: this is for looking *inside* one. At about
@@ -447,7 +476,7 @@ autoButton.addEventListener("click", () => {
     setAuto(false);
     return;
   }
-  if (halt({ cmd: "run", stops: chosen(), repeat: 50, period: 1 })) setAuto(true);
+  if (runTo({ repeat: 50, period: 1 })) setAuto(true);
 });
 
 abortButton.addEventListener("click", () => {
@@ -487,6 +516,9 @@ function noteSealed(ts, sealed) {
 function onTopo(ts, data) {
   const topo = data && typeof data === "object" ? data : {};
   world = topo;
+  /* Before anything can mint a tab or a card: how many VM slots the
+     machine has is the board's, not a number typed into the client. */
+  setGuestSlots(topo.board);
   topology.render(topo);
   const guests = Array.isArray(topo.guests) ? topo.guests : [];
   consoleView.setGuests(guests);
@@ -794,9 +826,7 @@ function onFrame(frame) {
       break;
     case "console":
       consoleView.append(data, frame.ts);
-      if (Number.isInteger(data.vm) && data.vm >= 0 && data.vm < MAX_VM_SLOT) {
-        cards.touch(data.vm, data.text);
-      }
+      if (hostsGuest(data.vm)) cards.touch(data.vm, data.text);
       break;
     case "ev":
       /* The same event, read two ways: the log takes it as a row, the
