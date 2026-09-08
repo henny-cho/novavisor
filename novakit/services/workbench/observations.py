@@ -34,22 +34,6 @@ MAX_VCPUS = abi.MAX_GUESTS * abi.MAX_VCPUS_PER_VM
 
 
 @dataclass(frozen=True)
-class ColumnSpec:
-    key: str
-    title: str
-    format: str = "text"
-    hint: str = ""
-
-
-@dataclass(frozen=True)
-class PanelSchema:
-    panel: str
-    title: str
-    section: str = ""
-    columns: tuple[ColumnSpec, ...] = ()
-
-
-@dataclass(frozen=True)
 class Obs:
     """One observation, whole: what it reads and how it travels."""
 
@@ -70,7 +54,6 @@ class Obs:
     # carrying when that shadow last became true. The publish stamp
     # dates the copy, which is a different question.
     as_of: str = ""
-    schema: PanelSchema | None = None
 
 
 @dataclass(frozen=True)
@@ -81,7 +64,6 @@ class Policy:
     hex: bool = False
     shape: derive.Shape | None = None
     as_of: str = ""
-    schema: PanelSchema | None = None
 
 
 
@@ -126,7 +108,7 @@ POLICY: dict[str, Policy] = {
     "vgic.lr": Policy(rate_hz=10, shape=derive.vgic_inflight, as_of="vgic.synced"),
     "vgic.synced": Policy(rate_hz=10),
     "vgic.token": Policy(rate_hz=5, shape=derive.vgic_posted),
-    "vgic.dist": Policy(rate_hz=5, hex=True),
+    "vgic.dist": Policy(rate_hz=5, shape=derive.vgic_dist),
     "vgic.resident": Policy(rate_hz=5, shape=derive.none_if_unset),
     # Settled in EL2 init, after topo is published — hence polled, and
     # constant thereafter, so the change gate emits it once.
@@ -170,7 +152,6 @@ def _joined() -> tuple[Obs, ...]:
                 hex=POLICY[want.topic].hex,
                 shape=POLICY[want.topic].shape,
                 as_of=POLICY[want.topic].as_of,
-                schema=POLICY[want.topic].schema,
             )
             for want in observe.OBSERVED
         )
@@ -288,16 +269,6 @@ def observation_rates() -> dict[str, dict]:
         info: dict = {"rate": obs.rate_hz, "asserted": obs.topic in asserted}
         if obs.as_of:
             info["as_of"] = obs.as_of
-        if obs.schema is not None:
-            info["schema"] = {
-                "panel": obs.schema.panel,
-                "title": obs.schema.title,
-                "section": obs.schema.section,
-                "columns": [
-                    {"key": col.key, "title": col.title, "format": col.format, "hint": col.hint}
-                    for col in obs.schema.columns
-                ],
-            }
         out[obs.topic] = info
     return out
 

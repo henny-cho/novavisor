@@ -44,6 +44,13 @@ _ESR = abi.read_defines(
     ["NOVA_ESR_EC_SHIFT", "NOVA_ESR_EC_MASK", "NOVA_ESR_IL_SHIFT", "NOVA_ESR_ISS_MASK"],
 )
 
+# Where SPI numbering starts, from the model the emulated distributor's
+# own accessors index by: bit 0 of every SPI word is this INTID.
+_SPI_BASE = abi.read_constexprs(
+    config.REPO / "src" / "components" / "vdev" / "vgic" / "include" / "vgic" / "vgic_model.hpp",
+    wanted={"kNumPrivate"},
+)["kNumPrivate"]
+
 
 def none_if_unset(value: object, info: elfsym.TypeInfo) -> object:
     """Turn the firmware's all-bits-set "none" into null.
@@ -145,6 +152,32 @@ def vgic_posted(value: object, info: elfsym.TypeInfo) -> object:
             for index, token in enumerate(vm)
             if token.get("generation")
         ]
+        for vm in value
+    ]
+
+
+def _spi_intids(word: int) -> list[int]:
+    """The interrupts a one-word SPI bitmap names."""
+    return [_SPI_BASE + bit for bit in range(word.bit_length()) if word >> bit & 1]
+
+
+def vgic_dist(value: object, info: elfsym.TypeInfo) -> object:
+    """The emulated distributor as the interrupts its bitmaps name.
+
+    Three words per VM travelled as bit patterns, and a reader had to
+    know both where SPI numbering starts and which word meant what. Only
+    the bits actually set travel now, as the INTIDs a guest sees — the
+    same "what is set" idiom as the timer queue and the SPI tokens.
+    """
+    del info
+    return [
+        {
+            # A control register is a bit pattern, so it reads as one.
+            "ctlr": f"{vm['ctlr']:#x}",
+            "group1": _spi_intids(vm["spi_group"]),
+            "enabled": _spi_intids(vm["spi_enabled"]),
+            "pending": _spi_intids(vm["spi_pending"]),
+        }
         for vm in value
     ]
 

@@ -53,7 +53,6 @@ class Topic(StrEnum):
 
 class Kind(StrEnum):
     SNAPSHOT = "snapshot"
-    DELTA = "delta"
     EVENT = "event"
 
 

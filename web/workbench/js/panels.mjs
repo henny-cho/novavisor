@@ -4,11 +4,18 @@
    as "—". Panels re-render from the latest per-topic value, so frame
    order and rate never matter here.
 
-   Panels are independent toggles rather than tabs: the sizes differ by an
-   order of magnitude (Sysreg is ten rows and only moves on a pause, the
-   context dump is forty), so which ones fit together is the reader's
-   call, not a fixed cap. Only visible panels render, and only those a
-   changed topic actually feeds. */
+   Which drawer a reading goes in is its own topic name: the manifest
+   spells every topic `subsystem.thing`, so the prefix is the drawer and
+   a topic the bridge adds arrives in a named drawer with nothing
+   written here. A drawer may override the drawing — the seven below
+   join several topics into one table — and whatever an override leaves
+   follows it as the shape the bridge sent.
+
+   Drawers are independent toggles rather than tabs: the sizes differ by
+   an order of magnitude (Sysreg is ten rows and only moves on a pause,
+   the context dump is forty), so which ones fit together is the
+   reader's call, not a fixed cap. Only visible drawers render, and only
+   those a changed topic actually feeds. */
 
 import { clear, el, elapsed, micros, stamp } from "./format.mjs";
 import {
@@ -23,8 +30,11 @@ import {
   table,
 } from "./primitives/table.mjs";
 
-/* Which panels were open, so a reload does not undo the choice. */
+/* Which drawers were open, so a reload does not undo the choice. */
 const OPEN_KEY = "nv-wb-panels";
+
+/* The subsystem a topic belongs to, and so the drawer it is drawn in. */
+const drawerOf = (topic) => topic.split(".")[0];
 
 export function createPanels({ tabs, host }) {
   const latest = new Map(); // topic -> {value, ts, at, src}
@@ -48,17 +58,23 @@ export function createPanels({ tabs, host }) {
   /* Topics the run had not read yet at the point the reader is looking
      at. Empty live, where the only point is now. */
   let unread = new Set();
-  const visible = new Set(); // panels switched on; screen order is PANELS order
-  const dirty = new Set(); // panels whose topics changed since the last settle
+  const visible = new Set(); // drawers switched on; screen order is drawer order
+  const dirty = new Set(); // drawers whose topics changed since the last settle
   let timerSlots = [];
   let observations = {};
   let ctxSlot = 0;
 
-  function restore(known) {
+  /* The drawers a previous session left open, of those that exist. Read
+     at every rebuild rather than once: the derived drawers only exist
+     once a topology has arrived, and a choice filtered out before then
+     would not survive a reload. Nothing stored at all is a reader who
+     has never chosen, and gets the drawer that says whether the machine
+     is running at all. */
+  function restore() {
     try {
-      const saved = JSON.parse(localStorage.getItem(OPEN_KEY) || "[]");
-      const kept = Array.isArray(saved) ? saved.filter((id) => known.includes(id)) : [];
-      return kept.length ? kept : ["sched"];
+      const saved = JSON.parse(localStorage.getItem(OPEN_KEY) || "null");
+      if (!Array.isArray(saved)) return ["sched"];
+      return saved.filter((id) => bodies.has(id));
     } catch (error) {
       return ["sched"];
     }
@@ -84,11 +100,19 @@ export function createPanels({ tabs, host }) {
         new Cursor(undefined, undefined)
       : new Cursor(latest.get(topic)?.value, moved.get(topic));
 
-  const PANELS = [
+  /* Drawings a drawer does itself, keyed by the drawer they belong to.
+     Each is a join — the Scheduler cross-joins four topics into one
+     table — which is why the unit here is the drawer and not the topic.
+
+     `draws` are the topics the body renders itself, so the rest of the
+     drawer's bundle follows as generic tables; `reads` are topics from
+     other drawers it consults, and they have to reach the interest
+     index or the drawer sits still on the frame that moved them. */
+  const OVERRIDES = [
     {
       id: "sched",
       title: "Scheduler",
-      topics: ["sched.cpu", "sched.slots", "sched.run", "sched.affinity", "sched.valid", "sched.slice"],
+      draws: ["sched.cpu", "sched.slots", "sched.run", "sched.affinity", "sched.valid", "sched.slice"],
       render(body) {
         body.append(section("pCPU"));
         body.append(
@@ -133,7 +157,8 @@ export function createPanels({ tabs, host }) {
     {
       id: "timer",
       title: "Timer",
-      topics: ["timer.queue", "timer.programmed", "timer.cntvoff", "vm.generation"],
+      draws: ["timer.queue", "timer.programmed", "timer.cntvoff"],
+      reads: ["vm.generation"],
       render(body) {
         const programmed = at("timer.programmed");
         at("timer.queue")
@@ -169,7 +194,8 @@ export function createPanels({ tabs, host }) {
     {
       id: "ctx",
       title: "Context",
-      topics: ["ctx.trap", "ctx.el1", "ctx.synced", "sched.valid"],
+      draws: ["ctx.trap", "ctx.el1"],
+      reads: ["sched.valid"],
       render(body) {
         const valid = at("sched.valid");
         const traps = at("ctx.trap");
@@ -228,7 +254,7 @@ export function createPanels({ tabs, host }) {
     {
       id: "ivc",
       title: "IVC",
-      topics: ["ivc.page"],
+      draws: ["ivc.page"],
       render(body) {
         const page = at("ivc.page");
         if (!page.shown) return;
@@ -260,7 +286,7 @@ export function createPanels({ tabs, host }) {
     {
       id: "smp",
       title: "PSCI·SMP",
-      topics: ["smp.lifecycle", "smp.mode", "smp.online", "smp.mail", "smp.budget"],
+      draws: ["smp.lifecycle", "smp.mode", "smp.online", "smp.mail", "smp.budget"],
       render(body) {
         const mode = at("smp.mode");
         const budget = at("smp.budget");
@@ -305,7 +331,7 @@ export function createPanels({ tabs, host }) {
     {
       id: "dev",
       title: "Devices",
-      topics: ["dev.uart", "dev.dma", "dev.watchdog"],
+      draws: ["dev.uart", "dev.dma", "dev.watchdog"],
       render(body) {
         body.append(section("vUART FIFO"));
         body.append(
@@ -357,7 +383,7 @@ export function createPanels({ tabs, host }) {
     {
       id: "sysreg",
       title: "Sysreg",
-      topics: ["sysreg"],
+      draws: ["sysreg"],
       render(body) {
         const data = at("sysreg");
         if (!data.shown) return;
@@ -378,81 +404,104 @@ export function createPanels({ tabs, host }) {
         );
       },
     },
-
   ];
 
-  /* Whatever no panel above claims, so a new row in the observation
-     manifest is on screen without a panel being written for it. The
-     default is visible rather than hidden; anything worth a shape of
-     its own graduates to a panel above and leaves here by itself. */
-  const FALLBACK = {
-    id: "other",
-    title: "기타",
-    topics: [],
-    render(body) {
-      for (const topic of FALLBACK.topics) {
-        const held = at(topic);
-        if (held.shown === undefined) continue;
-        body.append(section(topic));
-        body.append(generic(held));
-      }
-    },
-  };
-  PANELS.push(FALLBACK);
+  const drawers = new Map(); // id -> {title, override, watch, rest}
+  const interest = new Map(); // topic -> Set(drawer ids); sched.valid feeds two
+  const bodies = new Map(); // id -> {tab, body}, in screen order
 
-  const interest = new Map(); // topic -> Set(panel ids); sched.valid feeds two panels
-  function index() {
+  /* The drawers, from the manifest's own topic names. An override keeps
+     its title and its place; every other prefix published gets a drawer
+     named after itself. */
+  function project() {
+    const topics = Object.keys(observations);
+    /* A topic that dates another one is the header's own ±Δ, so it is
+       drawn as no row anywhere — it still feeds that age and the
+       placement, which is why it stays in the interest index. */
+    const dating = new Set(topics.map((topic) => observations[topic]?.as_of).filter(Boolean));
+    const written = OVERRIDES.map((override) => override.id);
+    const ids = [
+      ...written,
+      ...[...new Set(topics.map(drawerOf))].filter((id) => !written.includes(id)).sort(),
+    ];
+    drawers.clear();
     interest.clear();
-    for (const panel of PANELS) {
-      for (const topic of panel.topics) {
+    for (const id of ids) {
+      const override = OVERRIDES.find((entry) => entry.id === id) ?? null;
+      const draws = override?.draws ?? [];
+      const bundle = topics.filter((topic) => drawerOf(topic) === id);
+      /* Redrawn for its own bundle and for whatever an override reads
+         elsewhere: Context reads sched.valid and Timer vm.generation,
+         and a drawer watching only its prefix would sit still on the
+         frame that moved them. The moved badge and the placement read
+         this same union — a closed drawer has to count right too. */
+      const watch = [...new Set([...bundle, ...draws, ...(override?.reads ?? [])])];
+      drawers.set(id, {
+        title: override?.title ?? id,
+        override,
+        watch,
+        rest: bundle.filter((topic) => !draws.includes(topic) && !dating.has(topic)),
+      });
+      for (const topic of watch) {
         if (!interest.has(topic)) interest.set(topic, new Set());
-        interest.get(topic).add(panel.id);
+        interest.get(topic).add(id);
       }
     }
-  }
-  index();
-
-  const bodies = new Map();
-  for (const panel of PANELS) {
-    /* A toggle, not a tab: several panels may be open at once, so the
-       control reports aria-pressed and the strip is a plain group. */
-    const chip = el("button", "tab");
-    chip.type = "button";
-    chip.setAttribute("aria-pressed", "false");
-    chip.title = `${panel.title} 표시 전환`;
-    chip.append(el("span", "tt", panel.title));
-    /* How many values in this panel's topics moved since the previous
-       stop. A stop publishes the whole machine; between two consecutive
-       binds three or four values actually changed, and this is what
-       says which drawer to open for them.
-
-       Counted over the reading, not over what is drawn — those differ
-       where a panel shows a subset (the context dump is one slot at a
-       time), and the count has to be right for a closed drawer, which
-       has drawn nothing at all. */
-    chip.append(el("b", "tmoved", ""));
-    chip.addEventListener("click", () => toggle(panel.id));
-    /* Nothing is unclaimed until a topology says what is published. */
-    chip.hidden = panel === FALLBACK;
-    tabs.append(chip);
-
-    const body = el("div", "panel-body");
-    body.hidden = true;
-    host.append(body);
-    bodies.set(panel.id, { panel, tab: chip, body });
+    build(ids);
   }
 
-  /* Bodies sit in declaration order, so what is on screen always reads
-     top-to-bottom in that order however the panels were switched on. */
+  /* Tabs and bodies, rebuilt only when the set of drawers changes. The
+     topology is republished whenever anything on it moves, and
+     rebuilding on each would clear what a reader had open. */
+  function build(ids) {
+    if (ids.join(" ") === [...bodies.keys()].join(" ")) return;
+    clear(tabs);
+    clear(host);
+    bodies.clear();
+    for (const id of ids) {
+      const { title } = drawers.get(id);
+      /* A toggle, not a tab: several drawers may be open at once, so the
+         control reports aria-pressed and the strip is a plain group. */
+      const chip = el("button", "tab");
+      chip.type = "button";
+      chip.setAttribute("aria-pressed", "false");
+      chip.title = `${title} 표시 전환`;
+      chip.append(el("span", "tt", title));
+      /* How many values in this drawer's topics moved since the previous
+         stop. A stop publishes the whole machine; between two consecutive
+         binds three or four values actually changed, and this is what
+         says which drawer to open for them.
+
+         Counted over the reading, not over what is drawn — those differ
+         where a drawer shows a subset (the context dump is one slot at a
+         time), and the count has to be right for a closed drawer, which
+         has drawn nothing at all. */
+      chip.append(el("b", "tmoved", ""));
+      chip.addEventListener("click", () => toggle(id));
+      tabs.append(chip);
+
+      const body = el("div", "panel-body");
+      body.hidden = true;
+      host.append(body);
+      bodies.set(id, { tab: chip, body });
+    }
+    /* Bodies sit in drawer order, so what is on screen always reads
+       top-to-bottom in that order however the drawers were switched on. */
+    host.append(placeholder);
+    /* A drawer the manifest stopped publishing cannot stay open, and
+       one it has just named opens if the reader had it open before. */
+    for (const id of [...visible]) if (!bodies.has(id)) visible.delete(id);
+    for (const id of restore()) visible.add(id);
+  }
+
   const placeholder = el("div", "pnote", "표시할 패널을 위에서 선택하세요");
-  host.append(placeholder);
 
   function sync() {
     for (const [id, entry] of bodies) {
       const on = visible.has(id);
       entry.body.hidden = !on;
       entry.tab.setAttribute("aria-pressed", String(on));
-      if (!on) clear(entry.body); /* a hidden panel keeps no stale DOM */
+      if (!on) clear(entry.body); /* a hidden drawer keeps no stale DOM */
     }
     placeholder.hidden = visible.size > 0;
   }
@@ -477,12 +526,12 @@ export function createPanels({ tabs, host }) {
   }
 
   function markMoved() {
-    for (const entry of bodies.values()) {
+    for (const [id, nodes] of bodies) {
       let count = 0;
-      for (const topic of entry.panel.topics) count += movedCount(moved.get(topic));
-      const badge = entry.tab.querySelector(".tmoved");
+      for (const topic of drawers.get(id).watch) count += movedCount(moved.get(topic));
+      const badge = nodes.tab.querySelector(".tmoved");
       if (badge) badge.textContent = count ? String(count) : "";
-      entry.tab.classList.toggle("moved", count > 0);
+      nodes.tab.classList.toggle("moved", count > 0);
     }
   }
 
@@ -513,7 +562,7 @@ export function createPanels({ tabs, host }) {
     return `${elapsed(us)} 전`;
   }
 
-  /* How far a panel's newest reading sits from the reference. Null when
+  /* How far a drawer's newest reading sits from the reference. Null when
      there is nothing to place it against — no counter rate yet, or a
      provider that stamps nothing — and the header falls back to
      arrival. */
@@ -531,47 +580,57 @@ export function createPanels({ tabs, host }) {
   }
 
   function render(id) {
-    const entry = bodies.get(id);
-    if (!entry || entry.body.hidden) return;
+    const nodes = bodies.get(id);
+    if (!nodes || nodes.body.hidden) return;
+    const drawer = drawers.get(id);
     /* The drawer is the scroller and this rebuild empties it, which
        drops the reader's offset — a wide table could never be read to
        its right edge. Restore what they were looking at. */
     const left = host.scrollLeft;
     const top = host.scrollTop;
-    clear(entry.body);
-    const newest = entry.panel.topics
+    clear(nodes.body);
+    const newest = drawer.watch
       .map((topic) => latest.get(topic))
       .filter(Boolean)
       .reduce((a, b) => (a && a.ts > b.ts ? a : b), null);
-    /* Stacked panels need to name themselves; the freshness stamp rides
-       the same line so a panel costs one header row, not two. */
+    /* Stacked drawers need to name themselves; the freshness stamp rides
+       the same line so a drawer costs one header row, not two. */
     const head = el("div", "phead");
-    head.append(el("span", "pt", entry.panel.title));
+    head.append(el("span", "pt", drawer.title));
     if (newest) {
       /* The instant the machine took it, where there is one: only that
          places the reading against the events on the strip. */
-      const placed = placement(entry.panel.topics);
+      const placed = placement(drawer.watch);
       head.append(
         el("span", "pfresh", `src ${newest.src} · ${placed ?? stamp(newest.ts, 1)}`),
       );
     }
-    entry.body.append(head);
+    nodes.body.append(head);
     if (!newest) {
-      entry.body.append(el("div", "pnote", "실측 대기 중 — 세션이 실행되면 채워집니다"));
+      nodes.body.append(el("div", "pnote", "실측 대기 중 — 세션이 실행되면 채워집니다"));
     } else {
       try {
-        entry.panel.render(entry.body);
+        drawer.override?.render(nodes.body);
+        /* Whatever the override left, as the shape the bridge sent it:
+           a topic added to the manifest is drawn here, structured and
+           under its subsystem's name, with nothing written for it. */
+        for (const topic of drawer.rest) {
+          const held = at(topic);
+          if (held.shown === undefined) continue;
+          nodes.body.append(section(topic));
+          nodes.body.append(generic(held));
+        }
       } catch (error) {
         /* Nothing escapes: a throw here would leave the dirty set
            uncleared and freeze this drawer for the session. What failed
            is printed rather than guessed at — a bare cell is a fault in
            this file, and anything else is as likely to be one as it is
            to be a shape decoded out of live guest RAM. */
-        console.error("panel render failed", entry.panel.id, error);
+        console.error("panel render failed", id, error);
         const said = error instanceof BareCell
           ? "이 표는 값의 출처를 잃었다 — 패널 코드의 결함이다"
           : `그리지 못했다 — ${error}`;
-        entry.body.append(el("div", "pnote", said));
+        nodes.body.append(el("div", "pnote", said));
       }
     }
     host.scrollLeft = left;
@@ -583,7 +642,7 @@ export function createPanels({ tabs, host }) {
     dirty.clear();
   }
 
-  for (const id of restore(PANELS.map((panel) => panel.id))) visible.add(id);
+  project();
   sync();
   renderAll();
 
@@ -607,10 +666,11 @@ export function createPanels({ tabs, host }) {
          genuinely moved nothing, which is a different answer. */
       if (data.changed !== undefined) moved.set(frame.topic, data.changed);
       /* Coalesced to one render per flush window, and only for the
-         panels this topic actually feeds: six topics at 20 Hz would
+         drawers this topic actually feeds — its own bundle plus every
+         drawer whose override reads it: six topics at 20 Hz would
          otherwise rebuild the same table over a hundred times a second,
          throwing away hover, text selection and the slot picker each
-         time. Every panel still draws the newest value. */
+         time. Every drawer still draws the newest value. */
       for (const id of interest.get(frame.topic) ?? []) {
         if (visible.has(id)) dirty.add(id);
       }
@@ -654,16 +714,10 @@ export function createPanels({ tabs, host }) {
     setTopology(topo) {
       timerSlots = Array.isArray(topo.timer_slots) ? topo.timer_slots : [];
       observations = topo.observations || {};
-      /* The manifest states what is published; everything a panel above
-         does not claim falls to the fallback. */
-      const claimed = new Set(
-        PANELS.filter((panel) => panel !== FALLBACK).flatMap((panel) => panel.topics),
-      );
-      FALLBACK.topics = Object.keys(topo.observations || {})
-        .filter((topic) => !claimed.has(topic))
-        .sort();
-      index();
-      bodies.get(FALLBACK.id).tab.hidden = FALLBACK.topics.length === 0;
+      /* The manifest states what is published, and its topic names say
+         which drawer each reading is drawn in. */
+      project();
+      sync(); /* a rebuilt strip starts with every body hidden */
       renderAll(); /* owner labels may resolve without a new frame */
     },
     clearAll() {

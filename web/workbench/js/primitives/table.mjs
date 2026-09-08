@@ -74,14 +74,35 @@ export function note(text, moved = false) {
   return el("div", moved ? "pnote moved" : "pnote", text);
 }
 
-/* Generic table renderer for unknown/fallback object structures. */
+/* Every field name the records in a list carry, in first-seen order. */
+const columnsOf = (items) => [
+  ...new Set(
+    items.flatMap((item) =>
+      item && typeof item === "object" && !Array.isArray(item) ? Object.keys(item) : [],
+    ),
+  ),
+];
+
+/* Generic table renderer for a topic no drawer draws itself. */
 export function generic(cursor) {
   const held = cursor.shown;
   if (Array.isArray(held)) {
     const rows = cursor.rows();
-    const shaped = held.find((item) => item && typeof item === "object" && !Array.isArray(item));
-    if (!shaped) return table(["#", "value"], rows.map((row, index) => [plain(index), row]));
-    const columns = [...new Set(held.flatMap((item) => Object.keys(item || {})))];
+    /* A list per core or per VM of records — a list register shadow, a
+       timer queue — flattened with the outer index as its first column,
+       so the whole reading reads as one table instead of a JSON blob
+       per core. Elements that are not records have no columns to
+       spread, and fall through to the two-column form below. */
+    const inner = held.some(Array.isArray) ? columnsOf(held.flat()) : [];
+    if (inner.length) {
+      const flat = [];
+      rows.forEach((row, index) =>
+        row.rows().forEach((item) => flat.push([plain(index), ...inner.map((key) => item.get(key))])),
+      );
+      return table(["#", ...inner], flat);
+    }
+    const columns = columnsOf(held);
+    if (!columns.length) return table(["#", "value"], rows.map((row, index) => [plain(index), row]));
     return table(
       ["#", ...columns],
       rows.map((row, index) => [plain(index), ...columns.map((key) => row.get(key))]),

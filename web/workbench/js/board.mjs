@@ -1289,11 +1289,13 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
   function renderVgic() {
     const capacity = Number(value("vgic.capacity")) || 0;
     const carried = (value("vgic.lr") || []).reduce((sum, list) => sum + list.length, 0);
+    /* The distributor arrives as the interrupts its bitmaps name, so a
+       VM with something pending reads as those INTIDs. */
     const dist = value("vgic.dist") || [];
     const pending = dist
-      .map((vm, index) => ({ index, bits: Number.parseInt(String(vm?.spi_pending ?? "0"), 16) }))
-      .filter((vm) => vm.bits)
-      .map((vm) => `vm${vm.index} SPI 0b${vm.bits.toString(2)}`);
+      .map((vm, index) => ({ index, intids: vm?.pending || [] }))
+      .filter((vm) => vm.intids.length)
+      .map((vm) => `vm${vm.index} SPI ${vm.intids.join(", ")}`);
     /* Tracked SPIs a device has posted that no register has taken yet.
        refill() moves the token out, so this and the in-flight count
        never double-count the same interrupt: together they read as one

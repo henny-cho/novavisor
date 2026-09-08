@@ -50,6 +50,25 @@ class ManifestJoinTest(unittest.TestCase):
                 observations._joined()
 
 
+class ObservationWireTest(unittest.TestCase):
+    """What the topology says about a topic beyond its value.
+
+    Three facts the UI cannot work out for itself: how coarse the sample
+    is, whether any run is held to it, and which topic dates it when the
+    memory shadows hardware. A panel-and-column schema travelled here
+    too, read by nothing at either end; a wire field no reader consumes
+    is a contract that cannot fail and so never gets fixed.
+    """
+
+    def test_only_what_a_reader_consumes_travels(self):
+        wire = observations.observation_rates()
+        self.assertEqual(set(wire["sched.cpu"]), {"rate", "asserted"})
+        self.assertEqual(wire["ctx.el1"]["as_of"], "ctx.synced")
+        for topic, info in wire.items():
+            with self.subTest(topic=topic):
+                self.assertLessEqual(set(info), {"rate", "asserted", "as_of"})
+
+
 class StepFieldTest(unittest.TestCase):
     """A step names a reading's field, however deep the struct is."""
 

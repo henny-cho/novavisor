@@ -6,7 +6,7 @@ import unittest
 
 from novakit.image import elfsym
 from novakit.services.workbench import derive, translation
-from novakit.services.workbench.observations import OBSERVATIONS
+from novakit.services.workbench.observations import OBSERVATIONS, POLICY
 
 # The STE field positions, from the header the encoder compiles against.
 # Spelled out here they would be the copy the shape exists to avoid.
@@ -226,6 +226,54 @@ class VgicPostedTest(unittest.TestCase):
         vm0 = self.bank(s31={"virtual_intid": 63, "physical_intid": 200, "generation": 9})
         (posted, *_) = derive.vgic_posted([vm0], self.SPIS)
         self.assertEqual(posted[0]["spi"], 31)
+
+
+class VgicDistTest(unittest.TestCase):
+    """The emulated distributor as the interrupts its bitmaps name."""
+
+    # Where SPI numbering starts, from the same header the shape reads,
+    # so the test states which interrupt a bit is and not which number.
+    BASE = derive._SPI_BASE
+
+    @staticmethod
+    def vm(**words):
+        return {"ctlr": 0, "spi_group": 0, "spi_enabled": 0, "spi_pending": 0} | words
+
+    def test_a_set_bit_travels_as_the_intid_a_guest_sees(self):
+        (vm,) = derive.vgic_dist([self.vm(spi_enabled=0b101)], None)
+        self.assertEqual(vm["enabled"], [self.BASE, self.BASE + 2])
+        self.assertEqual((vm["group1"], vm["pending"]), ([], []))
+
+    def test_an_untouched_distributor_names_nothing(self):
+        # Only what is set travels, so an idle machine sends four empty
+        # lists and the change gate emits them once.
+        self.assertEqual(
+            derive.vgic_dist([self.vm()] * 2, None),
+            [{"ctlr": "0x0", "group1": [], "enabled": [], "pending": []}] * 2,
+        )
+
+    def test_the_control_register_stays_a_bit_pattern(self):
+        (vm,) = derive.vgic_dist([self.vm(ctlr=0x12)], None)
+        self.assertEqual(vm["ctlr"], "0x12")
+
+    def test_each_vm_keeps_its_own_bank(self):
+        quiet, busy = derive.vgic_dist([self.vm(), self.vm(spi_pending=1 << 5)], None)
+        self.assertEqual(quiet["pending"], [])
+        self.assertEqual(busy["pending"], [self.BASE + 5])
+
+    def test_a_full_word_names_every_spi_it_covers(self):
+        # The reset state puts every SPI in Group 1, and the bitmap is
+        # one register word wide.
+        word = 0xFFFF_FFFF
+        (vm,) = derive.vgic_dist([self.vm(spi_group=word)], None)
+        self.assertEqual(len(vm["group1"]), word.bit_count())
+        self.assertEqual(vm["group1"][-1], self.BASE + word.bit_length() - 1)
+
+    def test_the_shape_has_the_last_word_on_this_topic(self):
+        # `_hexify` runs after the shape, so a hex policy here would turn
+        # the INTID lists into hex strings.
+        self.assertIs(POLICY["vgic.dist"].shape, derive.vgic_dist)
+        self.assertFalse(POLICY["vgic.dist"].hex)
 
 
 class SmmuStreamTest(unittest.TestCase):

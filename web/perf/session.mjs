@@ -67,6 +67,16 @@ export const RATES = {
   "smp.mode": 2, "smp.mail": 2, "smp.budget": 2, "vgic.synced": 10, "vm.table": 2,
 };
 
+/* Which topic dates which shadow of hardware, as the manifest declares
+   it: the drawer draws these as no row of their own, so a page fed
+   without them renders two rows the bridge's own topology would not. */
+export const AGES = {
+  "ctx.trap": "ctx.synced",
+  "ctx.el1": "ctx.synced",
+  "ctx.syndrome": "ctx.synced",
+  "vgic.lr": "vgic.synced",
+};
+
 export function topology() {
   return frame("topo", {
     session: "perf", run_id: 1, phase: "running", demo: "07-shm", variant: null,
@@ -86,7 +96,10 @@ export function topology() {
              } },
     stops: STOPS,
     observations: Object.fromEntries(
-      Object.entries(RATES).map(([topic, rate]) => [topic, { rate, asserted: false }]),
+      Object.entries(RATES).map(([topic, rate]) => [
+        topic,
+        { rate, asserted: false, ...(AGES[topic] ? { as_of: AGES[topic] } : {}) },
+      ]),
     ),
     taxonomy: { badges: ["TRAP", "IRQ", "VGIC", "GIC", "SCHED", "SMP", "PSCI", "DMA", "SMMU", "WDG", "BOOT", "MUX", "VUART", "FAULT"],
                 esr_ec: { 36: "kDataAbortLower", 22: "kHvcAa64" } },
@@ -150,7 +163,8 @@ export function readings() {
       (i % 4 ? [] : [{ slot: 0, vintid: 33, state: "pending", prio: 160, group1: true,
                        eoi: false, pintid: 33, generation: 1 }])),
     "vgic.resident": [0, 4],
-    "vgic.dist": [{ spi_pending: "5" }, { spi_pending: "0" }],
+    "vgic.dist": [{ ctlr: "0x12", group1: [32, 33], enabled: [33], pending: [33] },
+                  { ctlr: "0x0", group1: [32, 33], enabled: [], pending: [] }],
     "vgic.token": [[{ pintid: 48 }], []],
     "vgic.synced": Array.from({ length: slots }, () => ({ synced_at: 4000 })),
     "timer.queue": [[{ slot: 1, deadline: "0x1234" }], [{ slot: 0, deadline: "0x99" }]],
