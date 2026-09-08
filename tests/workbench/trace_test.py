@@ -19,8 +19,14 @@ from novakit.services.workbench import commands, events, trace
 
 L = abi.read_defines(
     abi.TRACE_RING,
-    ["NOVA_TRACE_HEADER_SIZE", "NOVA_TRACE_RECORDS_OFF", "NOVA_TRACE_REC_SIZE"],
+    [
+        "NOVA_TRACE_HEADER_SIZE",
+        "NOVA_TRACE_RECORDS_OFF",
+        "NOVA_TRACE_REC_SIZE",
+        "NOVA_TRACE_PAIR_SHIFT",
+    ],
 )
+LIFECYCLE = abi.read_define_family(abi.TRACE_RING, "NOVA_TRACE_LC_")
 # How much a board spends on the T layer is that board's decision, so a
 # fixture states its own rather than borrowing one. Room for a few rings
 # of CAPACITY and nothing more — the arithmetic under test is
@@ -620,10 +626,14 @@ class DecodeTest(unittest.TestCase):
     # carries mmio's flag byte (2 bytes, a write), `b` is a packed pair,
     # and `ts`/`c` sit above `b` so a span comes out a positive width.
     TS, A, B, C = 0x7_0000_0100, 0x102, 0x7_0000_0021, 0x7_0000_0080
-    # `command` alone: its first word is two vocabulary codes, so a
-    # value shared with the others would name no opcode.
-    FIRST_WORD = {
-        "command": commands.OPS["mark"] | commands.RESULTS["state"] << commands.ANSWER_SHIFT,
+    # Where a shared word would name nothing: `command`'s first word is
+    # two vocabulary codes, and `vm.lifecycle`'s third pairs an outcome
+    # code with the generation the lifecycle left behind.
+    WORDS = {
+        "command": {"a": commands.OPS["mark"] | commands.RESULTS["state"] << commands.ANSWER_SHIFT},
+        "vm.lifecycle": {
+            "c": LIFECYCLE["NOVA_TRACE_LC_RESTARTED"] | 7 << L["NOVA_TRACE_PAIR_SHIFT"]
+        },
     }
 
     EXPECTED = {
@@ -664,6 +674,8 @@ class DecodeTest(unittest.TestCase):
                        "ticks": 223},
         "irq.latency": {"event": "irq.latency", "cpu": 3, "ts": 30064771328, "vintid": 258,
                         "ticks": 95},
+        "vm.lifecycle": {"event": "vm.lifecycle", "cpu": 3, "ts": 30064771328, "ticks": 223,
+                         "vm": 258, "outcome": "restarted", "generation": 7},
         "trace.gap": {"event": "trace.gap", "cpu": 3, "ts": 30064771328, "count": 258,
                       "ticks": 223},
     }
@@ -671,14 +683,8 @@ class DecodeTest(unittest.TestCase):
     def test_every_record_kind_decodes_as_it_did(self):
         for entry in events.EVENTS:
             with self.subTest(event=entry.id):
-                record = trace.Record(
-                    ts=self.TS,
-                    code=entry.code,
-                    cpu=3,
-                    a=self.FIRST_WORD.get(entry.id, self.A),
-                    b=self.B,
-                    c=self.C,
-                )
+                words = {"a": self.A, "b": self.B, "c": self.C} | self.WORDS.get(entry.id, {})
+                record = trace.Record(ts=self.TS, code=entry.code, cpu=3, **words)
                 self.assertEqual(trace.decode(record), self.EXPECTED[entry.id])
 
     def test_the_golden_names_every_catalogued_kind(self):
@@ -692,6 +698,26 @@ class DecodeTest(unittest.TestCase):
         record = trace.Record(ts=self.TS, code=events.BY_ID["timer.late"].code, cpu=0,
                               a=1, b=0, c=0)
         self.assertEqual(trace.decode(record)["ticks"], 0)
+
+    def test_a_span_still_reads_the_words_that_are_not_its_endpoints(self):
+        """Only the two counter words become the width. A third word
+        carries a value like any other record's, and a span that dropped
+        it would arrive on the wire with nothing but a duration."""
+        record = trace.Record(ts=self.TS, code=events.BY_ID["vm.lifecycle"].code, cpu=0,
+                              a=1, b=self.B,
+                              c=LIFECYCLE["NOVA_TRACE_LC_ISOLATED"] | 3 << L["NOVA_TRACE_PAIR_SHIFT"])
+        self.assertEqual(trace.decode(record),
+                         {"event": "vm.lifecycle", "cpu": 0, "ts": self.TS,
+                          "ticks": self.TS - self.B, "vm": 1, "outcome": "isolated",
+                          "generation": 3})
+
+    def test_a_code_the_vocabulary_does_not_name_stays_a_number(self):
+        """A reader older than the firmware it is reading is not an
+        error: it shows the code it cannot name and keeps the record."""
+        unnamed = max(LIFECYCLE.values()) + 1
+        record = trace.Record(ts=self.TS, code=events.BY_ID["vm.lifecycle"].code, cpu=0,
+                              a=1, b=self.B, c=unnamed)
+        self.assertEqual(trace.decode(record)["outcome"], str(unnamed))
 
 
 class CatalogueTest(unittest.TestCase):

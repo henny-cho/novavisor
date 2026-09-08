@@ -18,6 +18,7 @@
 #include "smp/smp.hpp"
 #include "smp_internal.hpp"
 #include "soft_timer/soft_timer.hpp"
+#include "trace/trace.hpp"
 
 #include <array>
 #include <atomic>
@@ -34,6 +35,27 @@ std::array<bool, kMaxGuests>          g_dma_pending{};
 std::array<bool, kMaxGuests>          g_dma_failed{};
 
 namespace {
+
+// When each VM's current lifecycle began, read from the clock the ring
+// stamps with so the terminal record below is a span the host can read.
+std::array<std::uint64_t, kMaxGuests> g_lifecycle_since{};
+
+// The ring's outcome vocabulary, mirrored so an emit site reads as a
+// word. The names are the header's, minus its prefix.
+enum class LifecycleOutcome : std::uint8_t {
+  kStopped     = NOVA_TRACE_LC_STOPPED,
+  kRestarted   = NOVA_TRACE_LC_RESTARTED,
+  kLeftStopped = NOVA_TRACE_LC_LEFT_STOPPED,
+  kDmaFailed   = NOVA_TRACE_LC_DMA_FAILED,
+  kIsolated    = NOVA_TRACE_LC_ISOLATED,
+};
+
+// One record per lifecycle, spanning from its start to now. Records
+// only: each terminal keeps its own teardown, which differs by exit.
+void record_lifecycle_end(std::size_t vm, LifecycleOutcome outcome) noexcept {
+  trace_emit(NOVA_TRACE_EV_VM_LIFECYCLE, static_cast<std::uint32_t>(vm), g_lifecycle_since[vm],
+             static_cast<std::uint64_t>(outcome) | (vcpu::vm_generation(vm) << NOVA_TRACE_PAIR_SHIFT));
+}
 
 void on_lifecycle_timeout(TrapContext* ctx, std::uint64_t arg) noexcept;
 void on_dma_drain(TrapContext* ctx, std::uint64_t arg) noexcept;
@@ -61,6 +83,7 @@ void finish_lifecycle(std::size_t vm) noexcept {
     console::write("[smp] VM ");
     console::write_dec64(vm);
     console::write(" stopped after DMA isolation failure\n");
+    record_lifecycle_end(vm, LifecycleOutcome::kDmaFailed);
     return; // keep the lifecycle token latched
   }
 
@@ -71,6 +94,7 @@ void finish_lifecycle(std::size_t vm) noexcept {
     console::write("[smp] VM ");
     console::write_dec64(vm);
     console::write(" stopped\n");
+    record_lifecycle_end(vm, LifecycleOutcome::kStopped);
     return;
   }
 
@@ -93,6 +117,7 @@ void finish_lifecycle(std::size_t vm) noexcept {
     console::write_dec64(vm);
     console::write(" reset left stopped\n");
   }
+  record_lifecycle_end(vm, restarted ? LifecycleOutcome::kRestarted : LifecycleOutcome::kLeftStopped);
 }
 
 void arm_lifecycle_timeout(std::size_t vm) noexcept {
@@ -185,6 +210,7 @@ void on_lifecycle_timeout(TrapContext* /*ctx*/, std::uint64_t arg) noexcept {
     }
     tracker.cancel();
     vcpu::end_lifecycle_transition();
+    record_lifecycle_end(vm, LifecycleOutcome::kIsolated);
     return;
   }
 }
@@ -315,9 +341,10 @@ auto begin_lifecycle_local(std::size_t vm, LifecycleMode mode) noexcept -> Begin
     return {};
   }
   g_lifecycle_token[vm].store(plan.epoch, std::memory_order_release);
-  g_lifecycle_mode[vm] = mode;
-  g_dma_pending[vm]    = false;
-  g_dma_failed[vm]     = false;
+  g_lifecycle_mode[vm]  = mode;
+  g_dma_pending[vm]     = false;
+  g_dma_failed[vm]      = false;
+  g_lifecycle_since[vm] = hyp_timer::now_relaxed();
   console::write("[smp] VM ");
   console::write_dec64(vm);
   console::write(mode == LifecycleMode::kReset ? " reset epoch " : " stop epoch ");

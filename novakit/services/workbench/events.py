@@ -80,6 +80,9 @@ class Event:
     # rather than indexed, so the declaration cannot drift from the
     # layout beside it.
     group: str = ""
+    # For a field that holds a code, the ABI define prefix whose family
+    # names it: decode() reports the member's name, not the number.
+    names: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.span and self.span != "ts" and self.span not in self.fields:
@@ -91,6 +94,13 @@ class Event:
             if name not in self.fields:
                 raise ValueError(
                     f"{self.id}: hex names {name!r}, not one of its fields {self.fields}"
+                )
+        halves = {half for word in self.fields for half in word.split("|")}
+        for name in self.names:
+            if name not in halves:
+                raise ValueError(
+                    f"{self.id}: names {name!r}, which is neither a field nor half of "
+                    f"a packed one {self.fields}"
                 )
         if not self.group:
             return
@@ -222,6 +232,14 @@ EVENTS: tuple[Event, ...] = (
     Event("irq.latency", "nova::demo_hvc_component::handle_hvc", "", (),
           "게스트 IRQ 진입 지연", code=_CODES["NOVA_TRACE_EV_IRQ_LATENCY"],
           fields=("vintid", "deadline", "entry"), span="entry", group="vintid"),
+    # How a VM lifecycle ended, its width the time the VM was out. The
+    # five things that begin one already have records (psci.call,
+    # command, trap, smmu.fault, timer.late on the watchdog slot); this
+    # is the end, one per lifecycle. No edge: a terminal lights no path.
+    Event("vm.lifecycle", "nova::smp::(anonymous)::record_lifecycle_end", "", ("vm", "outcome"),
+          "VM 수명주기 종결", code=_CODES["NOVA_TRACE_EV_VM_LIFECYCLE"],
+          fields=("vm", "since", "outcome|generation"), span="ts", group="vm",
+          names={"outcome": "NOVA_TRACE_LC_"}),
     # Not a moment in the firmware but a statement about the stream:
     # written by the reader where the records it could not recover
     # would have been. No symbol, so it is never offered as a stop

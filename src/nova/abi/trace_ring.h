@@ -171,6 +171,20 @@
  * wrote the record, which is after both, so the ring stays sorted. */
 #define NOVA_TRACE_EV_IRQ_LATENCY 19
 
+/* A VM lifecycle that ended. `a` is the VM, `b` is when the transition
+ * began — so the record is a span whose width is how long the VM was
+ * out — and `c` pairs how it ended with the generation it left behind.
+ * What began the lifecycle is already a record of its own. */
+#define NOVA_TRACE_EV_VM_LIFECYCLE 20
+
+/* How a lifecycle ended, read as a name family by its prefix the way
+ * NOVA_CMD_OP_* is, so the name is the same word on both sides. */
+#define NOVA_TRACE_LC_STOPPED      0
+#define NOVA_TRACE_LC_RESTARTED    1
+#define NOVA_TRACE_LC_LEFT_STOPPED 2
+#define NOVA_TRACE_LC_DMA_FAILED   3
+#define NOVA_TRACE_LC_ISOLATED     4
+
 /* Codes the host writes into the same stream, far above the firmware's
  * numbering and read as a separate family, so one can never be mistaken
  * for an unimplemented hook.

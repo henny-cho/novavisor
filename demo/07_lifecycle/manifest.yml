@@ -41,6 +41,11 @@ variants:
       # happened to print its banner twice.
       - event: "psci.call"
         within_seconds: 5
+      # And how that reset ended. One record per lifecycle, so the
+      # restart is EL2's account of it and its width is the outage.
+      - event: "vm.lifecycle"
+        where: { vm: 0, outcome: "restarted" }
+        within_seconds: 5
       - pattern: "demo_exit code=0"
         within_seconds: 14
       - pattern: "missed its heartbeat window"

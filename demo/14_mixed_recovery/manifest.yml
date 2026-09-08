@@ -65,6 +65,11 @@ steps:
     within_seconds: 30
   - pattern: "sysrq: Trigger a crash"
     within_seconds: 60
+  # The recovery, as EL2 recorded it rather than as a second boot
+  # banner: the panic's lifecycle ended by restarting the VM.
+  - event: "vm.lifecycle"
+    where: { vm: 1, outcome: "restarted" }
+    within_seconds: 60
   - pattern: "Booting Linux on physical CPU"
     within_seconds: 120
   - pattern: "aarch64 GNU/Linux"

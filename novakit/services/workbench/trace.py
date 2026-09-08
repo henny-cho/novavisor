@@ -62,6 +62,17 @@ _RECORDS_OFF = _LAYOUT["NOVA_TRACE_RECORDS_OFF"]
 _PAIR_SHIFT = _LAYOUT["NOVA_TRACE_PAIR_SHIFT"]
 _PAIR_MASK = _LAYOUT["NOVA_TRACE_PAIR_MASK"]
 
+# The name families a catalogue field points at, value -> member name
+# without its prefix. Read once from the prefixes the catalogue actually
+# uses, so a vocabulary that grows in the header needs no second list.
+_VOCABULARY = {
+    prefix: {
+        value: name[len(prefix) :].lower()
+        for name, value in abi.read_define_family(abi.TRACE_RING, prefix).items()
+    }
+    for prefix in {prefix for entry in events.EVENTS for prefix in entry.names.values()}
+}
+
 # The code this reader writes where records should have been. Taken from
 # the catalogue rather than the ABI header a second time: one entry names
 # the moment, its number, and what its words mean.
@@ -969,20 +980,15 @@ def decode(record: Record) -> dict:
     """A record as the event it is, with its arguments named.
 
     The catalogue's field spellings are the decode: a plain name takes
-    its word, `x|y` splits one at the ABI's pair shift, and a span
-    reports its width. Only mmio's flag word and command's name lookup
-    are not expressible as a spelling.
+    its word, `x|y` splits one at the ABI's pair shift, a span reports
+    its width instead of its endpoints, and a field the catalogue points
+    at a name family reports the member rather than the code. Only
+    mmio's flag word and command's paired vocabularies are left over.
     """
     entry = events.BY_CODE.get(record.code)
     out: dict = {"event": entry.id if entry else str(record.code), "cpu": record.cpu, "ts": record.ts}
     if entry is None:
         return out
-    if entry.span:
-        # The width, not the far end: `b` is a raw counter value, which
-        # is the one thing no reader can use. A start of zero is a
-        # stretch that opened before anything was recorded, so it has none.
-        return out | {entry.fields[0]: record.a,
-                      "ticks": entry.span_end(record) - record.b if record.b else 0}
     if entry.id == "command":
         # EL2 packs the opcode and the verdict into one word; the halves
         # and their names both come from the ABI header, so a refusal
@@ -994,6 +1000,13 @@ def decode(record: Record) -> dict:
             "b": record.c,
         }
     words = list(zip((record.a, record.b, record.c), entry.fields, strict=True))
+    if entry.span:
+        # The width, not the endpoints: both are raw counter values no
+        # reader can use. A start of zero opened before anything was
+        # recorded, so it has no width. Any other word decodes as usual.
+        ends = {1} if entry.span == "ts" else {1, entry.fields.index(entry.span)}
+        words = [word for index, word in enumerate(words) if index not in ends]
+        out["ticks"] = entry.span_end(record) - record.b if record.b else 0
     if entry.id == "mmio":
         # The access is a flag word rather than a value: width in the low
         # byte, direction in the bit above it. The other two words are regular.
@@ -1007,6 +1020,11 @@ def decode(record: Record) -> dict:
             out[low], out[high] = word & _PAIR_MASK, word >> _PAIR_SHIFT
         else:
             out[name] = f"{word:#x}" if name in entry.hex else word
+    for name, prefix in entry.names.items():
+        # A code becomes the name its family gives it, and an unnamed
+        # one stays the number: a build the reader does not know a
+        # vocabulary member of is not an error, it is a newer build.
+        out[name] = _VOCABULARY[prefix].get(out[name], str(out[name]))
     return out
 
 
