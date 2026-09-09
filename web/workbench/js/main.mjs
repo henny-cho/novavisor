@@ -34,8 +34,6 @@ const lossBadge = ref("loss");
 const lossNumber = ref("loss-n");
 const clockNode = ref("clock");
 const themeButton = ref("theme");
-const runButton = ref("run");
-const rerunButton = ref("rerun");
 const pauseButton = ref("pause");
 const stopPick = ref("stop-at");
 const advanceButton = ref("advance");
@@ -322,19 +320,12 @@ const topology = createTopology({
   variantSelect: ref("variant"),
   verifyBox: ref("verify"),
   runButton: ref("run"),
-  rerunButton,
   pane: ref("topo"),
   send: (topic, data) => wire.send(topic, data),
   /* The stepper's own read of the stop picker, so a stop armed at launch
      and one advanced to are always the same chosen event. */
   stops: () => chosen(),
-  onStart: (demo) => {
-    rerunButton.hidden = true;
-    /* One start per click storm: the next terminal phase (or a
-       rejection) re-arms the button. */
-    armRun(false);
-    events.addNotice(latestTs, `실행 요청 — ${demo}`);
-  },
+  onStart: (demo) => events.addNotice(latestTs, `실행 요청 — ${demo}`),
   onNotice: notify,
 });
 
@@ -346,18 +337,14 @@ const topology = createTopology({
    would put "실행 중" on a screen with no machine behind it. */
 let replaying = false;
 
-/* One owner for whether the machine can be launched. Seven places
-   re-armed the button directly, and a replay has to refuse all of them
-   — which is a rule about the session, not seven rules about them. */
-function armRun(on) {
-  runButton.disabled = replaying || !on;
-}
-
 function setPhase(phase, override) {
   if (replaying && phase !== "replay") return;
   const info = PHASES[phase];
   phaseBadge.dataset.tone = info ? info.tone : "idle";
   phaseText.textContent = override || (info ? info.text : phase || "—");
+  /* The launch control is the launch module's: one button whose text and
+     whose click both follow from whether a machine is there. */
+  topology.setPhase(phase);
   /* Only a running machine can be paused; every other phase offering
      the button would send stop to a machine that no longer exists. */
   pauseButton.hidden = phase !== "running";
@@ -366,13 +353,9 @@ function setPhase(phase, override) {
   for (const control of [advanceButton, stepButton, autoButton]) {
     control.disabled = phase !== "running";
   }
-  /* There is no machine to launch, and no run to re-run. The strip and
-     the panels stay live, because those are what a replay is for. */
-  if (phase === "replay") {
-    armRun(false);
-    ref("target").disabled = true;
-    rerunButton.hidden = true;
-  }
+  /* There is no machine to launch. The strip and the panels stay live,
+     because those are what a replay is for. */
+  if (phase === "replay") ref("target").disabled = true;
 }
 
 /* Connect replay hands the fresh snapshot over before the older backlog,
@@ -548,7 +531,6 @@ function onTopo(ts, data) {
       setPaused(false);
       setPhase(phase);
     }
-    rerunButton.hidden = phase !== "exited" && phase !== "failed";
   }
   /* The life event is not replayed, so a browser that joined after the
      seal reads the summary here — the same shape, noticed once. */
@@ -625,19 +607,15 @@ function onLife(ts, data) {
   switch (phase) {
     case "idle":
       setPhase(phase);
-      armRun(true);
       events.addNotice(ts, "세션 대기");
       break;
     case "building":
       setPhase(phase);
       bootMark.hidden = true;
-      rerunButton.hidden = true;
       events.addNotice(ts, `빌드 중${demo}`);
       break;
     case "running":
       setPhase(phase);
-      armRun(true);
-      rerunButton.hidden = true;
       setPaused(false);
       setAuto(false);
       say("");
@@ -714,16 +692,12 @@ function onLife(ts, data) {
       break;
     case "exited":
       setPhase(phase, `종료 (code=${data.code ?? "?"})`);
-      armRun(true);
-      rerunButton.hidden = false;
       events.addNotice(ts, `세션 종료 code=${data.code ?? "?"}`, {
         severity: exitSeverity(data.code),
       });
       break;
     case "failed":
       setPhase(phase);
-      armRun(true);
-      rerunButton.hidden = false;
       events.addNotice(ts, `실패: ${data.error || "원인 미상"}`, { severity: "CRIT" });
       break;
     case "booted":
@@ -790,7 +764,7 @@ function onLife(ts, data) {
       );
       break;
     case "uplink-rejected":
-      armRun(true); /* a rejected select ends its attempt */
+      topology.arm(true); /* a rejected request ends its attempt */
       events.addNotice(ts, `업링크 거부: ${data.reason || "?"}`, { severity: "WARN" });
       break;
     case "query-cancelled":
@@ -939,8 +913,6 @@ function onReset() {
   lostFrames = 0;
   lossBadge.hidden = true;
   bootMark.hidden = true;
-  armRun(true);
-  rerunButton.hidden = true;
   currentRun = null;
   sealedRuns.clear();
   setPaused(false);

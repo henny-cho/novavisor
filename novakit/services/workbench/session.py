@@ -536,7 +536,13 @@ class Session:
             # back now instead of at the scenario timeout.
             await asyncio.get_running_loop().run_in_executor(None, _kill, child)
         async with self._lock:
-            return await self._stop_locked()
+            dead = await self._stop_locked()
+            # A verify run holds the lock to its end and publishes its
+            # own outcome, so the stop's IDLE has to be said here or the
+            # last phase a reader sees is that outcome.
+            if self.phase is not Phase.IDLE:
+                self._set_phase(Phase.IDLE)
+            return dead
 
     async def _stop_locked(self) -> bool:
         if self._live is None:

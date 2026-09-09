@@ -1,10 +1,15 @@
-/* Target picker and guest topology summary. Both are driven by the topo
-   snapshot: the catalog fills the picker, the guest list fills the rail.
-   This module is the only sender of target uplinks. */
+/* Launch control, target picker and guest topology summary. The picker
+   and the rail are driven by the topo snapshot: the catalog fills one,
+   the guest list the other. This module is the only sender of target and
+   stop uplinks, and the only owner of the button that carries both. */
 
 import { clear, el, vmAccent, vmSlot } from "./format.mjs";
 
 const TARGET_KEY = "nv-wb-target";
+
+/* Phases in which a machine exists to be stopped. `building` counts: the
+   select holds the session lock, so the stop lands once it launches. */
+const ACTIVE = new Set(["building", "running", "verifying"]);
 
 /* The whole launch choice, not only the demo: which variant to build and
    whether to verify are as much a part of what to run as its name. An
@@ -31,7 +36,6 @@ export function createTopology({
   variantSelect,
   verifyBox,
   runButton,
-  rerunButton,
   pane,
   send,
   stops,
@@ -39,6 +43,12 @@ export function createTopology({
   onNotice,
 }) {
   let catalogKey = null;
+  /* One button, two meanings. Its text is the machine's presence and its
+     click is whichever of launch and stop that presence leaves open;
+     re-arming waits for the next phase, so a click storm is one request.
+     A replay has no machine and refuses both. */
+  let active = false;
+  let replaying = false;
   const held = stored();
   let lastTarget = held.demo || "";
   const variants = new Map();
@@ -158,12 +168,32 @@ export function createTopology({
     }
     lastTarget = target;
     remember({ demo: target, variant: data.variant, verify: data.verify });
+    arm(false);
     onStart?.(target);
   }
 
-  select.addEventListener("change", () => fillVariants(select.value));
-  runButton.addEventListener("click", () => start(select.value));
-  rerunButton.addEventListener("click", () => start(lastTarget || select.value));
+  function stop() {
+    if (!send("stop", {})) {
+      onNotice?.("브리지에 연결되지 않아 정지 요청을 보내지 못했습니다");
+      return;
+    }
+    arm(false);
+    onNotice?.("정지 요청");
+  }
 
-  return { render };
+  function arm(on) {
+    runButton.disabled = replaying || !on;
+  }
+
+  function setPhase(phase) {
+    replaying = String(phase) === "replay";
+    active = ACTIVE.has(String(phase));
+    runButton.textContent = active ? "정지" : "실행";
+    arm(true);
+  }
+
+  select.addEventListener("change", () => fillVariants(select.value));
+  runButton.addEventListener("click", () => (active ? stop() : start(select.value)));
+
+  return { render, setPhase, arm };
 }

@@ -41,6 +41,9 @@ class Topic(StrEnum):
     # uplink
     UART = "uart"
     TARGET = "target"
+    # The counterpart of `target`: point the session at nothing. Without
+    # it the only way to end a run was to select another one.
+    STOP = "stop"
     # The machine's stop and its advance. Named for what it owns rather
     # than the socket it once used: QMP no longer holds the stop.
     HALT = "halt"

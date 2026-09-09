@@ -483,6 +483,10 @@ class VerifyInterruptTest(unittest.IsolatedAsyncioTestCase):
         phases = [frame["data"].get("phase") for frame in state.drain()]
         self.assertIn("verify-fail", phases)
         self.assertIn("exited", phases)
+        # The stop has the last word. The verify run publishes its own
+        # outcome while still holding the lock, so a reader that took
+        # that as final would keep offering to stop a session that ended.
+        self.assertEqual([phase for phase in phases if phase][-1], "idle")
 
 
 class SurfaceSweepTest(unittest.TestCase):
@@ -1023,6 +1027,31 @@ class ConnectionHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(bridge._tasks), before + 1)
         for task in tuple(bridge._tasks):
             task.cancel()
+
+    async def test_a_stop_uplink_ends_the_run(self):
+        """The uplink that means "no machine". Without it the launch
+        control could only ever select, and pressing it while a machine
+        ran rebuilt that machine instead of stopping it."""
+        bridge = support.bridge()
+        called = asyncio.Event()
+
+        async def stop() -> bool:
+            called.set()
+            return True
+
+        bridge.session.stop = stop
+        bridge._handle_uplink('{"topic":"stop","data":{},"request_id":"stop:1"}')
+        await bridge.settled()
+
+        self.assertTrue(called.is_set())
+        self.assertEqual(
+            [
+                frame["data"]
+                for frame in bridge.store.drain()
+                if frame["data"].get("phase") == "uplink-rejected"
+            ],
+            [],
+        )
 
     async def test_every_other_command_still_waits_its_turn(self):
         bridge = support.bridge()

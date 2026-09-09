@@ -1,9 +1,11 @@
-/* Target picker test: what a launch actually asks the bridge for.
+/* Launch control test: what a launch actually asks the bridge for, and
+   which of its two meanings the one button carries.
 
    Every knob here is one the uplink has always accepted, so the thing
    under test is the payload — that a variant, a verification run and a
    stop armed at launch travel with the demo, and that the page comes
-   back up on the choice it was left with. */
+   back up on the choice it was left with. The toggle is the other half:
+   a machine that exists is one to stop, not one to launch again. */
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -25,16 +27,15 @@ function harness({ stops = () => [], storage = null } = {}) {
   const variantSelect = element("select");
   const verifyBox = element("input");
   const runButton = element("button");
-  const rerunButton = element("button");
   const pane = element("div");
   const sent = [];
+  const notices = [];
 
   const view = createTopology({
     select,
     variantSelect,
     verifyBox,
     runButton,
-    rerunButton,
     pane,
     send: (topic, data) => {
       sent.push([topic, data]);
@@ -42,10 +43,10 @@ function harness({ stops = () => [], storage = null } = {}) {
     },
     stops,
     onStart: () => {},
-    onNotice: () => {},
+    onNotice: (message) => notices.push(message),
   });
 
-  return { view, select, variantSelect, verifyBox, runButton, rerunButton, pane, sent };
+  return { view, select, variantSelect, verifyBox, runButton, pane, sent, notices };
 }
 
 const topo = (extra = {}) => ({ demo: null, guests: [], catalog: CATALOG, ...extra });
@@ -101,7 +102,9 @@ describe("target picker", () => {
     fire(runButton, "click");
     assert.equal("stops" in sent[0][1], false);
 
+    /* That run ended: the button is armed again, and launches again. */
     held.push("trap");
+    view.setPhase("idle");
     fire(runButton, "click");
     assert.deepEqual(sent[1][1].stops, ["trap"]);
   });
@@ -126,6 +129,63 @@ describe("target picker", () => {
     assert.deepEqual(again.sent, [
       ["target", { demo: "12_zephyr", variant: "dma", verify: true }],
     ]);
+  });
+
+  it("reads 정지 while a machine is building, running or verifying and 실행 otherwise", () => {
+    const { view, runButton } = harness();
+    view.render(topo());
+
+    for (const phase of ["building", "running", "verifying"]) {
+      view.setPhase(phase);
+      assert.equal(runButton.textContent, "정지", phase);
+    }
+    for (const phase of ["idle", "exited", "failed", "replay"]) {
+      view.setPhase(phase);
+      assert.equal(runButton.textContent, "실행", phase);
+    }
+  });
+
+  it("sends stop while active and target while idle", () => {
+    const { view, runButton, sent, notices } = harness();
+    view.render(topo());
+
+    view.setPhase("running");
+    fire(runButton, "click");
+    assert.deepEqual(sent, [["stop", {}]]);
+    assert.deepEqual(notices, ["정지 요청"]);
+
+    /* The stop landed: nothing is running, so the same button launches. */
+    view.setPhase("idle");
+    fire(runButton, "click");
+    assert.deepEqual(sent[1], ["target", { demo: "02_timer", variant: null, verify: false }]);
+  });
+
+  it("is disabled after a click until the phase re-arms it", () => {
+    const { view, runButton, sent } = harness();
+    view.render(topo());
+
+    fire(runButton, "click");
+    assert.equal(runButton.disabled, true);
+    /* A click storm is one request: the bridge is building, and the
+       clicks that land meanwhile must not queue a second launch. */
+    fire(runButton, "click");
+    assert.equal(sent.length, 1);
+
+    view.setPhase("running");
+    assert.equal(runButton.disabled, false);
+  });
+
+  it("replay keeps it disabled", () => {
+    const { view, runButton, sent } = harness();
+    view.render(topo());
+
+    view.setPhase("replay");
+    assert.equal(runButton.disabled, true);
+    /* And nothing re-arms it: a file has no machine to launch or stop. */
+    view.arm(true);
+    assert.equal(runButton.disabled, true);
+    fire(runButton, "click");
+    assert.deepEqual(sent, []);
   });
 
   it("shows the running variant beside the demo it belongs to", () => {

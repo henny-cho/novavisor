@@ -258,6 +258,10 @@ export const element = (tag) => globalThis.document.createElement(tag);
 
 /* What a listener the module registered would receive. */
 export function fire(node, type, event = {}) {
+  /* A browser delivers no gesture to a disabled control. Without that
+     here, a test could click a button the page had already refused —
+     and pass over a control left live by mistake. */
+  if (node.disabled) return;
   for (const handler of node.handlers.get(type) ?? []) handler(event);
 }
 

@@ -491,6 +491,17 @@ class Bridge:
             )
         )
 
+    def _stop_machine(self, request: Request) -> None:
+        """End the run the reader is watching, leaving nothing selected.
+
+        Same handover as a select: the machine goes back before it is
+        torn down, or a run ending while we hold its stop leaves QEMU
+        frozen mid-exit.
+        """
+        del request  # a stop names no target
+        self._release()
+        self.spawn(self.session.stop())
+
     def _reject(self, reason: str, reply_to: str | None = None) -> None:
         # Window only: a flood of bad uplinks must not evict the replay
         # history every future connection depends on.
@@ -841,6 +852,7 @@ HANDLERS = (
     Handler(Topic.CURSOR, Bridge._answer_cursor, Needs.REPLAY, query=True),
     Handler(Topic.CMD, Bridge._issue_command, Needs.MACHINE),
     Handler(Topic.TARGET, Bridge._select_target, Needs.MACHINE),
+    Handler(Topic.STOP, Bridge._stop_machine, Needs.MACHINE),
     Handler(Topic.HALT, Bridge._take_halt, Needs.RUNNING),
 )
 UPLINK = frozenset(handler.topic for handler in HANDLERS)
