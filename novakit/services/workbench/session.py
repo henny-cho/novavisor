@@ -133,7 +133,7 @@ def _world(view: observe.View | None, elf: Path | None) -> dict:
         "stops": events.catalogue(),
         "taxonomy": vocabulary() | derive.syndrome_vocabulary(view),
         "timer_slots": timer_slot_labels(),
-        "observations": observation_rates(),
+        "observations": observation_rates(view),
         "limits": {"buckets": MAX_BUCKETS},
         # Which build this is, by content. A report joining a run's
         # counts to an image's structure has to be able to refuse two
@@ -271,10 +271,10 @@ class Session:
         """Republish the board with the paths this run can now witness.
 
         Capability is not settled when the topology first goes out: EL2
-        places the trace rings well after it, and an edge that was grey
-        because nothing could watch it becomes direct the moment
-        something can. Publishing the upgrade is the alternative to
-        promising it in advance.
+        places the trace rings long after it. Graded against this run's
+        image, which `select` resolves before the machine launches, so
+        the rings cannot appear before it; by the rings alone when the
+        run has no image.
         """
         topology = self._store.topology
         board = topology.get("board")
@@ -283,7 +283,7 @@ class Session:
         regraded = paths.edges(
             board["cpus"],
             [block["id"] for block in board["blocks"]],
-            image_capability(image_answers(), tracing),
+            image_capability(self.view, tracing),
         )
         if regraded == board["edges"]:
             return

@@ -118,8 +118,11 @@ only the drawers you have open are rendered. After a stop, each button also
 carries how many values in its drawer moved since the previous stop — which
 is what says which drawer to open next.
 
-A full-profile run publishes 31 observation topics, which with the halt
-layer's `sysreg` make these ten drawers:
+The topology advertises **what this run's image can answer**, and the drawers
+follow it. A full profile publishes 31 observation topics, which with the halt
+layer's `sysreg` make the ten below; a profile composing no SMMU resolves
+neither `smmu.stream` nor `dev.dma`, so its runs offer no **smmu** drawer at
+all and **Devices** without the DMA registry.
 
 | Drawer | What it shows |
 |---|---|
@@ -470,9 +473,9 @@ flushed every 50 ms:
   `phase`, `paused`, and `run_id` (a change is a run boundary; the client
   clears panel values and counters).
 - Structural downlink topics are fixed (`topo, console, ev, life, verify,
-  sysreg, trace`); **S-layer topics are plain strings taken from the
-  manifest**, so adding an observation adds a topic without touching the
-  protocol.
+  sysreg, trace`); **S-layer topics are plain strings taken from the manifest
+  this run's image answers**, so adding an observation adds a topic without
+  touching the protocol.
 - Every panel-consumed snapshot (S topics and `sysreg`) carries its payload
   under `data.values` — one contract for the whole panel drawer.
 - Uplink (client → bridge): `target` (launch a demo — `variant`, `verify`, and

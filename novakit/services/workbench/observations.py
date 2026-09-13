@@ -178,6 +178,17 @@ def _joined() -> tuple[Obs, ...]:
 OBSERVATIONS: tuple[Obs, ...] = _joined()
 
 
+def available_observations(view: observe.View | None) -> tuple[Obs, ...]:
+    """Of the manifest, the observations this image answers.
+
+    A page declared by address has no symbol to be absent, so every
+    profile mapping it carries it. No view is no image to ask, and the
+    manifest stands whole — which is what a pre-run topology says.
+    """
+    if view is None:
+        return OBSERVATIONS
+    return tuple(obs for obs in OBSERVATIONS if obs.pa is not None or obs.topic in view.resolved)
+
 
 def _check_rates() -> None:
     """No entry may be sampled faster than the firmware publishes.
@@ -271,17 +282,17 @@ def issued_ops() -> set[str]:
     }
 
 
-def observation_rates() -> dict[str, dict]:
+def observation_rates(view: observe.View | None = None) -> dict[str, dict]:
     """What the UI needs to say about a topic beyond its value.
 
-    How coarse the sample is, whether a demo holds this run to it, and
-    which topic dates it when the memory is a shadow of hardware. All
-    three are facts the manifests know and the UI cannot; written into
-    the UI instead, the two drift and the badge lies.
+    Sample rate, whether a demo holds this run to it, and which topic
+    dates it when the memory shadows hardware — facts the manifests know
+    and the UI cannot. Only for what this image answers: advertising a
+    topic it cannot publish is a drawer that never fills.
     """
     asserted = asserted_names()
     out: dict[str, dict] = {}
-    for obs in OBSERVATIONS:
+    for obs in available_observations(view):
         info: dict = {"rate": obs.rate_hz, "asserted": obs.topic in asserted}
         if obs.as_of:
             info["as_of"] = obs.as_of

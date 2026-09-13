@@ -9,10 +9,13 @@ import socket
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from novakit.image import observe
 from novakit.services import expect, spawn
 from novakit.services.surfaces import Surfaces
-from novakit.services.workbench import snapshot, trace
+from novakit.services.workbench import events, hardware, paths, snapshot, trace
+from novakit.services.workbench import session as session_module
 from novakit.services.workbench.observations import Obs
 from novakit.services.workbench.protocol import Clock, Envelopes
 from novakit.services.workbench.session import (
@@ -728,6 +731,47 @@ class PollLoopTest(Draining):
         self.assertEqual(len(instances), 2)
         self.assertTrue(instances[0].closed, "the mid-build provider must be dropped")
         self.assertFalse(instances[1].closed)
+
+
+class _Symbols:
+    """A symbol table carrying exactly the names it was handed."""
+
+    def __init__(self, names):
+        self._names = set(names)
+
+    def has_function(self, name: str) -> bool:
+        return name in self._names
+
+
+def _image(*names: str) -> observe.View:
+    return observe.View(resolved={}, symbols=_Symbols(names))
+
+
+STOPPABLE = tuple(event.symbol for event in events.EVENTS if event.edge)
+
+
+class RegradeTest(unittest.TestCase):
+    """Paths are graded against the image this run built.
+
+    A variant may build another preset, so re-resolving the default
+    image would grade this run against components it never linked. The
+    default is stocked here with the opposite answer to prove which one
+    the grades came from.
+    """
+
+    def grades(self, run: observe.View, default: observe.View) -> set[str]:
+        made = Session(store())
+        made._store.set_topology({"demo": "x", "board": hardware.board_map()})
+        made.view = run
+        with mock.patch.object(session_module, "image_answers", return_value=default):
+            made.regrade_paths(tracing=False)
+        return {edge["grade"] for edge in made._store.topology["board"]["edges"]}
+
+    def test_a_path_this_image_cannot_witness_stays_grey(self):
+        self.assertNotIn(paths.GRADE_DIRECT, self.grades(_image(), _image(*STOPPABLE)))
+
+    def test_a_path_it_can_is_upgraded(self):
+        self.assertIn(paths.GRADE_DIRECT, self.grades(_image(*STOPPABLE), _image()))
 
 
 # The region a board reserves is a board number, so a fixture states

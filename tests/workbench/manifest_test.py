@@ -99,6 +99,35 @@ class ObservationWireTest(unittest.TestCase):
             self.assertNotIn("durations", wire[topic])
 
 
+class AdvertisedTopicTest(unittest.TestCase):
+    """The topology advertises what this run's image can answer.
+
+    The UI derives its drawers from the topics the topology names, so a
+    topic a subset profile never resolves would grow a drawer that the
+    poller — which reads only what resolved — can never fill.
+    """
+
+    TOPICS = {obs.topic for obs in observations.OBSERVATIONS}
+
+    def image(self, *lacking: str) -> observe.View:
+        # What resolved is the whole question; `absent` is no complement
+        # of it, carrying table symbols and enum names as well.
+        return observe.View(resolved=dict.fromkeys(self.TOPICS - set(lacking)), symbols=None)
+
+    def test_a_full_image_advertises_the_whole_manifest(self):
+        self.assertEqual(set(observations.observation_rates(self.image())), self.TOPICS)
+
+    def test_a_topic_this_image_lacks_is_neither_named_nor_rated(self):
+        # What a profile composing no SMMU leaves unresolved.
+        wire = observations.observation_rates(self.image("smmu.stream", "dev.dma"))
+        self.assertEqual(set(wire), self.TOPICS - {"smmu.stream", "dev.dma"})
+
+    def test_no_image_still_advertises_everything(self):
+        # A pre-run topology has none to ask, and the manifest is all
+        # there is to describe.
+        self.assertEqual(set(observations.observation_rates()), self.TOPICS)
+
+
 class StepFieldTest(unittest.TestCase):
     """A step names a reading's field, however deep the struct is."""
 

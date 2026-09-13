@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Protocol
 
 from ...image import abi, elfsym, observe
-from .observations import OBSERVATIONS, PUBLISH_HZ, Obs
+from .observations import OBSERVATIONS, PUBLISH_HZ, Obs, available_observations
 
 _U32 = elfsym.TypeInfo("uint", 4)
 _U64 = elfsym.TypeInfo("uint", 8)
@@ -213,11 +213,7 @@ class ElfRamProvider:
         self._resolved = image.resolved
         self._symbols = image.symbols
         self.regimes = image.walk
-        # What this image answers. A page declared by address has no
-        # symbol to be absent, so every profile mapping it carries it.
-        self.observations = tuple(
-            obs for obs in OBSERVATIONS if obs.pa is not None or obs.topic in image.resolved
-        )
+        self.observations = available_observations(image)
         with ram_path.open("rb") as backing:
             self._ram = mmap.mmap(backing.fileno(), 0, prot=mmap.PROT_READ)
         highest = max(

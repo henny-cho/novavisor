@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import pickle
 import struct
@@ -15,6 +16,7 @@ from novakit.services.workbench.observations import (
     OBSERVATIONS,
     PUBLISH_HZ,
     Obs,
+    observation_rates,
 )
 from tests.support import image as shared_image
 
@@ -300,6 +302,27 @@ class ElfRamProviderTest(unittest.TestCase):
                 provider.read_bytes(top - 8, 4096)
             with self.assertRaises(ValueError):
                 provider.read_bytes(RAM_BASE - 4096, 4096)
+
+    def test_the_wire_advertises_exactly_what_this_provider_polls(self):
+        """One availability rule, two callers.
+
+        A topic the topology names and the poller never reads is a
+        drawer that waits forever; both ask the same image.
+        """
+        view = shared_image.view()
+        short = dataclasses.replace(
+            view, resolved={k: v for k, v in view.resolved.items() if k != "smmu.stream"}
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            ram_path = Path(directory) / "guest-ram"
+            with ram_path.open("wb") as ram:
+                ram.truncate(_observed_top() - RAM_BASE)
+            provider = snapshot.ElfRamProvider(ELF, ram_path, RAM_BASE, short)
+            self.addCleanup(provider.close)
+            polled = {obs.topic for obs in provider.observations}
+
+        self.assertNotIn("smmu.stream", polled)
+        self.assertEqual(polled, set(observation_rates(short)))
 
 
 class Publisher:
