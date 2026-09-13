@@ -17,7 +17,12 @@ from novakit.services.surfaces import Surfaces
 from novakit.services.workbench import events, hardware, paths, snapshot, trace
 from novakit.services.workbench import session as session_module
 from novakit.services.workbench.observations import Obs
-from novakit.services.workbench.protocol import Clock, Envelopes
+from novakit.services.workbench.protocol import (
+    MAX_BUCKETS,
+    MAX_STEPS,
+    Clock,
+    Envelopes,
+)
 from novakit.services.workbench.session import (
     Deps,
     Phase,
@@ -562,6 +567,16 @@ class InitialTopologyTest(unittest.TestCase):
         names = [entry["name"] for entry in topology["catalog"]]
         self.assertIn("10_console_mux", names)
         self.assertIn("badges", topology["taxonomy"])
+
+    def test_publishes_the_bounds_a_request_is_clamped_to(self):
+        """The window width and the step count are the reader's to choose,
+        so the ceilings ride the wire. A client carrying its own copy asks
+        for what the bridge would then cut without saying so."""
+        from novakit.services.workbench.session import initial_topology
+
+        self.assertEqual(
+            initial_topology()["limits"], {"buckets": MAX_BUCKETS, "steps": MAX_STEPS}
+        )
 
 
 class GuestTableTest(unittest.TestCase):

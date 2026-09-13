@@ -21,12 +21,11 @@ from enum import StrEnum
 PROTOCOL_VERSION = 3
 REQUEST_ID = re.compile(r"[A-Za-z0-9._:-]{1,64}\Z")
 
-# Columns a window request may ask to be answered in. A limit on a
-# request field is part of the contract, not an implementation detail of
-# whoever enforces it: it lives here and rides the topology, so the two
-# clients ask within it instead of each carrying a copy of the number to
-# drift from.
-MAX_BUCKETS = 8192
+# A limit on a request field is part of the contract, not an
+# implementation detail of whoever enforces it: it lives here and rides
+# the topology, so clients ask within it instead of carrying a copy.
+MAX_BUCKETS = 8192  # columns one window answer may hold
+MAX_STEPS = 5000  # instructions one step request may advance, ~700us each
 
 
 class Topic(StrEnum):

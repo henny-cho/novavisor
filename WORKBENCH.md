@@ -79,8 +79,12 @@ client — the bridge and QEMU keep running for the next connection.
   interactive machine, then press `실행`. That is one button with two meanings:
   it reads `정지` while a machine is building, running or verifying and stops
   it, and either way it disarms until the next phase arrives, so a click storm
-  is one request. The last launch — demo, variant and verify — is remembered
-  for the next reload. The phase badge tracks the session lifecycle
+  is one request. A `정지` pressed while the build is still running is held
+  behind it and lands the moment the machine comes up — the notice says so
+  rather than implying an immediate stop. The last launch — demo, variant and
+  verify — is remembered for the next reload. In a replay there is no machine
+  for any of this to reach, so the whole group — picker, variant, `검증`,
+  `실행` and `일시정지` — is disabled. The phase badge tracks the session lifecycle
   (`building → running → verifying → exited/failed`); the connection badge
   tracks the WebSocket; the loss counter appears only if the bridge had to
   drop frames; the clock is the bridge's session clock.
@@ -187,9 +191,14 @@ something instead:
 |---|---|
 | **정지 지점** | which event to stop at, from the bridge's catalogue — or `정지 없음`, which is a choice and not merely the initial state: it is what launches a machine meant to keep going |
 | **다음 사건** | run until that event, then stop; refused while nothing is chosen, since a machine advancing to no event runs until the wait budget expires and stops nowhere |
-| **40 명령** | advance by instructions — for looking *inside* an event |
+| **명령 진행** | advance by instructions — for looking *inside* an event. The box beside it says how many, from 1 to the ceiling the bridge publishes in `topo.limits.steps`; a larger number is corrected in the box rather than cut silently on the far side, and the count is remembered between sessions |
 | **자동** | repeat, one second apart, so events pass at a readable speed |
 | **중지** | take the machine back from a run that is still going |
+
+Every one of them needs a machine that is running, and stands down while a
+request it sent is still in flight — the bridge holds one inspection at a
+time, so a second click could only be rejected. 중지 is on screen exactly
+while 자동 is, and cancelling is never what a request in flight blocks.
 
 A stop publishes more than a pause does. The event's own arguments are read
 out of the argument registers — so stopping at the interrupt bind shows the
@@ -204,8 +213,10 @@ A pulse there is not a sample or a log line; it is the event.
 Two things worth knowing:
 
 - **Stepping is for looking inside an event, not for reaching one.** A step
-  costs about 700 µs over the debug socket, so forty is a fraction of a second
-  and a million would be a day. Breakpoints are how you arrive.
+  costs about 700 µs over the debug socket, so the default forty is a fraction
+  of a second and the ceiling a few seconds. A batch is taken one instruction
+  at a time and the forward controls stand down until it finishes. Breakpoints
+  are how you arrive.
 - **A step at `wfi` does not finish.** The hypervisor idles there between
   events and the instruction retires only when an interrupt arrives, so the
   control reports `대기 중` and hands the machine back rather than hanging.
@@ -402,7 +413,8 @@ build input, read by `novakit/image/elfsym.py`.
 
 UI modules (`web/workbench/js/`): `main.mjs` (wiring), `net.mjs`
 (reconnect + seq dedup), `topology.mjs` (the launch group and the guest
-rail), `console.mjs`, `cards.mjs`, `events.mjs`, `panels.mjs` (the panel
+rail), `stepper.mjs` (the stop picker and the three ways to reach one),
+`console.mjs`, `cards.mjs`, `events.mjs`, `panels.mjs` (the panel
 drawers), `board.mjs` (the machine drawn as layers), `memory.mjs` (what
 an address means on this machine), `drive.mjs` (the command ring),
 `timeline.mjs` (the time axis), `format.mjs`, and `primitives/` — the
@@ -482,8 +494,9 @@ flushed every 50 ms:
   `stops` to arm as the machine boots), `stop` (point the session at nothing),
   `uart` (bytes to the focused guest), `halt`
   (`{"cmd": "stop"|"cont"|"step"|"run"|"abort", ...}` — `run` takes `stops`,
-  `repeat` and `period`; `step` takes `count`), `cmd` (an op into the
-  firmware's command ring), `probe` (an address to translate), and `cursor`
+  `repeat` and `period`; `step` takes `count`, bounded by
+  `topo.limits.steps`), `cmd` (an op into the firmware's command ring),
+  `probe` (an address to translate), and `cursor`
   (where in a replay the reader is looking). `trace`, `probe` and `cursor`
   travel both ways: the kind tells a request from a frame sent unasked, and a
   second topic for asking would say the same word twice.

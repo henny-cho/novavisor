@@ -41,8 +41,12 @@
       <select id="stop-at" class="pick" aria-label="어느 사건에서 멈출지"></select>
       <button id="advance" class="btn" type="button"
               title="선택한 사건까지 실행하고 멈춘다">다음 사건</button>
+      <!-- How far one step request reaches. The ceiling comes from the
+           bridge with the topology; the box never offers more. -->
+      <input id="step-count" class="pick sm" type="number" min="1"
+             aria-label="한 번에 진행할 명령 수">
       <button id="step" class="btn" type="button"
-              title="명령 단위로 진행 — 사건 '안'을 보기 위한 것">40 명령</button>
+              title="명령 단위로 진행 — 사건 '안'을 보기 위한 것">명령 진행</button>
       <button id="auto" class="btn" type="button" aria-pressed="false"
               title="사건에서 사건으로 자동 진행 (진행 단위는 시간이 아니라 사건)">자동</button>
       <button id="abort" class="btn ghost" type="button" hidden

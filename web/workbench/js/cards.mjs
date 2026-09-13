@@ -2,7 +2,7 @@
    bridge actually knows at M1 — identity, vCPU count, console volume and
    the last line that guest printed. No state is inferred here. */
 
-import { clear, el, vmAccent, vmSlot } from "./format.mjs";
+import { clear, el, hostsGuest, vmAccent, vmSlot } from "./format.mjs";
 
 const ACTIVE_MS = 700;
 const IDLE_TEXT = "출력 없음";
@@ -65,8 +65,10 @@ export function createCards(root) {
     emptyState();
   }
 
-  /* One console line attributed to a guest. */
+  /* One console line attributed to a guest. A card is a slot the board
+     can host; guest text that merely looks tagged mints nothing. */
   function touch(vm, text) {
+    if (!hostsGuest(vm)) return;
     const card = ensure(vm);
     card.lines += 1;
     card.count.textContent = `${card.lines}줄`;

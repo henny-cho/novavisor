@@ -111,17 +111,22 @@ const BOARD_VIEW = [
   },
 ];
 
-const STEPPER = [
+const STOP_NAMES = [
   {
     selector: `Literal[value=/${STOPS}/u], Identifier[name=/${STOPS}/u], TemplateElement[value.raw=/${STOPS}/u]`,
     message:
       "the stop catalogue lives beside the firmware symbols it names and arrives in the topology snapshot; an event spelled here is a second copy, free to offer a stop the firmware no longer has.",
   },
+];
+
+/* The other half of the same contract, and it belongs where the snapshot
+   is routed rather than where the picker is built. */
+const STOP_ROUTING = [
   {
     selector:
-      "Program:not(:has(CallExpression[callee.name='setStops'][arguments.0.object.name='topo'][arguments.0.property.name='stops']))",
+      "Program:not(:has(CallExpression[callee.property.name='setStops'][arguments.0.object.name='topo'][arguments.0.property.name='stops']))",
     message:
-      "the stop choices come from the bridge: the client has to hand topo.stops to setStops, or the controls stop following what the run actually accepts.",
+      "the stop choices come from the bridge: the client has to hand topo.stops to the stepper, or the controls stop following what the run actually accepts.",
   },
 ];
 
@@ -196,7 +201,12 @@ export default [
   },
   {
     name: "workbench/stepper",
+    files: ["workbench/js/stepper.mjs"],
+    rules: restricted(...EVERY_MODULE, ...STOP_NAMES),
+  },
+  {
+    name: "workbench/stop-routing",
     files: ["workbench/js/main.mjs"],
-    rules: restricted(...EVERY_MODULE, ...STEPPER),
+    rules: restricted(...EVERY_MODULE, ...STOP_NAMES, ...STOP_ROUTING),
   },
 ];

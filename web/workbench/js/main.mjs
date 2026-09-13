@@ -3,11 +3,8 @@
    much of the stream was lost. */
 
 import {
-  clear,
   clockLabel,
   describeStep,
-  el,
-  hostsGuest,
   sealedFields,
   setGuestSlots,
 } from "./format.mjs";
@@ -19,6 +16,7 @@ import { createDrive } from "./drive.mjs";
 import { createEvents } from "./events.mjs";
 import { createMemory } from "./memory.mjs";
 import { createPanels } from "./panels.mjs";
+import { createStepper } from "./stepper.mjs";
 import { createTimeline } from "./timeline.mjs";
 import { createTopology } from "./topology.mjs";
 
@@ -34,13 +32,6 @@ const lossBadge = ref("loss");
 const lossNumber = ref("loss-n");
 const clockNode = ref("clock");
 const themeButton = ref("theme");
-const pauseButton = ref("pause");
-const stopPick = ref("stop-at");
-const advanceButton = ref("advance");
-const stepButton = ref("step");
-const autoButton = ref("auto");
-const abortButton = ref("abort");
-const stopNote = ref("stop-note");
 
 /* Session phases the bridge publishes, in this UI's words. Unknown phases
    fall through to a plain notice rather than a blank badge. */
@@ -71,8 +62,6 @@ let latestTs = 0;
 let clockText = "";
 let lostFrames = 0;
 let currentRun = null;
-let paused = false;
-let autoRunning = false;
 let wireFault = null;
 /* Snapshots may arrive out of order during connect replay; the highest
    sequence is the current world. */
@@ -81,6 +70,24 @@ let topoSeq = 0;
    life event and again on every connect topology, and it is one fact. */
 const sealedRuns = new Set();
 let wire = { send: () => false, ask: () => false };
+
+/* The four facts every control follows. A phase alone cannot say whether
+   a request this page sent is still in flight, and a control that cannot
+   see one re-arms mid-request and lets a second go out. */
+const state = { phase: "idle", paused: false, replaying: false, pending: null };
+const controls = [];
+
+/* Anything the wire reports answers whatever request was in flight. */
+function reported(patch) {
+  Object.assign(state, patch, { pending: null });
+  for (const control of controls) control.setState(state);
+}
+
+/* A control sent a request; it stands down until the wire answers. */
+function pending(what) {
+  state.pending = what;
+  for (const control of controls) control.setState(state);
+}
 
 const events = createEvents({
   list: ref("elog"),
@@ -214,7 +221,7 @@ const timeline = createTimeline({
        a reader picks on the strip is the moment the panels and the
        console are returned to. Live there is only now, and asking
        would be asking a machine to have been something it is not. */
-    if (replaying) wire.ask("cursor", { ts: record.ts });
+    if (state.replaying) wire.ask("cursor", { ts: record.ts });
   },
 });
 
@@ -258,9 +265,7 @@ function traceFields(record) {
    record is the catalogue the halt layer breaks on. */
 stopHereButton.addEventListener("click", () => {
   if (!markedEvent) return;
-  stopPick.value = markedEvent;
-  if (halt({ cmd: "run", stops: [markedEvent] })) {
-    say(`대기 · ${markedEvent}`);
+  if (stepper.stopAt(markedEvent)) {
     events.addNotice(latestTs, `타임라인 마크에서 정지 요청 — ${markedEvent}`);
   }
 });
@@ -320,42 +325,43 @@ const topology = createTopology({
   variantSelect: ref("variant"),
   verifyBox: ref("verify"),
   runButton: ref("run"),
+  pauseButton: ref("pause"),
   pane: ref("topo"),
   send: (topic, data) => wire.send(topic, data),
   /* The stepper's own read of the stop picker, so a stop armed at launch
      and one advanced to are always the same chosen event. */
-  stops: () => chosen(),
+  stops: () => stepper.chosen(),
   onStart: (demo) => events.addNotice(latestTs, `실행 요청 — ${demo}`),
+  onPending: pending,
   onNotice: notify,
 });
 
+const stepper = createStepper({
+  pick: ref("stop-at"),
+  countInput: ref("step-count"),
+  advanceButton: ref("advance"),
+  stepButton: ref("step"),
+  autoButton: ref("auto"),
+  abortButton: ref("abort"),
+  note: ref("stop-note"),
+  send: (topic, data) => wire.send(topic, data),
+  onPending: pending,
+  onNotice: notify,
+});
+
+controls.push(topology, stepper);
+
 /* ---------------- top bar state ---------------- */
 
-/* True once the connect topology says this bridge is showing a file.
-   A recording replays its own lifecycle — started, ran, exited — and
-   those are history to look at, not transitions to obey: acting on them
-   would put "실행 중" on a screen with no machine behind it. */
-let replaying = false;
-
 function setPhase(phase, override) {
-  if (replaying && phase !== "replay") return;
+  /* A recording replays its own lifecycle — started, ran, exited — and
+     those are history to look at, not transitions to obey: acting on them
+     would put "실행 중" on a screen with no machine behind it. */
+  if (state.replaying && phase !== "replay") return;
   const info = PHASES[phase];
   phaseBadge.dataset.tone = info ? info.tone : "idle";
   phaseText.textContent = override || (info ? info.text : phase || "—");
-  /* The launch control is the launch module's: one button whose text and
-     whose click both follow from whether a machine is there. */
-  topology.setPhase(phase);
-  /* Only a running machine can be paused; every other phase offering
-     the button would send stop to a machine that no longer exists. */
-  pauseButton.hidden = phase !== "running";
-  /* Same reason as the pause button: advancing a machine that is not
-     there sends commands the bridge can only reject. */
-  for (const control of [advanceButton, stepButton, autoButton]) {
-    control.disabled = phase !== "running";
-  }
-  /* There is no machine to launch. The strip and the panels stay live,
-     because those are what a replay is for. */
-  if (phase === "replay") ref("target").disabled = true;
+  reported({ phase: String(phase) });
 }
 
 /* Connect replay hands the fresh snapshot over before the older backlog,
@@ -370,102 +376,9 @@ function updateClock(ts) {
   clockNode.textContent = next;
 }
 
-function setPaused(next) {
-  paused = next;
-  pauseButton.textContent = paused ? "재개" : "일시정지";
-}
-
-pauseButton.addEventListener("click", () => {
-  if (!wire.send("halt", { cmd: paused ? "cont" : "stop" })) {
-    notify("브리지에 연결되지 않아 요청을 보내지 못했습니다");
-  }
-});
-
-/* The choices come from the bridge with the rest of the topology, the
-   same way badges and board blocks do. Naming a firmware function here
-   would put a second copy of the catalogue in the client. */
-function setStops(stops) {
-  const previous = stopPick.value;
-  clear(stopPick);
-  /* No stop is a choice, not merely the initial state: it is what
-     launches a run that is meant to keep going. */
-  const none = el("option", "", "정지 없음");
-  none.value = "";
-  stopPick.append(none);
-  for (const stop of stops || []) {
-    /* One catalogue, two uses. Everything in it names a lane; only the
-       entries backed by a firmware function name a place to halt, and
-       the bridge says which those are rather than the client guessing
-       from an id. */
-    if (stop.stop === false) continue;
-    const option = el("option", "", stop.label ? `${stop.id} — ${stop.label}` : stop.id);
-    option.value = stop.id;
-    stopPick.append(option);
-  }
-  if (previous) stopPick.value = previous;
-}
-
-const chosen = () => (stopPick.value ? [stopPick.value] : []);
-
-/* Advancing needs an event to advance to: with nothing armed the machine
-   would run on until the wait budget expired and stop nowhere. */
-function runTo(extra = {}) {
-  const stops = chosen();
-  if (!stops.length) {
-    say("정지 지점을 선택하세요");
-    return false;
-  }
-  return halt({ cmd: "run", stops, ...extra });
-}
-
-function setAuto(next) {
-  autoRunning = next;
-  autoButton.setAttribute("aria-pressed", String(next));
-  abortButton.hidden = !next;
-}
-
-/* One line beside the controls saying what the machine is doing right
-   now. The event log keeps the history; this answers "is it stuck?",
-   which a scrolling log answers badly. */
-function say(text) {
-  stopNote.textContent = text || "";
-  stopNote.hidden = !text;
-}
-
-function halt(data) {
-  if (!wire.send("halt", data)) {
-    notify("브리지에 연결되지 않아 요청을 보내지 못했습니다");
-    return false;
-  }
-  return true;
-}
-
-advanceButton.addEventListener("click", () => {
-  runTo();
-});
-
-/* Instructions, not events: this is for looking *inside* one. At about
-   700us per instruction over the debug socket, forty is a fraction of a
-   second and forty thousand would be a minute. */
-stepButton.addEventListener("click", () => {
-  halt({ cmd: "step", count: 40 });
-});
-
-/* The period is in seconds but the unit of progress is an event — a
-   fixed slice of time holds anywhere from zero of them to thousands. */
-autoButton.addEventListener("click", () => {
-  if (autoRunning) {
-    halt({ cmd: "abort" });
-    setAuto(false);
-    return;
-  }
-  if (runTo({ repeat: 50, period: 1 })) setAuto(true);
-});
-
-abortButton.addEventListener("click", () => {
-  halt({ cmd: "abort" });
-  setAuto(false);
-});
+/* The wire reports it, so it is a fact of the control state; the button
+   that follows it belongs to the group it sits in. */
+const setPaused = (next) => reported({ paused: next });
 
 function noteLoss(count) {
   if (!(count > 0)) return;
@@ -512,7 +425,8 @@ function onTopo(ts, data) {
   boardView.setTopology(topo);
   memory.setWorld(topo.memory);
   drive.setWorld(topo);
-  setStops(topo.stops);
+  stepper.setStops(topo.stops);
+  stepper.setLimits(topo.limits);
   timeline.setCatalogue(topo.stops);
   timeline.setLimits(topo.limits);
   timeline.setBoard(topo.board);
@@ -523,7 +437,7 @@ function onTopo(ts, data) {
     const phase = String(topo.phase);
     /* Set before the switch below, so the guard in setPhase is already
        true for the very first thing it is asked to show. */
-    replaying = phase === "replay";
+    reported({ replaying: phase === "replay" });
     if (phase === "running" && topo.paused) {
       setPaused(true);
       setPhase("running", "일시정지 (H)");
@@ -617,8 +531,7 @@ function onLife(ts, data) {
     case "running":
       setPhase(phase);
       setPaused(false);
-      setAuto(false);
-      say("");
+      stepper.reset();
       consoleView.setBanner(null); /* a panic banner lives until the next run */
       /* Run boundary: measurements and counters from the previous
          machine must not read as this one's. The timeline goes too —
@@ -642,7 +555,7 @@ function onLife(ts, data) {
       break;
     case "resumed":
       setPaused(false);
-      setAuto(false);
+      stepper.reset();
       setPhase("running");
       /* A delta is only true of the pair of stops it was measured
          across; a running machine has moved past both. */
@@ -659,25 +572,27 @@ function onLife(ts, data) {
       const args = data.args && typeof data.args === "object" ? data.args : {};
       const named = Object.keys(args).map((key) => `${key}=${args[key]}`).join(" ");
       events.addNotice(ts, `정지 ${data.event || data.pc || ""}${named ? ` — ${named}` : ""}`);
-      say(data.event ? `정지 · ${data.event}` : "정지");
+      stepper.say(data.event ? `정지 · ${data.event}` : "정지");
       break;
     }
     case "armed":
-      say(`무장 · ${(data.stops || []).join(", ")}`);
+      stepper.say(`무장 · ${(data.stops || []).join(", ")}`);
       events.addNotice(ts, `정지 지점 무장 — ${(data.stops || []).join(", ")}`);
       break;
     /* The chosen event may be rare, or may not happen on this demo at
        all. Saying so is the difference between waiting and looking
        broken. */
     case "waiting":
-      say(`대기 · ${(data.stops || []).join(", ")}`);
+      stepper.say(`대기 · ${(data.stops || []).join(", ")}`);
       break;
     case "stepped":
       setPaused(true);
       /* A step at `wfi` does not retire until an interrupt arrives, and
          the hypervisor idles there between events — so this is the
          ordinary answer, not a fault. */
-      say(data.stalled ? "대기 중 — 명령이 끝나지 않음 (wfi)" : `${data.steps} 명령 진행`);
+      stepper.say(
+        data.stalled ? "대기 중 — 명령이 끝나지 않음 (wfi)" : `${data.steps} 명령 진행`,
+      );
       events.addNotice(
         ts,
         data.stalled
@@ -764,7 +679,7 @@ function onLife(ts, data) {
       );
       break;
     case "uplink-rejected":
-      topology.arm(true); /* a rejected request ends its attempt */
+      reported({}); /* a rejected request ends its attempt */
       events.addNotice(ts, `업링크 거부: ${data.reason || "?"}`, { severity: "WARN" });
       break;
     case "query-cancelled":
@@ -800,7 +715,7 @@ function onFrame(frame) {
       break;
     case "console":
       consoleView.append(data, frame.ts);
-      if (hostsGuest(data.vm)) cards.touch(data.vm, data.text);
+      cards.touch(data.vm, data.text);
       break;
     case "ev":
       /* The same event, read two ways: the log takes it as a row, the

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import halt, snapshot
 from .dispatcher import Request
-from .protocol import Kind, Src, Topic
+from .protocol import MAX_STEPS, Kind, Src, Topic
 from .session import Phase
 
 if TYPE_CHECKING:
@@ -25,9 +25,6 @@ WAIT_NOTICE_SECONDS = 0.5
 # covers a cold build ahead of the machine it is waiting for.
 LAUNCH_POLL_SECONDS = 0.02
 LAUNCH_ARM_TIMEOUT_SECONDS = 600.0
-# ~700 us per instruction over RSP, so this caps one request at a few
-# seconds. Stepping is for looking inside an event, not reaching one.
-MAX_STEPS = 5000
 
 
 class HaltController:

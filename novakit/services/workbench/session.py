@@ -21,7 +21,7 @@ from .. import artifacts, cmake, expect, manifest, spawn, verify
 from ..surfaces import Surfaces
 from . import anchors, derive, events, hardware, paths, steps
 from .observations import observation_rates, timer_slot_labels
-from .protocol import MAX_BUCKETS, Kind, Src, Topic
+from .protocol import MAX_BUCKETS, MAX_STEPS, Kind, Src, Topic
 from .store import StateStore
 from .taxonomy import vocabulary
 
@@ -134,7 +134,7 @@ def _world(view: observe.View | None, elf: Path | None) -> dict:
         "taxonomy": vocabulary() | derive.syndrome_vocabulary(view),
         "timer_slots": timer_slot_labels(),
         "observations": observation_rates(view),
-        "limits": {"buckets": MAX_BUCKETS},
+        "limits": {"buckets": MAX_BUCKETS, "steps": MAX_STEPS},
         # Which build this is, by content. A report joining a run's
         # counts to an image's structure has to be able to refuse two
         # different images, and a path cannot tell them apart: a rebuild

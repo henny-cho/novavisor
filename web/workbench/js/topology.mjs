@@ -1,7 +1,7 @@
-/* Launch control, target picker and guest topology summary. The picker
-   and the rail are driven by the topo snapshot: the catalog fills one,
-   the guest list the other. This module is the only sender of target and
-   stop uplinks, and the only owner of the button that carries both. */
+/* The launch group — target picker, variant, verify, run/stop and pause
+   — and the guest topology summary. The picker and the rail are driven
+   by the topo snapshot: the catalog fills one, the guest list the other.
+   Every control the group owns follows the shared control state. */
 
 import { clear, el, vmAccent, vmSlot } from "./format.mjs";
 
@@ -36,19 +36,21 @@ export function createTopology({
   variantSelect,
   verifyBox,
   runButton,
+  pauseButton,
   pane,
   send,
   stops,
   onStart,
+  onPending,
   onNotice,
 }) {
   let catalogKey = null;
   /* One button, two meanings. Its text is the machine's presence and its
-     click is whichever of launch and stop that presence leaves open;
-     re-arming waits for the next phase, so a click storm is one request.
-     A replay has no machine and refuses both. */
+     click is whichever of launch and stop that presence leaves open. */
   let active = false;
   let replaying = false;
+  let building = false;
+  let paused = false;
   const held = stored();
   let lastTarget = held.demo || "";
   const variants = new Map();
@@ -168,7 +170,7 @@ export function createTopology({
     }
     lastTarget = target;
     remember({ demo: target, variant: data.variant, verify: data.verify });
-    arm(false);
+    onPending?.("launch");
     onStart?.(target);
   }
 
@@ -177,23 +179,44 @@ export function createTopology({
       onNotice?.("브리지에 연결되지 않아 정지 요청을 보내지 못했습니다");
       return;
     }
-    arm(false);
-    onNotice?.("정지 요청");
+    onPending?.("stop");
+    /* A stop taken during a build lands after the launch — the session
+       lock holds it — so the machine starts and is at once terminated.
+       The outcome is the one asked for; the delay is what to say. */
+    onNotice?.(building ? "정지 요청 — 빌드가 끝난 뒤 적용됩니다" : "정지 요청 — 머신을 정지합니다");
   }
 
-  function arm(on) {
-    runButton.disabled = replaying || !on;
-  }
-
-  function setPhase(phase) {
-    replaying = String(phase) === "replay";
-    active = ACTIVE.has(String(phase));
+  /* A replay has no machine for any of this group to act on, so the
+     whole of it stands down. Re-arming the two buttons waits for the
+     wire to answer the request in flight, so a click storm is one. */
+  function setState(state) {
+    const phase = String(state.phase);
+    replaying = Boolean(state.replaying) || phase === "replay";
+    active = ACTIVE.has(phase);
+    building = phase === "building";
+    paused = Boolean(state.paused);
+    const busy = replaying || Boolean(state.pending);
+    select.disabled = replaying;
+    variantSelect.disabled = replaying;
+    verifyBox.disabled = replaying;
     runButton.textContent = active ? "정지" : "실행";
-    arm(true);
+    runButton.disabled = busy;
+    /* Only a running machine can be paused; the button offered in any
+       other phase would halt one that is no longer there. */
+    pauseButton.hidden = phase !== "running";
+    pauseButton.textContent = paused ? "재개" : "일시정지";
+    pauseButton.disabled = busy;
   }
 
   select.addEventListener("change", () => fillVariants(select.value));
   runButton.addEventListener("click", () => (active ? stop() : start(select.value)));
 
-  return { render, setPhase, arm };
+  /* One button, two directions, read from the state the wire reports. */
+  pauseButton.addEventListener("click", () => {
+    if (!send("halt", { cmd: paused ? "cont" : "stop" })) {
+      onNotice?.("브리지에 연결되지 않아 요청을 보내지 못했습니다");
+    }
+  });
+
+  return { render, setState };
 }

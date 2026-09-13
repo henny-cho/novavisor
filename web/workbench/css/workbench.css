@@ -61,6 +61,9 @@ b{font-weight:700}
    picks what runs, the other decides where it stops. */
 .stepper{display:flex;align-items:center;gap:6px;min-width:0}
 .stepper .pick{max-width:15ch}
+/* Four digits and a spinner: the count sits beside the button that
+   spends it, not in a field sized like a picker. */
+.stepper .pick.sm{width:8ch}
 .stepper .btn[aria-pressed="true"]{border-color:var(--hyp);color:var(--hyp)}
 .launch .lb{
   font-size:var(--fs-label);letter-spacing:.09em;text-transform:uppercase;color:var(--ink3);font-weight:650

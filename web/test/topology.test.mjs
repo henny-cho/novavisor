@@ -1,5 +1,6 @@
-/* Launch control test: what a launch actually asks the bridge for, and
-   which of its two meanings the one button carries.
+/* Launch group test: what a launch actually asks the bridge for, which
+   of its two meanings the one button carries, and what the group does
+   when there is no machine behind any of it.
 
    Every knob here is one the uplink has always accepted, so the thing
    under test is the payload — that a variant, a verification run and a
@@ -12,6 +13,10 @@ import { describe, it } from "node:test";
 
 import { createTopology } from "../workbench/js/topology.mjs";
 import { element, fire, installDom } from "./dom.mjs";
+
+/* Every control the launch group owns, for the states that answer for
+   all of them at once. */
+const OWNED = ["select", "variantSelect", "verifyBox", "runButton", "pauseButton"];
 
 const CATALOG = [
   { id: "02", name: "02_timer", variants: [] },
@@ -27,15 +32,20 @@ function harness({ stops = () => [], storage = null } = {}) {
   const variantSelect = element("select");
   const verifyBox = element("input");
   const runButton = element("button");
+  const pauseButton = element("button");
   const pane = element("div");
   const sent = [];
   const notices = [];
+  /* The control state main.mjs owns, driven here the way the wire drives
+     it: a request stands until the next thing the bridge reports. */
+  const state = { phase: "idle", paused: false, replaying: false, pending: null };
 
   const view = createTopology({
     select,
     variantSelect,
     verifyBox,
     runButton,
+    pauseButton,
     pane,
     send: (topic, data) => {
       sent.push([topic, data]);
@@ -43,10 +53,30 @@ function harness({ stops = () => [], storage = null } = {}) {
     },
     stops,
     onStart: () => {},
+    onPending: (what) => {
+      state.pending = what;
+      view.setState(state);
+    },
     onNotice: (message) => notices.push(message),
   });
 
-  return { view, select, variantSelect, verifyBox, runButton, pane, sent, notices };
+  const at = (patch) => {
+    Object.assign(state, patch, { pending: null });
+    view.setState(state);
+  };
+
+  return {
+    view,
+    at,
+    select,
+    variantSelect,
+    verifyBox,
+    runButton,
+    pauseButton,
+    pane,
+    sent,
+    notices,
+  };
 }
 
 const topo = (extra = {}) => ({ demo: null, guests: [], catalog: CATALOG, ...extra });
@@ -94,7 +124,7 @@ describe("target picker", () => {
 
   it("carries the chosen stop so it is armed at launch", () => {
     const held = [];
-    const { view, runButton, sent } = harness({ stops: () => held });
+    const { view, at, runButton, sent } = harness({ stops: () => held });
     view.render(topo());
 
     /* Nothing chosen: a run that is meant to keep going says nothing
@@ -104,7 +134,7 @@ describe("target picker", () => {
 
     /* That run ended: the button is armed again, and launches again. */
     held.push("trap");
-    view.setPhase("idle");
+    at({ phase: "idle" });
     fire(runButton, "click");
     assert.deepEqual(sent[1][1].stops, ["trap"]);
   });
@@ -132,36 +162,36 @@ describe("target picker", () => {
   });
 
   it("reads 정지 while a machine is building, running or verifying and 실행 otherwise", () => {
-    const { view, runButton } = harness();
+    const { view, at, runButton } = harness();
     view.render(topo());
 
     for (const phase of ["building", "running", "verifying"]) {
-      view.setPhase(phase);
+      at({ phase });
       assert.equal(runButton.textContent, "정지", phase);
     }
     for (const phase of ["idle", "exited", "failed", "replay"]) {
-      view.setPhase(phase);
+      at({ phase });
       assert.equal(runButton.textContent, "실행", phase);
     }
   });
 
   it("sends stop while active and target while idle", () => {
-    const { view, runButton, sent, notices } = harness();
+    const { view, at, runButton, sent, notices } = harness();
     view.render(topo());
 
-    view.setPhase("running");
+    at({ phase: "running" });
     fire(runButton, "click");
     assert.deepEqual(sent, [["stop", {}]]);
-    assert.deepEqual(notices, ["정지 요청"]);
+    assert.deepEqual(notices, ["정지 요청 — 머신을 정지합니다"]);
 
     /* The stop landed: nothing is running, so the same button launches. */
-    view.setPhase("idle");
+    at({ phase: "idle" });
     fire(runButton, "click");
     assert.deepEqual(sent[1], ["target", { demo: "02_timer", variant: null, verify: false }]);
   });
 
-  it("is disabled after a click until the phase re-arms it", () => {
-    const { view, runButton, sent } = harness();
+  it("is disabled after a click until the wire answers it", () => {
+    const { view, at, runButton, sent } = harness();
     view.render(topo());
 
     fire(runButton, "click");
@@ -171,21 +201,85 @@ describe("target picker", () => {
     fire(runButton, "click");
     assert.equal(sent.length, 1);
 
-    view.setPhase("running");
+    at({ phase: "running" });
     assert.equal(runButton.disabled, false);
   });
 
-  it("replay keeps it disabled", () => {
-    const { view, runButton, sent } = harness();
+  it("stays disabled while a stop it sent is still in flight", () => {
+    const { view, at, runButton, sent } = harness();
     view.render(topo());
 
-    view.setPhase("replay");
-    assert.equal(runButton.disabled, true);
-    /* And nothing re-arms it: a file has no machine to launch or stop. */
-    view.arm(true);
+    at({ phase: "building" });
+    fire(runButton, "click");
+    assert.deepEqual(sent, [["stop", {}]]);
+    /* The machine came up anyway — the stop lands once it has. A phase
+       that re-armed the button here would let a second stop go out. */
+    view.setState({ phase: "running", paused: false, replaying: false, pending: "stop" });
     assert.equal(runButton.disabled, true);
     fire(runButton, "click");
-    assert.deepEqual(sent, []);
+    assert.equal(sent.length, 1);
+  });
+
+  it("refuses every control it owns in a replay", () => {
+    const kit = harness();
+    kit.view.render(topo());
+
+    kit.at({ phase: "replay", replaying: true });
+    /* A knob left live in a replay reads as a choice the reader can
+       make, and there is no machine for any of them to reach. */
+    for (const name of OWNED) assert.equal(kit[name].disabled, true, name);
+    /* And nothing re-arms them: a file stays a file. */
+    kit.at({});
+    for (const name of OWNED) assert.equal(kit[name].disabled, true, name);
+    fire(kit.runButton, "click");
+    fire(kit.pauseButton, "click");
+    assert.deepEqual(kit.sent, []);
+  });
+
+  it("offers 일시정지 only for a running machine, and 재개 once it is", () => {
+    const { view, at, pauseButton } = harness();
+    view.render(topo());
+
+    at({ phase: "running" });
+    assert.equal(pauseButton.hidden, false);
+    assert.equal(pauseButton.textContent, "일시정지");
+    /* The wire reports the pause; the label follows that, not the click
+       that asked for it. */
+    at({ phase: "running", paused: true });
+    assert.equal(pauseButton.textContent, "재개");
+
+    for (const phase of ["idle", "building", "verifying", "exited", "failed"]) {
+      at({ phase });
+      assert.equal(pauseButton.hidden, true, phase);
+    }
+  });
+
+  it("halts and releases the machine with the one button", () => {
+    const { view, at, pauseButton, sent } = harness();
+    view.render(topo());
+
+    at({ phase: "running" });
+    fire(pauseButton, "click");
+    assert.deepEqual(sent, [["halt", { cmd: "stop" }]]);
+
+    at({ phase: "running", paused: true });
+    fire(pauseButton, "click");
+    assert.deepEqual(sent[1], ["halt", { cmd: "cont" }]);
+  });
+
+  it("says a stop during a build applies once the build has finished", () => {
+    const { view, at, runButton, notices } = harness();
+    view.render(topo());
+
+    /* The session lock holds the stop until the launch it is queued
+       behind lands, and the button alone implies none of that. */
+    at({ phase: "building" });
+    fire(runButton, "click");
+    assert.match(notices.at(-1), /빌드/u);
+
+    at({ phase: "running" });
+    fire(runButton, "click");
+    assert.doesNotMatch(notices.at(-1), /빌드/u);
   });
 
   it("shows the running variant beside the demo it belongs to", () => {
