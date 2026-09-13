@@ -92,7 +92,10 @@ client — the bridge and QEMU keep running for the next connection.
   the demo manifest.
 - **Console** — one tab per VM plus the hypervisor. The input line sends UART
   bytes to the focused guest (`Enter` to send; the `Ctrl-T` button, or the key
-  itself, sends `0x14` to rotate console focus between VMs).
+  itself, sends `0x14` to rotate console focus between VMs). A dot marks the tab
+  the last observed switch named — not a live reading: a browser that joined
+  later has seen none, and the firmware re-routes focus by itself when the
+  focused VM dies without printing a line. Each run boundary clears it.
 - **VM cards** — per-VM lifecycle summaries built from classified events.
 - **Measurement panels** — live firmware state; see below.
 - **Event log** — console lines classified into subsystem badges
@@ -253,6 +256,13 @@ history wrapping onto its own oldest record means the horizon was
 reached, which is normal running, and is published as `span.full`.
 Reporting the second as the first would leave the one actionable number
 permanently non-zero on any session past a few minutes.
+
+The note under the strip carries both, beside what the ring depth buys on
+this host: `링 0.3초 @ 12k/s · 최악 정체 664ms (1/5) · 자기 CPU 99%`. That
+last word says whose the worst stall was — the bridge's own CPU, its
+garbage collector, or `미실행`, time the process was not running at all —
+with the three terms in ms in the tooltip, because a 664 ms stall that is
+99% self CPU is a fact about the instrument rather than about the machine.
 
 The wire still carries counts per path and the last event of each,
 ~650 bytes per window, plus the span. The records are asked for — by

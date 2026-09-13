@@ -545,6 +545,11 @@ b{font-weight:700}
 }
 .tab .tn{font-family:var(--sans);font-size:var(--fs-meta);color:var(--ink3);max-width:88px;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
+/* The tab the last observed focus switch named — quiet, since it says
+   where input went, not where it goes now. */
+.tab.focused::after{
+  content:"";flex:none;align-self:center;width:5px;height:5px;border-radius:50%;background:var(--vmc)
+}
 
 .banner{
   flex:none;display:flex;align-items:center;gap:9px;

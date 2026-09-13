@@ -125,6 +125,66 @@ export function sealedFields(data = {}, stops = [], taxonomy = {}, timerSlots = 
   return fields;
 }
 
+/* What the ring depth buys on this host, in the two numbers that set
+   it: how fast the busiest core filled a ring, and how long this
+   process went between looks. Both come measured from the bridge. */
+export function budgetText(budget) {
+  if (!budget.peak_rate) return `링 ${budget.capacity}건`;
+  const rate =
+    budget.peak_rate >= 1000
+      ? `${Math.round(budget.peak_rate / 1000)}k/s`
+      : `${budget.peak_rate}/s`;
+  return `링 ${(budget.horizon_ms / 1000).toFixed(1)}초 @ ${rate} · ${stallText(budget)}`;
+}
+
+/* The worst stall alone cannot say whether it happened once or happens
+   all the time, so it carries the looks that landed in its own band and
+   the total the bridge took. Which band that is comes from the bridge's
+   ordering rather than being recomputed here — the arithmetic that puts
+   an interval in a band belongs in one place. */
+function stallText(budget) {
+  const bands = budget.gaps || {};
+  const edges = Object.keys(bands).map(Number);
+  const worst = `최악 정체 ${Math.round(budget.worst_gap_ms)}ms`;
+  const looks = edges.reduce((total, edge) => total + bands[edge], 0);
+  const band = edges.length ? ` (${bands[Math.max(...edges)]}/${looks})` : "";
+  const share = dominantShare(budget);
+  return share ? `${worst}${band} · ${share}` : `${worst}${band}`;
+}
+
+/* What the stall was made of. The remainder is time the process was not
+   running at all; the bridge rounds the three apart, so it can subtract
+   to just under zero. */
+function stallParts(budget) {
+  const gap = Number(budget.worst_gap_ms) || 0;
+  const cpu = Number(budget.worst_cpu_ms) || 0;
+  const gc = Number(budget.worst_gc_ms) || 0;
+  return [
+    ["자기 CPU", cpu],
+    ["GC", gc],
+    ["미실행", Math.max(0, gap - cpu - gc)],
+  ];
+}
+
+/* Whether the worst stall was the machine's or the instrument's, in one
+   word: the largest term as a share of the gap. */
+function dominantShare(budget) {
+  const gap = Number(budget.worst_gap_ms) || 0;
+  if (!gap) return "";
+  const [name, ms] = stallParts(budget).reduce((most, part) =>
+    part[1] > most[1] ? part : most,
+  );
+  return `${name} ${Math.round((ms / gap) * 100)}%`;
+}
+
+/* The three terms behind that word, raw. Self CPU is process_time — the
+   whole process, not the drain loop alone — so the tip says so. */
+export function stallTitle(budget) {
+  if (!Number(budget.worst_gap_ms)) return "";
+  const terms = stallParts(budget).map(([name, ms]) => `${name} ${ms.toFixed(1)}ms`);
+  return `${terms.join(" · ")} (자기 CPU는 드레인 루프가 아닌 프로세스 전체)`;
+}
+
 /* Element factory: text always lands in textContent, so firmware output
    can never be parsed as markup. */
 export function el(tag, className, text) {

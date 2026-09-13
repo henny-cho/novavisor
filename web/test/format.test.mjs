@@ -6,7 +6,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { describeStep, ecName, elapsed, micros, sealedFields } from "../workbench/js/format.mjs";
+import {
+  budgetText,
+  describeStep,
+  ecName,
+  elapsed,
+  micros,
+  sealedFields,
+  stallTitle,
+} from "../workbench/js/format.mjs";
 
 describe("describeStep", () => {
   it("reads a console step as its pattern", () => {
@@ -92,6 +100,57 @@ const SEALED = {
   events: { "1:22": 314, "18:1": 2, "20:0": 1 },
   latency: { "18:1": 62_500, "20:0": 1_250_000 },
 };
+
+/* The stall W1 measured: 664 ms of which the bridge's own drain was
+   99.3%. The two terms that settle it ride in every budget. */
+const BUDGET = {
+  capacity: 4096,
+  peak_rate: 12_000,
+  worst_gap_ms: 664.0,
+  worst_cpu_ms: 659.4,
+  worst_gc_ms: 1.2,
+  horizon_ms: 341.3,
+  overrun: true,
+  gaps: { 50: 3, 200: 1, 1000: 1 },
+};
+
+const msTerms = (title) => [...title.matchAll(/([\d.]+)ms/gu)].map((hit) => Number(hit[1]));
+
+describe("budgetText", () => {
+  it("names the term the worst stall mostly was", () => {
+    assert.equal(budgetText(BUDGET), "링 0.3초 @ 12k/s · 최악 정체 664ms (1/5) · 자기 CPU 99%");
+  });
+
+  it("does not claim self CPU for a stall that was the host's", () => {
+    const host = { ...BUDGET, worst_gap_ms: 57.0, worst_cpu_ms: 2.1, worst_gc_ms: 0.0 };
+    const text = budgetText(host);
+    assert.match(text, /최악 정체 57ms \(1\/5\) · 미실행 96%$/u);
+    assert.doesNotMatch(text, /자기 CPU/u);
+  });
+
+  it("reads as a ring depth alone before a rate has been measured", () => {
+    const fresh = { capacity: 4096, peak_rate: 0, worst_gap_ms: 0, gaps: {} };
+    assert.equal(budgetText(fresh), "링 4096건");
+    assert.equal(stallTitle(fresh), "");
+  });
+});
+
+describe("stallTitle", () => {
+  it("breaks the gap into three terms that add back up to it", () => {
+    const terms = msTerms(stallTitle(BUDGET));
+    assert.deepEqual(terms, [659.4, 1.2, 3.4]);
+    assert.equal(terms.reduce((sum, ms) => sum + ms, 0), BUDGET.worst_gap_ms);
+  });
+
+  it("shows no negative remainder when the three round apart", () => {
+    const tight = { ...BUDGET, worst_gap_ms: 5.0, worst_cpu_ms: 4.9, worst_gc_ms: 0.2 };
+    assert.deepEqual(msTerms(stallTitle(tight)), [4.9, 0.2, 0]);
+  });
+
+  it("says self CPU is the whole process", () => {
+    assert.match(stallTitle(BUDGET), /자기 CPU는 드레인 루프가 아닌 프로세스 전체/u);
+  });
+});
 
 describe("sealedFields", () => {
   it("names each counted key by the catalogue and its own vocabulary", () => {

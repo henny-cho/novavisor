@@ -17,7 +17,7 @@ CLASSIFY_TABLE = (
     ("[smp] DMA fault in VM 2", Badge.FAULT, Severity.WARN, {"vm": "2"}),
     ("[smp] stop rejected: coordinator mailbox unavailable", Badge.SMP, Severity.WARN, {}),
     ("[watchdog] VM 0 missed its heartbeat window", Badge.WDG, Severity.WARN, {"vm": "0"}),
-    ("[mux] focus vm2", Badge.MUX, Severity.INFO, {"vm": "2"}),
+    ("[mux] focus vm2", Badge.MUX, Severity.INFO, {"focus": "2"}),
     (
         "[core_gic] unclaimed physical IRQ INTID=54 — quarantined",
         Badge.IRQ,

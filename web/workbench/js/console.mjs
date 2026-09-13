@@ -7,11 +7,15 @@ const MERGED = "all";
 /* console_mux focus-cycle byte (Ctrl-T). An empty payload is never sent:
    a stray control byte could reach QEMU's own escape handling. */
 const FOCUS_CYCLE = "\u0014";
+/* What the tab marker claims: the last switch the firmware printed, not
+   where typing goes now. */
+const FOCUS_NOTE = "마지막으로 관측된 입력 포커스 (현재 값 아님)";
 
 export function createConsole({ tabs, logs, banner, form, input, focusButton, send, onNotice }) {
   const views = new Map();
   let active = MERGED;
   let signature = null;
+  let focused = null;
 
   function makeView(key, label, name, accent) {
     const tab = el("button", accent ? `tab ${accent}` : "tab");
@@ -31,7 +35,7 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
     pane.setAttribute("aria-label", name || label);
     tab.setAttribute("aria-controls", pane.id);
     pane.hidden = true;
-    const view = { tab, pane, stream: new StreamLog({ container: pane, lineCap: LINE_CAP }) };
+    const view = { tab, pane, name, stream: new StreamLog({ container: pane, lineCap: LINE_CAP }) };
     views.set(key, view);
     tabs.append(tab);
     logs.append(pane);
@@ -83,6 +87,25 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
     activate(active);
   }
 
+  /* Mark the tab a switch named — never a live reading: a late joiner
+     has seen none, and a dead guest's focus re-routes with no line. */
+  function setFocus(vm) {
+    const slot = Number.parseInt(vm, 10);
+    focused = hostsGuest(slot) ? slot : null;
+    for (const [key, view] of views) {
+      const on = key === focused;
+      view.tab.classList.toggle("focused", on);
+      view.tab.title = on ? FOCUS_NOTE : view.name;
+    }
+  }
+
+  /* A focus switch is the only event that says where typing went; every
+     other one leaves the last observation standing. */
+  function note(data) {
+    const focus = data?.fields?.focus;
+    if (focus !== undefined) setFocus(focus);
+  }
+
   function push(view, vm, text, ts) {
     const row = el("div", vm === null ? "cline hyp" : `cline guest ${vmAccent(vm)}`);
     row.append(el("span", "cg", vm === null ? "EL2" : `vm${vm}`));
@@ -125,6 +148,7 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
   function mark(text) {
     const view = merged();
     view.stream.append(el("div", "cline mark", text));
+    setFocus(null); /* the machine the last switch spoke of is gone */
   }
 
 
@@ -138,6 +162,7 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
 
   function clearAll() {
     setBanner(null);
+    setFocus(null);
     signature = null;
     for (const [key, view] of views) {
       if (key === MERGED) {
@@ -179,5 +204,5 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
 
   merged();
   activate(MERGED);
-  return { setGuests, append, mark, setBanner, settle, clearAll, cutAt };
+  return { setGuests, append, note, mark, setBanner, settle, clearAll, cutAt };
 }

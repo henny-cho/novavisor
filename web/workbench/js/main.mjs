@@ -3,10 +3,12 @@
    much of the stream was lost. */
 
 import {
+  budgetText,
   clockLabel,
   describeStep,
   sealedFields,
   setGuestSlots,
+  stallTitle,
 } from "./format.mjs";
 import { connect } from "./net.mjs";
 import { createBoard } from "./board.mjs";
@@ -162,6 +164,12 @@ for (const tab of document.querySelectorAll(".vtab[data-view]")) {
 }
 
 const timelineNote = ref("tl-note"); /* what the run holds */
+/* The tip belongs to the line it explains: one without the other
+   would outlive it across a run boundary. */
+const setTimelineNote = (text, title = "") => {
+  timelineNote.textContent = text;
+  timelineNote.title = title;
+};
 const stopHereButton = ref("tl-stop");
 let markedEvent = null; /* the event a picked mark names, for "stop here" */
 const timelineSel = ref("tl-sel"); /* what the reader picked */
@@ -461,32 +469,6 @@ function onTopo(ts, data) {
   }
 }
 
-/* What the ring depth buys on this host, in the two numbers that set
-   it: how fast the busiest core filled a ring, and how long this
-   process went between looks. Both come measured from the bridge. */
-function budgetText(budget) {
-  if (!budget.peak_rate) return `링 ${budget.capacity}건`;
-  const rate =
-    budget.peak_rate >= 1000
-      ? `${Math.round(budget.peak_rate / 1000)}k/s`
-      : `${budget.peak_rate}/s`;
-  return `링 ${(budget.horizon_ms / 1000).toFixed(1)}초 @ ${rate} · ${stallText(budget)}`;
-}
-
-/* The worst stall alone cannot say whether it happened once or happens
-   all the time, so it carries the looks that landed in its own band and
-   the total the bridge took. Which band that is comes from the bridge's
-   ordering rather than being recomputed here — the arithmetic that puts
-   an interval in a band belongs in one place. */
-function stallText(budget) {
-  const bands = budget.gaps || {};
-  const edges = Object.keys(bands).map(Number);
-  const worst = `최악 정체 ${Math.round(budget.worst_gap_ms)}ms`;
-  if (!edges.length) return worst;
-  const looks = edges.reduce((total, edge) => total + bands[edge], 0);
-  return `${worst} (${bands[Math.max(...edges)]}/${looks})`;
-}
-
 /* The `early` count is a different fact from a drain loss: those events
    predate the rings, so no drainer however prompt could have had them. */
 function traceStateText(data) {
@@ -539,7 +521,7 @@ function onLife(ts, data) {
          them in one order. */
       panels.clearAll();
       timeline.reset();
-      timelineNote.textContent = "트레이스 대기";
+      setTimelineNote("트레이스 대기");
       timelineSel.textContent = "";
       stopHereButton.hidden = true;
       boardView.clearAll();
@@ -718,10 +700,11 @@ function onFrame(frame) {
       cards.touch(data.vm, data.text);
       break;
     case "ev":
-      /* The same event, read two ways: the log takes it as a row, the
-         board as evidence that a path was used. */
+      /* One event, three readers: a log row, evidence a path was used,
+         and — for a focus switch — the tab host input reached. */
       events.addEvent(frame.ts, data);
       boardView.note(frame.ts, data);
+      consoleView.note(data);
       break;
     /* T layer: what the firmware recorded, drained from its rings. The
        summary lights the board; the window answers draw the order. */
@@ -745,10 +728,14 @@ function onFrame(frame) {
         const held = data.span.full
           ? `${data.span.n} 레코드 · 지평선 도달`
           : `${data.span.n} 레코드`;
-        timelineNote.textContent = data.budget ? `${held} · ${budgetText(data.budget)}` : held;
+        const budget = data.budget;
+        setTimelineNote(
+          budget ? `${held} · ${budgetText(budget)}` : held,
+          budget ? stallTitle(budget) : "",
+        );
         /* The declared horizon and the observed stall side by side,
            with the crossing marked. */
-        timelineNote.classList.toggle("over", Boolean(data.budget?.overrun));
+        timelineNote.classList.toggle("over", Boolean(budget?.overrun));
       }
       if (data.dropped) noteLoss(data.dropped);
       break;

@@ -226,6 +226,54 @@ describe("console input", () => {
   });
 });
 
+describe("console focus", () => {
+  /* A guest set the board can host, so a slot the firmware names has a tab. */
+  const twoGuests = () => {
+    const kit = harness();
+    setGuestSlots({ max_guests: 4 });
+    kit.consoleView.setGuests([{ name: "vm0", vcpus: 1 }, { name: "vm1", vcpus: 1 }]);
+    return kit;
+  };
+  const marked = (tabs) => findAll(tabs, "focused").map((tab) => tab.textContent);
+
+  it("marks no tab until a switch is observed", () => {
+    const { tabs } = twoGuests();
+
+    assert.deepEqual(marked(tabs), [], "a browser that joined late has seen none");
+  });
+
+  it("marks the tab a focus switch named and unmarks the one before", () => {
+    const { consoleView, tabs } = twoGuests();
+
+    consoleView.note({ fields: { focus: "1" } });
+    assert.deepEqual(marked(tabs), ["vm1"]);
+    /* The tooltip carries the caveat the dot cannot: last seen, not live. */
+    assert.match(findAll(tabs, "focused")[0].title, /현재 값 아님/u);
+
+    consoleView.note({ fields: { focus: "0" } });
+    assert.deepEqual(marked(tabs), ["vm0"], "focus is one tab at a time");
+  });
+
+  it("leaves the mark standing for an event that carries no focus", () => {
+    const { consoleView, tabs } = twoGuests();
+    consoleView.note({ fields: { focus: "1" } });
+
+    consoleView.note({ fields: { vm: "0" } });
+    consoleView.note({});
+
+    assert.deepEqual(marked(tabs), ["vm1"], "only a focus switch says where typing goes");
+  });
+
+  it("drops the mark at a run boundary, which the new machine has not answered for", () => {
+    const { consoleView, tabs } = twoGuests();
+    consoleView.note({ fields: { focus: "1" } });
+
+    consoleView.mark("── 10_console_mux ──");
+
+    assert.deepEqual(marked(tabs), []);
+  });
+});
+
 /* The cap the console and the event log are both built on. */
 describe("stream cap", () => {
   it("holds its cap and drops the oldest, across a clear", () => {
