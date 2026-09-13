@@ -832,11 +832,8 @@ class RunLedger:
     def quantile_of(self, key: tuple[int, int], permille: int) -> int | None:
         """A quantile of one span row's samples, or None if it cannot be claimed.
 
-        None before the run is sealed and for a run that is not complete:
-        a lost record is a lost sample, and a quantile over holes is the
-        overstatement completeness refuses. None too for a point event,
-        which keeps no samples at all.
-        """
+        None until sealed and for an incomplete run — a lost record is a
+        lost sample — and None for a point event, which keeps no samples."""
         samples = self._samples.get(key)
         if not samples or self._sealed is None or not self._sealed.complete:
             return None
@@ -847,10 +844,8 @@ class RunLedger:
     ) -> RunTotals:
         """The counts, and the quantile the run's own samples support.
 
-        In two steps because the second needs the first: whether a
-        quantile may be claimed at all is completeness, which is the
-        totals' rule rather than a copy of it here.
-        """
+        In two steps because the second needs the first: claimability is
+        completeness, which is the totals' rule rather than a copy here."""
         self._sealed = RunTotals(
             events=dict(self._events),
             lost=self._lost,

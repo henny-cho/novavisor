@@ -67,12 +67,10 @@ export function createPanels({ tabs, host }) {
   let taxonomy = {};
   let ctxSlot = 0;
 
-  /* The drawers a previous session left open, of those that exist. Read
-     at every rebuild rather than once: the derived drawers only exist
-     once a topology has arrived, and a choice filtered out before then
-     would not survive a reload. Nothing stored at all is a reader who
-     has never chosen, and gets the drawer that says whether the machine
-     is running at all. */
+  /* The drawers a previous session left open, of those that exist. Read at
+     every rebuild, not once: derived drawers exist only after a topology
+     arrives, so a choice filtered out before then would not survive a
+     reload. Nothing stored is a reader who has never chosen. */
   function restore() {
     try {
       const saved = JSON.parse(localStorage.getItem(OPEN_KEY) || "null");
@@ -104,10 +102,9 @@ export function createPanels({ tabs, host }) {
       : new Cursor(latest.get(topic)?.value, moved.get(topic), counterWords(topic));
 
   /* How a topic's counter values read, in the manifest's own words: a
-     stamp is an instant, placed against the same reference the header
-     is, and a duration is the length it counts. The raw ticks stay in
-     the tooltip, and stay in the cell until the clock's rate is known —
-     a division by no frequency is wrong by whatever it turns out to be. */
+     stamp is an instant against the header's reference, a duration is the
+     length it counts. Raw ticks stay in the tooltip, and in the cell until
+     the clock's rate is known — dividing by no frequency is a guess. */
   function counterWords(topic) {
     const { stamps = [], durations = [] } = observations[topic] || {};
     if (!stamps.length && !durations.length) return null;
@@ -124,14 +121,10 @@ export function createPanels({ tabs, host }) {
     };
   }
 
-  /* Drawings a drawer does itself, keyed by the drawer they belong to.
-     Each is a join — the Scheduler cross-joins four topics into one
-     table — which is why the unit here is the drawer and not the topic.
-
-     `draws` are the topics the body renders itself, so the rest of the
-     drawer's bundle follows as generic tables; `reads` are topics from
-     other drawers it consults, and they have to reach the interest
-     index or the drawer sits still on the frame that moved them. */
+  /* Drawings a drawer does itself. Each is a join (Scheduler crosses four
+     topics into one table), so the unit is the drawer, not the topic.
+     `draws` the body renders itself and the rest of the bundle follows as
+     generic tables; `reads` must reach the interest index to redraw. */
   const OVERRIDES = [
     {
       id: "sched",
@@ -476,11 +469,10 @@ export function createPanels({ tabs, host }) {
       const override = OVERRIDES.find((entry) => entry.id === id) ?? null;
       const draws = override?.draws ?? [];
       const bundle = topics.filter((topic) => drawerOf(topic) === id);
-      /* Redrawn for its own bundle and for whatever an override reads
-         elsewhere — Context reads sched.valid — since a drawer watching
-         only its prefix would sit still on the frame that moved it. The
-         moved badge and the placement read this same union, so a closed
-         drawer counts right too. */
+      /* Redrawn for its own bundle and whatever an override reads
+         elsewhere (Context reads sched.valid), or a drawer watching only
+         its prefix sits still on the frame that moved it. The moved badge
+         reads the same union, so a closed drawer counts right too. */
       const watch = [...new Set([...bundle, ...draws, ...(override?.reads ?? [])])];
       drawers.set(id, {
         title: override?.title ?? id,
@@ -513,15 +505,10 @@ export function createPanels({ tabs, host }) {
       chip.setAttribute("aria-pressed", "false");
       chip.title = `${title} 표시 전환`;
       chip.append(el("span", "tt", title));
-      /* How many values in this drawer's topics moved since the previous
-         stop. A stop publishes the whole machine; between two consecutive
-         binds three or four values actually changed, and this is what
-         says which drawer to open for them.
-
-         Counted over the reading, not over what is drawn — those differ
-         where a drawer shows a subset (the context dump is one slot at a
-         time), and the count has to be right for a closed drawer, which
-         has drawn nothing at all. */
+      /* How many of this drawer's values moved since the previous stop —
+         a stop publishes the whole machine, so this is what says which
+         drawer to open. Counted over the reading, not what is drawn: a
+         drawer may show a subset, and a closed one draws nothing at all. */
       chip.append(el("b", "tmoved", ""));
       chip.addEventListener("click", () => toggle(id));
       tabs.append(chip);

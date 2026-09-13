@@ -775,11 +775,8 @@ STOPPABLE = tuple(event.symbol for event in events.EVENTS if event.edge)
 class RegradeTest(unittest.TestCase):
     """Paths are graded against the image this run built.
 
-    A variant may build another preset, so re-resolving the default
-    image would grade this run against components it never linked. The
-    default is stocked here with the opposite answer to prove which one
-    the grades came from.
-    """
+    A variant may build another preset, so the default image is stocked
+    with the opposite answer to prove which one the grades came from."""
 
     def grades(self, run: observe.View, default: observe.View) -> set[str]:
         made = Session(store())

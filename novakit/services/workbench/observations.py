@@ -54,11 +54,9 @@ class Obs:
     # carrying when that shadow last became true. The publish stamp
     # dates the copy, which is a different question.
     as_of: str = ""
-    # Which of the reading's fields hold a CNTPCT instant, and which a
-    # count of ticks. No ELF can say it — the DWARF reader folds a
-    # typedef into its underlying type — so it is declared here beside
-    # `hex`. `""` names the reading itself; a name, a row's field at any
-    # depth of the shaped value.
+    # Which fields hold a CNTPCT instant and which a tick count: the DWARF
+    # reader folds the typedef away, so it is declared here beside `hex`.
+    # `""` names the reading itself, a name a field at any depth of it.
     stamps: tuple[str, ...] = ()
     durations: tuple[str, ...] = ()
 
@@ -181,10 +179,8 @@ OBSERVATIONS: tuple[Obs, ...] = _joined()
 def available_observations(view: observe.View | None) -> tuple[Obs, ...]:
     """Of the manifest, the observations this image answers.
 
-    A page declared by address has no symbol to be absent, so every
-    profile mapping it carries it. No view is no image to ask, and the
-    manifest stands whole — which is what a pre-run topology says.
-    """
+    A page declared by address has no symbol to be absent, so it always
+    carries; no view is no image to ask, which is a pre-run topology."""
     if view is None:
         return OBSERVATIONS
     return tuple(obs for obs in OBSERVATIONS if obs.pa is not None or obs.topic in view.resolved)

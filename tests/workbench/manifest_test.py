@@ -53,13 +53,8 @@ class ManifestJoinTest(unittest.TestCase):
 class ObservationWireTest(unittest.TestCase):
     """What the topology says about a topic beyond its value.
 
-    Facts the UI cannot work out for itself: how coarse the sample is,
-    whether any run is held to it, which topic dates it when the memory
-    shadows hardware, and which of its numbers are counter values. A
-    panel-and-column schema travelled here too, read by nothing at
-    either end; a wire field no reader consumes is a contract that
-    cannot fail and so never gets fixed.
-    """
+    Facts the UI cannot work out itself: how coarse the sample is, whether
+    a run is held to it, what dates a hardware shadow, which are counters."""
 
     WORDS = {
         "timer.queue": {"stamps": ["deadline"]},
@@ -83,13 +78,8 @@ class ObservationWireTest(unittest.TestCase):
     def test_a_counter_value_says_whether_it_is_a_moment_or_a_length(self):
         """A tick count is a moment or a length, and the two read alike.
 
-        Nothing in the image separates them — the DWARF reader folds a
-        typedef into its underlying type — so the words are declared,
-        like `hex`, and only the declaration can be checked. Not against
-        the join's field list either: that list narrows a DWARF struct
-        to the members that travel, is empty for four of these six, and
-        a shape rewrites a row's keys before the wire.
-        """
+        The image cannot separate them, so only the declaration is
+        checkable — not the join's field list, which a shape rewrites."""
         wire = observations.observation_rates()
         for topic, words in self.WORDS.items():
             with self.subTest(topic=topic):
@@ -102,10 +92,8 @@ class ObservationWireTest(unittest.TestCase):
 class AdvertisedTopicTest(unittest.TestCase):
     """The topology advertises what this run's image can answer.
 
-    The UI derives its drawers from the topics the topology names, so a
-    topic a subset profile never resolves would grow a drawer that the
-    poller — which reads only what resolved — can never fill.
-    """
+    Drawers are derived from the topics named, so one a subset profile
+    never resolves grows a drawer the poller can never fill."""
 
     TOPICS = {obs.topic for obs in observations.OBSERVATIONS}
 

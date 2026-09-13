@@ -330,11 +330,8 @@ class Recording:
     def latency(self, key: tuple[int, int], permille: int) -> int | None:
         """A quantile of how late one span row ran, or None if unclaimable.
 
-        `key` is the row the totals count under — code and the
-        catalogue's breakdown word — so a late slice and a late watchdog
-        are separate samples, not one pool. The ledger holds both the
-        samples and the rule about which runs may claim one.
-        """
+        `key` is the row the totals count under — code and breakdown word —
+        so a late slice and a late watchdog are separate sample pools."""
         return self.ledger.quantile_of(key, permille)
 
     def wire_ts(self, cntpct: int) -> int:

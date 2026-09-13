@@ -149,15 +149,10 @@ describe("panel drawer", () => {
   });
 });
 
-/* Where a reading is drawn.
-
-   The drawer a topic belongs to is its own name: the manifest spells
-   every topic `subsystem.thing`. What used to be here instead was a
-   hand-written topic-to-panel table, and nine topics the bridge had
-   added since sat in a fallback drawer as JSON — the list was the gap.
-   So what is tested is the derivation, and the two things it must not
-   lose: a drawer's own drawing, and the frames that drawing reads from
-   elsewhere. */
+/* Where a reading is drawn: the drawer is the topic's own prefix, since
+   the manifest spells every topic `subsystem.thing`. What the derivation
+   must not lose is a drawer's own drawing and the frames it reads from
+   elsewhere — a hand-written table had stranded nine topics. */
 describe("drawers from the manifest", () => {
   const TOPO = (observations) => ({ observations, timer_slots: [] });
 
@@ -320,15 +315,10 @@ describe("drawers from the manifest", () => {
   });
 });
 
-/* A counter value as the time it names.
-
-   The published copies are stamped with CNTPCT and nothing in the image
-   can say whether one of its u64s is a moment or a length — the DWARF
-   reader folds the typedef away — so the manifest declares it, and the
-   drawer is what turns the declaration into a reading a person can use.
-   What is tested is that the two words reach every table, an override's
-   and a derived one alike, and that a tick count with no clock behind
-   it stays a tick count. */
+/* A counter value as the time it names. The image cannot say whether a
+   u64 is a moment or a length, so the manifest declares it: the two words
+   must reach every table, an override's and a derived one alike, and a
+   tick count with no clock behind it stays ticks. */
 describe("a counter value as the time it names", () => {
   const WORDS = {
     "timer.queue": { rate: 10, stamps: ["deadline"] },

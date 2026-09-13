@@ -25,12 +25,10 @@ export class Cell {
 /* What a cell reads as: its own words where it has them, else the value. */
 export const read = (cell) => cell.text ?? fmt(cell.shown);
 
-/* A reading and the mask of what moved in it, walked together.
-
-   `unit` is how this topic's numbers read as time — the manifest's own
-   words for it, since a counter value carries no unit — asked for by
-   the key the walk arrived at. Handed down the walk, so every cell of
-   the reading gets it wherever a renderer picks it up. */
+/* A reading and the mask of what moved in it, walked together. `unit` is
+   how this topic's numbers read as time — the manifest's own words, since
+   a counter value carries none — keyed by where the walk arrived, and
+   handed down so every cell gets it wherever a renderer picks it up. */
 export class Cursor extends Cell {
   constructor(shown, mask, unit = null, key = "") {
     super(shown, mask === true);
@@ -116,9 +114,8 @@ export function generic(cursor) {
     const rows = cursor.rows();
     /* A list per core or per VM of records — a list register shadow, a
        timer queue — flattened with the outer index as its first column,
-       so the whole reading reads as one table instead of a JSON blob
-       per core. Elements that are not records have no columns to
-       spread, and fall through to the two-column form below. */
+       so the reading is one table and not a JSON blob per core. Elements
+       that are not records fall through to the two-column form below. */
     const inner = held.some(Array.isArray) ? columnsOf(held.flat()) : [];
     if (inner.length) {
       const flat = [];

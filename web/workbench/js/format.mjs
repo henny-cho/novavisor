@@ -140,11 +140,10 @@ export function budgetText(budget) {
   return `링 ${(budget.horizon_ms / 1000).toFixed(1)}초 @ ${rate} · ${stallText(budget)}`;
 }
 
-/* The worst stall alone cannot say whether it happened once or happens
-   all the time, so it carries the looks that landed in its own band and
-   the total the bridge took. Which band that is comes from the bridge's
-   ordering rather than being recomputed here — the arithmetic that puts
-   an interval in a band belongs in one place. */
+/* The worst stall alone cannot say whether it happened once or all the
+   time, so it carries its own band's count and the bridge's total. The
+   band comes from the bridge's ordering — binning an interval into one
+   belongs in a single place. */
 function stallText(budget) {
   const bands = budget.gaps || {};
   const edges = Object.keys(bands).map(Number);

@@ -357,10 +357,8 @@ class Bridge:
     def _sealed_data(self, run: int, totals: trace.RunTotals) -> dict:
         """One run's summary as the wire states it.
 
-        Spelled once for the life event and the connect topology alike.
-        `freq_hz` travels with it so the sealed ticks read as durations
-        without a second frame to join against.
-        """
+        Spelled once for the life event and the connect topology alike;
+        `freq_hz` travels with it so sealed ticks read as durations."""
         return {
             "phase": "run-sealed",
             "run_id": run,
@@ -494,10 +492,8 @@ class Bridge:
     def _stop_machine(self, request: Request) -> None:
         """End the run the reader is watching, leaving nothing selected.
 
-        Same handover as a select: the machine goes back before it is
-        torn down, or a run ending while we hold its stop leaves QEMU
-        frozen mid-exit.
-        """
+        Same handover as a select: the machine goes back before teardown,
+        or a run ending while we hold its stop leaves QEMU frozen."""
         del request  # a stop names no target
         self._release()
         self.spawn(self.session.stop())

@@ -304,11 +304,8 @@ class ElfRamProviderTest(unittest.TestCase):
                 provider.read_bytes(RAM_BASE - 4096, 4096)
 
     def test_the_wire_advertises_exactly_what_this_provider_polls(self):
-        """One availability rule, two callers.
-
-        A topic the topology names and the poller never reads is a
-        drawer that waits forever; both ask the same image.
-        """
+        """One availability rule, two callers: a topic the topology names
+        and the poller never reads is a drawer that waits forever."""
         view = shared_image.view()
         short = dataclasses.replace(
             view, resolved={k: v for k, v in view.resolved.items() if k != "smmu.stream"}

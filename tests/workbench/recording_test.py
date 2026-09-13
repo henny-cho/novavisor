@@ -815,10 +815,8 @@ class CursorTest(Recorded):
 class WrittenRunTest(Recorded):
     """A whole run built by the writer rather than kept as a file.
 
-    The loader takes one version, so a recording stored in the tree has
-    a version somebody types. Written here, both the version and the
-    shape are whatever the code produces.
-    """
+    A recording stored in the tree has a version somebody types; written
+    here, both version and shape are whatever the code produces."""
 
     def kinds(self) -> list[trace.Record]:
         """One record of every kind the catalogue names."""

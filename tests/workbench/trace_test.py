@@ -614,13 +614,10 @@ class SummaryTest(unittest.TestCase):
 
 
 class DecodeTest(unittest.TestCase):
-    """Every record kind, decoded, against what it decoded to before the
-    catalogue's field names were the decode.
-
-    One synthetic record per code rather than a recorded run: the
-    fixture holds four kinds and two of those are the irregular ones, so
-    it cannot say whether the other sixteen still read the same.
-    """
+    """Every record kind decoded, against the values from before the
+    catalogue's field names were the decode. One synthetic record per code:
+    a recorded run carries a few kinds and cannot say whether the other
+    sixteen still read the same."""
 
     # One triple for every code, chosen so no field reads as zero: `a`
     # carries mmio's flag byte (2 bytes, a write), `b` is a packed pair,

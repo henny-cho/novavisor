@@ -39,7 +39,6 @@ class Severity(StrEnum):
 def vocabulary() -> dict[str, list[str]]:
     """The vocabulary shipped to the UI inside the `topo` snapshot.
 
-    Badges only: every classified event carries its own severity, so
-    enumerating them would be a second copy nothing reads.
-    """
+    Badges only: every event carries its own severity, so listing them
+    here would be a second copy nothing reads."""
     return {"badges": [badge.value for badge in Badge]}

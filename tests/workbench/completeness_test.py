@@ -106,10 +106,8 @@ class LedgerTest(unittest.TestCase):
 class SpanSampleTest(unittest.TestCase):
     """The samples a run's span records are, and the quantile they support.
 
-    Kept by the ledger rather than re-walked per question: the counts and
-    the quantile are two readings of one stream, and a second walk is a
-    second chance to disagree about which records were in it.
-    """
+    Kept by the ledger rather than re-walked per question: a second walk
+    is a second chance to disagree about which records were in it."""
 
     def late(self, ts: int, due: int, slot: int = 1) -> trace.Record:
         return trace.Record(ts=ts, code=LATE, cpu=0, a=slot, b=due, c=0)

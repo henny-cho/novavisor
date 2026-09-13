@@ -164,11 +164,8 @@ def _spi_intids(word: int) -> list[int]:
 def vgic_dist(value: object, info: elfsym.TypeInfo) -> object:
     """The emulated distributor as the interrupts its bitmaps name.
 
-    Three words per VM travelled as bit patterns, and a reader had to
-    know both where SPI numbering starts and which word meant what. Only
-    the bits actually set travel now, as the INTIDs a guest sees — the
-    same "what is set" idiom as the timer queue and the SPI tokens.
-    """
+    Only set bits travel, as the INTIDs a guest sees, so no reader needs
+    the SPI base or which word is which — the timer queue's idiom."""
     del info
     return [
         {

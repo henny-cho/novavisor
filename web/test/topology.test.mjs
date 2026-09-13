@@ -1,12 +1,7 @@
-/* Launch group test: what a launch actually asks the bridge for, which
-   of its two meanings the one button carries, and what the group does
-   when there is no machine behind any of it.
-
-   Every knob here is one the uplink has always accepted, so the thing
-   under test is the payload — that a variant, a verification run and a
-   stop armed at launch travel with the demo, and that the page comes
-   back up on the choice it was left with. The toggle is the other half:
-   a machine that exists is one to stop, not one to launch again. */
+/* Launch group test: the payload a launch sends — variant, verification
+   and a stop armed at launch all travel with the demo — and the choice
+   the page comes back up on. The toggle is the other half: a machine
+   that exists is one to stop, not one to launch again. */
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";

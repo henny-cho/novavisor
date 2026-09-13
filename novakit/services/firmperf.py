@@ -256,10 +256,8 @@ def _said(run: recording.Recording, pattern: re.Pattern) -> int | None:
 def _unopened(run: recording.Recording) -> list[trace.Record]:
     """Span records carrying no start, or one after the end they cover.
 
-    What the recording format's version means: a span's second word is
-    when the stretch opened. A zero there is a sample the ledger drops
-    without a word, so a run holding one measured less than it reports.
-    """
+    A zero where the start belongs is a sample the ledger drops without
+    a word, so a run holding one measured less than it reports."""
     return [
         record
         for record in run.records
