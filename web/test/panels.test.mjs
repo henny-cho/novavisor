@@ -233,6 +233,25 @@ describe("drawers from the manifest", () => {
     assert.deepEqual(findAll(host, "pslot").map((pick) => pick.classes.has("off")), [true, true]);
   });
 
+  it("leaves a guest's generation to the drawer whose topic it is", () => {
+    const { panels, host } = harness(["timer"]);
+    panels.setTopology({
+      observations: { "timer.cntvoff": { rate: 10 }, "vm.generation": { rate: 10 } },
+      timer_slots: [],
+    });
+    panels.apply(snapshot("timer.cntvoff", ["0x0", "0x100"]));
+    panels.apply(snapshot("vm.generation", [7, 9]));
+    panels.settle();
+
+    /* Drawers derive from the topic prefix, so `vm.generation` is the
+       vm drawer's. Drawn here too it would be one value in two places,
+       each with its own moved badge. */
+    assert.deepEqual(rowsOf(findAll(host, "ptable").at(-1)), [
+      ["0", "0x0"],
+      ["1", "0x100"],
+    ]);
+  });
+
   it("flattens a list per core into one table", () => {
     const { panels, tabs, host } = harness();
     panels.setTopology(TOPO({ "novel.lr": {} }));

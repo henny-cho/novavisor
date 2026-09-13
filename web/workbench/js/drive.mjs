@@ -118,11 +118,14 @@ export function createDrive({ root, note, send }) {
                drain period would otherwise return early here and leave
                the previous wait on screen for the rest of the session. */
             period: command.period_us,
+            /* The ring refuses when it is full, so its depth is what a
+               refusal is read against. */
+            slots: command.slots,
           }
         : null;
       if (JSON.stringify(next) === JSON.stringify(world)) return;
       world = next;
-      contract = world ? `≤${usText(world.period)}` : "";
+      contract = world ? `≤${usText(world.period)} · ${world.slots}칸` : "";
       root.hidden = !world;
       note.classList.remove("bad");
       note.textContent = contract || "이 실행은 명령을 받지 않는다";

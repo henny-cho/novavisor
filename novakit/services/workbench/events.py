@@ -309,7 +309,6 @@ def catalogue() -> list[dict]:
         {
             "id": event.id,
             "edge": event.edge,
-            "args": list(event.args),
             "label": event.label,
             # Column-encoded records carry the firmware's number, so the
             # UI needs the same mapping the ring writer used.

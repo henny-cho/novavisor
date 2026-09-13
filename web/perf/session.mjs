@@ -119,7 +119,7 @@ export function topology() {
     limits: { buckets: 4096 },
     memory: { regimes: [{ id: "el2.self", label: "EL2 · 자기", role: "self", root: "0x40100000" },
                         { id: "vm0.cpu", label: "VM 0 · CPU", role: "cpu", root: "0x40200000" }] },
-    command: { period_us: 250, ops: [
+    command: { period_us: 250, slots: 128, ops: [
       { name: "spi", label: "SPI 주입", action: "주입", desc: "물리 SPI를 게스트로",
         args: [{ kind: "vm", lo: 0, hi: 1 }, { kind: "int", lo: 32, hi: 1019, default: 48 }] },
       { name: "mark", label: "표식", action: "표식", args: [{ kind: "int", free: true, lo: 0, hi: 65535 }] },

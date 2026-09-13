@@ -20,10 +20,13 @@ export const hostsGuest = (vm) => Number.isInteger(vm) && vm >= 0 && vm < guestS
    may add one without the screen going quiet. */
 const STEP_LABEL = { pattern: (subject) => `/${subject}/` };
 
-export function describeStep({ kind, subject } = {}) {
+export function describeStep({ kind, subject, elapsed: took } = {}) {
   const text = subject ?? "";
   const label = STEP_LABEL[kind];
-  return label ? label(text) : `${kind ?? "?"} ${text}`.trim();
+  const said = label ? label(text) : `${kind ?? "?"} ${text}`.trim();
+  /* How long the step waited, in the seconds its budget is written in —
+     which is what names the slow step in a scenario that ran long. */
+  return took > 0 ? `${said} · ${Number(took).toFixed(1)}s` : said;
 }
 
 /* Protocol timestamps are session-monotonic nanoseconds. */

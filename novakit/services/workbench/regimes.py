@@ -549,8 +549,6 @@ def _isolation(walks: _Walks, captured: dict, regime: dict) -> dict | None:
         for role, side in sides.items()
     }
     return {
-        "cpu": sides["cpu"]["id"],
-        "dma": sides["dma"]["id"],
         "cpu_only": _minus(reach["cpu"], reach["dma"]),
         "dma_only": _minus(reach["dma"], reach["cpu"]),
     }
@@ -653,7 +651,6 @@ def _rights(descriptor: translation.Descriptor) -> dict:
 
 def _tree_wire(found: translation.Tree, fmt: translation.Format) -> dict:
     return {
-        "root": f"{found.root:#x}",
         "read": found.read,
         "truncated": found.truncated,
         "unreadable": [f"{pa:#x}" for pa in found.unreadable],

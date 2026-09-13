@@ -28,6 +28,7 @@ from novakit.services.workbench import events, recording, trace
 RUNNER = CliRunner()
 BIND = events.BY_ID["vgic.bind"].code
 TRAP = events.BY_ID["trap"].code
+SWITCH = events.BY_ID["sched.switch"].code
 
 
 WHOLE = {"producer_dead": True, "tail_drained": True, "absent": False}
@@ -316,6 +317,9 @@ class VerifyTest(Recorded):
     def sample(self, due: int, entry: int, wrote: int) -> trace.Record:
         return trace.Record(ts=wrote, code=self.LATENCY, cpu=0, a=27, b=due, c=entry)
 
+    def switch(self, since: int, wrote: int) -> trace.Record:
+        return trace.Record(ts=wrote, code=SWITCH, cpu=0, a=1, b=since, c=0)
+
     def written(self, *, sealed: dict = WHOLE, rows=(), said: str | None = None):
         recorder = recording.Recorder(self.root, {"demo": "test", "board": "qemu_virt"})
         recorder.for_run(1)
@@ -374,3 +378,20 @@ class VerifyTest(Recorded):
         runs = self.written(rows=[self.sample(100, 150, 200), self.sample(200, 260, 250)],
                             said="irq_latency: 2")
         self.assertIn("before it was entered", self.refused(runs))
+
+    def test_a_span_outside_the_judged_row_says_when_it_began(self):
+        """What the format's version means, on a kind the table does not
+        judge: a switch's second word is the residency it closed."""
+        self.check(self.written(
+            rows=[self.sample(100, 150, 200), self.sample(200, 260, 300), self.switch(150, 400)],
+            said="irq_latency: 2",
+        ))
+
+    def test_a_span_that_begins_at_nothing_is_refused(self):
+        """A zero start keeps no sample, so the row it belongs to
+        under-reports instead of failing."""
+        runs = self.written(
+            rows=[self.sample(100, 150, 200), self.sample(200, 260, 300), self.switch(0, 400)],
+            said="irq_latency: 2",
+        )
+        self.assertIn("begin at nothing", self.refused(runs))

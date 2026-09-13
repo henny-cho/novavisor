@@ -477,6 +477,13 @@ class AnswerTest(Walkable, unittest.TestCase):
         self.assertEqual((run["count"], int(run["size"], 16)), (4, 4 * self.MIB2))
         self.assertEqual((run["level"], run["kind"]), (2, "block"))
 
+    def test_the_answer_states_the_root_it_walked_from_once(self):
+        """The tree is the walk from that root; a copy inside it would be
+        a second number free to disagree with the one that was used."""
+        answer = regimes.answer(self.captured, {"regime": "vm0.cpu"})
+        self.assertEqual(int(answer["root"], 16), self.ROOT)
+        self.assertNotIn("root", answer["tree"])
+
     def test_a_guest_window_is_writable_and_executable_without_complaint(self):
         """Counted, never judged here: Stage 2 grants both on purpose and
         the regime's control register says whether that is a defect."""
@@ -523,9 +530,11 @@ class AnswerTest(Walkable, unittest.TestCase):
         no device can touch, one only DMA reaches is a device able to
         write where the guest cannot look."""
         isolation = regimes.answer(self.captured, {"regime": "vm0.cpu"})["isolation"]
-        self.assertEqual((isolation["cpu"], isolation["dma"]), ("vm0.cpu", "vm0.dma"))
         self.assertEqual(isolation["cpu_only"], [[f"{2 * self.MIB2:#x}", f"{2 * self.MIB2:#x}"]])
         self.assertEqual(isolation["dma_only"], [[f"{8 * self.MIB2:#x}", f"{self.MIB2:#x}"]])
+        # The difference is the whole answer: naming the two regimes
+        # again would restate what the request already said.
+        self.assertEqual(set(isolation), {"cpu_only", "dma_only"})
 
     def test_the_difference_reads_the_same_from_either_side(self):
         # It is one fact about the VM, not a property of which chip was

@@ -35,6 +35,19 @@ describe("describeStep", () => {
     assert.equal(describeStep({}), "?");
     assert.equal(describeStep(), "?");
   });
+
+  it("says how long the step waited, which names the slow one", () => {
+    assert.equal(
+      describeStep({ kind: "pattern", subject: "demo_exit code=0", elapsed: 4.25 }),
+      "/demo_exit code=0/ · 4.3s",
+    );
+  });
+
+  it("says nothing about a wait a recording never carried", () => {
+    /* A file written before the bridge timed steps has no elapsed on
+       its verify frames, and a replay of one must not read as 0.0s. */
+    assert.equal(describeStep({ kind: "pattern", subject: "booted" }), "/booted/");
+  });
 });
 
 describe("micros", () => {

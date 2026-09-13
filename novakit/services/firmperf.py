@@ -253,6 +253,22 @@ def _said(run: recording.Recording, pattern: re.Pattern) -> int | None:
     return None
 
 
+def _unopened(run: recording.Recording) -> list[trace.Record]:
+    """Span records carrying no start, or one after the end they cover.
+
+    What the recording format's version means: a span's second word is
+    when the stretch opened. A zero there is a sample the ledger drops
+    without a word, so a run holding one measured less than it reports.
+    """
+    return [
+        record
+        for record in run.records
+        if (entry := events.BY_CODE.get(record.code)) is not None
+        and entry.span
+        and not 0 < record.b <= entry.span_end(record)
+    ]
+
+
 def _require(ok: bool, where: str, why: str) -> None:
     if not ok:
         raise SystemExit(f"[measure] {where}: {why}")
@@ -285,6 +301,12 @@ def verify(
             all(record.b <= record.c <= record.ts for record in rows),
             where,
             "a sample is entered before it was due, or written before it was entered",
+        )
+        unopened = _unopened(run)
+        _require(
+            not unopened,
+            where,
+            f"{len(unopened)} span record(s) begin at nothing or after they ended",
         )
         _require(
             run.latency(key, trace.SLO_PERMILLE) is not None, where, "no p99.9 could be claimed"

@@ -215,7 +215,6 @@ def _blocks(values: dict, inventory: dict) -> list[dict]:
             "intid": device["interrupt"]["intid"],
             "streams": list(device.get("streams", [])),
             "device_id": device.get("device_id"),
-            "compatible": compatible,
         })
     if "NOVA_BOARD_PCIE_ECAM_BASE" in values:
         blocks.append({

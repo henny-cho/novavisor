@@ -145,6 +145,20 @@ describe("address view: the recheck", () => {
   });
 });
 
+describe("address view: the root a walk started from", () => {
+  it("names the table the answer was walked from", () => {
+    /* A live regime is rooted per answer, so this is a fact about this
+       walk — and the only place the TTBR it used is stated. */
+    const { memory, body } = harness();
+    world(memory, [GUEST]);
+    memory.answer(CLOSED);
+    assert.ok(
+      findAll(body, "mnote").some((node) => node.textContent === "뿌리 0x100000"),
+      findAll(body, "mnote").map((node) => node.textContent),
+    );
+  });
+});
+
 describe("address view: the age of the root", () => {
   const ROOTED = { ...CLOSED, rooted: { at: 1_000_000, as_of: "ctx.synced", slot: 0 } };
   const synced = (values) => ({ topic: "ctx.synced", kind: "snapshot", data: { values } });

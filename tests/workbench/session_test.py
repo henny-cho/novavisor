@@ -38,6 +38,10 @@ from novakit.services.workbench.trace_drain import (
 )
 from tests.support import bridge as support
 
+# The T-layer fixture: a region written by the reader's own packer, and
+# the board numbers it is placed at.
+from tests.workbench.trace_test import RAM_BASE, REGION_SIZE, TRACE_PA, Region
+
 
 class FakeLive:
     """A LiveSession stand-in over a socketpair.
@@ -567,6 +571,9 @@ class InitialTopologyTest(unittest.TestCase):
         names = [entry["name"] for entry in topology["catalog"]]
         self.assertIn("10_console_mux", names)
         self.assertIn("badges", topology["taxonomy"])
+        # Every classified event carries its own severity, so the
+        # enumerated list beside them answered nothing.
+        self.assertNotIn("severities", topology["taxonomy"])
 
     def test_publishes_the_bounds_a_request_is_clamped_to(self):
         """The window width and the step count are the reader's to choose,
@@ -789,11 +796,6 @@ class RegradeTest(unittest.TestCase):
         self.assertIn(paths.GRADE_DIRECT, self.grades(_image(*STOPPABLE), _image()))
 
 
-# The region a board reserves is a board number, so a fixture states
-# its own. Big enough for the one small ring below and nothing more.
-REGION_SIZE = 0x10000
-
-
 class TraceAttachTest(unittest.TestCase):
     """Binding the T reader to a run.
 
@@ -975,6 +977,36 @@ class TraceAttachTest(unittest.TestCase):
                 drain.pace(TRACE_TURN_SECONDS / 4, capped=True)
             self.assertEqual(drain.drain_limit, 128)
             bridge._trace_service.drop()
+
+
+class TraceSummaryTest(unittest.TestCase):
+    """What a drain says it drained."""
+
+    def test_the_drain_states_its_record_count_once(self):
+        """On the horizon the browser already reads it from. A second
+        count beside it is a number free to disagree the moment either
+        one is filtered or clamped."""
+        region = Region(rings=1)
+        self.addCleanup(region.cleanup)
+        for ts in range(3):
+            region.emit(0, ts=ts, code=events.BY_ID["trap"].code)
+        with tempfile.TemporaryDirectory() as name:
+            bridge = support.running(Path(name), board={
+                "NOVA_BOARD_PHYS_RAM_BASE": RAM_BASE,
+                "NOVA_BOARD_TRACE_PA": TRACE_PA,
+                "NOVA_BOARD_TRACE_SIZE": REGION_SIZE,
+            })
+            bridge.session.surfaces.shm_path.write_bytes(bytes(region.buffer))
+            self.assertTrue(bridge._trace_service.attach())
+            self.addCleanup(bridge._trace_service.drop)
+            bridge._trace_service.pump()
+
+            (event,) = [
+                frame for frame in bridge.store.drain()
+                if frame["topic"] == "trace" and frame["kind"] == "event"
+            ]
+            self.assertEqual(event["data"]["span"]["n"], 3)
+            self.assertNotIn("count", event["data"])
 
 
 class ConnectionHandlerTest(unittest.IsolatedAsyncioTestCase):

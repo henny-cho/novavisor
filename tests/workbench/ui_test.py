@@ -82,6 +82,18 @@ class FailureVisibilityTest(unittest.TestCase):
         self.assertIn("lifeDetail(data)", fallback.group(1))
         self.assertNotIn("dim: true", fallback.group(1))
 
+    def test_a_failed_verify_says_how_far_it_got(self):
+        """The pass badge carries the pair already; without it a failure
+        says something broke and not how much of the scenario ran."""
+        block = self.life_case("verify-fail")
+        self.assertIn("data.carried", block)
+        self.assertIn("data.total", block)
+
+    def test_a_stop_names_the_core_it_was_taken_on(self):
+        """The other cores were somewhere else, so a stop on an SMP
+        machine is evidence about one of them."""
+        self.assertIn("data.thread", self.life_case("stopped"))
+
     def test_every_view_tab_is_live(self):
         tabs = re.findall(r'<button class="vtab".*?</button>', (UI / "index.html").read_text(), re.S)
         self.assertTrue(tabs)
@@ -108,8 +120,6 @@ class UiStructureTest(unittest.TestCase):
 
 
 VIEW_HEADER = re.compile(r'<div class="view-h">(.*?)</div>\s*<div class="board"', re.S)
-# `"topic": ["section", ...]`
-PAINTS = re.compile(r'"([\w.]+)":\s*\[([^\]]*)\]')
 
 
 class MemoryViewTest(unittest.TestCase):
@@ -154,40 +164,23 @@ class BoardViewTest(unittest.TestCase):
         self.assertNotRegex(css, r"\.view\[hidden\]")
 
     def test_the_board_reads_only_published_topics(self):
-        # Its topic table is the contract with the observation manifest;
-        # a topic the bridge never publishes would silently draw nothing.
+        # Each painter names the topics that dirty it, and the board's
+        # index is derived from those names; a topic the bridge never
+        # publishes reaches no painter and silently draws nothing.
         from novakit.services.workbench.observations import OBSERVATIONS
 
         source = (UI / "js" / "board.mjs").read_text()
-        table = re.search(r"const TOPICS = \{(.*?)\n\};", source, re.S)
-        self.assertIsNotNone(table, "board topic table not found")
-        wanted = set(re.findall(r'"([\w.]+)":', table.group(1)))
+        table = re.search(r"const painters = \{(.*?)\n  \};", source, re.S)
+        self.assertIsNotNone(table, "board painter table not found")
+        wanted = set(re.findall(r'"([\w.]+)"', table.group(1)))
         self.assertTrue(wanted)
         published = {obs.topic for obs in OBSERVATIONS}
         self.assertLessEqual(wanted, published, f"unpublished: {wanted - published}")
 
-    def test_a_topic_repaints_named_sections_and_nothing_more(self):
-        # Twenty scheduler samples a second must not redraw the address
-        # strip, so each topic declares the sections it can change. A
-        # section with no painter behind it is a silent no-op, and a
-        # painter no topic names is a value that stopped arriving.
-        source = (UI / "js" / "board.mjs").read_text()
-        table = re.search(r"const TOPICS = \{(.*?)\n\};", source, re.S)
-        self.assertIsNotNone(table, "board topic table not found")
-        painters = set(re.findall(r"^ {4}(\w+): render\w+,$", source, re.M))
-        self.assertTrue(painters, "board painter table not found")
-        entries = PAINTS.findall(table.group(1))
-        self.assertEqual(
-            len(entries), len(re.findall(r'"[\w.]+":', table.group(1))), "a topic paints nothing"
-        )
-        claimed = set()
-        for topic, listed in entries:
-            sections = set(re.findall(r'"(\w+)"', listed))
-            with self.subTest(topic=topic):
-                self.assertTrue(sections, "subscribed but paints nothing")
-                self.assertLessEqual(sections, painters, f"no painter: {sections - painters}")
-            claimed |= sections
-        self.assertEqual(painters, claimed, f"painters no topic reaches: {painters - claimed}")
+    def test_a_device_block_names_the_stream_it_issues_under(self):
+        """The one fact joining a device to a row of the SMMU stream
+        table, and through it to the regime that row roots."""
+        self.assertIn("block.streams", (UI / "js" / "board.mjs").read_text())
 
 
 class BoardAnchorTest(unittest.TestCase):

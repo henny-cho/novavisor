@@ -175,7 +175,6 @@ class TraceDrain:
             Kind.EVENT,
             trace.summarise(records)
             | {
-                "count": len(records),
                 "span": self.history.span().as_dict(),
                 "budget": self.budget.as_dict(),
             },

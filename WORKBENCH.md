@@ -134,7 +134,7 @@ all and **Devices** without the DMA registry.
 | Drawer | What it shows |
 |---|---|
 | **Scheduler** | per-pCPU current vCPU and how long it has been resident, FP ownership/trap, idling; per-slot power (`kOff/kOnPending/kOn`), run state, affinity, validity; slice ticks |
-| **Timer** | per-CPU programmed deadline and the armed soft-timer slots under it with owner labels (slice, cntv_wake, watchdog, …); per-VM CNTVOFF and generation |
+| **Timer** | per-CPU programmed deadline and the armed soft-timer slots under it with owner labels (slice, cntv_wake, watchdog, …); per-VM CNTVOFF |
 | **Context** | one vCPU slot at a time (picker `s0…s7`): the trap frame `x0–x30, sp, elr, spsr, esr, far` from the last EL2 entry, why it was taken as one line (`EC` and its name, `IL`, `ISS`, `FAR`, `ELR`), and the saved EL1 register bank |
 | **IVC** | both shared-memory rings at PA `0x6000_0000`: write/read indices and a 16-cell occupancy strip |
 | **PSCI·SMP** | per-VM lifecycle (mode, epoch, pending core mask, retries, active, restart budget) and per-core online/mailbox state |
@@ -203,12 +203,14 @@ request it sent is still in flight — the bridge holds one inspection at a
 time, so a second click could only be rejected. 중지 is on screen exactly
 while 자동 is, and cancelling is never what a request in flight blocks.
 
-A stop publishes more than a pause does. The event's own arguments are read
-out of the argument registers — so stopping at the interrupt bind shows the
-physical INTID, the virtual one it was bound to, and the generation — and the
-**whole** observation manifest is re-read and published as `src H`. Nothing is
-moving, so those reads are all of one instant, with no torn value and no
-writer racing the reader. This is the one place the S layer is exact.
+A stop publishes more than a pause does. The notice names the gdb thread the
+machine stopped on, which on an SMP machine is which core. The event's own
+arguments are read out of the argument registers — so stopping at the interrupt
+bind shows the physical INTID, the virtual one it was bound to, and the
+generation — and the **whole** observation manifest is re-read and published as
+`src H`. Nothing is moving, so those reads are all of one instant, with no torn
+value and no writer racing the reader. This is the one place the S layer is
+exact.
 
 Paths on the board that can be stopped on are drawn solid and legended **M**.
 A pulse there is not a sample or a log line; it is the event.
@@ -336,10 +338,11 @@ Things worth knowing:
 
 `nova workbench serve <demo> --verify`, or the `검증` checkbox, streams the
 verification scenario: each carried step appears in the event log as its index,
-the step count, and what the step was — a console pattern, a reading, an event
-waited for, a walk, a command. The session ends with a `verify-pass` badge
-carrying how many steps were carried of how many, or a `verify-fail` badge
-carrying the failure kind and the step that failed.
+the step count, what the step was — a console pattern, a reading, an event
+waited for, a walk, a command — and how long it waited, which is what names the
+slow step in a scenario that ran long. The session ends with a `verify-pass`
+badge or a `verify-fail` badge, both carrying how many steps were carried of
+how many, and the failing one also the failure kind and the step that failed.
 
 ### The CLI twin
 
@@ -631,10 +634,10 @@ naming what it draws and what it reads:
 
 ```js
 {
-  id: "timer",
-  title: "Timer",
-  draws: ["timer.queue", "timer.programmed", "timer.cntvoff"],
-  reads: ["vm.generation"],        // another drawer's topic, joined in here
+  id: "ctx",
+  title: "Context",
+  draws: ["ctx.trap", "ctx.el1", "ctx.syndrome"],
+  reads: ["sched.valid"],          // another drawer's topic, joined in here
   render(body) { /* build DOM from at(topic) cursors */ },
 }
 ```
@@ -643,10 +646,9 @@ Rules the tests enforce and the design assumes:
 
 - **Latest-value re-render** — drawers re-render from a `topic → latest value`
   map, so frame order and rate never matter. Never accumulate frames.
-- **Thin client** — subsystem vocabulary (badges, severities) arrives in the
-  topo snapshot; UI modules must not hard-code taxonomy strings, which
-  `web/eslint.config.mjs` refuses by reading the badge list from `taxonomy.py`
-  itself.
+- **Thin client** — subsystem vocabulary (badges) arrives in the topo snapshot;
+  UI modules must not hard-code taxonomy strings, which `web/eslint.config.mjs`
+  refuses by reading the badge list from `taxonomy.py` itself.
 - **`draws` and `reads` are both interest.** Whatever an override does not
   draw follows it as a generic table of the shape the bridge sent, and a topic
   it reads from another drawer has to be declared or the drawer sits still on

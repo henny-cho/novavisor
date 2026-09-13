@@ -185,7 +185,6 @@ export function createPanels({ tabs, host }) {
       id: "timer",
       title: "Timer",
       draws: ["timer.queue", "timer.programmed", "timer.cntvoff"],
-      reads: ["vm.generation"],
       render(body) {
         const programmed = at("timer.programmed");
         at("timer.queue")
@@ -208,14 +207,13 @@ export function createPanels({ tabs, host }) {
             );
             if (!slots.rows().length) body.append(el("div", "pnote", "armed 슬롯 없음"));
           });
-        const generation = at("vm.generation");
         body.append(section("per-VM"));
         body.append(
           table(
-            ["vm", "cntvoff", "generation"],
+            ["vm", "cntvoff"],
             at("timer.cntvoff")
               .rows()
-              .map((offset, vm) => [plain(vm), offset, generation.get(vm)]),
+              .map((offset, vm) => [plain(vm), offset]),
           ),
         );
       },
@@ -479,10 +477,10 @@ export function createPanels({ tabs, host }) {
       const draws = override?.draws ?? [];
       const bundle = topics.filter((topic) => drawerOf(topic) === id);
       /* Redrawn for its own bundle and for whatever an override reads
-         elsewhere: Context reads sched.valid and Timer vm.generation,
-         and a drawer watching only its prefix would sit still on the
-         frame that moved them. The moved badge and the placement read
-         this same union — a closed drawer has to count right too. */
+         elsewhere — Context reads sched.valid — since a drawer watching
+         only its prefix would sit still on the frame that moved it. The
+         moved badge and the placement read this same union, so a closed
+         drawer counts right too. */
       const watch = [...new Set([...bundle, ...draws, ...(override?.reads ?? [])])];
       drawers.set(id, {
         title: override?.title ?? id,

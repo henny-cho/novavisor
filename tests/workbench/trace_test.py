@@ -777,3 +777,11 @@ class CatalogueTest(unittest.TestCase):
             if entry["id"] == "trace.gap":
                 self.assertFalse(entry["stop"])
                 self.assertTrue(entry["span"])
+
+    def test_the_wire_catalogue_leaves_the_argument_registers_behind(self):
+        """A breakpoint reads them off the entry itself, at the moment it
+        lands; nothing on the far side of the wire has ever named one."""
+        self.assertTrue(events.BY_ID["vgic.bind"].args)
+        for entry in events.catalogue():
+            with self.subTest(event=entry["id"]):
+                self.assertNotIn("args", entry)

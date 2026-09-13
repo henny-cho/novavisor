@@ -17,7 +17,7 @@ import unittest
 from pathlib import Path
 
 from novakit.image import abi
-from novakit.services.workbench import recording, trace
+from novakit.services.workbench import events, recording, trace
 from novakit.services.workbench.protocol import (
     Clock,
     Envelopes,
@@ -25,7 +25,6 @@ from novakit.services.workbench.protocol import (
     Topic,
 )
 from novakit.services.workbench.store import FrameWindow, StateStore
-from tests import REPO
 from tests.support import bridge as support
 
 
@@ -813,60 +812,53 @@ class CursorTest(Recorded):
         self.assertTrue(any("only a replay" in text for text in said), said)
 
 
-FIXTURE = REPO / "tests" / "fixtures" / "workbench-run"
+class WrittenRunTest(Recorded):
+    """A whole run built by the writer rather than kept as a file.
 
-
-class FixtureTest(unittest.TestCase):
-    """The bridge, against a real run that cannot change.
-
-    A recorded run is a deterministic input to the layers that otherwise
-    need QEMU to exercise: the window protocol, gap placement, the fold
-    and the seek. Only the browser stays outside.
-
-    Recorded from demo 10 (two guests, console multiplexing) because it
-    exercises more of the wire than a single-guest run: two console
-    tabs, both vCPU slots, and a trace stream busy enough to have shape.
+    The loader takes one version, so a recording stored in the tree has
+    a version somebody types. Written here, both the version and the
+    shape are whatever the code produces.
     """
 
-    @classmethod
-    def setUpClass(cls):
-        cls.recorded = recording.load(FIXTURE)
+    def kinds(self) -> list[trace.Record]:
+        """One record of every kind the catalogue names."""
+        return [
+            trace.Record(ts=10_000 + index, code=entry.code, cpu=index % 2,
+                         a=index + 1, b=1_000, c=5_000)
+            for index, entry in enumerate(events.EVENTS)
+        ]
 
-    def test_the_history_answers_windows_over_it(self):
-        from novakit.services.workbench.history import History
+    def written(self) -> recording.Recording:
+        """The run a bridge writes: a world, two topics first read at
+        different moments, and the whole record family."""
+        recorder = recording.Recorder(self.directory, {"freq_hz": 62_500_000})
+        recorder.frame({"seq": 1, "topic": "topo", "kind": "snapshot", "ts": 0,
+                        "src": "bridge", "data": {"demo": "10_console_mux"}})
+        recorder.frame({"seq": 2, "topic": "sched.cpu", "kind": "snapshot", "ts": 10,
+                        "src": "S", "data": {"values": [{"current": 0}]}})
+        recorder.frame({"seq": 3, "topic": "dev.dma", "kind": "snapshot", "ts": 30,
+                        "src": "S", "data": {"values": {"count_": 1}}})
+        recorder.drained(self.kinds())
+        recorder.close()
+        return recording.load(self.directory)
 
-        held = History(1 << 16)
-        held.freq_hz = self.recorded.meta["freq_hz"]
-        held.append(self.recorded.records)
-        span = held.span()
-        self.assertEqual(span.count, len(self.recorded.records))
-        # A window over the middle holds fewer records than the whole,
-        # and every one of them is inside it.
-        middle = (span.first + span.last) // 2
-        inside = held.window(span.first, middle)
-        self.assertLess(len(inside), span.count)
-        self.assertTrue(all(span.first <= r.ts <= middle for r in inside))
+    def test_the_version_a_reader_takes_is_the_one_the_writer_stamped(self):
+        """Nothing between the two names a number: the writer stamps
+        what it wrote and the loader refuses anything else."""
+        run = self.written()
+        self.assertEqual(run.meta["v"], recording.VERSION)
+        self.assertTrue(run.meta["complete"])
 
-    def test_the_fold_is_a_function_of_the_stream(self):
-        """On a real run, not a constructed one: the same answer at
-        every checkpoint however finely the stream was folded."""
-        coarse = recording.Recording(
-            directory=FIXTURE, meta=self.recorded.meta, frames=self.recorded.frames,
-            marks=recording.fold(self.recorded.frames, every=len(self.recorded.frames) + 1),
-        )
-        for mark in self.recorded.marks:
-            with self.subTest(at=mark.at):
-                self.assertEqual(self.recorded.at(mark.ts), coarse.at(mark.ts))
+    def test_every_record_kind_survives_the_file(self):
+        """A file holds whichever kinds its run happened to emit; the
+        catalogue is what the writer has to carry unchanged."""
+        run = self.written()
+        self.assertEqual({record.code for record in run.records}, set(events.BY_CODE))
+        self.assertEqual(run.records, self.kinds())
 
     def test_a_cursor_late_in_the_run_reads_more_than_one_early(self):
-        first, last = self.recorded.frames[0]["ts"], self.recorded.frames[-1]["ts"]
-        self.assertLess(len(self.recorded.at(first)), len(self.recorded.at(last)))
-
-    def test_every_record_the_run_holds_decodes_or_is_a_gap(self):
-        """A record nothing can name reaches the strip as a bare number
-        and is skipped without a word."""
-        from novakit.services.workbench import events
-
-        for record in self.recorded.records:
-            with self.subTest(code=record.code):
-                self.assertIn(record.code, events.BY_CODE)
+        """Topics are read as the run produces them, so a moment early
+        in it holds fewer readings than its end."""
+        run = self.written()
+        first, last = run.frames[0]["ts"], run.frames[-1]["ts"]
+        self.assertLess(len(run.at(first)), len(run.at(last)))

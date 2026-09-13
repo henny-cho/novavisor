@@ -553,7 +553,13 @@ function onLife(ts, data) {
       boardView.stopped(ts, data);
       const args = data.args && typeof data.args === "object" ? data.args : {};
       const named = Object.keys(args).map((key) => `${key}=${args[key]}`).join(" ");
-      events.addNotice(ts, `정지 ${data.event || data.pc || ""}${named ? ` — ${named}` : ""}`);
+      /* Which core it stopped on: on an SMP machine the other cores were
+         somewhere else, and the stop is evidence about this one. */
+      const where = data.thread ? ` · thread ${data.thread}` : "";
+      events.addNotice(
+        ts,
+        `정지 ${data.event || data.pc || ""}${where}${named ? ` — ${named}` : ""}`,
+      );
       stepper.say(data.event ? `정지 · ${data.event}` : "정지");
       break;
     }
@@ -623,10 +629,14 @@ function onLife(ts, data) {
     case "verify-pass":
       events.addNotice(ts, `검증 통과 ${data.carried ?? "?"}/${data.total ?? "?"}`);
       break;
+    /* How far it got before it failed, the pair the pass badge already
+       carries: a failure at step 2 and one at step 20 read differently. */
     case "verify-fail":
       events.addNotice(
         ts,
-        `검증 실패 (${data.failure || "?"}${data.step ? ` — ${data.step}` : ""})`,
+        `검증 실패 ${data.carried ?? "?"}/${data.total ?? "?"} (${data.failure || "?"}${
+          data.step ? ` — ${data.step}` : ""
+        })`,
         { severity: "CRIT" },
       );
       break;

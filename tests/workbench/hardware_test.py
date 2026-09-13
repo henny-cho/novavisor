@@ -49,6 +49,21 @@ class BoardMapTest(unittest.TestCase):
             with self.subTest(block=block):
                 self.assertEqual(blocks[block]["base"], values[define])
 
+    def test_a_device_block_is_labelled_by_its_compatible_and_keeps_its_streams(self):
+        """The compatible became the label; carried on past that it was a
+        second copy nobody read. The streams stay: they are what ties a
+        device to a row of the SMMU stream table."""
+        inventory = hardware.load_inventory(hardware.inventory_path(self.board))
+        devices = {str(entry["id"]): entry for entry in inventory["devices"]}
+        blocks = [block for block in self.map["blocks"] if block["id"] in devices]
+        self.assertTrue(blocks)
+        for block in blocks:
+            device = devices[block["id"]]
+            with self.subTest(block=block["id"]):
+                self.assertNotIn("compatible", block)
+                self.assertEqual(block["label"], device["compatible"].split(",")[-1].upper())
+                self.assertEqual(block["streams"], device["streams"])
+
     def test_one_redistributor_frame_per_pe(self):
         # The UI places GICR·n under pCPUn by index alone; a frame count
         # that disagrees with the CPU count would mislabel every frame.

@@ -28,34 +28,6 @@ const DRAG_FLOOR = 220;
 /* Below this the console has no room left worth sharing. */
 const SHORT_WINDOW = 800;
 
-/* S-layer topics the board reads, each with the sections it can change.
-
-   A snapshot repaints those sections and nothing else. Twenty scheduler
-   samples a second must not rewrite the address strip, and a topic that
-   paints nothing has no business being subscribed at all.
-
-   The rates are not here. How often a topic is sampled is the
-   manifest's to state, and it arrives in `topo.observations`. */
-const TOPICS = {
-  "sched.cpu": ["routes", "vcpus", "cores"],
-  "sched.run": ["vcpus"],
-  "sched.affinity": ["vcpus"],
-  "sched.slice": ["sched"],
-  "timer.queue": ["timer"],
-  "timer.programmed": ["cores"],
-  "vm.generation": ["guests"],
-  "ctx.syndrome": ["trap"],
-  "vgic.lr": ["lrs"],
-  "vgic.token": ["vgic"],
-  "vgic.capacity": ["lrs", "vgic"],
-  "vgic.dist": ["vgic"],
-  "vgic.resident": ["lrs", "routes"],
-  "dev.uart": ["vuart"],
-  "dev.dma": ["devices"],
-  "ivc.page": ["ivc"],
-  "smp.online": ["routes", "cores"],
-};
-
 /* A list register's state, as a mark that survives being printed in
    one colour. The bridge names the states; these are the marks. */
 const LR_GLYPH = {
@@ -957,9 +929,11 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
       const node = staticBlock(band, block, span);
       const body = el("div", "bv");
       node.append(body);
-      if (block.intid !== undefined) {
-        node.querySelector(".bm").textContent += ` · INTID ${block.intid}`;
-      }
+      const meta = node.querySelector(".bm");
+      if (block.intid !== undefined) meta.textContent += ` · INTID ${block.intid}`;
+      /* The stream IDs it issues under: the one fact tying a device to a
+         row of the SMMU stream table, and to the regime that row roots. */
+      if (block.streams?.length) meta.textContent += ` · S${block.streams.join("/")}`;
       if (block.owner === "el2") {
         body.textContent = "호스트 콘솔 — EL2 소유";
       } else if (block.device_id !== undefined) {
@@ -1413,29 +1387,39 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     }
   }
 
-  /* The sections a snapshot can repaint, and the only place a topic is
-     turned into work. Adding a value to the board means adding a
-     painter here and naming it in TOPICS — never widening an existing
-     one until it redraws the whole machine again. */
+  /* Every section a snapshot can repaint: what redraws it, and the
+     S-layer topics whose arrival dirties it. Twenty scheduler samples a
+     second must not rewrite the address strip, so a new value means a
+     new entry here — never widening an existing one. */
   const painters = {
-    routes: renderRoutes,
-    guests: renderGuestMeta,
-    vcpus: renderVcpus,
-    trap: renderTrap,
-    sched: renderSched,
-    timer: renderTimer,
-    vuart: renderVuart,
-    ivc: renderIvc,
-    cores: renderCores,
-    lrs: renderLrs,
-    vgic: renderVgic,
-    devices: renderDevices,
+    routes: { render: renderRoutes, topics: ["sched.cpu", "vgic.resident", "smp.online"] },
+    guests: { render: renderGuestMeta, topics: ["vm.generation"] },
+    vcpus: { render: renderVcpus, topics: ["sched.cpu", "sched.run", "sched.affinity"] },
+    trap: { render: renderTrap, topics: ["ctx.syndrome"] },
+    sched: { render: renderSched, topics: ["sched.slice"] },
+    timer: { render: renderTimer, topics: ["timer.queue"] },
+    vuart: { render: renderVuart, topics: ["dev.uart"] },
+    ivc: { render: renderIvc, topics: ["ivc.page"] },
+    cores: { render: renderCores, topics: ["sched.cpu", "timer.programmed", "smp.online"] },
+    lrs: { render: renderLrs, topics: ["vgic.lr", "vgic.capacity", "vgic.resident"] },
+    vgic: { render: renderVgic, topics: ["vgic.token", "vgic.capacity", "vgic.dist"] },
+    devices: { render: renderDevices, topics: ["dev.dma"] },
   };
+
+  /* The table read backwards, once: what a topic's arrival dirties.
+     Sample rates are not the board's; they ride in `topo.observations`. */
+  const dirtiedBy = new Map();
+  for (const [section, painter] of Object.entries(painters)) {
+    for (const topic of painter.topics) {
+      if (!dirtiedBy.has(topic)) dirtiedBy.set(topic, []);
+      dirtiedBy.get(topic).push(section);
+    }
+  }
 
   function paint(sections) {
     if (folded() || !live.routes) return;
     const moved = residency();
-    for (const name of sections) painters[name]();
+    for (const name of sections) painters[name].render();
     /* A vCPU that is nowhere loses its wire until the next switch-in. */
     if (moved) {
       relink();
@@ -1498,7 +1482,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     /* Some topics are read for their value, some only as evidence that a
        path was used, and some for both. `smp.mail` paints nothing and
        still has to arrive, or the crosscall never lights. */
-    accepts: (topic) => topic in TOPICS || byTopic.has(topic),
+    accepts: (topic) => dirtiedBy.has(topic) || byTopic.has(topic),
     /* A path named from somewhere else — a timeline mark, say. The
        board focuses by anchor, so pointing at the path's source is what
        leaves it lit with everything not touching it dimmed; the focus
@@ -1528,7 +1512,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
          animation. Unfolding repaints every section from `latest`, so
          skipping the section tracking while hidden loses nothing. */
       if (folded()) return;
-      for (const section of TOPICS[frame.topic] || []) dirty.add(section);
+      for (const section of dirtiedBy.get(frame.topic) || []) dirty.add(section);
       /* Arrival is the delta. The bridge's change gate only sends a
          topic whose value moved, so there is nothing to compare here. */
       if (byTopic.has(frame.topic)) lit.add(frame.topic);
@@ -1586,7 +1570,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     setUnread(topics) {
       for (const topic of topics || []) {
         if (!latest.delete(topic)) continue;
-        for (const section of TOPICS[topic] || []) dirty.add(section);
+        for (const section of dirtiedBy.get(topic) || []) dirty.add(section);
       }
     },
     clearAll() {

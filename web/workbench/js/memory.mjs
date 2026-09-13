@@ -241,6 +241,9 @@ export function createMemory({ pick, form, input, note, body, request }) {
     const rows = tree.nodes || [];
     const regime = regimes.find((entry) => entry.id === chosen);
     input.placeholder = firstMapped(rows);
+    /* The table the walk started from. A live regime's root is read per
+       answer, so it is a fact about this walk and not about the regime. */
+    if (shown.root) body.append(el("div", "mnote", `뿌리 ${shown.root}`));
     renderRooted(shown.rooted, body);
     renderBeside(shown.beside, body);
     renderThrough(shown.through, shown.probe || {}, body);

@@ -33,6 +33,7 @@ const RUN = {
       },
     ],
     period_us: 2000,
+    slots: 8,
   },
   guests: [{ name: "vm0" }, { name: "vm1" }],
 };
@@ -183,7 +184,9 @@ describe("drive verdict", () => {
     const { drive, root, note } = harness();
     drive.setWorld(RUN);
     press(root, "남기기");
-    assert.equal(note.textContent, "≤2 ms");
+    /* The wait and the ring's depth: the ring refuses when it is full,
+       so the depth is the number a refusal is read against. */
+    assert.equal(note.textContent, "≤2 ms · 8칸");
   });
 
   it("keeps the wait beside what the machine did with it", () => {
@@ -193,11 +196,11 @@ describe("drive verdict", () => {
     drive.answered({ op: "spi", a: 0, b: 33, result: "ok" });
     /* Trailing zeros dropped, interior ones kept: `spi 0 33` names VM 0,
        where `mark 1 0` says nothing the tag did not. */
-    assert.equal(note.textContent, "≤2 ms · spi 0 33 → ok");
+    assert.equal(note.textContent, "≤2 ms · 8칸 · spi 0 33 → ok");
     assert.equal(note.classes.has("bad"), false);
 
     drive.answered({ op: "mark", a: 1, b: 0, result: "refused" });
-    assert.equal(note.textContent, "≤2 ms · mark 1 → refused");
+    assert.equal(note.textContent, "≤2 ms · 8칸 · mark 1 → refused");
     assert.equal(note.classes.has("bad"), true);
   });
 
