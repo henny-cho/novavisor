@@ -564,12 +564,16 @@ function onLife(ts, data) {
       break;
     }
     /* The machine is running toward the stops, at launch and again at
-       every repeat of an 자동 run: the pause a stop reported is over. */
-    case "armed":
+       every repeat of an 자동 run: the pause a stop reported is over. A
+       repeat restates the hold's last arming, so the log says it dimly. */
+    case "armed": {
+      const stops = Array.isArray(data.stops) ? data.stops : [];
+      const again = stepper.armed(stops);
       setPaused(false);
-      stepper.say(`무장 · ${(data.stops || []).join(", ")}`);
-      events.addNotice(ts, `정지 지점 무장 — ${(data.stops || []).join(", ")}`);
+      stepper.say(`무장 · ${stops.join(", ")}`);
+      events.addNotice(ts, `정지 지점 무장 — ${stops.join(", ")}`, { dim: again });
       break;
+    }
     /* The bridge holds the machine for one command, from the click until
        it lets go — after the sweep, and after every repeat. What the
        drive controls may do follows this, not the request they sent. */

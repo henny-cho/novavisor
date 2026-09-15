@@ -324,6 +324,22 @@ describe("stepper", () => {
     assert.equal(kit.abortButton.hidden, true);
   });
 
+  it("knows when an arming only repeats the hold's last one", () => {
+    const kit = harness();
+    kit.at({ phase: "running", halt: { cmd: "run" } });
+
+    /* The first arming of a hold is news; the repeats of an 자동 run
+       restate it; a different stop set is news again. */
+    assert.equal(kit.view.armed(["bind"]), false);
+    assert.equal(kit.view.armed(["bind"]), true);
+    assert.equal(kit.view.armed(["inject"]), false);
+
+    /* A new hold starts afresh, even for the same stops. */
+    kit.at({ halt: null });
+    kit.at({ halt: { cmd: "run" } });
+    assert.equal(kit.view.armed(["inject"]), false);
+  });
+
   it("unpresses 자동 when the bridge refuses it before any hold", () => {
     const kit = harness();
     kit.view.setStops(CATALOGUE);

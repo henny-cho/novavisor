@@ -27,6 +27,7 @@ export function createStepper({
   onNotice,
 }) {
   let autoRunning = false;
+  let lastArmed = null; /* the stops the current hold last armed, as one key */
   /* How far one request may reach is the bridge's to say, and it says so
      in the first frame of every connection. A number invented here to
      hold until then would be the copy this reads from the wire to avoid. */
@@ -58,6 +59,7 @@ export function createStepper({
   function setState(state) {
     const live = String(state.phase) === "running" && !state.replaying;
     const held = Boolean(state.halt);
+    if (!held) lastArmed = null;
     /* 자동 ends with the hold it asked for — or with a machine that is
        gone, or a request the bridge refused before any hold began. */
     if (autoRunning && (!live || !(held || state.pending))) setAuto(false);
@@ -66,6 +68,15 @@ export function createStepper({
     stepButton.disabled = !live || busy;
     autoButton.disabled = !live || (busy && !autoRunning);
     abortButton.hidden = !held;
+  }
+
+  /* Whether an arming restates the last one of the same hold — the
+     repeats of an 자동 run — which the log can then say quietly. */
+  function armed(stops) {
+    const key = stops.join(",");
+    const again = key === lastArmed;
+    lastArmed = key;
+    return again;
   }
 
   /* The choices come from the bridge with the rest of the topology, the
@@ -200,5 +211,5 @@ export function createStepper({
   }
   count();
 
-  return { setState, setStops, setLimits, chosen, say, stopAt, reset };
+  return { setState, setStops, setLimits, chosen, say, stopAt, reset, armed };
 }

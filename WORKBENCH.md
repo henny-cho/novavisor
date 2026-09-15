@@ -219,7 +219,9 @@ let go, after the sweep) rather than remembered from the click: a 다음 사건
 run can outlast its click by minutes, and an 자동 run answers fifty times
 before it ends. 중지 is on screen exactly while there is a hold, whatever
 asked for it — a stop armed at launch and a page reloaded mid-run included —
-and 일시정지 stands down for the same hold.
+and 일시정지 stands down for the same hold. The log keeps every stop of an
+자동 run; the re-arming between them restates the hold's first and is
+written dim.
 
 A stop publishes more than a pause does. The notice names the gdb thread the
 machine stopped on, which on an SMP machine is which core. The event's own
