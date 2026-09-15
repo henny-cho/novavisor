@@ -384,6 +384,7 @@ the same reader the poller uses.
 | Panels show `실측 대기 중` | No session is running yet, or the S provider could not attach. Watch the event log for `snapshot-unavailable` (symbol resolution failed — rebuild the image) |
 | `유실 N` badge | The frame window overflowed (oldest console frames are dropped first); click to reset the counter |
 | Pause rejected (`halt: session is …`) | The pause path needs a RUNNING interactive session with observation surfaces; it is unavailable while building, verifying, or idle |
+| `게스트 구성 불일치: vm0: pa, uart` | The manifest asked for a placement the firmware did not build; the fields named are the ones the machine decided otherwise, and the drawing already follows the machine. A demo that says this on every launch has a manifest to bring current |
 | Port already in use | Another bridge is running; pick `--port` or stop it |
 
 ---

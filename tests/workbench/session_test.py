@@ -625,7 +625,7 @@ class GuestTableTest(unittest.TestCase):
             for frame in self.frames(made)
             if frame["data"].get("phase") == "guests-differ"
         ]
-        self.assertEqual(said, [{"phase": "guests-differ", "guests": ["one"]}])
+        self.assertEqual(said, [{"phase": "guests-differ", "guests": {"one": ["pa"]}}])
 
     def test_agreement_publishes_nothing(self):
         asked = {"name": "one", "vcpus": 1, "pa": 0x8000, "ipa": 0x4000, "size": 0x1000, "uart": "none"}

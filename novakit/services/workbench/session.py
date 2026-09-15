@@ -319,7 +319,7 @@ class Session:
             return
         built = {entry["vm"]: entry for entry in entries if isinstance(entry, dict) and "vm" in entry}
         merged = []
-        differs = []
+        differs: dict[str, list[str]] = {}
         for index, guest in enumerate(asked):
             entry = built.get(index)
             if entry is None:
@@ -336,8 +336,11 @@ class Session:
                 "size": entry.get("size"),
                 "uart": uart,
             }
-            if any(says[key] != guest.get(key) for key in says):
-                differs.append(guest.get("name") or f"vm{index}")
+            # Named per field: a guest's name alone says that the machine
+            # disagreed and leaves the reader to find out where.
+            moved = [key for key in says if says[key] != guest.get(key)]
+            if moved:
+                differs[guest.get("name") or f"vm{index}"] = moved
             merged.append(guest | says)
         if merged == asked:
             return

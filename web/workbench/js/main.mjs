@@ -675,13 +675,15 @@ function onLife(ts, data) {
         severity: "WARN",
       });
       break;
-    case "guests-differ":
-      events.addNotice(
-        ts,
-        `게스트 구성 불일치: ${Array.isArray(data.guests) ? data.guests.join(", ") : "대상 미상"}`,
-        { severity: "WARN" },
-      );
+    /* Which guest, and which of its fields the machine placed otherwise. */
+    case "guests-differ": {
+      const guests = data.guests && typeof data.guests === "object" ? data.guests : {};
+      const said = Object.entries(guests)
+        .map(([name, fields]) => `${name}: ${Array.isArray(fields) ? fields.join(", ") : "?"}`)
+        .join(" · ");
+      events.addNotice(ts, `게스트 구성 불일치: ${said || "대상 미상"}`, { severity: "WARN" });
       break;
+    }
     case "uplink-rejected":
       reported({}); /* a rejected request ends its attempt */
       events.addNotice(ts, `업링크 거부: ${data.reason || "?"}`, { severity: "WARN" });
