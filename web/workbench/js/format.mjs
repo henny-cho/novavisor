@@ -128,30 +128,34 @@ export function sealedFields(data = {}, stops = [], taxonomy = {}, timerSlots = 
   return fields;
 }
 
-/* What the ring depth buys on this host, in the two numbers that set
-   it: how fast the busiest core filled a ring, and how long this
-   process went between looks. Both come measured from the bridge. */
-export function budgetText(budget) {
-  if (!budget.peak_rate) return `링 ${budget.capacity}건`;
-  const rate =
-    budget.peak_rate >= 1000
-      ? `${Math.round(budget.peak_rate / 1000)}k/s`
-      : `${budget.peak_rate}/s`;
-  return `링 ${(budget.horizon_ms / 1000).toFixed(1)}초 @ ${rate} · ${stallText(budget)}`;
-}
-
-/* The worst stall alone cannot say whether it happened once or all the
-   time, so it carries its own band's count and the bridge's total. The
-   band comes from the bridge's ordering — binning an interval into one
-   belongs in a single place. */
-function stallText(budget) {
+/* What the ring depth buys on this host and what its worst stall was
+   made of, as the line and the tooltip of one note. Whether there is a
+   stall to speak of is decided once, here, for both: a tooltip that
+   explained a stall the line had dropped was two decisions disagreeing. */
+export function budgetWords(budget) {
+  const rate = budget.peak_rate;
+  const depth = rate
+    ? `링 ${(budget.horizon_ms / 1000).toFixed(1)}초 @ ${rate >= 1000 ? `${Math.round(rate / 1000)}k/s` : `${rate}/s`}`
+    : `링 ${budget.capacity}건`;
+  const gap = Number(budget.worst_gap_ms) || 0;
+  if (!gap) return { text: depth, title: "" };
+  /* The worst stall alone cannot say whether it happened once or all the
+     time, so it carries its own band's count and the bridge's total; the
+     band comes from the bridge's ordering, which bins in one place. */
   const bands = budget.gaps || {};
   const edges = Object.keys(bands).map(Number);
-  const worst = `최악 정체 ${Math.round(budget.worst_gap_ms)}ms`;
   const looks = edges.reduce((total, edge) => total + bands[edge], 0);
   const band = edges.length ? ` (${bands[Math.max(...edges)]}/${looks})` : "";
-  const share = dominantShare(budget);
-  return share ? `${worst}${band} · ${share}` : `${worst}${band}`;
+  /* One word for whether the stall was the machine's or the instrument's:
+     the largest term as a share of the gap. The three raw terms go to the
+     tooltip; self CPU is process_time, the whole process, so it says so. */
+  const parts = stallParts(budget);
+  const [name, ms] = parts.reduce((most, part) => (part[1] > most[1] ? part : most));
+  const terms = parts.map(([term, value]) => `${term} ${value.toFixed(1)}ms`).join(" · ");
+  return {
+    text: `${depth} · 최악 정체 ${Math.round(gap)}ms${band} · ${name} ${Math.round((ms / gap) * 100)}%`,
+    title: `${terms} (자기 CPU는 드레인 루프가 아닌 프로세스 전체)`,
+  };
 }
 
 /* What the stall was made of. The remainder is time the process was not
@@ -166,25 +170,6 @@ function stallParts(budget) {
     ["GC", gc],
     ["미실행", Math.max(0, gap - cpu - gc)],
   ];
-}
-
-/* Whether the worst stall was the machine's or the instrument's, in one
-   word: the largest term as a share of the gap. */
-function dominantShare(budget) {
-  const gap = Number(budget.worst_gap_ms) || 0;
-  if (!gap) return "";
-  const [name, ms] = stallParts(budget).reduce((most, part) =>
-    part[1] > most[1] ? part : most,
-  );
-  return `${name} ${Math.round((ms / gap) * 100)}%`;
-}
-
-/* The three terms behind that word, raw. Self CPU is process_time — the
-   whole process, not the drain loop alone — so the tip says so. */
-export function stallTitle(budget) {
-  if (!Number(budget.worst_gap_ms)) return "";
-  const terms = stallParts(budget).map(([name, ms]) => `${name} ${ms.toFixed(1)}ms`);
-  return `${terms.join(" · ")} (자기 CPU는 드레인 루프가 아닌 프로세스 전체)`;
 }
 
 /* Element factory: text always lands in textContent, so firmware output

@@ -3,12 +3,11 @@
    much of the stream was lost. */
 
 import {
-  budgetText,
+  budgetWords,
   clockLabel,
   describeStep,
   sealedFields,
   setGuestSlots,
-  stallTitle,
 } from "./format.mjs";
 import { connect } from "./net.mjs";
 import { createBoard } from "./board.mjs";
@@ -751,14 +750,11 @@ function onFrame(frame) {
         const held = data.span.full
           ? `${data.span.n} 레코드 · 지평선 도달`
           : `${data.span.n} 레코드`;
-        const budget = data.budget;
-        setTimelineNote(
-          budget ? `${held} · ${budgetText(budget)}` : held,
-          budget ? stallTitle(budget) : "",
-        );
+        const words = data.budget ? budgetWords(data.budget) : { text: "", title: "" };
+        setTimelineNote(words.text ? `${held} · ${words.text}` : held, words.title);
         /* The declared horizon and the observed stall side by side,
            with the crossing marked. */
-        timelineNote.classList.toggle("over", Boolean(budget?.overrun));
+        timelineNote.classList.toggle("over", Boolean(data.budget?.overrun));
       }
       if (data.dropped) noteLoss(data.dropped);
       break;

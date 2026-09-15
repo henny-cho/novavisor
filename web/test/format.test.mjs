@@ -7,13 +7,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  budgetText,
+  budgetWords,
   describeStep,
   ecName,
   elapsed,
   micros,
   sealedFields,
-  stallTitle,
 } from "../workbench/js/format.mjs";
 
 describe("describeStep", () => {
@@ -129,39 +128,49 @@ const BUDGET = {
 
 const msTerms = (title) => [...title.matchAll(/([\d.]+)ms/gu)].map((hit) => Number(hit[1]));
 
-describe("budgetText", () => {
+describe("budgetWords", () => {
   it("names the term the worst stall mostly was", () => {
-    assert.equal(budgetText(BUDGET), "링 0.3초 @ 12k/s · 최악 정체 664ms (1/5) · 자기 CPU 99%");
+    assert.equal(
+      budgetWords(BUDGET).text,
+      "링 0.3초 @ 12k/s · 최악 정체 664ms (1/5) · 자기 CPU 99%",
+    );
   });
 
   it("does not claim self CPU for a stall that was the host's", () => {
     const host = { ...BUDGET, worst_gap_ms: 57.0, worst_cpu_ms: 2.1, worst_gc_ms: 0.0 };
-    const text = budgetText(host);
+    const { text } = budgetWords(host);
     assert.match(text, /최악 정체 57ms \(1\/5\) · 미실행 96%$/u);
     assert.doesNotMatch(text, /자기 CPU/u);
   });
 
-  it("reads as a ring depth alone before a rate has been measured", () => {
+  it("reads as a ring depth alone before anything has been measured", () => {
     const fresh = { capacity: 4096, peak_rate: 0, worst_gap_ms: 0, gaps: {} };
-    assert.equal(budgetText(fresh), "링 4096건");
-    assert.equal(stallTitle(fresh), "");
+    assert.deepEqual(budgetWords(fresh), { text: "링 4096건", title: "" });
   });
-});
 
-describe("stallTitle", () => {
+  it("decides once whether there is a stall, for the line and the tooltip", () => {
+    /* The first looks of a run: a stall measured before a rate has been.
+       The line used to drop it on the rate, and the tooltip to explain
+       it on the gap — two gates on one budget, disagreeing. */
+    const early = { capacity: 4096, peak_rate: 0, worst_gap_ms: 12.0, worst_cpu_ms: 1.0, gaps: { 50: 1 } };
+    const words = budgetWords(early);
+    assert.equal(words.text, "링 4096건 · 최악 정체 12ms (1/1) · 미실행 92%");
+    assert.deepEqual(msTerms(words.title), [1, 0, 11]);
+  });
+
   it("breaks the gap into three terms that add back up to it", () => {
-    const terms = msTerms(stallTitle(BUDGET));
+    const terms = msTerms(budgetWords(BUDGET).title);
     assert.deepEqual(terms, [659.4, 1.2, 3.4]);
     assert.equal(terms.reduce((sum, ms) => sum + ms, 0), BUDGET.worst_gap_ms);
   });
 
   it("shows no negative remainder when the three round apart", () => {
     const tight = { ...BUDGET, worst_gap_ms: 5.0, worst_cpu_ms: 4.9, worst_gc_ms: 0.2 };
-    assert.deepEqual(msTerms(stallTitle(tight)), [4.9, 0.2, 0]);
+    assert.deepEqual(msTerms(budgetWords(tight).title), [4.9, 0.2, 0]);
   });
 
   it("says self CPU is the whole process", () => {
-    assert.match(stallTitle(BUDGET), /자기 CPU는 드레인 루프가 아닌 프로세스 전체/u);
+    assert.match(budgetWords(BUDGET).title, /자기 CPU는 드레인 루프가 아닌 프로세스 전체/u);
   });
 });
 
