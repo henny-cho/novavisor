@@ -57,6 +57,11 @@ RECORDS = "trace.bin"
 # The topic carrying the world, spelled once. This file distinguishes
 # readings from the world in three places.
 TOPO = Topic.TOPO.value
+LIFE = Topic.LIFE.value
+
+
+def _phase(frame: dict) -> str:
+    return str((frame.get("data") or {}).get("phase", ""))
 
 
 class Unreadable(RuntimeError):
@@ -71,10 +76,9 @@ class Unreadable(RuntimeError):
 def _named(world: dict | None) -> dict:
     """The demo and variant a topology frame names, or nothing.
 
-    Called when the recorder learns which run it is following, which is
-    the only moment the world and the run agree: a demo's topology is
-    published while the previous run is still current, so neither the
-    launch target nor the last topology in a file names the run reliably.
+    Read when the recorder learns which run it is following, off the
+    topology that run published — not the target the bridge was launched
+    with, which names only the first run of a session.
 
     Both fields travel together — a variant belongs to the demo beside it.
     """
@@ -107,11 +111,12 @@ class Recorder:
             # Refused rather than opened with "w". The meta written at
             # open is what makes a killed recording visible here.
             raise FileExistsError(f"{self.root} already holds a recording")
-        self._meta = dict(meta or {})
+        # What the recording as a whole knows; each run's file starts from
+        # it and learns its own id, clock and seal as the run goes.
+        self._base = dict(meta or {})
         self._run = 0  # the machine being recorded; 0 is "none yet"
         self._index = 0
-        # The last topology frame seen, carried across a roll by _open.
-        self._world: dict | None = None
+        self._world: dict | None = None  # the last topology frame seen
         self.written: list[Path] = []
         self._open()
 
@@ -123,30 +128,18 @@ class Recorder:
         self._records = (self.directory / RECORDS).open("wb")
         self._pending: list[str] = []
         self._bytes = bytearray()
+        self._meta = dict(self._base)
         self._started = datetime.now(UTC).isoformat(timespec="seconds")
         self._write_meta(complete=False)
-        if self._world is not None:
-            # A run's topology is published during the select that builds
-            # it, before the launch bumps the run id this rolls on, so it
-            # lands in the previous run's file and the new one opens with
-            # no world at all. Re-emitted verbatim: minting a fresh
-            # envelope would consume a sequence number that live clients
-            # never receive and read as a gap.
-            self.frame(self._world)
 
     def for_run(self, run_id: int) -> None:
-        """Follow the machine, rolling to a new directory on a restart.
+        """Name the run this file follows, once the launch has numbered it.
 
-        The first launch does not roll: the topology, the build and the
-        launch itself are that run's opening, not a recording of their
-        own. A machine replacing a machine does, because that is where
-        the guest clock restarts.
+        The roll itself happened at the run's opening: by the time the id
+        exists, the topology the run published is already in this file.
         """
         if run_id == self._run:
             return
-        if self._run:
-            self.close()
-            self._open()
         self._run = run_id
         self.note(run_id=run_id, **_named(self._world))
 
@@ -163,6 +156,12 @@ class Recorder:
         self._write_meta(complete=False)
 
     def frame(self, frame: dict) -> None:
+        # A run opens with its build, ahead of the topology it publishes
+        # and the launch that numbers it — so a file holding a run already
+        # rolls here, and the new run's opening lands in its own file.
+        if self._run and frame.get("topic") == LIFE and _phase(frame) == "building":
+            self.close()
+            self._open()
         self._pending.append(json.dumps(frame, ensure_ascii=False))
         if frame.get("topic") == TOPO:
             self._world = frame

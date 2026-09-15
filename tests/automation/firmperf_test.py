@@ -39,10 +39,12 @@ def record(root: Path, runs: list[tuple[dict, list[trace.Record]]], *, image: st
     """A set of runs on disk, written the way a measurement writes one.
 
     One recorder rolling from run to run, because that is what the
-    bridge does: a directory per machine, numbered in order.
+    bridge does: a directory per machine, opened at its build and
+    numbered in order.
     """
     recorder = recording.Recorder(root, {"demo": "test", "board": "qemu_virt"})
     for index, (sealed, records) in enumerate(runs, 1):
+        recorder.frame({"topic": "life", "seq": index, "ts": index, "data": {"phase": "building"}})
         recorder.for_run(index)
         recorder.frame(
             {"topic": "topo", "seq": index, "ts": index, "data": {"demo": "test", "image": image}}

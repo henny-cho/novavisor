@@ -52,7 +52,10 @@ nova workbench serve [DEMO] [--host ADDR] [--port N] [--variant NAME] [--verify]
 - `--verify` — run the demo's verification scenario instead of an interactive
   session, streaming each step into the UI.
 - `--record` — write the run to a directory exactly as the wire carried it;
-  `nova workbench replay DIR` serves it back with no QEMU and no image.
+  `nova workbench replay DIR` serves it back with no QEMU and no image. Each
+  run gets its own `run-N` directory, opened where the run opens — at its
+  build — so a run's topology, launch and seal are all in one file and a
+  restarted machine's clock never runs backwards inside one.
 - One QEMU session per bridge. Run several bridges on different ports if you
   need parallel targets.
 

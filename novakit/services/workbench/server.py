@@ -764,11 +764,9 @@ class Bridge:
             await asyncio.sleep(FLUSH_INTERVAL_SECONDS)
             if self._recorder is not None:
                 # Ahead of the connection check: recording with nobody
-                # watching is the ordinary case.
-                #
-                # And here rather than at the tracer's attach, so a
-                # restart is noticed before the new machine's first
-                # frame lands in the old machine's file.
+                # watching is the ordinary case. The run's id reaches its
+                # meta here; the roll happens where the run opens, on the
+                # building frame the recorder sees as it is published.
                 self._recorder.for_run(self.session.run_id)
                 self._recorder.flush()
             if not self._connections:

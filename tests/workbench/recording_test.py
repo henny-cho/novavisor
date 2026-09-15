@@ -35,6 +35,14 @@ def records(count: int, first: int = 100) -> list[trace.Record]:
     ]
 
 
+def life(seq: int, phase: str) -> dict:
+    return {"seq": seq, "topic": "life", "kind": "event", "ts": seq, "data": {"phase": phase}}
+
+
+def topo(seq: int, demo: str, **data) -> dict:
+    return {"seq": seq, "topic": "topo", "kind": "snapshot", "ts": seq, "data": {"demo": demo, **data}}
+
+
 class Recorded(unittest.TestCase):
     """A directory to record into, and a UI root to serve a bridge from.
 
@@ -139,9 +147,11 @@ class RoundTripTest(Recorded):
         nothing about it until somebody replays it.
         """
         recorder = recording.Recorder(self.directory, {})
+        recorder.frame(life(1, "building"))
         recorder.for_run(1)
         recorder.drained(records(10, first=1_000))
-        recorder.for_run(2)  # the machine restarted
+        recorder.frame(life(2, "building"))  # the machine restarted
+        recorder.for_run(2)
         recorder.drained(records(10, first=10))
         recorder.close()
 
@@ -158,51 +168,69 @@ class RoundTripTest(Recorded):
             self.assertEqual(stamps, sorted(stamps))
 
     def test_the_first_launch_does_not_start_a_second_recording(self):
-        """The frames before it — the topology, the build, the launch —
+        """The frames before it — the build, the topology, the launch —
         are that run's opening, not a recording of their own."""
         recorder = recording.Recorder(self.directory, {})
-        recorder.frame({"seq": 1, "topic": "topo", "kind": "snapshot", "ts": 0, "data": {}})
+        recorder.frame(life(1, "building"))
+        recorder.frame(topo(2, "01_hello"))
         recorder.for_run(1)
-        recorder.for_run(1)  # every flush tick asks; only a change rolls
+        recorder.for_run(1)  # every flush tick asks; only a change is noted
         recorder.close()
         self.assertEqual([child.name for child in self.directory.iterdir()], ["run-1"])
-        self.assertEqual(len(recording.load(self.directory).frames), 1)
+        self.assertEqual(len(recording.load(self.directory).frames), 2)
 
-    def test_a_rolled_run_opens_with_the_world_it_is_a_recording_of(self):
-        """A run's own description is published while the previous run is
-        still the current one: a select builds and publishes the new
-        topology, and only the launch that follows bumps the id this
-        rolls on. On a two-demo session the second demo's world lands in
-        the first demo's file and run-2 holds no topology at all, which
-        replays as the empty pickable world with no guests.
+    def test_a_run_opens_its_own_file_where_it_opens(self):
+        """A run opens with its build, publishes its topology, and only
+        the launch after that numbers it. Rolling on the number put a
+        run's opening in the previous run's file, where a replay ended on
+        a world with no machine behind it; rolling on the build puts each
+        run's opening — build, world, launch — in its own file, verbatim.
         """
         recorder = recording.Recorder(self.directory, {"demo": "01_hello"})
-        recorder.frame({"seq": 1, "topic": "topo", "kind": "snapshot", "ts": 0,
-                        "data": {"demo": "01_hello", "guests": [{"name": "hello"}]}})
+        recorder.frame(life(1, "building"))
+        recorder.frame(topo(2, "01_hello", guests=[{"name": "hello"}]))
         recorder.for_run(1)
-        recorder.frame({"seq": 2, "topic": "console", "kind": "event", "ts": 1, "data": {}})
-        # The reader picks a second demo: prepared, published, and only
-        # then launched.
-        recorder.frame({"seq": 3, "topic": "topo", "kind": "snapshot", "ts": 2,
-                        "data": {"demo": "02_timer", "guests": [{"name": "timer"}]}})
+        recorder.frame({"seq": 3, "topic": "console", "kind": "event", "ts": 3, "data": {}})
+        recorder.frame(life(4, "exited"))
+        # The reader picks a second demo: built, published, then launched.
+        recorder.frame(life(5, "building"))
+        recorder.frame(topo(6, "02_timer", guests=[{"name": "timer"}]))
         recorder.for_run(2)
         recorder.close()
 
+        first = recording.load(self.directory / "run-1")
         second = recording.load(self.directory / "run-2")
-        world = [frame for frame in second.frames if frame["topic"] == "topo"]
-        self.assertEqual([frame["data"]["demo"] for frame in world], ["02_timer"])
-        # Verbatim, not minted here: a fresh envelope would burn a
-        # sequence number every live client reads as a hole.
-        self.assertEqual(world[0]["seq"], 3)
+        self.assertEqual([frame["seq"] for frame in first.frames], [1, 2, 3, 4])
+        self.assertEqual([frame["seq"] for frame in second.frames], [5, 6])
+        world = [frame["data"]["demo"] for frame in second.frames if frame["topic"] == "topo"]
+        self.assertEqual(world, ["02_timer"])
+
+    def test_a_new_file_starts_with_none_of_the_previous_runs_facts(self):
+        """The id, the clock and the seal are a run's own. Carried over,
+        a run killed before its seal replayed as sealed by the run before
+        it — the loader seals from exactly these fields."""
+        recorder = recording.Recorder(self.directory, {"host": "ci"})
+        recorder.frame(life(1, "building"))
+        recorder.for_run(1)
+        recorder.note(freq_hz=62_500_000, producer_dead=True, tail_drained=True, absent=False)
+        recorder.frame(life(2, "building"))
+        recorder.close()
+
+        first = recording.load(self.directory / "run-1").meta
+        second = recording.load(self.directory / "run-2").meta
+        self.assertEqual((first["run_id"], first["tail_drained"]), (1, True))
+        for name in ("run_id", "freq_hz", "producer_dead", "tail_drained", "absent"):
+            self.assertNotIn(name, second, name)
+        self.assertEqual(second["host"], "ci")  # what the recording knew as a whole
 
     def test_a_run_is_named_by_the_world_it_recorded(self):
-        """Not by the target the bridge was launched with. Those agree
-        only until somebody picks a second demo, after which the launch
-        names a run that ended — and both files claimed the first."""
+        """Not by the target the bridge was launched with, which names
+        only the first run of a session."""
         recorder = recording.Recorder(self.directory, {"demo": "01_hello"})
+        recorder.frame(life(1, "building"))
         recorder.for_run(1)
-        recorder.frame({"seq": 1, "topic": "topo", "kind": "snapshot", "ts": 0,
-                        "data": {"demo": "02_timer", "variant": "smp"}})
+        recorder.frame(life(2, "building"))
+        recorder.frame(topo(3, "02_timer", variant="smp"))
         recorder.for_run(2)
         recorder.close()
 
@@ -214,7 +242,9 @@ class RoundTripTest(Recorded):
         """`--record DIR` leaves a directory of runs, so the thing a
         reader has in hand is as often the root as a run."""
         recorder = recording.Recorder(self.directory, {})
+        recorder.frame(life(1, "building"))
         recorder.for_run(1)
+        recorder.frame(life(2, "building"))
         recorder.for_run(2)
         recorder.close()
         self.assertEqual(recording.load(self.directory).meta["run_id"], 2)
@@ -228,6 +258,7 @@ class RoundTripTest(Recorded):
         """
         recorder = recording.Recorder(self.directory, {})
         for run_id in range(1, 11):
+            recorder.frame(life(run_id, "building"))
             recorder.for_run(run_id)
         recorder.close()
 
