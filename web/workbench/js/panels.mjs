@@ -689,9 +689,9 @@ export function createPanels({ tabs, host }) {
       latest.set(frame.topic, {
         value: data.values,
         ts: frame.ts,
-        /* The publisher's counter for this slot. Absent from a
-           provider with no publisher behind it, and absent is not
-           zero. */
+        /* The firmware clock this reading is of: the publisher's stamp
+           for a polled copy, the stop's floor for a halt sweep. Absent
+           when neither is known, and absent is not zero. */
         at: typeof data.ts === "number" ? data.ts : undefined,
         src: frame.src,
       });

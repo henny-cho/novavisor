@@ -1309,6 +1309,46 @@ class HaltFlightTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bridge._live_state()["halt"], {"cmd": "run"})
 
 
+class StopFloorTest(unittest.IsolatedAsyncioTestCase):
+    """A sweep reads raw addresses the firmware never stamped. The stop's
+    instant is unreadable too, so every reading of a stop carries the
+    freshest firmware clock the frozen memory holds — one value, a floor."""
+
+    class Swept:
+        def __init__(self, newest: int | None):
+            self.newest = newest
+
+        def sweep(self):
+            return [(Obs(topic="sched.cpu"), [1, 2])]
+
+        def newest_stamp(self):
+            return self.newest
+
+    async def stop(self, ring: int | None, slot: int | None) -> list[dict]:
+        bridge = support.bridge()
+        service = bridge._halt_service
+        service._newest_ts = lambda: ring
+
+        async def poller():
+            return self.Swept(slot)
+
+        service._ensure_poller = poller
+        await service.sweep_to_panels(Held())
+        return [frame for frame in bridge.store.drain() if frame["kind"] == "snapshot"]
+
+    async def test_every_reading_of_a_stop_carries_the_same_floor(self):
+        for ring, slot, expected in ((70, 40, 70), (30, 40, 40), (None, 40, 40), (70, None, 70)):
+            with self.subTest(ring=ring, slot=slot):
+                snapshots = await self.stop(ring, slot)
+                self.assertEqual({frame["topic"] for frame in snapshots}, {"sysreg", "sched.cpu"})
+                self.assertEqual({frame["data"]["ts"] for frame in snapshots}, {expected})
+
+    async def test_no_clock_means_no_stamp_rather_than_zero(self):
+        snapshots = await self.stop(None, None)
+        self.assertEqual(len(snapshots), 2)
+        self.assertTrue(all("ts" not in frame["data"] for frame in snapshots))
+
+
 @unittest.skipUnless(importlib.util.find_spec("websockets"), "websockets is not installed")
 class ServerSmokeTest(unittest.IsolatedAsyncioTestCase):
     """Runs only where the pinned websockets package is installed."""

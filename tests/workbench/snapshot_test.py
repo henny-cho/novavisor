@@ -165,6 +165,13 @@ class PollerTest(unittest.TestCase):
         self.provider.read(self.observations[0])
         self.assertEqual(self.poller.stamp("fast"), 101)
 
+    def test_the_newest_stamp_is_the_latest_publish_seen(self):
+        """A stop with no ring to ask is placed after the last publish
+        this poller took, which is a floor and never a made-up clock."""
+        self.assertIsNone(self.poller.newest_stamp())
+        self.poller.tick()
+        self.assertEqual(self.poller.newest_stamp(), 102)
+
     def test_a_topic_with_no_publisher_behind_it_has_no_stamp(self):
         """A scripted or replayed reading is placed by its arrival, and
         a made-up clock would be indistinguishable from a real one."""

@@ -183,6 +183,10 @@ class TraceDrain:
         self.pace(time.monotonic() - arrived, capped=waiting > self.drain_limit)
         return bool(self.tracer.pending())
 
+    def newest_ts(self) -> int | None:
+        """The last record's clock, or None without a ring to read."""
+        return None if self.tracer is None else self.tracer.newest_ts()
+
     def consume(self, records: list[trace.Record]) -> None:
         """The one way a record reaches history, the recording and the ledger.
 

@@ -189,6 +189,20 @@ class DrainTest(unittest.TestCase):
         self.assertEqual([record.ts for record in records], [2])
         self.assertEqual(trace.dropped_in(records), 0)
 
+    def test_the_newest_record_is_the_machines_clock_from_below(self):
+        """A stopped machine's own instant is unreadable; the last record
+        any ring holds is the closest its frozen memory comes to it."""
+        reader = self.region.reader()
+        self.addCleanup(reader.close)
+        self.assertIsNone(reader.newest_ts())
+
+        self.region.emit(0, ts=1_000, code=TRAP)
+        self.region.emit(1, ts=5_000, code=TRAP)
+        self.region.emit(0, ts=3_000, code=TRAP)
+        self.region.flush()
+        # Neither the ring written last nor the first: the latest clock.
+        self.assertEqual(reader.newest_ts(), 5_000)
+
     def test_rings_merge_by_timestamp(self):
         """CNTPCT is common to every PE, so the merge is the machine's
         real order — the thing a sampled layer cannot supply at any

@@ -218,7 +218,12 @@ bind shows the physical INTID, the virtual one it was bound to, and the
 generation — and the **whole** observation manifest is re-read and published as
 `src H`. Nothing is moving, so those reads are all of one instant, with no torn
 value and no writer racing the reader. This is the one place the S layer is
-exact.
+exact. Those readings are of raw addresses the firmware never stamped, and the
+stop's own instant cannot be read (QEMU's stub exposes no counter), so every
+reading of a stop carries the same `ts`: the machine's clock as of its last
+trace record — or its last published slot, on an image without a ring — which
+is the stop from below by at most one event. Stamp columns and the drawer's
+placement read against that rather than against the last poll.
 
 Paths on the board that can be stopped on are drawn solid and legended **M**.
 A pulse there is not a sample or a log line; it is the event.
@@ -516,7 +521,10 @@ flushed every 50 ms:
   this run's image answers**, so adding an observation adds a topic without
   touching the protocol.
 - Every panel-consumed snapshot (S topics and `sysreg`) carries its payload
-  under `data.values` — one contract for the whole panel drawer.
+  under `data.values` — one contract for the whole panel drawer — and, where
+  the firmware clock is known, `data.ts`: the publisher's stamp for a polled
+  copy, the stop's floor (newest ring record, else newest published slot) for
+  every reading of a halt sweep.
 - Uplink (client → bridge): `target` (launch a demo — `variant`, `verify`, and
   `stops` to arm as the machine boots), `stop` (point the session at nothing),
   `uart` (bytes to the focused guest), `halt`
@@ -622,6 +630,13 @@ arm at launch — runs inside one hold, published as `halt-begin`/`halt-end`
 around it and carried on the connect topo as `halt`. `abort` is the one
 command taken during a hold; a run's wait loop asks for it between slices
 and a step's instruction loop between instructions.
+
+The sweep after a stop reads raw addresses (`SnapshotPoller.sweep`, no
+stamp), so the controller stamps every reading of the stop with one floor
+of the machine's clock — `TraceReader.newest_ts()`, the last record any ring
+holds, or `SnapshotPoller.newest_stamp()` without a ring — rather than the
+stale stamp of the last polled copy, which would date a fresher value by an
+older publish.
 
 Measured limit: the stub advertises 263 registers with no `ICH_*`/`ICC_*`,
 so interrupt/list-register truth remains an S-layer concern.

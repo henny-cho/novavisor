@@ -36,12 +36,14 @@ class HaltController:
         session: Session,
         reject_fn: Callable[[str, str | None], None],
         ensure_poller_fn: Callable[[], Coroutine[Any, Any, snapshot.SnapshotPoller | None]],
+        newest_ts_fn: Callable[[], int | None],
         spawn_fn: Callable[[Coroutine], asyncio.Task],
     ) -> None:
         self.store = store
         self.session = session
         self._reject = reject_fn
         self._ensure_poller = ensure_poller_fn
+        self._newest_ts = newest_ts_fn
         self._spawn = spawn_fn
 
         self.inspector: halt.HaltInspector | None = None
@@ -84,39 +86,58 @@ class HaltController:
         data = await loop.run_in_executor(None, inspector.pause)
         self.session.paused = True
         was, self.stopped_at = self.stopped_at, {Topic.SYSREG.value: data}
+        poller = None
+        try:
+            poller = await self._ensure_poller()
+        except Exception as error:
+            self._unavailable(error)
+        at = self.stop_floor(poller)
         self.store.publish(
             Topic.SYSREG,
             Kind.SNAPSHOT,
-            self.with_delta(data, was, Topic.SYSREG.value),
+            self.with_delta(data, was, Topic.SYSREG.value, at),
             src=Src.HALT,
         )
+        if poller is None:
+            return
         try:
-            poller = await self._ensure_poller()
-            if poller is None:
-                return
             values = await loop.run_in_executor(None, poller.sweep)
         except Exception as error:
-            self.store.publish(
-                Topic.LIFE,
-                Kind.EVENT,
-                {"phase": "snapshot-unavailable", "error": str(error)},
-            )
+            self._unavailable(error)
             return
         for obs, value in values:
             self.stopped_at[obs.topic] = value
             self.store.publish(
                 obs.topic,
                 Kind.SNAPSHOT,
-                self.with_delta(value, was, obs.topic),
+                self.with_delta(value, was, obs.topic, at),
                 src=Src.HALT,
             )
 
+    def _unavailable(self, error: Exception) -> None:
+        self.store.publish(
+            Topic.LIFE, Kind.EVENT, {"phase": "snapshot-unavailable", "error": str(error)}
+        )
+
+    def stop_floor(self, poller: snapshot.SnapshotPoller | None) -> int | None:
+        """The machine's clock as of the stop, from below.
+
+        The instant itself is unreadable — QEMU's stub exposes no counter —
+        so the freshest firmware timestamp in the frozen memory stands in:
+        the newest ring record, or the newest published slot without a ring.
+        """
+        floors = [self._newest_ts(), None if poller is None else poller.newest_stamp()]
+        known = [floor for floor in floors if floor is not None]
+        return max(known) if known else None
+
     @staticmethod
-    def with_delta(value: Any, previous: dict, topic: str) -> dict:
-        """A stopped reading, and what moved since the last stop."""
+    def with_delta(value: Any, previous: dict, topic: str, at: int | None) -> dict:
+        """A stopped reading, what moved since the last stop, and when it is of."""
         payload = {"values": value}
         if topic in previous:
             payload["changed"] = snapshot.changed_mask(previous[topic], value)
+        if at is not None:
+            payload["ts"] = at
         return payload
 
     async def advance(self, inspector: halt.HaltInspector, data: dict) -> None:

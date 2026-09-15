@@ -158,6 +158,7 @@ class Bridge:
             self.session,
             self._reject,
             self._ensure_poller,
+            self._trace_service.newest_ts,
             self.spawn,
         )
         # The bridge's memory of the run. The firmware's rings hold
