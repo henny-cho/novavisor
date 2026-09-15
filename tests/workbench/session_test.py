@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import signal
 import socket
 import tempfile
 import unittest
@@ -14,7 +15,15 @@ from unittest import mock
 from novakit.image import observe
 from novakit.services import expect, spawn
 from novakit.services.surfaces import Surfaces
-from novakit.services.workbench import events, halt, hardware, paths, snapshot, trace
+from novakit.services.workbench import (
+    events,
+    halt,
+    hardware,
+    paths,
+    server,
+    snapshot,
+    trace,
+)
 from novakit.services.workbench import session as session_module
 from novakit.services.workbench.observations import Obs
 from novakit.services.workbench.protocol import (
@@ -1307,6 +1316,29 @@ class HaltFlightTest(unittest.IsolatedAsyncioTestCase):
 
         bridge._halt_service.flight = {"cmd": "run"}
         self.assertEqual(bridge._live_state()["halt"], {"cmd": "run"})
+
+
+class SignalTeardownTest(unittest.IsolatedAsyncioTestCase):
+    """Ctrl-C and a supervisor's SIGTERM both end the runner's task — also
+    when the process inherited SIGINT ignored, which is what a bridge under
+    nohup or a supervisor gets, and where Python installs no handler."""
+
+    async def test_either_signal_cancels_the_task_even_with_sigint_ignored(self):
+        loop = asyncio.get_running_loop()
+        before = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                with self.subTest(signal=signum.name):
+                    runner = asyncio.create_task(asyncio.sleep(5))
+                    server._cancel_on_signals(runner)
+                    try:
+                        signal.raise_signal(signum)
+                        with self.assertRaises(asyncio.CancelledError):
+                            await asyncio.wait_for(runner, 2)
+                    finally:
+                        loop.remove_signal_handler(signum)
+        finally:
+            signal.signal(signal.SIGINT, before)
 
 
 class StopFloorTest(unittest.IsolatedAsyncioTestCase):

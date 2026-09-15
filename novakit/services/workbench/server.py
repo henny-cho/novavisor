@@ -854,6 +854,16 @@ HANDLERS = (
 UPLINK = frozenset(handler.topic for handler in HANDLERS)
 
 
+def _cancel_on_signals(task: asyncio.Task) -> None:
+    """Ctrl-C and a supervisor's SIGTERM walk one teardown, or QEMU outlives
+    the bridge with a gigabyte of tmpfs pinned. A loop handler for SIGINT
+    too: Python raises KeyboardInterrupt only over the default disposition,
+    and a bridge started from a non-interactive shell inherits it ignored."""
+    loop = asyncio.get_running_loop()
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(signum, task.cancel)
+
+
 async def _serve_forever(
     *,
     host: str,
@@ -885,12 +895,7 @@ async def _serve_forever(
     bridge = Bridge(
         ui_root=ui_root, surfaces=surfaces, trace_history=trace_history, recorder=recorder
     )
-    # A supervisor's SIGTERM must walk the same teardown as Ctrl-C, or
-    # QEMU (its own session, immune to the terminal) outlives the bridge
-    # with a gigabyte of tmpfs pinned.
-    asyncio.get_running_loop().add_signal_handler(
-        signal.SIGTERM, asyncio.current_task().cancel
-    )
+    _cancel_on_signals(asyncio.current_task())
     try:
         # Topology first: a client racing the startup must never replay
         # an empty world.
@@ -932,6 +937,7 @@ async def _measure_forever(*, target: Target, record: Path, runs: int) -> None:
     paths that actually ship.
     """
     surfaces = make_surfaces()
+    _cancel_on_signals(asyncio.current_task())
     try:
         recorder = recording.Recorder(
             record,
@@ -958,7 +964,7 @@ def measure(*, target: Target, record: Path, runs: int) -> int:
     """Record `runs` runs of one demo, for a report to read afterwards."""
     try:
         asyncio.run(_measure_forever(target=target, record=record, runs=runs))
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         # The runs already written are still evidence; the report says
         # how many it found rather than assuming it got what it asked for.
         pass
@@ -978,9 +984,7 @@ async def _replay_forever(*, host: str, port: int, ui_root: Path, directory: Pat
     # The absence is the point — a replay that needed QEMU would not be
     # a thing you could send somebody.
     bridge = Bridge(ui_root=ui_root)
-    asyncio.get_running_loop().add_signal_handler(
-        signal.SIGTERM, asyncio.current_task().cancel
-    )
+    _cancel_on_signals(asyncio.current_task())
     try:
         bridge.store.adopt_topology(initial_topology())
         bridge.load_replay(loaded)
