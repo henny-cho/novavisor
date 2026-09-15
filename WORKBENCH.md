@@ -88,8 +88,11 @@ client — the bridge and QEMU keep running for the next connection.
   it, and either way it disarms until the next phase arrives, so a click storm
   is one request. A `정지` pressed while the build is still running is held
   behind it and lands the moment the machine comes up — the notice says so
-  rather than implying an immediate stop. The last launch — demo, variant and
-  verify — is remembered for the next reload. In a replay there is no machine
+  rather than implying an immediate stop. What `실행` sends next is the launch
+  this page last made or saw — demo, variant and verify — remembered for the
+  next reload: a machine launched by the CLI or another page becomes that
+  launch as it comes up, so `정지` then `실행` runs the same machine again,
+  while a pick made during a run stands until the next launch. In a replay there is no machine
   for any of this to reach, so the whole group — picker, variant, `검증`,
   `실행` and `일시정지` — is disabled. The phase badge tracks the session lifecycle
   (`building → running → verifying → exited/failed`); the connection badge

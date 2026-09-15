@@ -156,6 +156,78 @@ describe("target picker", () => {
     ]);
   });
 
+  it("takes the machine's launch as what 실행 sends next, once per run", () => {
+    const { view, select, variantSelect, verifyBox } = harness();
+    view.render(topo({ demo: "12_zephyr", variant: "dma", run_id: 1 }));
+    assert.equal(select.value, "12_zephyr");
+    assert.equal(variantSelect.value, "dma");
+    assert.equal(verifyBox.checked, false);
+
+    /* The reader looks ahead to another demo. A republish within the run
+       — page tables landed, an edge regraded — is not a launch. */
+    select.value = "02_timer";
+    fire(select, "change");
+    view.render(topo({ demo: "12_zephyr", variant: "dma", run_id: 1, description: "Zephyr" }));
+    assert.equal(select.value, "02_timer");
+  });
+
+  it("relaunches the machine it saw stopped, whoever launched it", () => {
+    const { view, at, runButton, sent } = harness();
+    view.render(topo({ demo: "12_zephyr", variant: "heartbeat", run_id: 3 }));
+    at({ phase: "running" });
+    /* The stop: no machine, the same run number. */
+    view.render(topo({ demo: null, run_id: 3 }));
+    at({ phase: "idle" });
+
+    fire(runButton, "click");
+    assert.deepEqual(sent, [["target", { demo: "12_zephyr", variant: "heartbeat", verify: false }]]);
+  });
+
+  it("takes a relaunch of the same demo as a boundary too", () => {
+    const { view, select } = harness();
+    view.render(topo({ demo: "12_zephyr", variant: "dma", run_id: 1 }));
+    view.render(topo({ demo: null, run_id: 1 }));
+    select.value = "02_timer";
+    fire(select, "change");
+
+    view.render(topo({ demo: "12_zephyr", variant: "dma", run_id: 2 }));
+    assert.equal(select.value, "12_zephyr");
+  });
+
+  it("leaves the pick alone for a machine the catalogue does not offer", () => {
+    const { view, select } = harness();
+    view.render(topo());
+    select.value = "02_timer";
+    fire(select, "change");
+
+    /* A measurement-only demo runs from the CLI: 실행 could not send it. */
+    view.render(topo({ demo: "19_irq_latency", run_id: 1 }));
+    assert.equal(select.value, "02_timer");
+  });
+
+  it("outranks the launch a previous page remembered, and is remembered in turn", () => {
+    const first = harness();
+    first.view.render(topo());
+    first.select.value = "02_timer";
+    fire(first.select, "change");
+    first.verifyBox.checked = true;
+    fire(first.runButton, "click");
+
+    /* A new page onto a machine somebody else launched: what runs wins
+       over what this browser launched yesterday, and the run that
+       happened was not a verify. */
+    const again = harness({ storage: globalThis.localStorage });
+    again.view.render(topo({ demo: "12_zephyr", variant: "dma", run_id: 7 }));
+    assert.equal(again.select.value, "12_zephyr");
+    assert.equal(again.variantSelect.value, "dma");
+    assert.equal(again.verifyBox.checked, false);
+
+    const third = harness({ storage: globalThis.localStorage });
+    third.view.render(topo());
+    assert.equal(third.select.value, "12_zephyr");
+    assert.equal(third.variantSelect.value, "dma");
+  });
+
   it("reads 정지 while a machine is building, running or verifying and 실행 otherwise", () => {
     const { view, at, runButton } = harness();
     view.render(topo());

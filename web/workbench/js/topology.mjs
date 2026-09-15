@@ -23,7 +23,7 @@ function stored() {
   }
 }
 
-function remember(choice) {
+function store(choice) {
   try {
     localStorage.setItem(TARGET_KEY, JSON.stringify(choice));
   } catch {
@@ -51,19 +51,25 @@ export function createTopology({
   let replaying = false;
   let building = false;
   let paused = false;
-  const held = stored();
-  let lastTarget = held.demo || "";
+  /* The one memory of what 실행 sends next: the last launch this page
+     made or saw. Held here for the picker, stored for the next reload. */
+  let held = stored();
+  let adoptedRun; /* the run whose launch the picker last took as its own */
   const variants = new Map();
   verifyBox.checked = Boolean(held.verify);
+
+  function remember(choice) {
+    held = choice;
+    store(choice);
+  }
 
   const variantsOf = (item) =>
     (Array.isArray(item && item.variants) ? item.variants : []).map(String);
 
   /* A demo's own variants, or nothing to pick between: the catalogue
      names only real ones, so a plain manifest hides the picker. */
-  function fillVariants(demo) {
+  function fillVariants(demo, keep = variantSelect.value || (demo === held.demo ? held.variant : "")) {
     const names = variants.get(String(demo || "")) || [];
-    const keep = variantSelect.value || (demo === held.demo ? held.variant : "");
     clear(variantSelect);
     for (const name of names) {
       const option = el("option", "", name);
@@ -83,7 +89,7 @@ export function createTopology({
       .join("|");
     if (key === catalogKey) return;
     catalogKey = key;
-    const keep = select.value || lastTarget;
+    const keep = select.value || held.demo;
     clear(select);
     variants.clear();
     for (const item of list) {
@@ -148,7 +154,24 @@ export function createTopology({
     const data = topo && typeof topo === "object" ? topo : {};
     fillPicker(data.catalog);
     describe(data, data.catalog);
-    if (data.demo) lastTarget = String(data.demo);
+    /* A run boundary: whoever launched the machine — this page, another,
+       the CLI — its launch is what 실행 sends next. Once per run, and only
+       a target the catalogue offers, so a republish within a run leaves
+       the reader's pick alone. A replay carries no run to adopt. */
+    const demo = data.demo ? String(data.demo) : "";
+    if (data.run_id !== undefined && data.run_id !== adoptedRun && demo && variants.has(demo)) {
+      adoptedRun = data.run_id;
+      adopt({ demo, variant: data.variant ? String(data.variant) : null, verify: false });
+    }
+  }
+
+  /* The machine's launch, taken as the reader's next one: a run that
+     happened was not a verify, so the box follows. */
+  function adopt(choice) {
+    remember(choice);
+    select.value = choice.demo;
+    fillVariants(choice.demo, choice.variant || "");
+    verifyBox.checked = false;
   }
 
   function start(demo) {
@@ -168,7 +191,6 @@ export function createTopology({
       onNotice?.("브리지에 연결되지 않아 실행 요청을 보내지 못했습니다");
       return;
     }
-    lastTarget = target;
     remember({ demo: target, variant: data.variant, verify: data.verify });
     onPending?.("launch");
     onStart?.(target);
