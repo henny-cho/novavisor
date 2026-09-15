@@ -1,6 +1,7 @@
 /* The stepper: which event to stop the machine at, and the three ways to
    reach one. Every control here follows the shared control state — a
-   machine that is there, and no request of this page's still in flight. */
+   machine that is there, not held by the bridge for a command already,
+   and no request of this page's still unanswered. */
 
 import { clear, el } from "./format.mjs";
 
@@ -48,20 +49,23 @@ export function createStepper({
   function setAuto(next) {
     autoRunning = next;
     autoButton.setAttribute("aria-pressed", String(next));
-    abortButton.hidden = !next;
   }
 
-  /* Driving needs a machine and no request of ours still on the bridge.
-     Cancelling is the answer to a request in flight, so 중지 and a
-     pressed 자동 are the two that flight does not stand down. */
+  /* Driving needs a machine the bridge is not already holding, and no
+     request of ours unanswered. 중지 is the answer to a hold, so it is on
+     screen exactly while there is one; a pressed 자동 is the one request
+     the hold does not stand down, since pressing it again is 중지. */
   function setState(state) {
     const live = String(state.phase) === "running" && !state.replaying;
-    /* A machine that is gone is not being stepped through. */
-    if (!live && autoRunning) setAuto(false);
-    const busy = Boolean(state.pending);
+    const held = Boolean(state.halt);
+    /* 자동 ends with the hold it asked for — or with a machine that is
+       gone, or a request the bridge refused before any hold began. */
+    if (autoRunning && (!live || !(held || state.pending))) setAuto(false);
+    const busy = held || Boolean(state.pending);
     advanceButton.disabled = !live || busy;
     stepButton.disabled = !live || busy;
     autoButton.disabled = !live || (busy && !autoRunning);
+    abortButton.hidden = !held;
   }
 
   /* The choices come from the bridge with the rest of the topology, the
@@ -178,7 +182,7 @@ export function createStepper({
   });
 
   /* 중지 expects no answer — the bridge only raises a flag — so it names
-     no request in flight. */
+     no request in flight. The hold it ends is what takes it off screen. */
   abortButton.addEventListener("click", () => {
     halt({ cmd: "abort" });
     setAuto(false);
@@ -188,7 +192,7 @@ export function createStepper({
      and nothing to say about either. The count a reader last chose is a
      reading habit, so it opens where they left it. */
   reset();
-  setState({ phase: "", paused: false, replaying: false, pending: null });
+  setState({ phase: "", paused: false, replaying: false, pending: null, halt: null });
   try {
     countInput.value = localStorage.getItem(STEP_KEY) || "";
   } catch {

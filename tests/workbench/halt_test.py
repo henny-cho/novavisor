@@ -490,6 +490,16 @@ class AdvanceModeTest(unittest.TestCase):
         self.assertFalse(result["stalled"])
         self.assertEqual(log.count("vCont;s:01"), 3)
 
+    def test_a_step_batch_ends_where_the_abort_finds_it(self):
+        """중지 answers a batch as it answers a run: the count says how
+        far it got, and the machine is not stepped past the abort."""
+        inspector, log = self.start()
+        answers = iter([False, False, True])
+        result = inspector.step(5, cancelled=lambda: next(answers))
+        self.assertEqual(result["steps"], 2)
+        self.assertFalse(result["stalled"])
+        self.assertEqual(log.count("vCont;s:01"), 2)
+
     def test_a_step_that_never_retires_is_reported_not_hung(self):
         """`wfi` is where the hypervisor waits. A UI that hangs there
         looks broken; one that says "still waiting" is telling the truth

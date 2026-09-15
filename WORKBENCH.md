@@ -177,7 +177,8 @@ it into the guest on resume). If the register sweep fails after the attach
 already landed — say the gdb socket is taken by an external debugger — the
 bridge lets go of the machine before reporting, so a failed pause never
 leaves a silently frozen one. Reloading the page while paused is safe:
-the pause state (and the 재개 button) is restored on connect.
+the pause state (and the 재개 button) is restored on connect, and so is an
+inspection still in flight — 중지 comes back with it.
 
 Known limit: QEMU's gdbstub exposes no `ICH_*`/`ICC_*` registers, so GIC and
 list-register state is not part of the halt sweep; the S-layer vGIC shadow is
@@ -195,13 +196,18 @@ something instead:
 | **정지 지점** | which event to stop at, from the bridge's catalogue — or `정지 없음`, which is a choice and not merely the initial state: it is what launches a machine meant to keep going |
 | **다음 사건** | run until that event, then stop; refused while nothing is chosen, since a machine advancing to no event runs until the wait budget expires and stops nowhere |
 | **명령 진행** | advance by instructions — for looking *inside* an event. The box beside it says how many, from 1 to the ceiling the bridge publishes in `topo.limits.steps`; a larger number is corrected in the box rather than cut silently on the far side, and the count is remembered between sessions |
-| **자동** | repeat, one second apart, so events pass at a readable speed |
-| **중지** | take the machine back from a run that is still going |
+| **자동** | repeat, one second apart, so events pass at a readable speed; it stays pressed until the bridge lets the machine go |
+| **중지** | take the machine back from a run that is still going, or end a step batch where it stands |
 
-Every one of them needs a machine that is running, and stands down while a
-request it sent is still in flight — the bridge holds one inspection at a
-time, so a second click could only be rejected. 중지 is on screen exactly
-while 자동 is, and cancelling is never what a request in flight blocks.
+Every one of them needs a machine that is running and one the bridge is not
+already holding for a command — it holds one inspection at a time, so a
+second click could only be rejected. The hold is the bridge's fact, reported
+at both ends (`halt-begin` with the command, `halt-end` once the machine is
+let go, after the sweep) rather than remembered from the click: a 다음 사건
+run can outlast its click by minutes, and an 자동 run answers fifty times
+before it ends. 중지 is on screen exactly while there is a hold, whatever
+asked for it — a stop armed at launch and a page reloaded mid-run included —
+and 일시정지 stands down for the same hold.
 
 A stop publishes more than a pause does. The notice names the gdb thread the
 machine stopped on, which on an SMP machine is which core. The event's own
@@ -495,8 +501,14 @@ flushed every 50 ms:
   a bounded backlog — a late joiner is never blank. The connect topo also
   carries live session state the evictable backlog cannot guarantee:
   `session` (a per-bridge token — a change means the bridge restarted),
-  `phase`, `paused`, and `run_id` (a change is a run boundary; the client
-  clears panel values and counters).
+  `phase`, `paused`, `halt` (the command the bridge holds the machine for,
+  or null), and `run_id` (a change is a run boundary; the client clears
+  panel values and counters).
+- H-layer life events: `halt-begin` (`cmd`) and `halt-end` bracket every
+  inspection the bridge holds the machine for, and `armed` (`stops`) is
+  published each time a run lets the machine go again — at launch and at
+  every repeat — so a client's pause state follows the machine rather than
+  the last stop it saw.
 - Structural downlink topics are fixed (`topo, console, ev, life, verify,
   sysreg, trace`); **S-layer topics are plain strings taken from the manifest
   this run's image answers**, so adding an observation adds a topic without
@@ -602,6 +614,12 @@ documents): sequential assignment unless a `regnum` attribute says otherwise.
 The result is published as one `sysreg` snapshot (`src: "H"`) followed by a
 `paused` life event; `resume()` issues `cont`. The machine stays stopped
 between the two — pausing is an inspection state, not a transient.
+
+Every command the controller takes — `stop`, `cont`, `step`, `run`, and the
+arm at launch — runs inside one hold, published as `halt-begin`/`halt-end`
+around it and carried on the connect topo as `halt`. `abort` is the one
+command taken during a hold; a run's wait loop asks for it between slices
+and a step's instruction loop between instructions.
 
 Measured limit: the stub advertises 263 registers with no `ICH_*`/`ICC_*`,
 so interrupt/list-register truth remains an S-layer concern.

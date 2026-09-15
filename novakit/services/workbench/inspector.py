@@ -46,7 +46,9 @@ class HaltController:
 
         self.inspector: halt.HaltInspector | None = None
         self.inspector_run = 0
-        self.halting = False
+        # The command the bridge holds the machine for, or None. Reported
+        # at both ends so controls follow it instead of what they sent.
+        self.flight: dict | None = None
         self.abort = False
         # The previous stop's reading, per topic. A stop publishes the
         # whole machine; this is what lets it also say what moved.
@@ -132,6 +134,11 @@ class HaltController:
                     break
             await loop.run_in_executor(None, inspector.begin, stops)
             self.session.paused = False
+            # Every resume, not only the one at launch: between repeats
+            # the machine runs again and the reader's pause state must say so.
+            self.store.publish(
+                Topic.LIFE, Kind.EVENT, {"phase": "armed", "stops": inspector.armed}
+            )
             stop = None
             waited = 0.0
             noticed = False
@@ -171,22 +178,14 @@ class HaltController:
         else:
             self._reject("halt: the machine never came up to be armed", reply_to)
             return
-        if self.halting:
+        if self.flight is not None:
             return
-        self.halting = True
-        self.abort = False
-        try:
-            inspector = self.hold()
+
+        async def arm_and_run(inspector: halt.HaltInspector) -> None:
             await self.sweep_to_panels(inspector)
-            self.store.publish(
-                Topic.LIFE, Kind.EVENT, {"phase": "armed", "stops": sorted(stops)}
-            )
             await self.advance(inspector, {"stops": stops})
-        except Exception as error:
-            self._reject(f"halt: {error}", reply_to)
-        finally:
-            self.halting = False
-            self.abort = False
+
+        await self._inspect("run", arm_and_run, reply_to)
 
     def take_halt(self, request: Request) -> None:
         """Accept one halt command, or say why it is not one."""
@@ -204,20 +203,35 @@ class HaltController:
         if command == "abort":
             self.abort = True
             return
-        if self.halting:
+        if self.flight is not None:
             self._reject("halt: inspection in progress", reply_to)
             return
-        self.halting = True
+        step_fn = HALT_STEPS[command]
+        await self._inspect(command, lambda inspector: step_fn(self, inspector, data), reply_to)
+
+    async def _inspect(
+        self,
+        command: str,
+        body: Callable[[halt.HaltInspector], Coroutine],
+        reply_to: str | None,
+    ) -> None:
+        """One inspection at a time, both ends on the wire.
+
+        An advance outlasts its click by minutes and answers many times
+        before the bridge lets go, so the controls follow these two
+        events rather than the request they remember sending.
+        """
+        self.flight = {"cmd": command}
         self.abort = False
+        self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "halt-begin", **self.flight})
         try:
-            inspector = self.hold()
-            step_fn = HALT_STEPS[command]
-            await step_fn(self, inspector, data)
+            await body(self.hold())
         except Exception as error:
             self._reject(f"halt: {error}", reply_to)
         finally:
-            self.halting = False
+            self.flight = None
             self.abort = False
+            self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "halt-end"})
 
     async def halt_stop(self, inspector: halt.HaltInspector, _data: dict) -> None:
         await self.sweep_to_panels(inspector)
@@ -233,7 +247,7 @@ class HaltController:
             await self.sweep_to_panels(inspector)
         count = max(1, min(int(data.get("count", 1)), MAX_STEPS))
         result = await asyncio.get_running_loop().run_in_executor(
-            None, inspector.step, count
+            None, inspector.step, count, lambda: self.abort
         )
         self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "stepped", **result})
         await self.sweep_to_panels(inspector)

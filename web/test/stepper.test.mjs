@@ -34,7 +34,7 @@ function harness({ sends = true, fresh = true } = {}) {
   };
   const sent = [];
   const notices = [];
-  const state = { phase: "idle", paused: false, replaying: false, pending: null };
+  const state = { phase: "idle", paused: false, replaying: false, pending: null, halt: null };
 
   const view = createStepper({
     ...nodes,
@@ -102,12 +102,16 @@ describe("stepper", () => {
       for (const paused of [false, true]) {
         for (const replaying of [false, true]) {
           for (const pending of [null, "advance"]) {
-            kit.view.setState({ phase, paused, replaying, pending });
-            /* A paused machine is a running one stopped where the reader
-               asked, which is exactly when stepping is wanted. */
-            const live = phase === "running" && !replaying && !pending;
-            const where = `${phase} paused=${paused} replay=${replaying} pending=${pending}`;
-            for (const name of DRIVERS) assert.equal(kit[name].disabled, !live, `${name} ${where}`);
+            for (const halt of [null, { cmd: "run" }]) {
+              kit.view.setState({ phase, paused, replaying, pending, halt });
+              /* A paused machine is a running one stopped where the reader
+                 asked, which is exactly when stepping is wanted; one the
+                 bridge holds for a command is refused a second. */
+              const live = phase === "running" && !replaying && !pending && !halt;
+              const where = `${phase} paused=${paused} replay=${replaying} pending=${pending} halt=${Boolean(halt)}`;
+              for (const name of DRIVERS) assert.equal(kit[name].disabled, !live, `${name} ${where}`);
+              assert.equal(kit.abortButton.hidden, !halt, `abort ${where}`);
+            }
           }
         }
       }
@@ -259,21 +263,77 @@ describe("stepper", () => {
     for (const name of DRIVERS) assert.equal(kit[name].disabled, false, name);
   });
 
-  it("shows 중지 only while 자동 is running", () => {
+  it("shows 중지 exactly while the bridge holds the machine", () => {
     const kit = harness();
     kit.view.setStops(CATALOGUE);
     kit.pick.value = "bind";
     kit.running();
     assert.equal(kit.abortButton.hidden, true);
 
-    fire(kit.autoButton, "click");
-    assert.deepEqual(kit.sent, [["halt", { cmd: "run", stops: ["bind"], repeat: 50, period: 1 }]]);
+    /* A request out is not yet a hold; the bridge says when it has one,
+       and from then on 중지 is the one thing left to press. */
+    fire(kit.advanceButton, "click");
+    assert.equal(kit.abortButton.hidden, true);
+    kit.at({ halt: { cmd: "run" } });
     assert.equal(kit.abortButton.hidden, false);
-    assert.equal(kit.autoButton.getAttribute("aria-pressed"), "true");
+    for (const name of DRIVERS) assert.equal(kit[name].disabled, true, name);
 
+    /* Asking to abort does not end the hold; the bridge letting go does. */
     fire(kit.abortButton, "click");
     assert.deepEqual(kit.sent.at(-1), ["halt", { cmd: "abort" }]);
+    assert.equal(kit.abortButton.hidden, false);
+    kit.at({ paused: true, halt: null });
     assert.equal(kit.abortButton.hidden, true);
+    assert.equal(kit.advanceButton.disabled, false);
+  });
+
+  it("offers 중지 for a hold this page never asked for", () => {
+    const kit = harness();
+    kit.view.setStops(CATALOGUE);
+    kit.pick.value = "bind";
+
+    /* A stop armed at launch, or a page reloaded mid-run: the connect
+       topology carries the hold, and the reader can still take the
+       machine back. */
+    kit.at({ phase: "running", halt: { cmd: "run" } });
+    assert.equal(kit.abortButton.hidden, false);
+    for (const name of DRIVERS) assert.equal(kit[name].disabled, true, name);
+  });
+
+  it("keeps 자동 pressed across the stops of its run and releases it with the hold", () => {
+    const kit = harness();
+    kit.view.setStops(CATALOGUE);
+    kit.pick.value = "bind";
+    kit.running();
+
+    fire(kit.autoButton, "click");
+    assert.deepEqual(kit.sent, [["halt", { cmd: "run", stops: ["bind"], repeat: 50, period: 1 }]]);
+    assert.equal(kit.autoButton.getAttribute("aria-pressed"), "true");
+    kit.at({ halt: { cmd: "run" } });
+    /* Each stop of the run answers, and the run is not over: the bridge
+       still holds the machine for the next repeat. */
+    kit.at({ paused: true });
+    assert.equal(kit.autoButton.getAttribute("aria-pressed"), "true");
+    assert.equal(kit.autoButton.disabled, false);
+    assert.equal(kit.advanceButton.disabled, true);
+    assert.equal(kit.abortButton.hidden, false);
+
+    /* The fiftieth stop, or an abort: the bridge lets go and 자동 is over. */
+    kit.at({ halt: null });
+    assert.equal(kit.autoButton.getAttribute("aria-pressed"), "false");
+    assert.equal(kit.abortButton.hidden, true);
+  });
+
+  it("unpresses 자동 when the bridge refuses it before any hold", () => {
+    const kit = harness();
+    kit.view.setStops(CATALOGUE);
+    kit.pick.value = "bind";
+    kit.running();
+
+    fire(kit.autoButton, "click");
+    assert.equal(kit.state.pending, "auto");
+    kit.at({}); /* uplink-rejected: the attempt is over, nothing was held */
+    assert.equal(kit.autoButton.getAttribute("aria-pressed"), "false");
   });
 
   it("lets 자동 be taken back while its own request is in flight", () => {
@@ -339,6 +399,6 @@ describe("stepper", () => {
     kit.view.reset();
     assert.equal(kit.note.textContent, "");
     assert.equal(kit.note.hidden, true);
-    assert.equal(kit.abortButton.hidden, true);
+    assert.equal(kit.autoButton.getAttribute("aria-pressed"), "false");
   });
 });

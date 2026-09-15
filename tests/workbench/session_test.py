@@ -14,7 +14,7 @@ from unittest import mock
 from novakit.image import observe
 from novakit.services import expect, spawn
 from novakit.services.surfaces import Surfaces
-from novakit.services.workbench import events, hardware, paths, snapshot, trace
+from novakit.services.workbench import events, halt, hardware, paths, snapshot, trace
 from novakit.services.workbench import session as session_module
 from novakit.services.workbench.observations import Obs
 from novakit.services.workbench.protocol import (
@@ -1074,7 +1074,7 @@ class ConnectionHandlerTest(unittest.IsolatedAsyncioTestCase):
         putting it behind the busy guard rejects it exactly when it is
         needed — and the advance then waits forever with no way out."""
         bridge = support.bridge()
-        bridge._halt_service.halting = True
+        bridge._halt_service.flight = {"cmd": "run"}
 
         await bridge._halt_service.halt_command("abort", {})
 
@@ -1143,7 +1143,7 @@ class ConnectionHandlerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_every_other_command_still_waits_its_turn(self):
         bridge = support.bridge()
-        bridge._halt_service.halting = True
+        bridge._halt_service.flight = {"cmd": "run"}
 
         await bridge._halt_service.halt_command("run", {})
 
@@ -1211,6 +1211,102 @@ class ConnectionHandlerTest(unittest.IsolatedAsyncioTestCase):
         stop = sysreg(bridge)
         self.assertEqual(stop["values"]["pc"], "0x1004")
         self.assertEqual(stop["changed"], {"pc": True})
+
+
+class Held:
+    """The gdb side of an inspection, reduced to what the controller
+    drives: it stops when told and never on its own."""
+
+    def __init__(self):
+        self.armed: list[str] = []
+        self.paused = False
+        self.interrupts = 0
+
+    def pause(self) -> dict:
+        self.paused = True
+        return {"pc": "0x1000"}
+
+    def begin(self, wanted) -> None:
+        self.armed = sorted(wanted)
+        self.paused = False
+
+    def wait(self, _timeout: float) -> None:
+        return None
+
+    def interrupt(self) -> halt.Stop:
+        self.interrupts += 1
+        return halt.Stop(pc=0x1004, thread="01")
+
+    def resume(self) -> None:
+        self.paused = False
+
+
+def life_of(bridge) -> list[dict]:
+    return [frame["data"] for frame in bridge.store.drain() if "phase" in frame["data"]]
+
+
+class HaltFlightTest(unittest.IsolatedAsyncioTestCase):
+    """The hold is the bridge's fact. A control that remembered its own
+    click instead could not see a run armed at launch, a page reloaded
+    mid-run, or the forty-nine repeats of an 자동 run still to come."""
+
+    async def test_an_inspection_is_reported_at_both_ends(self):
+        bridge = support.bridge()
+        service = bridge._halt_service
+        service.hold = lambda: Held()
+
+        await service.halt_command("stop", {})
+
+        life = life_of(bridge)
+        self.assertEqual(life[0], {"phase": "halt-begin", "cmd": "stop"})
+        self.assertEqual([entry["phase"] for entry in life[1:]], ["paused", "halt-end"])
+        self.assertIsNone(service.flight)
+
+    async def test_a_run_says_when_the_machine_runs_again_and_ends_on_abort(self):
+        bridge = support.bridge()
+        service = bridge._halt_service
+        held = Held()
+        service.hold = lambda: held
+
+        running = asyncio.create_task(
+            service.halt_command("run", {"stops": ["vgic.bind"], "repeat": 2})
+        )
+        while not held.armed:
+            await asyncio.sleep(0.01)
+        await service.halt_command("abort", {})
+        await running
+
+        life = life_of(bridge)
+        phases = [entry["phase"] for entry in life]
+        self.assertEqual(life[0], {"phase": "halt-begin", "cmd": "run"})
+        # The resume is on the wire, with what it is armed for.
+        self.assertEqual(life[phases.index("armed")]["stops"], ["vgic.bind"])
+        self.assertEqual(phases[-2:], ["stopped", "halt-end"])
+        # Aborted after the first repeat: the second never began.
+        self.assertEqual(phases.count("armed"), 1)
+        self.assertEqual(held.interrupts, 1)
+        self.assertIsNone(service.flight)
+
+    async def test_a_hold_that_fails_still_lets_go_on_the_wire(self):
+        bridge = support.bridge()
+        service = bridge._halt_service
+
+        def broken():
+            raise RuntimeError("no active session surfaces")
+
+        service.hold = broken
+        await service.halt_command("stop", {})
+
+        phases = [entry["phase"] for entry in life_of(bridge)]
+        self.assertEqual(phases, ["halt-begin", "uplink-rejected", "halt-end"])
+        self.assertIsNone(service.flight)
+
+    async def test_connect_state_carries_the_hold(self):
+        bridge = support.bridge()
+        self.assertIsNone(bridge._live_state()["halt"])
+
+        bridge._halt_service.flight = {"cmd": "run"}
+        self.assertEqual(bridge._live_state()["halt"], {"cmd": "run"})
 
 
 @unittest.skipUnless(importlib.util.find_spec("websockets"), "websockets is not installed")

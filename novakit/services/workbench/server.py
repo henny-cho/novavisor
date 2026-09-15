@@ -368,8 +368,8 @@ class Bridge:
 
     def _live_state(self) -> dict:
         """Session truth a late joiner cannot recover from the backlog:
-        life events are evictable, so phase, pause state and the last
-        run's summary ride the connect topo instead.
+        life events are evictable, so phase, pause state, the inspection
+        in flight and the last run's summary ride the connect topo instead.
 
         `sealed` is always a key, even with nothing sealed yet: the
         replay strip removes exactly the names this returns, and a key
@@ -380,6 +380,7 @@ class Bridge:
             "session": self._token,
             "phase": self.session.phase.value,
             "paused": self.session.paused,
+            "halt": self._halt_service.flight,
             "run_id": self.session.run_id,
             "sealed": self._sealed_data(*last) if last else None,
         }

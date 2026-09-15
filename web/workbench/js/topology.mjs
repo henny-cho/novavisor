@@ -202,10 +202,11 @@ export function createTopology({
     runButton.textContent = active ? "정지" : "실행";
     runButton.disabled = busy;
     /* Only a running machine can be paused; the button offered in any
-       other phase would halt one that is no longer there. */
+       other phase would halt one that is no longer there, and one the
+       bridge already holds for a command is refused a second. */
     pauseButton.hidden = phase !== "running";
     pauseButton.textContent = paused ? "재개" : "일시정지";
-    pauseButton.disabled = busy;
+    pauseButton.disabled = busy || Boolean(state.halt);
   }
 
   select.addEventListener("change", () => fillVariants(select.value));

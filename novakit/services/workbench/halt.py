@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import re
 import socket
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -458,12 +458,19 @@ class HaltInspector:
             }
         return Stop(pc, thread, name, event.edge if event else "", args)
 
-    def step(self, count: int = 1, timeout: float = 3.0) -> dict:
+    def step(
+        self,
+        count: int = 1,
+        cancelled: Callable[[], bool] | None = None,
+        timeout: float = 3.0,
+    ) -> dict:
         """Advance one thread by instructions.
 
         Measured at ~700 us per instruction over the RSP socket, so this
         is for looking *inside* an event, never for reaching one: a few
         hundred steps is a fraction of a second, a few million is a day.
+        `cancelled` is asked between instructions, so an abort ends the
+        batch where it stands and the count reports how far it got.
 
         A step that does not retire is the normal answer at `wfi`, where
         the hypervisor idles between events — the instruction completes
@@ -474,6 +481,8 @@ class HaltInspector:
         done = 0
         stalled = False
         for _ in range(max(1, count)):
+            if cancelled is not None and cancelled():
+                break
             reply = gdb.step(thread, timeout)
             if reply is None:
                 stalled = True

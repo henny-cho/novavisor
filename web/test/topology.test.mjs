@@ -33,7 +33,7 @@ function harness({ stops = () => [], storage = null } = {}) {
   const notices = [];
   /* The control state main.mjs owns, driven here the way the wire drives
      it: a request stands until the next thing the bridge reports. */
-  const state = { phase: "idle", paused: false, replaying: false, pending: null };
+  const state = { phase: "idle", paused: false, replaying: false, pending: null, halt: null };
 
   const view = createTopology({
     select,
@@ -247,6 +247,22 @@ describe("target picker", () => {
       at({ phase });
       assert.equal(pauseButton.hidden, true, phase);
     }
+  });
+
+  it("stands 일시정지 down while the bridge holds the machine for a command", () => {
+    const { view, at, runButton, pauseButton } = harness();
+    view.render(topo());
+
+    at({ phase: "running" });
+    assert.equal(pauseButton.disabled, false);
+    /* A run toward a stop is an inspection in flight; a pause asked for
+       meanwhile could only be refused. Stopping the session is not: the
+       machine can be taken away from under a hold. */
+    at({ halt: { cmd: "run" } });
+    assert.equal(pauseButton.disabled, true);
+    assert.equal(runButton.disabled, false);
+    at({ halt: null });
+    assert.equal(pauseButton.disabled, false);
   });
 
   it("halts and releases the machine with the one button", () => {

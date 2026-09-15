@@ -73,10 +73,11 @@ let topoSeq = 0;
 const sealedRuns = new Set();
 let wire = { send: () => false, ask: () => false };
 
-/* The four facts every control follows. A phase alone cannot say whether
-   a request this page sent is still in flight, and a control that cannot
-   see one re-arms mid-request and lets a second go out. */
-const state = { phase: "idle", paused: false, replaying: false, pending: null };
+/* The facts every control follows. `pending` is the request this page
+   sent and has not heard back on; `halt` is the command the bridge holds
+   the machine for, which can outlast a click by minutes and answer many
+   times before it ends — so it is the bridge's to report, not ours. */
+const state = { phase: "idle", paused: false, replaying: false, pending: null, halt: null };
 const controls = [];
 
 /* Anything the wire reports answers whatever request was in flight. */
@@ -445,7 +446,7 @@ function onTopo(ts, data) {
     const phase = String(topo.phase);
     /* Set before the switch below, so the guard in setPhase is already
        true for the very first thing it is asked to show. */
-    reported({ replaying: phase === "replay" });
+    reported({ replaying: phase === "replay", halt: topo.halt || null });
     if (phase === "running" && topo.paused) {
       setPaused(true);
       setPhase("running", "일시정지 (H)");
@@ -563,9 +564,21 @@ function onLife(ts, data) {
       stepper.say(data.event ? `정지 · ${data.event}` : "정지");
       break;
     }
+    /* The machine is running toward the stops, at launch and again at
+       every repeat of an 자동 run: the pause a stop reported is over. */
     case "armed":
+      setPaused(false);
       stepper.say(`무장 · ${(data.stops || []).join(", ")}`);
       events.addNotice(ts, `정지 지점 무장 — ${(data.stops || []).join(", ")}`);
+      break;
+    /* The bridge holds the machine for one command, from the click until
+       it lets go — after the sweep, and after every repeat. What the
+       drive controls may do follows this, not the request they sent. */
+    case "halt-begin":
+      reported({ halt: { cmd: String(data.cmd || "") } });
+      break;
+    case "halt-end":
+      reported({ halt: null });
       break;
     /* The chosen event may be rare, or may not happen on this demo at
        all. Saying so is the difference between waiting and looking
