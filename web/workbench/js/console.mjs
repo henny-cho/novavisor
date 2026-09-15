@@ -176,8 +176,18 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
     activate(MERGED);
   }
 
+  /* The bridge's own rule for input, followed here so the line stands
+     down instead of being refused: bytes reach a running machine, and a
+     paused one would buffer them into the guest on resume. */
+  let live = false;
+  function setState(state) {
+    live = String(state.phase) === "running" && !state.replaying && !state.paused;
+    input.disabled = !live;
+    focusButton.disabled = !live;
+  }
+
   function transmit(bytes) {
-    if (!bytes) return false; /* never send an empty payload */
+    if (!live || !bytes) return false; /* nothing to reach, or nothing to send */
     if (send("uart", { bytes })) return true;
     onNotice?.("브리지에 연결되지 않아 입력을 보내지 못했습니다");
     return false;
@@ -204,5 +214,6 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
 
   merged();
   activate(MERGED);
-  return { setGuests, append, note, mark, setBanner, settle, clearAll, cutAt };
+  setState({ phase: "", paused: false, replaying: false, pending: null, halt: null });
+  return { setState, setGuests, append, note, mark, setBanner, settle, clearAll, cutAt };
 }

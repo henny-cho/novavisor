@@ -17,6 +17,8 @@ export function createDrive({ root, note, send }) {
   let world = null; /* what this run says it accepts, or null */
   let contract = ""; /* the wait it promised, kept beside every verdict */
   let counter = 0; /* which mark this is, so two are distinguishable */
+  let live = false; /* a running machine, not a replay: what a command can reach */
+  const buttons = []; /* the issuing controls of the current world */
 
   const issue = (op, a = 0, b = 0) => send({ op, a, b });
 
@@ -24,7 +26,9 @@ export function createDrive({ root, note, send }) {
     const control = el("button", "btn sm", label);
     control.type = "button";
     control.title = title;
+    control.disabled = !live;
     control.addEventListener("click", onClick);
+    buttons.push(control);
     return control;
   }
 
@@ -94,11 +98,19 @@ export function createDrive({ root, note, send }) {
 
   function render() {
     clear(root);
+    buttons.length = 0;
     if (!world) return;
     for (const op of world.ops) renderOp(root, op, world.guests);
   }
 
   return {
+    /* The shared control state: the rows stay readable in a replay, the
+       buttons that would ask the machine for something do not. */
+    setState(state) {
+      live = String(state.phase) === "running" && !state.replaying;
+      for (const control of buttons) control.disabled = !live;
+    },
+
     /* What this run accepts, from the topology. Absent means the
        firmware placed no ring, and the panel says so — controls that
        quietly do nothing are what this milestone exists to remove.

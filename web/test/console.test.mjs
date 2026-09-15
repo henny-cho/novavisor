@@ -11,7 +11,11 @@ import { element, findAll, fire, gesture, installDom } from "./dom.mjs";
 
 const FOCUS_CYCLE = "\u0014"; /* the byte Ctrl-T stands for */
 
-function harness() {
+/* The control state main.mjs hands every control module; a machine is
+   running unless a test is about the states where none is. */
+const RUNNING = { phase: "running", paused: false, replaying: false, pending: null, halt: null };
+
+function harness({ live = true } = {}) {
   installDom();
   const tabs = element("div");
   const logs = element("div");
@@ -41,6 +45,7 @@ function harness() {
     send,
     onNotice,
   });
+  if (live) consoleView.setState(RUNNING);
 
   return { consoleView, tabs, logs, banner, form, input, focusButton, link, sent, notices };
 }
@@ -58,6 +63,41 @@ const press = (input, key, held = {}) => {
 };
 
 describe("console multiplexer", () => {
+  it("sends nothing before the wire has said anything", () => {
+    const { input, focusButton, form, sent } = harness({ live: false });
+
+    /* The markup ships the line live; a page that has not heard from the
+       bridge has no machine for the bytes to reach. */
+    assert.equal(input.disabled, true);
+    assert.equal(focusButton.disabled, true);
+    input.value = "ls";
+    submit(form);
+    assert.deepEqual(sent, []);
+  });
+
+  it("stands down where the bridge would refuse: paused, and in a replay", () => {
+    const { consoleView, input, focusButton, form, sent } = harness();
+
+    /* A paused machine's pty would buffer the bytes and replay them into
+       the guest on resume — the bridge refuses them, so the line does
+       not offer to send them. */
+    consoleView.setState({ ...RUNNING, paused: true });
+    assert.equal(input.disabled, true);
+    assert.equal(focusButton.disabled, true);
+    input.value = "ls";
+    submit(form);
+    assert.deepEqual(sent, []);
+
+    consoleView.setState({ ...RUNNING, phase: "replay", replaying: true });
+    assert.equal(input.disabled, true);
+
+    /* The machine runs again: the line is back, and what was typed with it. */
+    consoleView.setState(RUNNING);
+    assert.equal(input.disabled, false);
+    submit(form);
+    assert.deepEqual(sent, [["uart", { bytes: "ls\n" }]]);
+  });
+
   it("initializes tabs and appends hypervisor lines to merged view", () => {
     const { consoleView, logs } = harness();
     consoleView.append({ vm: null, text: "booting nova EL2" }, 1e9);

@@ -92,7 +92,9 @@ client — the bridge and QEMU keep running for the next connection.
   the demo manifest.
 - **Console** — one tab per VM plus the hypervisor. The input line sends UART
   bytes to the focused guest (`Enter` to send; the `Ctrl-T` button, or the key
-  itself, sends `0x14` to rotate console focus between VMs). A dot marks the tab
+  itself, sends `0x14` to rotate console focus between VMs). It stands down
+  wherever the bridge would refuse the bytes — no running machine, a paused
+  one, or a replay — as do the command panel's buttons. A dot marks the tab
   the last observed switch named — not a live reading: a browser that joined
   later has seen none, and the firmware re-routes focus by itself when the
   focused VM dies without printing a line. Each run boundary clears it.
@@ -172,8 +174,8 @@ The `일시정지` (pause) button appears while a session runs:
    to the **Sysreg** panel — and then the whole observation manifest.
 3. The machine **stays stopped** until you press `재개` (resume).
 
-While paused, console input is rejected (the pty would buffer it and replay
-it into the guest on resume). If the register sweep fails after the attach
+While paused, the console input line stands down (the pty would buffer the
+bytes and replay them into the guest on resume). If the register sweep fails after the attach
 already landed — say the gdb socket is taken by an external debugger — the
 bridge lets go of the machine before reporting, so a failed pause never
 leaves a silently frozen one. Reloading the page while paused is safe:

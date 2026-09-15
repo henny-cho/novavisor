@@ -50,14 +50,21 @@ const again = (over = {}) => ({
   command: { ...structuredClone(RUN.command), ...over },
 });
 
-function harness() {
+/* The control state main.mjs hands every control module; a machine is
+   running unless a test is about the states where none is. */
+const RUNNING = { phase: "running", paused: false, replaying: false, pending: null, halt: null };
+
+function harness({ live = true } = {}) {
   installDom();
   const root = element("div");
   const note = element("div");
   const sent = [];
   const drive = createDrive({ root, note, send: (data) => sent.push(data) });
+  if (live) drive.setState(RUNNING);
   return { drive, root, note, sent };
 }
+
+const issuers = (root) => findAll(root, "btn");
 
 const press = (root, label) =>
   fire(
@@ -66,6 +73,36 @@ const press = (root, label) =>
   );
 
 describe("drive panel", () => {
+  it("issues nothing before the wire has said anything", () => {
+    const { drive, root, sent } = harness({ live: false });
+    drive.setWorld(RUN);
+
+    /* The rows are drawn from the topology, but a page that has not
+       heard from the bridge has no machine to issue to. */
+    assert.ok(issuers(root).every((control) => control.disabled));
+    press(root, "주입");
+    assert.deepEqual(sent, []);
+  });
+
+  it("stands down in a replay and comes back with the machine", () => {
+    const { drive, root, sent } = harness();
+    drive.setWorld(RUN);
+    assert.ok(issuers(root).every((control) => !control.disabled));
+
+    drive.setState({ ...RUNNING, phase: "replay", replaying: true });
+    assert.ok(issuers(root).every((control) => control.disabled));
+    press(root, "주입");
+    /* A world rebuilt meanwhile draws its controls in the same standing. */
+    drive.setWorld(again({ period_us: 3000 }));
+    assert.ok(issuers(root).every((control) => control.disabled));
+    press(root, "주입");
+    assert.deepEqual(sent, []);
+
+    drive.setState(RUNNING);
+    press(root, "주입");
+    assert.deepEqual(sent, [{ op: "spi", a: 0, b: 32 }]);
+  });
+
   it("builds a control for each op the run declares and no other", () => {
     const { drive, root } = harness();
     drive.setWorld(again({ ops: [RUN.command.ops[0]] }));

@@ -358,7 +358,7 @@ const stepper = createStepper({
   onNotice: notify,
 });
 
-controls.push(topology, stepper);
+controls.push(topology, stepper, consoleView, drive);
 
 /* ---------------- top bar state ---------------- */
 
