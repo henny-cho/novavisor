@@ -405,17 +405,21 @@ def load_all(directory: Path) -> list[Recording]:
     Ordered by the number the recorder assigned, not by mtime: a
     recording is a thing people copy, and a copy re-stamps every mtime
     in whatever order the directory was walked.
+
+    A directory is a run once the launch numbered it: a verify, or a
+    build that failed, opened a file of its own and no machine ran in it.
     """
     directory = Path(directory)
     if (directory / META).is_file():
         return [load(directory)]
-    runs = sorted(
+    opened = sorted(
         (child for child in directory.glob("run-*") if (child / META).is_file()),
         key=_run_index,
     )
+    runs = [run for run in map(load, opened) if run.meta.get("run_id") is not None]
     if not runs:
-        raise Unreadable(f"{directory} holds no {META}")
-    return [load(run) for run in runs]
+        raise Unreadable(f"{directory} holds no run a machine ran in")
+    return runs
 
 
 def load(directory: Path) -> Recording:

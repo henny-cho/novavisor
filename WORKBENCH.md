@@ -55,7 +55,9 @@ nova workbench serve [DEMO] [--host ADDR] [--port N] [--variant NAME] [--verify]
   `nova workbench replay DIR` serves it back with no QEMU and no image. Each
   run gets its own `run-N` directory, opened where the run opens — at its
   build — so a run's topology, launch and seal are all in one file and a
-  restarted machine's clock never runs backwards inside one.
+  restarted machine's clock never runs backwards inside one. A verify or a
+  build that failed opens a directory too, but only a directory the launch
+  numbered counts as a run when the root is replayed or read as a set.
 - One QEMU session per bridge. Run several bridges on different ports if you
   need parallel targets.
 

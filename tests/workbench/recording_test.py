@@ -58,13 +58,20 @@ class Recorded(unittest.TestCase):
         self.addCleanup(shutil.rmtree, made, ignore_errors=True)
         return made
 
+    def recorder(self, meta: dict | None = None) -> recording.Recorder:
+        """A recorder following a numbered run, as the flush loop leaves one
+        once a machine has launched — the state every replay test stands in."""
+        made = recording.Recorder(self.directory, meta)
+        made.for_run(1)
+        return made
+
 
 class RoundTripTest(Recorded):
     def test_the_envelopes_come_back_exactly_as_they_went_out(self):
         """Not "equivalent": identical. A replay that reconstructed
         frames would be a second bridge, free to answer differently
         about one run."""
-        recorder = recording.Recorder(self.directory, {"demo": "13_linux"})
+        recorder = self.recorder({"demo": "13_linux"})
         sent = []
         for index in range(5):
             frame = {"seq": index, "topic": "life", "kind": "event",
@@ -81,7 +88,7 @@ class RoundTripTest(Recorded):
         self.assertTrue(back.meta["complete"])
 
     def test_records_come_back_at_the_firmwares_own_width(self):
-        recorder = recording.Recorder(self.directory)
+        recorder = self.recorder()
         written = records(7)
         recorder.drained(written)
         recorder.close()
@@ -93,7 +100,7 @@ class RoundTripTest(Recorded):
         """Buffered on purpose: publish() is synchronous and on the
         bridge's only thread, so the disk write belongs to the loop that
         was already waking every 50 ms."""
-        recorder = recording.Recorder(self.directory, {})
+        recorder = self.recorder({})
         recorder.frame({"seq": 1, "topic": "life", "kind": "event", "ts": 0, "data": {}})
         wire = recorder.directory / recording.WIRE
         self.assertEqual(wire.read_text(), "")
@@ -105,7 +112,7 @@ class RoundTripTest(Recorded):
         """An ordinary way for a recording to end. Refusing the whole
         file over its last half-written line would throw away the run
         that was worth recording."""
-        recorder = recording.Recorder(self.directory, {})
+        recorder = self.recorder({})
         recorder.frame({"seq": 1, "topic": "life", "kind": "event", "ts": 0, "data": {}})
         recorder.close()
         wire = recorder.directory / recording.WIRE
@@ -115,7 +122,7 @@ class RoundTripTest(Recorded):
         self.assertEqual(len(back.frames), 1)
 
     def test_damage_anywhere_but_the_end_is_refused(self):
-        recorder = recording.Recorder(self.directory, {})
+        recorder = self.recorder({})
         for index in range(3):
             recorder.frame({"seq": index, "topic": "life", "kind": "event", "ts": 0, "data": {}})
         recorder.close()
@@ -128,7 +135,7 @@ class RoundTripTest(Recorded):
             recording.load(self.directory)
 
     def test_a_future_version_is_refused_rather_than_decoded(self):
-        recorder = recording.Recorder(self.directory, {})
+        recorder = self.recorder({})
         recorder.close()
         meta = recorder.directory / recording.META
         meta.write_text(json.dumps({"v": recording.VERSION + 1}))
@@ -222,6 +229,33 @@ class RoundTripTest(Recorded):
         for name in ("run_id", "freq_hz", "producer_dead", "tail_drained", "absent"):
             self.assertNotIn(name, second, name)
         self.assertEqual(second["host"], "ci")  # what the recording knew as a whole
+
+    def test_a_directory_no_launch_numbered_is_not_a_run(self):
+        """A verify, or a build that failed, opens a file of its own; a
+        measurement reading the root as a set of runs must not count it
+        as a run that saw nothing, and a replay of the root must not open
+        it as the newest machine."""
+        recorder = recording.Recorder(self.directory, {})
+        recorder.frame(life(1, "building"))
+        recorder.for_run(1)
+        recorder.drained(records(3))
+        recorder.frame(life(2, "building"))  # a verify: built, never launched
+        recorder.frame(life(3, "verifying"))
+        recorder.close()
+
+        self.assertEqual(sorted(c.name for c in self.directory.iterdir()), ["run-1", "run-2"])
+        runs = recording.load_all(self.directory)
+        self.assertEqual([run.meta["run_id"] for run in runs], [1])
+        self.assertEqual(recording.load(self.directory).meta["run_id"], 1)
+        # Named directly, the file still opens: it is evidence of the build.
+        self.assertEqual(len(recording.load(self.directory / "run-2").frames), 2)
+
+    def test_a_root_where_no_machine_ran_says_so(self):
+        recorder = recording.Recorder(self.directory, {})
+        recorder.frame(life(1, "building"))
+        recorder.close()
+        with self.assertRaises(recording.Unreadable):
+            recording.load_all(self.directory)
 
     def test_a_run_is_named_by_the_world_it_recorded(self):
         """Not by the target the bridge was launched with, which names
@@ -338,7 +372,7 @@ class TeeTest(Recorded):
         """The window sheds console frames when a batch overruns, and a
         recording taken from what a client received would be missing
         exactly what the busiest moment produced."""
-        recorder = recording.Recorder(self.directory, {})
+        recorder = self.recorder({})
         store = StateStore(Envelopes(Clock()), FrameWindow(max_frames=4), on_frame=recorder.frame)
         for index in range(20):
             store.publish(Topic.CONSOLE, Kind.EVENT, {"line": index})
@@ -397,7 +431,7 @@ class IdentityTest(Recorded):
 
     def test_one_window_has_one_answer_live_or_replayed(self):
         written = records(600, first=1_000)
-        recorder = recording.Recorder(self.directory, {"freq_hz": 62_500_000})
+        recorder = self.recorder({"freq_hz": 62_500_000})
         recorder.frame({"seq": 1, "topic": "life", "kind": "event", "ts": 5,
                         "src": "bridge", "data": {"phase": "running"}})
         recorder.drained(written)
@@ -420,7 +454,7 @@ class IdentityTest(Recorded):
         self.assertEqual(self.answer(live, request), self.answer(replayed, request))
 
     def test_replay_restamping_does_not_claim_an_old_reply(self):
-        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        recorder = self.recorder({"freq_hz": 1})
         recorder.frame({
             "seq": 1,
             "topic": "trace",
@@ -447,7 +481,7 @@ class IdentityTest(Recorded):
         published as `frames-dropped` — so the badge that means "the
         bridge could not keep up" lit on merely opening a recording.
         """
-        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        recorder = self.recorder({"freq_hz": 1})
         for index in range(9_000):
             recorder.frame({"seq": index, "topic": "console", "kind": "event",
                             "ts": index, "src": "serial", "data": {"line": index}})
@@ -467,7 +501,7 @@ class IdentityTest(Recorded):
         """A recording carries what the run that made it wrote. Coercing
         an unfamiliar field into this build's enum raised, which killed
         the connection over a value the reader never looked at."""
-        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        recorder = self.recorder({"freq_hz": 1})
         recorder.frame({"seq": 1, "topic": "console", "kind": "gossip", "ts": 3,
                         "src": "martian", "data": {"line": "from a later build"}})
         recorder.close()
@@ -485,7 +519,7 @@ class IdentityTest(Recorded):
         becomes direct the moment something can. Taking the first
         description threw every such upgrade away and drew the board as
         it looked before the run had proved anything."""
-        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        recorder = self.recorder({"freq_hz": 1})
         for seq, grade in enumerate(("none", "direct"), start=1):
             recorder.frame({"seq": seq, "topic": "topo", "kind": "snapshot", "ts": seq,
                             "data": {"board": {"edges": [{"id": "post", "grade": grade}]}}})
@@ -501,7 +535,7 @@ class IdentityTest(Recorded):
         """A connect topology carries the live session's last seal, and
         the recorder tees it. Adopted, a replay would show a summary of
         the machine that made the file — it seals from its own frames."""
-        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        recorder = self.recorder({"freq_hz": 1})
         recorder.frame({"seq": 1, "topic": "topo", "kind": "snapshot", "ts": 1,
                         "data": {"image": "abc", "sealed": {"run_id": 3}, "phase": "running"}})
         recorder.close()
@@ -516,7 +550,7 @@ class IdentityTest(Recorded):
         phase and run identity arrive *after* the fresh copy that
         replaced them — and each reconnect costs the backlog a real
         frame of history."""
-        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        recorder = self.recorder({"freq_hz": 1})
         recorder.close()
         bridge = support.bridge(ui_root=self.ui)
         bridge.load_replay(recording.load(self.directory))
@@ -528,7 +562,7 @@ class IdentityTest(Recorded):
     def test_a_replay_says_it_is_one(self):
         from novakit.services.workbench.session import Phase
 
-        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        recorder = self.recorder({"freq_hz": 1})
         recorder.close()
         bridge = support.bridge(ui_root=self.ui)
         bridge.load_replay(recording.load(self.directory))
@@ -545,7 +579,7 @@ class IdentityTest(Recorded):
         """
         from novakit.services.workbench import server
 
-        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        recorder = self.recorder({"freq_hz": 1})
         recorder.close()
         bridge = support.bridge(ui_root=self.ui)
         bridge.load_replay(recording.load(self.directory))
@@ -579,7 +613,7 @@ class IdentityTest(Recorded):
         guesses about a machine that is not here. And exactly one
         topology, or the recorded run's phase would overwrite the
         replay's and the reader would be told it is live."""
-        recorder = recording.Recorder(self.directory, {"freq_hz": 1})
+        recorder = self.recorder({"freq_hz": 1})
         recorder.frame({"seq": 900, "topic": "topo", "kind": "snapshot", "ts": 0,
                         "src": "bridge", "data": {"stops": [{"id": "trap"}], "phase": "running"}})
         recorder.frame({"seq": 901, "topic": "console", "kind": "event", "ts": 3,
@@ -754,7 +788,7 @@ class CursorTest(Recorded):
     """One number moves the strip, the panels and the console."""
 
     def recorded(self):
-        recorder = recording.Recorder(self.directory, {"freq_hz": 1_000_000})
+        recorder = self.recorder({"freq_hz": 1_000_000})
         for index in range(4):
             recorder.frame({"seq": index * 2, "topic": "sched.cpu", "kind": "snapshot",
                             "ts": index * 10, "src": "S",
@@ -860,7 +894,7 @@ class WrittenRunTest(Recorded):
     def written(self) -> recording.Recording:
         """The run a bridge writes: a world, two topics first read at
         different moments, and the whole record family."""
-        recorder = recording.Recorder(self.directory, {"freq_hz": 62_500_000})
+        recorder = self.recorder({"freq_hz": 62_500_000})
         recorder.frame({"seq": 1, "topic": "topo", "kind": "snapshot", "ts": 0,
                         "src": "bridge", "data": {"demo": "10_console_mux"}})
         recorder.frame({"seq": 2, "topic": "sched.cpu", "kind": "snapshot", "ts": 10,
