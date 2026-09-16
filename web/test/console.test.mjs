@@ -11,6 +11,12 @@ import { element, findAll, fire, gesture, installDom } from "./dom.mjs";
 
 const FOCUS_CYCLE = "\u0014"; /* the byte Ctrl-T stands for */
 
+/* The lines a pane holds. The stream groups them, so they are what a
+   walk finds rather than what the pane's own children are — and a line
+   shows only if its group does. */
+const lines = (pane) => findAll(pane, "cline");
+const showing = (row) => !row.hidden && !row.parentNode.hidden;
+
 /* The control state main.mjs hands every control module; a machine is
    running unless a test is about the states where none is. */
 const RUNNING = { phase: "running", paused: false, replaying: false, pending: null, halt: null };
@@ -105,8 +111,8 @@ describe("console multiplexer", () => {
 
     const merged = logs.children.find((p) => p.id === "log-all");
     assert.ok(merged, "merged log pane exists");
-    assert.equal(merged.children.length, 1);
-    assert.match(merged.children[0].textContent, /EL2booting nova EL2/);
+    assert.equal(lines(merged).length, 1);
+    assert.match(lines(merged)[0].textContent, /EL2booting nova EL2/);
   });
 
   it("dynamically manages guest tabs from topology", () => {
@@ -125,8 +131,8 @@ describe("console multiplexer", () => {
     const vm1Pane = logs.children.find((p) => p.id === "log-1");
     assert.ok(vm0Pane);
     assert.ok(vm1Pane);
-    assert.equal(vm0Pane.children.length, 1);
-    assert.equal(vm1Pane.children.length, 1);
+    assert.equal(lines(vm0Pane).length, 1);
+    assert.equal(lines(vm1Pane).length, 1);
   });
 
   it("mints nothing for a slot the board cannot host", () => {
@@ -139,7 +145,7 @@ describe("console multiplexer", () => {
 
     assert.equal(findAll(tabs, "tab").length, 1); // the merged log alone
     const merged = logs.children.find((pane) => pane.id === "log-all");
-    assert.equal(merged.children.length, 1);
+    assert.equal(lines(merged).length, 1);
   });
 
   it("cuts future output when cursor moves into past", () => {
@@ -148,21 +154,39 @@ describe("console multiplexer", () => {
     consoleView.append({ vm: null, text: "late event" }, 5e9);
 
     const merged = logs.children.find((p) => p.id === "log-all");
-    assert.equal(merged.children.length, 2);
+    assert.equal(lines(merged).length, 2);
 
     consoleView.cutAt(3e9);
-    assert.equal(merged.children[0].hidden, false);
-    assert.equal(merged.children[1].hidden, true);
+    assert.equal(showing(lines(merged)[0]), true);
+    assert.equal(showing(lines(merged)[1]), false);
 
     consoleView.cutAt(null);
-    assert.equal(merged.children[1].hidden, false);
+    assert.equal(showing(lines(merged)[1]), true);
+  });
+
+  it("keeps a pane nobody is looking at ready to be looked at", () => {
+    const { consoleView, logs } = harness();
+    setGuestSlots({ max_guests: 2 });
+    consoleView.setGuests([{ name: "linux", vcpus: 1 }]);
+    /* The merged tab is active, so vm0's pane is hidden. What its groups
+       declare is still owed: activating it pins to a bottom computed
+       from those declarations. */
+    for (let i = 1; i <= 120; i += 1) consoleView.append({ vm: 0, text: `line ${i}` }, i * 1e9);
+    consoleView.settle();
+
+    const pane = logs.children.find((p) => p.id === "log-0");
+    assert.equal(pane.hidden, true);
+    assert.deepEqual(
+      findAll(pane, "chunk").map((chunk) => Number(chunk.style.getPropertyValue("--rows"))),
+      [100, 20],
+    );
   });
 
   it("keeps up with a cursor moved repeatedly, and with a line that lands past it", () => {
     const { consoleView, logs } = harness();
     for (let i = 1; i <= 6; i += 1) consoleView.append({ vm: null, text: `line ${i}` }, i * 1e9);
     const merged = logs.children.find((p) => p.id === "log-all");
-    const shown = () => merged.children.map((row) => !row.hidden);
+    const shown = () => lines(merged).map(showing);
 
     /* The cut walks out from where it last was rather than over every
        row, so what it left behind has to still be right after it has
@@ -327,8 +351,7 @@ describe("stream cap", () => {
     };
 
     for (let n = 0; n < 6; n += 1) put(n);
-    assert.equal(container.children.length, 3);
-    assert.deepEqual(container.children.map((row) => row.textContent), ["line 3", "line 4", "line 5"]);
+    assert.deepEqual([...stream.rows()].map((row) => row.textContent), ["line 3", "line 4", "line 5"]);
 
     /* The stream counts what it put there rather than asking the
        container, so the count has to survive everything that empties
@@ -336,7 +359,6 @@ describe("stream cap", () => {
        a full buffer down to nothing. */
     stream.clear();
     for (let n = 0; n < 4; n += 1) put(n);
-    assert.equal(container.children.length, 3);
-    assert.deepEqual(container.children.map((row) => row.textContent), ["line 1", "line 2", "line 3"]);
+    assert.deepEqual([...stream.rows()].map((row) => row.textContent), ["line 1", "line 2", "line 3"]);
   });
 });

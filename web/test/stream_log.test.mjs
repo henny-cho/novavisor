@@ -1,11 +1,12 @@
-/* The stream log's scroll pin: it belongs to the frame that lays the
-   batch out, and following is the reader's to give up and take back. */
+/* The stream log: a scroll pin that belongs to the frame that lays the
+   batch out, following that is the reader's to give up and take back,
+   and rows grouped so a full log costs what is on screen. */
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { StreamLog } from "../workbench/js/primitives/stream_log.mjs";
-import { element, fire, installDom } from "./dom.mjs";
+import { element, findAll, fire, installDom } from "./dom.mjs";
 
 /* A scroller with room to scroll, and frames the test releases itself
    rather than the fake DOM's synchronous ones. The bottom is
@@ -143,5 +144,123 @@ describe("stream log pin", () => {
     frame();
     assert.equal(container.scrollTop, 560);
     assert.equal(frames.length, 0);
+  });
+});
+
+/* Rows are grouped so the browser can skip most of a full log. What the
+   group declares about itself is the whole of what a skipped one is. */
+describe("stream log chunks", () => {
+  function filled(count, { lineCap = 1000, from = 0 } = {}) {
+    installDom();
+    const container = element("div");
+    const log = new StreamLog({ container, lineCap });
+    for (let n = from; n < from + count; n += 1) {
+      const row = element("div");
+      row.textContent = `line ${n}`;
+      log.append(row, (n + 1) * 1000);
+    }
+    return { log, container, chunks: () => findAll(container, "chunk") };
+  }
+  const rowsDeclared = (chunk) => Number(chunk.style.getPropertyValue("--rows"));
+
+  it("drops the oldest rows across the boundary and takes the empty group with them", () => {
+    const { log, container, chunks } = filled(260, { lineCap: 150 });
+    log.settle();
+
+    assert.equal([...log.rows()].length, 150);
+    assert.equal([...log.rows()][0].textContent, "line 110");
+    /* The first group emptied and went; the second is what the trim ate
+       into. A group left in the container holding nothing would declare
+       a height for rows that are not there. */
+    assert.deepEqual(chunks().map(rowsDeclared), [90, 60]);
+    assert.equal(container.children.length, 2);
+  });
+
+  it("walks rows in order across the boundary, both ways", () => {
+    const { log } = filled(250);
+    const seen = [];
+    /* The cut walks row to row; the grouping must be invisible to it.
+       The first cut has no boundary to start from, so it is one full
+       pass — over every row, in order, across every group. */
+    log.cutTo(120_500, (row, past) => {
+      row.hidden = past;
+      seen.push(row.textContent);
+    });
+    assert.equal(seen.length, 250);
+    assert.deepEqual([seen[0], seen.at(-1)], ["line 0", "line 249"]);
+
+    /* And the next is the boundary walk: the rows that changed side. */
+    seen.length = 0;
+    log.cutTo(null, (row, past) => {
+      row.hidden = past;
+      seen.push(row.textContent);
+    });
+    assert.equal(seen.length, 130); // rows 120..249, the ones past the cut
+    assert.deepEqual([seen[0], seen.at(-1)], ["line 120", "line 249"]);
+    assert.equal([...log.rows()].every((row) => !row.hidden), true);
+  });
+
+  it("declares the rows a group still shows, and hides a group showing none", () => {
+    const { log, chunks } = filled(300);
+    log.settle();
+    assert.deepEqual(chunks().map(rowsDeclared), [100, 100, 100]);
+
+    /* A cursor moved into the past: two whole groups are future. A group
+       that only declared a height would leave it as empty space. */
+    log.cutTo(100_000, (row, past) => {
+      row.hidden = past;
+    });
+    assert.deepEqual(chunks().map(rowsDeclared), [100, 0, 0]);
+    assert.deepEqual(chunks().map((chunk) => chunk.hidden), [false, true, true]);
+
+    log.cutTo(null, (row, past) => {
+      row.hidden = past;
+    });
+    assert.deepEqual(chunks().map(rowsDeclared), [100, 100, 100]);
+    assert.deepEqual(chunks().map((chunk) => chunk.hidden), [false, false, false]);
+  });
+
+  it("brings a group back when a row arrives in one that shows nothing", () => {
+    const { log, chunks } = filled(150);
+    log.settle();
+    /* The cursor at the very start: every row is future, every group is
+       nothing to show. */
+    log.cutTo(0, (row, past) => {
+      row.hidden = past;
+    });
+    assert.deepEqual(chunks().map((chunk) => chunk.hidden), [true, true]);
+
+    /* A remark this session makes: on no run clock, so no cut hides it.
+       Landing in a group that is display:none would make it invisible —
+       and nothing would say so until some later batch settled. */
+    const notice = element("div");
+    notice.hidden = log.append(notice, undefined);
+    assert.equal(notice.hidden, false);
+    assert.equal(notice.parentNode.hidden, false);
+  });
+
+  it("declares what its groups hold even where nobody is looking", () => {
+    const { log, container, chunks } = filled(150);
+    /* A console tab that is not the active one: the count it declares is
+       owed all the same, or showing it would scroll into the space its
+       stale estimate claims. Only the scroll waits for the pane. */
+    container.hidden = true;
+    log.settle();
+    assert.deepEqual(chunks().map(rowsDeclared), [100, 50]);
+    assert.equal(container.scrollTop, 0);
+  });
+
+  it("takes the count again when the caller hides rows by a rule of its own", () => {
+    const { log, chunks } = filled(200);
+    log.settle();
+
+    /* A badge filter, which the stream knows nothing about. */
+    for (const row of log.rows()) row.hidden = row.textContent.endsWith("7");
+    log.restyled();
+    assert.deepEqual(chunks().map(rowsDeclared), [90, 90]);
+
+    for (const row of log.rows()) row.hidden = true;
+    log.restyled();
+    assert.deepEqual(chunks().map((chunk) => chunk.hidden), [true, true]);
   });
 });

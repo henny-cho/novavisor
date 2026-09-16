@@ -31,10 +31,12 @@ export function createEvents({ list, filters, resetButton, clearButton }) {
   };
 
   function refresh() {
-    for (const row of list.children) {
+    for (const row of stream.rows()) {
       if (row.dataset.badge) row.hidden = !shows(row);
     }
-    stream.dirty = true;
+    /* Hidden by this rule rather than by the cut, so the stream has to
+       take the count of what is left over again. */
+    stream.restyled();
   }
 
   /* Show only these badges, or pass null to stop narrowing. What the

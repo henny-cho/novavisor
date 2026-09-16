@@ -127,13 +127,12 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
     }
   }
 
-  /* One scroll write per batch instead of a forced layout per line —
-     a boot burst carries thousands of lines in one flush. `stick` is
-     maintained solely by each pane's scroll listener. */
+  /* One scroll write per batch instead of a forced layout per line — a
+     boot burst carries thousands of lines in one flush. Every pane, on
+     screen or not: the stream keeps what a hidden one owes and leaves
+     the scroll to whatever shows it. */
   function settle() {
-    for (const view of views.values()) {
-      if (!view.pane.hidden) view.stream.settle();
-    }
+    for (const view of views.values()) view.stream.settle();
   }
 
   function append(line, ts) {

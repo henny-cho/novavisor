@@ -30,7 +30,9 @@ const chip = (filters, name) =>
   findAll(filters, "fchip").find((found) => found.textContent === name);
 
 const showing = (list) =>
-  list.children.filter((row) => !row.hidden).map((row) => row.dataset.badge);
+  findAll(list, "erow")
+    .filter((row) => !row.hidden && !row.parentNode.hidden)
+    .map((row) => row.dataset.badge);
 
 describe("event log filters", () => {
   it("keeps the board's narrowing out of the reader's muting", () => {
