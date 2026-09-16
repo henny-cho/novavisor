@@ -616,11 +616,6 @@ export function createPanels({ tabs, host }) {
     const nodes = bodies.get(id);
     if (!nodes || nodes.body.hidden) return;
     const drawer = drawers.get(id);
-    /* The drawer is the scroller and this rebuild empties it, which
-       drops the reader's offset — a wide table could never be read to
-       its right edge. Restore what they were looking at. */
-    const left = host.scrollLeft;
-    const top = host.scrollTop;
     clear(nodes.body);
     const newest = drawer.watch
       .map((topic) => latest.get(topic))
@@ -666,8 +661,6 @@ export function createPanels({ tabs, host }) {
         nodes.body.append(el("div", "pnote", said));
       }
     }
-    host.scrollLeft = left;
-    host.scrollTop = top;
   }
 
   function renderAll() {
