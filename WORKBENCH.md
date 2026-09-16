@@ -755,6 +755,16 @@ import itself.
   any new executor + marshalling pattern.
 - **Connect replay is newest-first for topology**: clients dedup by `seq`,
   and topology snapshots carry the highest `seq` wins semantics (`topoSeq`).
+- **A batch's layout visits every live box in a scroller**, dirty or not, so
+  what a log costs follows how much of it is in the DOM rather than how much
+  of it changed. The console and event logs hold their rows in groups of a
+  hundred (`stream_log.mjs`): a group out of view is skipped whole and
+  declares the height of the rows it still shows, and one showing none hides
+  itself — a replay cursor moved into the past would otherwise leave every
+  future group's estimate standing as empty space. Nothing on a draw path
+  may read layout (`no-layout-read-on-draw-path` holds the board and the
+  panel drawers to it); the log's own scroll pin measures in the animation
+  frame, where the layout happens anyway.
 - The served UI lives in `web/workbench/`; the design mock it came from
   (`web_sim/novavisor-sim.html`) is local-only and never tracked, so
   `tokens.css` is the authoritative palette and a parity test compares the

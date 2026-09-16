@@ -9,8 +9,8 @@
    Naming the draw-path entry points is not enough on its own: a helper
    two calls down measures just as expensively. So the check is a walk
    of the module's own call graph from those entries. The walk stops at
-   the seam, which is where the module is supposed to measure and which
-   caches what it read. */
+   the seam, where the module is supposed to measure and where it caches
+   what it read — a module with nothing to measure names no seam. */
 
 const holder = (functions, name, node) => {
   const found = functions.get(name);
@@ -23,14 +23,18 @@ const holder = (functions, name, node) => {
   return fresh;
 };
 
-/* A function's name where one can be read: the declaration's own, or
-   the binding an arrow was assigned to. Anything else is anonymous and
-   its body belongs to the nearest named function around it. */
+/* A function's name where one can be read: the declaration's own, the
+   binding an arrow was assigned to, or the key it is a method under —
+   a drawer written as one is still a drawer. Anything else is anonymous
+   and its body belongs to the nearest named function around it. */
 const nameOf = (node) => {
   if (node.type === "FunctionDeclaration") return node.id?.name ?? "";
   const parent = node.parent;
   if (parent?.type === "VariableDeclarator" && parent.id.type === "Identifier") {
     return parent.id.name;
+  }
+  if (parent?.type === "Property" || parent?.type === "MethodDefinition") {
+    return parent.key?.name ?? String(parent.key?.value ?? "");
   }
   return node.id?.name ?? "";
 };
@@ -50,7 +54,7 @@ export default {
           seam: { type: "string" },
           apis: { type: "array", items: { type: "string" }, minItems: 1 },
         },
-        required: ["entry", "seam", "apis"],
+        required: ["entry", "apis"],
         additionalProperties: false,
       },
     ],
@@ -61,6 +65,8 @@ export default {
         "{{seam}}() is gone: the module has no single place to read geometry, so every draw path is free to measure.",
       blindSeam:
         "{{seam}}() reads no layout: the measuring seam stopped measuring, and this rule now proves nothing.",
+      readsAtAll:
+        "{{api}} runs on the draw path ({{path}}): a snapshot must never force a layout, and this module has nothing it needs to measure.",
       noEntries:
         "no draw-path function matches {{entry}}: the names moved and this rule stopped watching anything.",
     },
@@ -104,10 +110,10 @@ export default {
           context.report({ node: program, messageId: "noEntries", data: { entry } });
           return;
         }
-        const measured = functions.get(seam);
-        if (!measured) {
+        const measured = seam ? functions.get(seam) : null;
+        if (seam && !measured) {
           context.report({ node: program, messageId: "noSeam", data: { seam } });
-        } else if (measured.reads.length === 0) {
+        } else if (measured && measured.reads.length === 0) {
           context.report({ node: measured.node, messageId: "blindSeam", data: { seam } });
         }
 
@@ -125,7 +131,11 @@ export default {
         for (const [name, origin] of from) {
           const path = origin === name ? name : `${origin} reaches ${name}`;
           for (const node of functions.get(name).reads) {
-            context.report({ node, messageId: "reads", data: { api: node.name, path, seam } });
+            context.report({
+              node,
+              messageId: seam ? "reads" : "readsAtAll",
+              data: { api: node.name, path, seam },
+            });
           }
         }
       },

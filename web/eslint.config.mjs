@@ -154,6 +154,26 @@ const BROWSER = Object.fromEntries(
   ].map((name) => [name, "readonly"]),
 );
 
+/* Every DOM read that makes the browser lay the page out before it can
+   answer. Scroll offsets are in it because a panel drawer kept one
+   across a rebuild and paid a forced layout per batch for it. */
+const LAYOUT_READS = [
+  "getBoundingClientRect",
+  "offsetWidth",
+  "offsetHeight",
+  "offsetTop",
+  "offsetLeft",
+  "clientWidth",
+  "clientHeight",
+  "clientTop",
+  "clientLeft",
+  "scrollWidth",
+  "scrollHeight",
+  "scrollTop",
+  "scrollLeft",
+  "getComputedStyle",
+];
+
 export default [
   {
     name: "workbench/language",
@@ -181,21 +201,20 @@ export default [
              purpose: they run on a gesture, not on a value. */
           entry: "^(?:render|paint|draw|flash|note|relink|residency|put)",
           seam: "measure",
-          apis: [
-            "getBoundingClientRect",
-            "offsetWidth",
-            "offsetHeight",
-            "offsetTop",
-            "offsetLeft",
-            "clientWidth",
-            "clientHeight",
-            "clientTop",
-            "clientLeft",
-            "scrollWidth",
-            "scrollHeight",
-            "getComputedStyle",
-          ],
+          apis: LAYOUT_READS,
         },
+      ],
+    },
+  },
+  {
+    name: "workbench/panel-drawers",
+    files: ["workbench/js/panels.mjs"],
+    rules: {
+      /* No seam: a drawer draws tables from values it was handed and has
+         nothing to measure, so every layout read here is one too many. */
+      "workbench/no-layout-read-on-draw-path": [
+        "error",
+        { entry: "^render", apis: LAYOUT_READS },
       ],
     },
   },
