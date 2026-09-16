@@ -40,9 +40,9 @@ class Element {
     this.hidden = false;
     this.focused = false;
     this.scrollLeft = 0;
-    this.scrollTop = 0;
-    this.scrollHeight = 0;
-    this.clientHeight = 0;
+    this._scrollHeight = 0;
+    this._clientHeight = 0;
+    this._scrollTop = 0;
     /* What getBoundingClientRect answers; a test that cares sets it. */
     this.rect = { left: 0, top: 0, width: 0, height: 0 };
     /* A text field reads back as empty before anything is typed, as the
@@ -61,6 +61,42 @@ class Element {
         return on;
       },
     };
+  }
+
+  /* A scroller lands where it can, as a browser's does: told to go past
+     the bottom, it stops at scrollHeight − clientHeight — and when the
+     bottom moves above it, it is moved there and says so with a scroll. */
+  get scrollTop() {
+    return this._scrollTop;
+  }
+
+  set scrollTop(value) {
+    const bottom = Math.max(0, this._scrollHeight - this._clientHeight);
+    this._scrollTop = Math.max(0, Math.min(Number(value) || 0, bottom));
+  }
+
+  get scrollHeight() {
+    return this._scrollHeight;
+  }
+
+  set scrollHeight(value) {
+    this._scrollHeight = value;
+    this.reclamp();
+  }
+
+  get clientHeight() {
+    return this._clientHeight;
+  }
+
+  set clientHeight(value) {
+    this._clientHeight = value;
+    this.reclamp();
+  }
+
+  reclamp() {
+    const was = this._scrollTop;
+    this.scrollTop = was;
+    if (this._scrollTop !== was) fire(this, "scroll");
   }
 
   get className() {
@@ -231,9 +267,9 @@ class Storage {
   }
 }
 
-/* Frames run where they were asked for. Everything under test draws
-   from records rather than from what is already painted, so a deferred
-   frame would only make a test wait to observe the same thing. */
+/* Frames run where they were asked for: nothing under test paints, so a
+   deferred frame would only make a test wait to observe the same thing.
+   A test about the deferral itself replaces this with a queue. */
 export function installDom() {
   const document = new Document();
   globalThis.document = document;

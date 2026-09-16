@@ -57,7 +57,7 @@ export function createConsole({ tabs, logs, banner, form, input, focusButton, se
       const on = id === active;
       view.pane.hidden = !on;
       view.tab.setAttribute("aria-selected", String(on));
-      if (on) view.stream.pin();
+      if (on) view.stream.pin({ recheck: true });
     }
   }
 

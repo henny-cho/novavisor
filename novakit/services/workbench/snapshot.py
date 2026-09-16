@@ -602,11 +602,9 @@ class SnapshotPoller:
         return self._stamp.get(topic)
 
     def newest_stamp(self) -> int | None:
-        """The latest publish this poller has seen, over every topic.
-
-        A floor of the machine's clock at any later moment — every copy
-        published predates it — for a stop with no ring to ask instead.
-        """
+        """The latest publish this poller has seen, over every topic: a floor
+        of the machine's clock at any later moment, for a stop with no ring
+        to ask instead."""
         return max(self._stamp.values(), default=None)
 
     def sweep(self) -> list[tuple[Obs, object]]:

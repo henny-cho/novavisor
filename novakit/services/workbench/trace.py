@@ -697,12 +697,10 @@ class TraceReader:
         return tuple(self._head(ring) for ring in range(self.geometry.rings))
 
     def newest_ts(self) -> int | None:
-        """The machine's clock as of its last record, over every ring.
-
-        A stopped machine writes nothing more, so this is the tightest
-        floor of the instant it stopped at that its frozen memory holds.
-        None until some ring has published a record.
-        """
+        """The machine's clock as of its last record, over every ring. A
+        stopped machine writes nothing more, so this is the tightest floor
+        of its stopping instant that its frozen memory holds; None until
+        some ring has published a record."""
         written = [(ring, head) for ring, head in enumerate(self.snapshot_heads()) if head]
         if not written:
             return None

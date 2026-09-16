@@ -120,12 +120,10 @@ class HaltController:
         )
 
     def stop_floor(self, poller: snapshot.SnapshotPoller | None) -> int | None:
-        """The machine's clock as of the stop, from below.
-
-        The instant itself is unreadable — QEMU's stub exposes no counter —
-        so the freshest firmware timestamp in the frozen memory stands in:
-        the newest ring record, or the newest published slot without a ring.
-        """
+        """The machine's clock as of the stop, from below. The instant itself
+        is unreadable (QEMU's stub exposes no counter), so the freshest
+        firmware timestamp in the frozen memory stands in: the newest ring
+        record, or the newest published slot without a ring."""
         floors = [self._newest_ts(), None if poller is None else poller.newest_stamp()]
         known = [floor for floor in floors if floor is not None]
         return max(known) if known else None
@@ -236,12 +234,10 @@ class HaltController:
         body: Callable[[halt.HaltInspector], Coroutine],
         reply_to: str | None,
     ) -> None:
-        """One inspection at a time, both ends on the wire.
-
-        An advance outlasts its click by minutes and answers many times
-        before the bridge lets go, so the controls follow these two
-        events rather than the request they remember sending.
-        """
+        """One inspection at a time, both ends on the wire. An advance
+        outlasts its click by minutes and answers many times before the
+        bridge lets go, so controls follow these two events rather than
+        the request they remember sending."""
         self.flight = {"cmd": command}
         self.abort = False
         self.store.publish(Topic.LIFE, Kind.EVENT, {"phase": "halt-begin", **self.flight})

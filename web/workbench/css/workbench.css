@@ -560,12 +560,18 @@ b{font-weight:700}
 .banner .bl{font-weight:700;letter-spacing:.06em;flex:none}
 
 .logs{flex:1;min-height:0;position:relative;margin:8px var(--wb-pad);display:flex}
+/* The log keeps its own scroll position (pinned, or where the reader
+   left it); the browser's scroll anchoring would fight that as rows
+   swap their estimated height for the rendered one. */
 .log{
-  flex:1;min-width:0;overflow-y:auto;overflow-x:hidden;
+  flex:1;min-width:0;overflow-y:auto;overflow-x:hidden;overflow-anchor:none;
   padding:7px 10px;border:1px solid var(--line);border-radius:var(--wb-r);background:var(--sunken);
   font-family:var(--mono);font-size:var(--fs-body);line-height:1.62
 }
-.cline{display:flex;gap:8px;align-items:baseline}
+/* Rows out of view are not laid out: a batch's layout visits every live
+   box in the log, and the cap keeps thousands. The intrinsic size is one
+   line of the pane's type; `auto` keeps the rendered height afterwards. */
+.cline{display:flex;gap:8px;align-items:baseline;content-visibility:auto;contain-intrinsic-size:auto 1lh}
 .cline .cg{
   flex:none;width:30px;text-align:right;font-size:var(--fs-label);color:var(--ink3);
   opacity:.75;user-select:none
@@ -627,12 +633,13 @@ b{font-weight:700}
 }
 .fchip[aria-pressed="false"]{opacity:.3;border-color:var(--line2);color:var(--ink3)}
 .elog{
-  flex:1;min-height:0;overflow-y:auto;padding:6px 8px;
+  flex:1;min-height:0;overflow-y:auto;overflow-anchor:none;padding:6px 8px;
   background:var(--sunken);font-family:var(--mono);font-size:var(--fs-meta);line-height:1.55
 }
 .erow{
   display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;
-  padding:1px 5px 1px 6px;border-left:2px solid transparent;border-radius:3px
+  padding:1px 5px 1px 6px;border-left:2px solid transparent;border-radius:3px;
+  content-visibility:auto;contain-intrinsic-size:auto calc(1lh + 2px) /* one line plus the padding */
 }
 .erow .et{
   flex:none;min-width:52px;text-align:right;font-size:var(--fs-label);color:var(--ink3);

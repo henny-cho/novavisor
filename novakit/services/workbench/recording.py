@@ -74,14 +74,10 @@ class Unreadable(RuntimeError):
 
 
 def _named(world: dict | None) -> dict:
-    """The demo and variant a topology frame names, or nothing.
-
-    Read when the recorder learns which run it is following, off the
-    topology that run published — not the target the bridge was launched
-    with, which names only the first run of a session.
-
-    Both fields travel together — a variant belongs to the demo beside it.
-    """
+    """The demo and variant a topology frame names, or nothing — read off
+    the topology the run published, not the launch target, which names
+    only a session's first run. Both travel together: a variant belongs
+    to the demo beside it."""
     data = (world or {}).get("data") or {}
     return {"demo": data["demo"], "variant": data.get("variant")} if data.get("demo") else {}
 
@@ -134,10 +130,8 @@ class Recorder:
 
     def for_run(self, run_id: int) -> None:
         """Name the run this file follows, once the launch has numbered it.
-
-        The roll itself happened at the run's opening: by the time the id
-        exists, the topology the run published is already in this file.
-        """
+        The roll happened at the run's opening, so by the time the id
+        exists the topology the run published is already in this file."""
         if run_id == self._run:
             return
         self._run = run_id

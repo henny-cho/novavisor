@@ -187,12 +187,10 @@ class RoundTripTest(Recorded):
         self.assertEqual(len(recording.load(self.directory).frames), 2)
 
     def test_a_run_opens_its_own_file_where_it_opens(self):
-        """A run opens with its build, publishes its topology, and only
-        the launch after that numbers it. Rolling on the number put a
-        run's opening in the previous run's file, where a replay ended on
-        a world with no machine behind it; rolling on the build puts each
-        run's opening — build, world, launch — in its own file, verbatim.
-        """
+        """A run opens with its build, publishes its topology, and only the
+        launch after that numbers it. Rolling on the number put a run's
+        opening in the previous run's file — a replay ended on a world with
+        no machine; rolling on the build keeps each opening in its own."""
         recorder = recording.Recorder(self.directory, {"demo": "01_hello"})
         recorder.frame(life(1, "building"))
         recorder.frame(topo(2, "01_hello", guests=[{"name": "hello"}]))

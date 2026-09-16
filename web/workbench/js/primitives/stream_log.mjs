@@ -2,12 +2,14 @@
    cut over it: where in the run the reader is looking. */
 
 /* Reading the scroll box is layout, and this file is the only caller,
-   so it lives with the buffer rather than among the shared helpers. */
+   so it lives with the buffer rather than among the shared helpers.
+   `toBottom` answers where the scroller actually landed. */
 const atBottom = (node, slack) =>
   node.scrollHeight - node.scrollTop - node.clientHeight <= slack;
 
 const toBottom = (node) => {
   node.scrollTop = node.scrollHeight;
+  return node.scrollTop;
 };
 
 /* A row's moment on the run's clock. Rows without one — a session
@@ -21,8 +23,15 @@ export class StreamLog {
     this.container = container;
     this.lineCap = lineCap;
     this.slack = slack;
+    /* Following means the reader has not scrolled up from the bottom. The
+       log's own pin scrolls too, and its event can arrive after more rows
+       landed and the bottom moved on — so a scroll found where the pin
+       left the position is not the reader's, and changes nothing. */
     this.stick = true;
+    this.pinnedTop = 0;
     this.dirty = false;
+    this.pinning = false; /* a pin already waiting for the frame */
+    this.recheck = false; /* pin once more, on rendered rather than estimated heights */
     /* Where in the run the reader is looking, and the first row past
        it. `null` edge is "none is"; `undefined` is "not known", which
        one full pass answers. */
@@ -36,6 +45,7 @@ export class StreamLog {
     this.held = 0;
 
     this.container.addEventListener("scroll", () => {
+      if (this.container.scrollTop === this.pinnedTop) return;
       this.stick = atBottom(this.container, this.slack);
     });
   }
@@ -113,10 +123,23 @@ export class StreamLog {
   }
 
   /* Back to the bottom, where a stream the reader has not scrolled away
-     from belongs — after a batch of lines, and when a hidden pane is
-     shown again. */
-  pin() {
-    if (this.stick) toBottom(this.container);
+     from belongs — after a batch, and when a hidden pane is shown. In the
+     frame: reading the scroll height here would force the batch's layout
+     now; the frame does it once, and one pin answers every ask before it. */
+  pin({ recheck = false } = {}) {
+    this.recheck ||= recheck;
+    if (this.pinning) return;
+    this.pinning = true;
+    requestAnimationFrame(() => {
+      this.pinning = false;
+      const again = this.recheck;
+      this.recheck = false;
+      if (!this.stick) return;
+      this.pinnedTop = toBottom(this.container);
+      /* A pane shown for the first time was pinned on estimated row
+         heights; the rows now in view take their rendered ones. */
+      if (again) this.pin();
+    });
   }
 
   settle() {
@@ -130,6 +153,7 @@ export class StreamLog {
       this.container.removeChild(this.container.firstChild);
     }
     this.stick = true;
+    this.pinnedTop = 0;
     this.dirty = false;
     this.cut = null;
     this.edge = undefined;
