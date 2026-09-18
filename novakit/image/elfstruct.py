@@ -22,9 +22,9 @@ The rules, so a second implementation cannot disagree:
                  its own section.
   indirect       `blr`/`br` is counted, never followed. It is the shape a
                  cib service slot has, and following it would be a guess.
-  roots          the ELF entry point, the vector table and its slots'
-                 targets, and the chains cib stores into service slots at
-                 nexus init.
+  roots          the ELF entry point, the symbols the CPU arrives at
+                 rather than calls, and the chains cib stores into service
+                 slots at nexus init.
   unproven       everything else. Not dead code: the rules cannot follow a
                  stored address, so it names what to review by hand.
 
@@ -54,9 +54,10 @@ CIB_CHAIN_PATTERNS = (
     re.compile(r"\bflow::graph_builder<.*>::built_flow<.*>::run\b"),
 )
 
-# The symbol hardware enters on an exception. Its slots are branches; the
-# table itself is a root because the CPU, not a call, arrives at it.
-VECTOR_TABLE = "_vector_table"
+# Where the CPU arrives without a call — hardware on an exception, firmware
+# on CPU_ON. Nothing in the image branches to either, so the walk has to be
+# told; what they reach from there is ordinary edges.
+CPU_ENTRIES = ("_vector_table", "nova_secondary_entry")
 
 _SHF_EXECINSTR = 0x4
 _STT_FUNC = "STT_FUNC"
@@ -207,15 +208,10 @@ def _demangle(names: list[str]) -> dict[str, str]:
     return dict(zip(names, readable, strict=True))
 
 
-def _walk(text: str, functions: list[Function]) -> tuple[dict, dict, dict]:
-    """Edges, indirect-site counts, and each function's outward branches.
-
-    The third is kept apart because the vector table's slots are branches
-    that make roots rather than edges, and both come from the same pass.
-    """
+def _walk(text: str, functions: list[Function]) -> tuple[dict, dict]:
+    """Edges and indirect-site counts, from one pass over the disassembly."""
     edges: dict[str, set[str]] = {}
     indirect: dict[str, int] = {}
-    branches: dict[str, list[str]] = {}
     extent = {fn.name: (fn.address, fn.address + fn.size) for fn in functions}
 
     for line in text.splitlines():
@@ -242,13 +238,12 @@ def _walk(text: str, functions: list[Function]) -> tuple[dict, dict, dict]:
             start, end = extent[here]
             if start <= goes_to < end:
                 continue  # a loop inside the function, not an edge
-            branches.setdefault(here, []).append(there)
         edges.setdefault(here, set()).add(there)
 
-    return edges, indirect, branches
+    return edges, indirect
 
 
-def _roots(entry: int, functions: list[Function], branches: dict[str, list[str]]) -> list[str]:
+def _roots(entry: int, functions: list[Function]) -> list[str]:
     found: set[str] = set()
     at_entry = _containing(functions, entry)
     if at_entry is None:
@@ -259,9 +254,7 @@ def _roots(entry: int, functions: list[Function], branches: dict[str, list[str]]
     found.add(at_entry)
 
     names = [fn.name for fn in functions]
-    if VECTOR_TABLE in names:
-        found.add(VECTOR_TABLE)
-        found.update(branches.get(VECTOR_TABLE, ()))
+    found.update(name for name in CPU_ENTRIES if name in names)
 
     demangled = _demangle([name for name in names if name.startswith("_Z")])
     for name, readable in demangled.items():
@@ -273,8 +266,8 @@ def _roots(entry: int, functions: list[Function], branches: dict[str, list[str]]
 def analyse(elf: Path) -> StructureReport:
     """The structure of one linked image, or a refusal to guess at it."""
     entry, functions = _read_image(elf)
-    edges, indirect, branches = _walk(_disassemble(elf), functions)
-    roots = _roots(entry, functions, branches)
+    edges, indirect = _walk(_disassemble(elf), functions)
+    roots = _roots(entry, functions)
 
     reachable: set[str] = set()
     pending = list(roots)

@@ -73,21 +73,20 @@ class EdgeRuleTest(unittest.TestCase):
         return elfstruct._walk("\n".join(lines), self.functions)
 
     def test_bl_is_an_edge(self):
-        edges, indirect, _ = self.walk("    1000:\tbl\t1020 <callee>")
+        edges, indirect = self.walk("    1000:\tbl\t1020 <callee>")
         self.assertEqual(edges, {"caller": {"callee"}})
         self.assertEqual(indirect, {})
 
     def test_a_branch_out_of_the_function_is_a_tail_edge(self):
-        edges, _, branches = self.walk("    1004:\tb\t1020 <callee>")
+        edges, _ = self.walk("    1004:\tb\t1020 <callee>")
         self.assertEqual(edges, {"caller": {"callee"}})
-        self.assertEqual(branches, {"caller": ["callee"]})
 
     def test_a_branch_inside_the_function_is_a_loop_not_an_edge(self):
-        edges, _, _ = self.walk("    1008:\tb\t1000 <caller>")
+        edges, _ = self.walk("    1008:\tb\t1000 <caller>")
         self.assertEqual(edges, {})
 
     def test_a_register_branch_is_counted_and_never_followed(self):
-        edges, indirect, _ = self.walk(
+        edges, indirect = self.walk(
             "    100c:\tblr\tx1",
             "    1010:\tbr\tx2",
         )
@@ -96,7 +95,7 @@ class EdgeRuleTest(unittest.TestCase):
 
     def test_a_conditional_branch_is_not_an_edge(self):
         """-ffunction-sections keeps them inside one function by construction."""
-        edges, indirect, _ = self.walk(
+        edges, indirect = self.walk(
             "    1014:\tb.ne\t1020 <callee>",
             "    1018:\tcbz\tx0, 1020 <callee>",
             "    101c:\ttbz\tw0, #0, 1020 <callee>",
@@ -105,12 +104,33 @@ class EdgeRuleTest(unittest.TestCase):
         self.assertEqual(indirect, {})
 
     def test_an_instruction_outside_every_extent_is_ignored(self):
-        edges, indirect, _ = self.walk(
+        edges, indirect = self.walk(
             "    2000:\tbl\t1020 <callee>",
             "    2004:\tblr\tx3",
         )
         self.assertEqual(edges, {})
         self.assertEqual(indirect, {})
+
+
+class RootRuleTest(unittest.TestCase):
+    """A root is an entry nothing in the image calls."""
+
+    def roots(self, *names: str) -> list[str]:
+        sized = [_function(name, 0x1000 + n * 0x10, 0x10) for n, name in enumerate(names)]
+        return elfstruct._roots(0x1000, sized)
+
+    def test_the_cpu_entries_are_roots_though_nothing_calls_them(self):
+        """Hardware and PSCI CPU_ON carry these addresses, not a `bl`."""
+        found = self.roots("fx_entry", "_vector_table", "nova_secondary_entry")
+        self.assertEqual(found, ["_vector_table", "fx_entry", "nova_secondary_entry"])
+
+    def test_an_image_without_them_is_read_all_the_same(self):
+        """A composition may link neither; their absence is not a refusal."""
+        self.assertEqual(self.roots("fx_entry", "fx_direct"), ["fx_entry"])
+
+    def test_an_entry_point_in_no_function_is_refused(self):
+        with self.assertRaises(elfstruct.ContractViolation):
+            elfstruct._roots(0x2000, [_function("fx_entry", 0x1000, 0x10)])
 
 
 class ChainPatternTest(unittest.TestCase):

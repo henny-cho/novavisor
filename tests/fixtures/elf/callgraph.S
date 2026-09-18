@@ -12,6 +12,8 @@
 //                    must come back unproven — the same shape a cib service
 //                    slot has in the real image)
 //   vector entry    _vector_table's slots branch to fx_slot_*
+//   secondary entry nova_secondary_entry: firmware carries the address in
+//                   PSCI CPU_ON, so nothing in the image calls it
 //   unreferenced    fx_orphan and its callee: reachable from nothing
 //   outside the set fx_data (OBJECT) and fx_marker (NOTYPE, size 0) must be
 //                   ignored, not rejected — only FUNC symbols are analysed
@@ -67,6 +69,19 @@ fx_slot_irq:
 fx_from_sync:
     ret
 .size fx_from_sync, . - fx_from_sync        // 1 = 4 B
+
+// --- secondary entry (root: firmware starts a core here) ----------------
+.global nova_secondary_entry
+.type   nova_secondary_entry, @function
+nova_secondary_entry:
+    bl      fx_from_secondary
+    ret
+.size nova_secondary_entry, . - nova_secondary_entry  // 2 = 8 B
+
+.type   fx_from_secondary, @function
+fx_from_secondary:
+    ret
+.size fx_from_secondary, . - fx_from_secondary  // 1 = 4 B
 
 // --- reachable only through a function pointer --------------------------
 .type   fx_indirect_target, @function

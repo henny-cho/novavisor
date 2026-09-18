@@ -5,8 +5,9 @@
     "counts x 4 read off the fixture source; addresses are deliberately",
     "absent so a layout change cannot invalidate the oracle.",
     "",
-    "roots: e_entry (fx_entry), the vector table itself (hardware enters",
-    "it), and the branch targets of its slots.",
+    "roots: e_entry (fx_entry) and the two symbols the CPU arrives at",
+    "without a call — the vector table and the secondary entry. What they",
+    "branch to is an ordinary edge, so slot targets are reachable, not roots.",
     "unproven: fx_indirect_target is reached only through an address load",
     "+ blr, and fx_orphan* by nothing at all. Neither is dead code —",
     "unproven means the static rules could not prove reachability."
@@ -14,13 +15,13 @@
   "roots": [
     "_vector_table",
     "fx_entry",
-    "fx_slot_irq",
-    "fx_slot_sync"
+    "nova_secondary_entry"
   ],
   "functions": {
     "_vector_table": 256,
     "fx_direct": 8,
     "fx_entry": 20,
+    "fx_from_secondary": 4,
     "fx_from_sync": 4,
     "fx_indirect_target": 4,
     "fx_orphan": 8,
@@ -28,7 +29,8 @@
     "fx_slot_irq": 4,
     "fx_slot_sync": 8,
     "fx_tail_from_entry": 8,
-    "fx_tail_target": 4
+    "fx_tail_target": 4,
+    "nova_secondary_entry": 8
   },
   "edges": {
     "_vector_table": [
@@ -47,6 +49,9 @@
     ],
     "fx_tail_from_entry": [
       "fx_tail_target"
+    ],
+    "nova_secondary_entry": [
+      "fx_from_secondary"
     ]
   },
   "indirect_sites": {
@@ -56,11 +61,13 @@
     "_vector_table",
     "fx_direct",
     "fx_entry",
+    "fx_from_secondary",
     "fx_from_sync",
     "fx_slot_irq",
     "fx_slot_sync",
     "fx_tail_from_entry",
-    "fx_tail_target"
+    "fx_tail_target",
+    "nova_secondary_entry"
   ],
   "unproven": [
     "fx_indirect_target",
