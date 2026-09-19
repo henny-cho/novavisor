@@ -15,6 +15,28 @@ export function setGuestSlots(board) {
 
 export const hostsGuest = (vm) => Number.isInteger(vm) && vm >= 0 && vm < guestSlots;
 
+/* The topics the manifest declares, and a name the screen asks for that
+   is not among them. Undeclared reads exactly like declared-without-a-
+   rate, so a renamed topic would draw an ordinary surface that never
+   fills; said once per name, and the screen goes on drawing. */
+let declared = null;
+const unknown = new Set();
+
+export function setObservations(observations) {
+  declared = observations && typeof observations === "object" ? observations : null;
+  unknown.clear();
+}
+
+export function observationOf(topic) {
+  if (declared === null) return undefined;
+  const said = declared[topic];
+  if (said === undefined && !unknown.has(topic)) {
+    unknown.add(topic);
+    console.error(`the screen asks about ${topic}, which the manifest does not declare`);
+  }
+  return said;
+}
+
 /* One carried verification step as a line. A kind this build does not
    name still reads as itself rather than as a blank label, so the bridge
    may add one without the screen going quiet. */

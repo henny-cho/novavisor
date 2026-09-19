@@ -8,6 +8,7 @@ import {
   describeStep,
   sealedFields,
   setGuestSlots,
+  setObservations,
 } from "./format.mjs";
 import { connect } from "./net.mjs";
 import { createBoard } from "./board.mjs";
@@ -423,6 +424,7 @@ function onTopo(ts, data) {
   /* Before anything can mint a tab or a card: how many VM slots the
      machine has is the board's, not a number typed into the client. */
   setGuestSlots(topo.board);
+  setObservations(topo.observations);
   topology.render(topo);
   const guests = Array.isArray(topo.guests) ? topo.guests : [];
   consoleView.setGuests(guests);
