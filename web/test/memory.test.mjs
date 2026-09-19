@@ -15,6 +15,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { setObservations } from "../workbench/js/format.mjs";
 import { createMemory } from "../workbench/js/memory.mjs";
 import { element, find, findAll, fire, gesture, installDom } from "./dom.mjs";
 
@@ -34,6 +35,39 @@ function harness() {
   const memory = createMemory({ ...parts, request: (data) => asked.push(data) });
   return { memory, asked, ...parts };
 }
+
+/* The view reads two S-layer topics by name. A manifest that stopped
+   declaring one would leave it waiting for a reading forever, so the
+   name is asked of the manifest when a topology arrives. */
+describe("memory vocabulary", () => {
+  function complaints(observations) {
+    const { memory } = harness();
+    setObservations(observations);
+    const said = [];
+    const spoke = console.error;
+    console.error = (...parts) => said.push(parts.join(" "));
+    try {
+      memory.setWorld({ regimes: [] });
+    } finally {
+      console.error = spoke;
+    }
+    return said;
+  }
+
+  it("names a topic it reads that the manifest does not declare", () => {
+    const said = complaints({ "ctx.synced": { rate: 10 } });
+    assert.deepEqual(said, [
+      "the screen asks about smmu.stream, which the manifest does not declare",
+    ]);
+  });
+
+  it("says nothing when the manifest declares both", () => {
+    assert.deepEqual(
+      complaints({ "smmu.stream": { rate: 20 }, "ctx.synced": { rate: 10 } }),
+      [],
+    );
+  });
+});
 
 const GUEST = {
   id: "vm0.v0.el1.low",

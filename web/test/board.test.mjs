@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createBoard } from "../workbench/js/board.mjs";
+import { setObservations } from "../workbench/js/format.mjs";
 import { element, installDom } from "./dom.mjs";
 
 const BOARD = {
@@ -23,6 +24,7 @@ const BOARD = {
    view needs a parent the way it has one on the page. */
 function harness(observations) {
   installDom();
+  setObservations(observations);
   const host = element("div");
   const view = element("div");
   host.append(view);
@@ -54,13 +56,13 @@ describe("board vocabulary", () => {
     /* What an initial paint asks for; the rest are named as their own
        sections paint. Whichever they are, none may go unsaid. */
     assert.ok(said.length > 0);
-    for (const line of said) assert.match(line, /which the manifest does not declare$/u);
+    for (const line of said) assert.match(line, /^the screen asks about \S+, which the manifest does not declare$/u);
     assert.ok(said.some((line) => line.includes("sched.cpu")));
   });
 
   it("says it once for a name, however often it is asked", () => {
     const said = harness({});
-    const names = said.map((line) => line.split(" ")[3]);
+    const names = said.map((line) => line.match(/asks about (\S+),/u)[1]);
     assert.deepEqual([...new Set(names)], names);
   });
 
