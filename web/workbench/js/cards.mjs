@@ -9,6 +9,8 @@ const IDLE_TEXT = "출력 없음";
 
 export function createCards(root) {
   const cards = new Map();
+  /* Cards a line landed on since the last settle. */
+  const touched = new Set();
   let signature = null;
 
   function emptyState() {
@@ -35,7 +37,7 @@ export function createCards(root) {
     node.append(head, last, foot);
     root.append(node);
 
-    const card = { node, last, count, lines: 0, timer: 0 };
+    const card = { node, last, count, lines: 0, text: "", timer: 0 };
     cards.set(id, card);
     return card;
   }
@@ -58,6 +60,7 @@ export function createCards(root) {
     signature = next;
     for (const card of cards.values()) clearTimeout(card.timer);
     cards.clear();
+    touched.clear();
     clear(root);
     list.forEach((guest, index) =>
       makeCard(vmSlot(guest, index), String((guest && guest.name) || ""), Number(guest && guest.vcpus)),
@@ -66,25 +69,37 @@ export function createCards(root) {
   }
 
   /* One console line attributed to a guest. A card is a slot the board
-     can host; guest text that merely looks tagged mints nothing. */
+     can host; guest text that merely looks tagged mints nothing.
+     Counting is the line's and writing is the batch's — a card shows a
+     total and the last line, and a burst only ever paints its last. */
   function touch(vm, text) {
     if (!hostsGuest(vm)) return;
     const card = ensure(vm);
     card.lines += 1;
-    card.count.textContent = `${card.lines}줄`;
-    const line = text === undefined || text === null ? "" : String(text);
-    card.last.textContent = line.trim() ? line : IDLE_TEXT;
-    card.node.classList.add("act");
-    clearTimeout(card.timer);
-    card.timer = setTimeout(() => card.node.classList.remove("act"), ACTIVE_MS);
+    card.text = text === undefined || text === null ? "" : String(text);
+    touched.add(card);
+  }
+
+  /* End of a batch: every card a line landed on says so, once. */
+  function settle() {
+    for (const card of touched) {
+      card.count.textContent = `${card.lines}줄`;
+      card.last.textContent = card.text.trim() ? card.text : IDLE_TEXT;
+      card.node.classList.add("act");
+      clearTimeout(card.timer);
+      card.timer = setTimeout(() => card.node.classList.remove("act"), ACTIVE_MS);
+    }
+    touched.clear();
   }
 
   /* Run boundary: the cards stay, their accumulation starts over. */
   function reset() {
+    touched.clear();
     for (const card of cards.values()) {
       clearTimeout(card.timer);
       card.timer = 0;
       card.lines = 0;
+      card.text = "";
       card.count.textContent = "0줄";
       card.last.textContent = IDLE_TEXT;
       card.node.classList.remove("act");
@@ -94,11 +109,12 @@ export function createCards(root) {
   function clearAll() {
     for (const card of cards.values()) clearTimeout(card.timer);
     cards.clear();
+    touched.clear();
     signature = null;
     clear(root);
     emptyState();
   }
 
   emptyState();
-  return { setGuests, touch, reset, clearAll };
+  return { setGuests, touch, settle, reset, clearAll };
 }

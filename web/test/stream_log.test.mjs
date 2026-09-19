@@ -163,17 +163,28 @@ describe("stream log chunks", () => {
   }
   const rowsDeclared = (chunk) => Number(chunk.style.getPropertyValue("--rows"));
 
-  it("drops the oldest rows across the boundary and takes the empty group with them", () => {
-    const { log, container, chunks } = filled(260, { lineCap: 150 });
+  it("drops a whole group to stay under the cap", () => {
+    const { log, container, chunks } = filled(620, { lineCap: 500 });
     log.settle();
 
-    assert.equal([...log.rows()].length, 150);
-    assert.equal([...log.rows()][0].textContent, "line 110");
-    /* The first group emptied and went; the second is what the trim ate
-       into. A group left in the container holding nothing would declare
-       a height for rows that are not there. */
-    assert.deepEqual(chunks().map(rowsDeclared), [90, 60]);
-    assert.equal(container.children.length, 2);
+    /* Two groups went whole, so the cap is an upper bound reached in
+       steps of a group rather than an exact count. Taking rows one at a
+       time moved the head of a bottom-pinned scroller on every one. */
+    const rows = [...log.rows()];
+    assert.equal(rows.length, 420);
+    assert.ok(rows.length <= 500);
+    assert.equal(rows[0].textContent, "line 200");
+    assert.deepEqual(chunks().map(rowsDeclared), [100, 100, 100, 100, 20]);
+    assert.equal(container.children.length, 5);
+  });
+
+  it("never drops the group rows are arriving in", () => {
+    /* A cap below one group: the log holds more than it asked for until
+       a second group opens, and the arriving one is never the one that
+       goes — a batch smaller than a group would have nowhere to land. */
+    const { log, chunks } = filled(60, { lineCap: 50 });
+    assert.equal([...log.rows()].length, 60);
+    assert.equal(chunks().length, 1);
   });
 
   it("walks rows in order across the boundary, both ways", () => {

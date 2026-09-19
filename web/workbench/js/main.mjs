@@ -855,13 +855,14 @@ function onGap() {
   notify("재연결됨 — 끊긴 동안의 스트림 일부는 복원되지 않았을 수 있습니다");
 }
 
-/* End of one 50ms flush window: settle the scroll work the views
-   deferred, one layout per batch instead of one per line. */
+/* End of one 50ms flush window: settle the work the views deferred —
+   one layout and one card write per batch instead of one per line. */
 function onBatch() {
   consoleView.settle();
   events.settle();
   panels.settle();
   boardView.settle();
+  cards.settle();
 }
 
 /* ---------------- theme ---------------- */

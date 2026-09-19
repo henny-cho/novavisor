@@ -123,7 +123,19 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
      both belong to the manifests that know. A value on screen with no
      demo checking it is a claim; one with a predicate is a guarantee,
      and a reader cannot tell them apart from the number alone. */
-  const about = (topic) => topology?.observations?.[topic];
+  const undeclared = new Set();
+  /* A topic named here that the manifest does not declare reads exactly
+     like one declared without a rate — an ordinary badge over a surface
+     that will never fill. Said once per name; the board draws on,
+     because a mismatch is no reason for the reader to lose it. */
+  const about = (topic) => {
+    const said = topology?.observations?.[topic];
+    if (said === undefined && topology?.observations && !undeclared.has(topic)) {
+      undeclared.add(topic);
+      console.error(`board asks about ${topic}, which the manifest does not declare`);
+    }
+    return said;
+  };
   const sampled = (topic) => {
     const said = about(topic);
     const badge = evidence("s", said?.rate ? `S ${said.rate}Hz` : "S");

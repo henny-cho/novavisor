@@ -26,6 +26,23 @@ class Style {
   }
 }
 
+/* A child that is text and nothing else: it carries its own string and
+   answers to none of the element accessors. */
+class Text {
+  constructor(data) {
+    this.own = String(data);
+    this.parentNode = null;
+  }
+
+  get textContent() {
+    return this.own;
+  }
+
+  set textContent(value) {
+    this.own = String(value);
+  }
+}
+
 class Element {
   constructor(tagName) {
     this.tagName = String(tagName).toUpperCase();
@@ -121,15 +138,21 @@ class Element {
   }
 
   get firstElementChild() {
-    return this.children[0] ?? null;
+    return this.elementChildren[0] ?? null;
   }
 
   get lastElementChild() {
-    return this.children.at(-1) ?? null;
+    return this.elementChildren.at(-1) ?? null;
   }
 
   get childElementCount() {
-    return this.children.length;
+    return this.elementChildren.length;
+  }
+
+  /* Text nodes are children too, and every accessor with "element" in
+     its name skips them, as a browser's does. */
+  get elementChildren() {
+    return this.children.filter((child) => child instanceof Element);
   }
 
   /* Sibling links and connectedness, for the log cut: it walks out from
@@ -147,8 +170,12 @@ class Element {
     return this.parentNode !== null;
   }
 
+  get parentElement() {
+    return this.parentNode instanceof Element ? this.parentNode : null;
+  }
+
   #sibling(step) {
-    const kin = this.parentNode?.children;
+    const kin = this.parentNode?.elementChildren;
     if (!kin) return null;
     return kin[kin.indexOf(this) + step] ?? null;
   }
@@ -241,6 +268,16 @@ class Document {
      when one does. */
   failOn(tag, error) {
     this.pending = { tag, error };
+  }
+
+  createTextNode(data) {
+    return new Text(data);
+  }
+
+  /* The wires are SVG. Nothing here depends on the namespace, so the
+     element is the same one a tag name makes. */
+  createElementNS(_namespace, tag) {
+    return this.createElement(tag);
   }
 
   createElement(tag) {

@@ -44,6 +44,7 @@ describe("vm cards", () => {
     view.setGuests(GUESTS);
 
     view.touch(1, "zephyr boot banner");
+    view.settle();
     const [first, second] = cards(root);
     assert.equal(second.classes.has("act"), true);
     assert.equal(partOf(second, "cl"), "zephyr boot banner");
@@ -51,6 +52,21 @@ describe("vm cards", () => {
     /* The line belongs to one guest, and only that one moved. */
     assert.equal(first.classes.has("act"), false);
     assert.equal(partOf(first, "cc"), "0줄");
+  });
+
+  it("writes a card once for a burst, not once per line", () => {
+    const { view, root } = harness();
+    view.setGuests(GUESTS);
+
+    for (let n = 0; n < 200; n += 1) view.touch(0, `line ${n}`);
+    /* Nothing is on screen until the batch ends: the 199 lines before
+       the last would each have written a card nobody ever saw. */
+    assert.equal(partOf(cards(root)[0], "cc"), "0줄");
+
+    view.settle();
+    const [first] = cards(root);
+    assert.equal(partOf(first, "cc"), "200줄");
+    assert.equal(partOf(first, "cl"), "line 199");
   });
 
   it("mints nothing for a slot the board cannot host", () => {
@@ -66,6 +82,7 @@ describe("vm cards", () => {
     view.setGuests(GUESTS);
     view.touch(0, "linux kernel started");
     view.touch(0, "and a second line");
+    view.settle();
 
     view.reset();
     const minted = cards(root);

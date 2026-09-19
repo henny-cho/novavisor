@@ -343,22 +343,26 @@ describe("stream cap", () => {
   it("holds its cap and drops the oldest, across a clear", () => {
     installDom();
     const container = element("div");
-    const stream = new StreamLog({ container, lineCap: 3 });
+    const stream = new StreamLog({ container, lineCap: 100 });
     const put = (n) => {
       const row = element("div");
       row.textContent = `line ${n}`;
       stream.append(row, n * 1000);
     };
+    const first = () => [...stream.rows()][0].textContent;
 
-    for (let n = 0; n < 6; n += 1) put(n);
-    assert.deepEqual([...stream.rows()].map((row) => row.textContent), ["line 3", "line 4", "line 5"]);
+    /* The cap is met a group at a time, so 250 rows leave the last 50. */
+    for (let n = 0; n < 250; n += 1) put(n);
+    assert.equal([...stream.rows()].length, 50);
+    assert.equal(first(), "line 200");
 
     /* The stream counts what it put there rather than asking the
        container, so the count has to survive everything that empties
        it — a stale one either lets the log grow without bound or trims
        a full buffer down to nothing. */
     stream.clear();
-    for (let n = 0; n < 4; n += 1) put(n);
-    assert.deepEqual([...stream.rows()].map((row) => row.textContent), ["line 1", "line 2", "line 3"]);
+    for (let n = 0; n < 120; n += 1) put(n);
+    assert.equal([...stream.rows()].length, 20);
+    assert.equal(first(), "line 100");
   });
 });

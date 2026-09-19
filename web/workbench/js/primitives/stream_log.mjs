@@ -33,6 +33,10 @@ export const stampOf = (node) =>
 export class StreamLog {
   constructor({ container, lineCap = 2000, slack = 12 }) {
     this.container = container;
+    /* An upper bound held in chunk steps: the log drops a whole chunk to
+       stay under it, so it keeps between `lineCap - CHUNK_ROWS` and
+       `lineCap` rows. A cap below one chunk is met only once a second
+       chunk opens. */
     this.lineCap = lineCap;
     this.slack = slack;
     /* Following means the reader has not scrolled up from the bottom. The
@@ -88,7 +92,7 @@ export class StreamLog {
     this.held += 1;
     this.touched.add(open);
     if (past && this.edge === null) this.edge = node;
-    while (this.held > this.lineCap) this.#drop();
+    while (this.held > this.lineCap && this.#drop());
     this.dirty = true;
     return past;
   }
@@ -108,16 +112,18 @@ export class StreamLog {
     return fresh;
   }
 
-  /* The oldest row goes, and the chunk it empties goes with it. */
+  /* The oldest chunk goes whole. Taking rows one at a time moved the
+     head of a scroller pinned to its bottom on every one of them, and
+     the position had to be resolved again each time. The chunk rows
+     arrive in is never dropped, so a batch smaller than one always has
+     somewhere to land. */
   #drop() {
     const chunk = this.#chunk(this.container.firstElementChild, true);
-    if (!chunk) return;
-    chunk.removeChild(chunk.firstElementChild);
-    this.held -= 1;
-    this.touched.add(chunk);
-    if (chunk.childElementCount) return;
+    if (!chunk || chunk === this.container.lastElementChild) return false;
+    this.held -= chunk.childElementCount;
     this.container.removeChild(chunk);
     this.touched.delete(chunk);
+    return true;
   }
 
   /* From `node`, the first chunk in that direction, `node` included. */

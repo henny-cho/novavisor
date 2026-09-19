@@ -44,7 +44,7 @@ const EDGES = [
   { id: "sw", from: "sched", to: "band:pe", grade: "poll", topic: "sched.cpu", badges: ["SCHED"], label: "문맥 교환" },
 ];
 
-export const STOPS = [
+const STOPS = [
   { id: "vgic.bind", edge: "inject", args: ["pintid", "vintid"], label: "바인드", code: 1,
     fields: ["pintid|vintid", "", ""], stop: true, span: false },
   { id: "vgic.eoi", edge: "inject", args: [], label: "EoI", code: 2, fields: ["vintid", "", ""],
@@ -55,39 +55,23 @@ export const STOPS = [
     fields: ["count", "from", ""], stop: false, span: true },
 ];
 
-/* The manifest's rates, because they are what decides how often each
-   scenario below actually happens on a reader's screen. */
-export const RATES = {
-  "sched.cpu": 20, "sched.run": 20, "sched.slots": 20, "sched.slice": 10,
-  "sched.affinity": 2, "sched.valid": 2, "vm.generation": 2, "ctx.syndrome": 10,
-  "ctx.trap": 2, "ctx.el1": 2, "ctx.synced": 10, "vgic.lr": 10, "vgic.capacity": 2,
-  "vgic.dist": 10, "vgic.resident": 10, "vgic.token": 10, "timer.queue": 10,
-  "timer.programmed": 10, "timer.cntvoff": 2, "dev.uart": 10, "dev.dma": 2,
-  "dev.watchdog": 2, "ivc.page": 2, "smp.online": 2, "smp.lifecycle": 2,
-  "smp.mode": 2, "smp.mail": 2, "smp.budget": 2, "vgic.synced": 10, "vm.table": 2,
-};
+/* What the bridge says about each topic — rate, whether a demo holds a
+   run to it, which topic dates it, which of its numbers are instants.
+   Handed in rather than written here: a copy of the manifest drifts, and
+   a page fed a vocabulary the bridge does not publish measures a screen
+   nobody will see. */
+let manifest = {};
 
-/* Which of a topic's numbers are counter values, as the manifest
-   declares it: the drawer converts these to times, and a page fed
-   without them measures a table that skips the conversion. */
-const WORDS = {
-  "sched.cpu": { stamps: ["since"] },
-  "sched.slice": { durations: [""] },
-  "timer.queue": { stamps: ["deadline"] },
-  "timer.programmed": { stamps: [""] },
-  "timer.cntvoff": { durations: [""] },
-  "dev.dma": { stamps: ["deadline"] },
-};
+export function install(observations) {
+  manifest = observations;
+  const missing = Object.keys(manifest).filter((topic) => !(topic in readings()));
+  if (missing.length) {
+    throw new Error(`no reading staged for ${missing.join(", ")}`);
+  }
+}
 
-/* Which topic dates which shadow of hardware, as the manifest declares
-   it: the drawer draws these as no row of their own, so a page fed
-   without them renders two rows the bridge's own topology would not. */
-export const AGES = {
-  "ctx.trap": "ctx.synced",
-  "ctx.el1": "ctx.synced",
-  "ctx.syndrome": "ctx.synced",
-  "vgic.lr": "vgic.synced",
-};
+export const topics = () => Object.keys(manifest);
+export const rate = (topic) => manifest[topic]?.rate;
 
 export function topology() {
   return frame("topo", {
@@ -107,12 +91,7 @@ export function topology() {
                      { base: 0xa000000, size: 0x200, kind: "assigned", name: "virtio" }],
              } },
     stops: STOPS,
-    observations: Object.fromEntries(
-      Object.entries(RATES).map(([topic, rate]) => [
-        topic,
-        { rate, asserted: false, ...(AGES[topic] ? { as_of: AGES[topic] } : {}), ...WORDS[topic] },
-      ]),
-    ),
+    observations: manifest,
     taxonomy: { badges: ["TRAP", "IRQ", "VGIC", "GIC", "SCHED", "SMP", "PSCI", "DMA", "SMMU", "WDG", "BOOT", "MUX", "VUART", "FAULT"],
                 esr_ec: { 36: "kDataAbortLower", 22: "kHvcAa64" } },
     timer_slots: ["watchdog", "slice", "vtimer"],
@@ -186,6 +165,8 @@ export function readings() {
     "dev.dma": { entries_: [{ device_id: 0, owner_vm: 0, state: "kAssigned", generation: 1,
                               deadline: 0, bus_master_blocked: false }], count_: 1 },
     "dev.watchdog": [7, 7],
+    "smmu.stream": [{ stream: 0, state: "translate", vmid: 1, root: "0x41000000" },
+                    { stream: 1, state: "abort" }],
     "ivc.page": { a2b: { widx: "0x5", ridx: "0x2", slots: [0, 0, 0, 0] } },
     "smp.online": [true, true],
     "smp.lifecycle": [{ epoch_: 1, pending_mask_: 0, retries_: 0, active_: true }],

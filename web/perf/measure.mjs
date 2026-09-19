@@ -17,6 +17,7 @@
 
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
+import { text } from "node:stream/consumers";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -122,9 +123,7 @@ function harness() {
    often the bridge publishes it — from the observation manifest, or the
    protocol's flush window for what the machine emits. */
 function scenarios() {
-  const values = wire.readings();
-  const at = (topics) => topics.map((topic) => wire.snapshot(topic, values[topic]));
-  const rated = (hz) => Object.keys(wire.RATES).filter((topic) => wire.RATES[topic] === hz);
+  const rated = (hz) => wire.topics().filter((topic) => wire.rate(topic) === hz);
   const drain = wire.traceDrain(2048);
   return [
     { name: "console-burst", rate: 20,
@@ -135,10 +134,10 @@ function scenarios() {
       batches: [wire.events(50)] },
     { name: "snapshot-20hz", rate: 20,
       what: "the S-layer topics that publish twenty times a second",
-      batches: [at(rated(20))] },
+      batches: [wire.tick(rated(20))] },
     { name: "snapshot-all", rate: 2,
       what: "every observed topic in one tick, as a stop publishes them",
-      batches: [at(Object.keys(wire.RATES))] },
+      batches: [wire.tick(wire.topics())] },
     { name: "trace-drain", rate: 4,
       what: "a drain summary and the 2048-record window the strip asks for",
       batches: [[drain.summary, drain.window]] },
@@ -147,7 +146,7 @@ function scenarios() {
       batches: [[
         ...wire.consoleLines(40),
         ...wire.events(10),
-        ...at([...rated(20), ...rated(10)]),
+        ...wire.tick([...rated(20), ...rated(10)]),
         drain.summary,
       ]] },
     { name: "cursor-step", rate: 20,
@@ -203,6 +202,8 @@ function report({ name, what, rate = null, once = false, samples, result, long =
 
 async function main() {
   const samples = Number(process.argv[2] ?? 21);
+  /* The observation manifest, from the caller that owns it. */
+  wire.install(JSON.parse(await text(process.stdin)));
   const warm = Math.max(3, Math.round(samples / 3));
   const { server, port } = await serve();
   const browser = await chromium.launch({ args: ["--no-sandbox", "--disable-gpu"] });

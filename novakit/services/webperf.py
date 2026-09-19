@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 from ..core import config, proc
+from .workbench import observations
 
 # Enough of a core that the UI is visibly behind for as long as it lasts.
 BUSY_SHARE = 0.5
@@ -119,11 +120,15 @@ def measure(samples: int, as_json: bool, check: bool) -> int:
     if code:
         return code
 
+    # The page is the real one, so the vocabulary it is fed is the real
+    # one too: the same map the bridge puts in a topology frame. A topic
+    # the board names and this does not carry is a fault, not a blank.
     finished = proc.run(
         ["node", "perf/measure.mjs", str(samples)],
         cwd=config.WEB_DIR,
         capture=True,
         check=False,
+        stdin=json.dumps(observations.observation_rates()),
     )
     if not finished.stdout.strip():
         sys.stderr.write(finished.stderr)
