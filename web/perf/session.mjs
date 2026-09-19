@@ -28,74 +28,31 @@ const GUESTS = [
   { name: "vm1", vcpus: 2, pa: 0x4c000000, ipa: 0x40000000, size: 64 << 20, uart: "none" },
 ];
 
-const BLOCKS = [
-  { id: "gicd", layer: "ic", label: "GICD", base: 0x8000000, size: 0x10000 },
-  { id: "gicr", layer: "ic", label: "GICR", base: 0x80a0000, size: 0x20000, cpu: 0 },
-  { id: "smmu", layer: "ic", label: "SMMU", base: 0x9050000, size: 0x20000, sid_bits: 8, intids: [74, 75] },
-  { id: "uart0", layer: "dev", label: "PL011", base: 0x9000000, size: 0x1000, owner: "el2", intid: 33 },
-  { id: "virtio0", layer: "dev", label: "virtio-mmio", base: 0xa000000, size: 0x200, device_id: 0, intid: 48 },
-];
+/* Everything a topology says about the machine rather than about the
+   run — the board, the stop catalogue, the observation manifest, the
+   vocabularies and the limits. Handed in rather than written here: a
+   copy drifts, and a page fed a machine nobody runs measures a cost
+   nobody pays. */
+let world = { observations: {} };
 
-const EDGES = [
-  { id: "mmio", from: "band:el1", to: "trap", grade: "console", badges: ["TRAP"], label: "게스트 MMIO → 트랩" },
-  { id: "inject", from: "vgic", to: "band:el1", grade: "direct", badges: ["VGIC"], label: "vGIC 주입" },
-  { id: "spi", from: "gicd", to: "vgic", grade: "poll", topic: "vgic.dist", badges: ["GIC"], label: "SPI → vGIC" },
-  { id: "dma", from: "virtio0", to: "smmu", grade: "poll", topic: "dev.dma", badges: ["DMA"], label: "DMA → SMMU" },
-  { id: "sw", from: "sched", to: "band:pe", grade: "poll", topic: "sched.cpu", badges: ["SCHED"], label: "문맥 교환" },
-];
-
-const STOPS = [
-  { id: "vgic.bind", edge: "inject", args: ["pintid", "vintid"], label: "바인드", code: 1,
-    fields: ["pintid|vintid", "", ""], stop: true, span: false },
-  { id: "vgic.eoi", edge: "inject", args: [], label: "EoI", code: 2, fields: ["vintid", "", ""],
-    stop: true, span: false },
-  { id: "ctx.switch", edge: "sw", args: [], label: "문맥 교환", code: 3, fields: ["from", "to", ""],
-    stop: true, span: false },
-  { id: "trace.gap", edge: "", args: [], label: "관측되지 않은 구간", code: 9,
-    fields: ["count", "from", ""], stop: false, span: true },
-];
-
-/* What the bridge says about each topic — rate, whether a demo holds a
-   run to it, which topic dates it, which of its numbers are instants.
-   Handed in rather than written here: a copy of the manifest drifts, and
-   a page fed a vocabulary the bridge does not publish measures a screen
-   nobody will see. */
-let manifest = {};
-
-export function install(observations) {
-  manifest = observations;
-  const missing = Object.keys(manifest).filter((topic) => !(topic in readings()));
+export function install(machine) {
+  world = machine;
+  const missing = Object.keys(world.observations).filter((topic) => !(topic in readings()));
   if (missing.length) {
     throw new Error(`no reading staged for ${missing.join(", ")}`);
   }
 }
 
-export const topics = () => Object.keys(manifest);
-export const rate = (topic) => manifest[topic]?.rate;
+export const topics = () => Object.keys(world.observations);
+export const rate = (topic) => world.observations[topic]?.rate;
 
 export function topology() {
   return frame("topo", {
     session: "perf", run_id: 1, phase: "running", demo: "07-shm", variant: null,
     description: "공유 메모리 부트 카운터",
-    catalog: [{ id: "07", name: "07-shm", variants: [] }],
+    /* The machine, from the bridge; the run's own placement, from here. */
+    ...world,
     guests: GUESTS,
-    board: { name: "qemu-virt", cpus: 2, cpu: "cortex-a57", vcpu_stride: 4, max_guests: 4,
-             blocks: BLOCKS, edges: EDGES,
-             regions: {
-               pa: [{ base: 0x40000000, size: 0x8000000, kind: "el2", name: "EL2" },
-                    { base: 0x48000000, size: 0x8000000, kind: "guest", name: "게스트 창" },
-                    { base: 0x50000000, size: 0x100000, kind: "shared", name: "공유" },
-                    { base: 0x50100000, size: 0x100000, kind: "trace", name: "트레이스" }],
-               ipa: [{ base: 0x40000000, size: 0x4000000, kind: "guest", name: "게스트" },
-                     { base: 0x9000000, size: 0x1000, kind: "trap", name: "vUART" },
-                     { base: 0xa000000, size: 0x200, kind: "assigned", name: "virtio" }],
-             } },
-    stops: STOPS,
-    observations: manifest,
-    taxonomy: { badges: ["TRAP", "IRQ", "VGIC", "GIC", "SCHED", "SMP", "PSCI", "DMA", "SMMU", "WDG", "BOOT", "MUX", "VUART", "FAULT"],
-                esr_ec: { 36: "kDataAbortLower", 22: "kHvcAa64" } },
-    timer_slots: ["watchdog", "slice", "vtimer"],
-    limits: { buckets: 4096 },
     memory: { regimes: [{ id: "el2.self", label: "EL2 · 자기", role: "self", root: "0x40100000" },
                         { id: "vm0.cpu", label: "VM 0 · CPU", role: "cpu", root: "0x40200000" }] },
     command: { period_us: 250, slots: 128, ops: [

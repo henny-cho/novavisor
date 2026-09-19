@@ -181,6 +181,21 @@ function session() {
   ];
 }
 
+/* Staging leaves deferred work behind — the board's paint, the drawers'
+   projection — and the first scenario measured while that lands times
+   the staging instead of itself. Waited out by the condition rather than
+   by a constant: the world grows, and a constant stops being enough
+   without saying so. */
+async function quiet(page, still = 250, cap = 30_000) {
+  const until = Date.now() + cap;
+  for (;;) {
+    const seen = await page.evaluate(() => window.__long.length);
+    await page.waitForTimeout(still);
+    const now = await page.evaluate(() => window.__long.length);
+    if (now === seen || Date.now() > until) return;
+  }
+}
+
 function report({ name, what, rate = null, once = false, samples, result, long = [] }) {
   const total = result.script + result.render;
   return {
@@ -250,7 +265,7 @@ async function main() {
 
   const page = await open();
   await page.evaluate((frames) => window.__feed(frames), session());
-  await page.waitForTimeout(300);
+  await quiet(page);
   for (const scenario of scenarios()) {
     const before = await page.evaluate(() => window.__long.length);
     const result = await page.evaluate(
