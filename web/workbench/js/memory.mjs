@@ -10,14 +10,12 @@
    differing only in output address, and the bridge folds them before
    they travel. */
 
-import { clear, el, elapsed, micros } from "./format.mjs";
+import { clear, el, elapsed, micros, observationOf } from "./format.mjs";
 
-/* S-layer topics this view reads, declared as the board declares its
-   own so a topic the manifest dropped fails a test. The stream table is
-   polled rather than read with the tables it points at, because a fault
-   quarantines a stream and this is the entry that changes. The sync
-   stamps are here because a live answer says how old the root it walked
-   from was, and it is dated against the slot's own sync. */
+/* S-layer topics this view reads, held to the manifest by a test that
+   reads this table and by the asking below. The stream table is polled
+   apart from what it points at because a fault quarantines a stream, and
+   the sync stamps date the root a live answer walked from. */
 const TOPICS = new Set(["smmu.stream", "ctx.synced"]);
 
 /* A probe lands on exactly one row per level. */
@@ -310,6 +308,10 @@ export function createMemory({ pick, form, input, note, body, request }) {
     /* The regimes a run has, from the topology. A run that published
        none leaves the view saying so rather than empty. */
     setWorld(memory) {
+      /* A topology has arrived, so the manifest is answerable: ask it for
+         what this view reads, and a topic it dropped is named now rather
+         than by a view waiting forever for a reading. */
+      for (const topic of TOPICS) observationOf(topic);
       const listed = Array.isArray(memory?.regimes) ? memory.regimes : [];
       /* The first word a run says about its regimes is drawn even when
          it is "none": a client joining before EL2 has built its tables

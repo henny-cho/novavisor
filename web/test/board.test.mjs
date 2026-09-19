@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createBoard } from "../workbench/js/board.mjs";
+import { setObservations } from "../workbench/js/format.mjs";
 import { element, installDom } from "./dom.mjs";
 
 const BOARD = {
@@ -23,6 +24,7 @@ const BOARD = {
    view needs a parent the way it has one on the page. */
 function harness(observations) {
   installDom();
+  setObservations(observations);
   const host = element("div");
   const view = element("div");
   host.append(view);
@@ -49,24 +51,33 @@ function harness(observations) {
 }
 
 describe("board vocabulary", () => {
-  it("names a topic the manifest does not declare", () => {
+  const nameOf = (line) => line.match(/asks about (\S+),/u)[1];
+
+  it("names every topic it holds, not only the ones a first paint reads", () => {
     const said = harness({});
-    /* What an initial paint asks for; the rest are named as their own
-       sections paint. Whichever they are, none may go unsaid. */
-    assert.ok(said.length > 0);
-    for (const line of said) assert.match(line, /which the manifest does not declare$/u);
-    assert.ok(said.some((line) => line.includes("sched.cpu")));
+    for (const line of said) {
+      assert.match(line, /^the screen asks about \S+, which the manifest does not declare$/u);
+    }
+    /* The sections these belong to draw nothing until their own reading
+       arrives, so a check that waited for a paint would never reach
+       them — and a topic renamed out from under one of them would show
+       as a surface that merely has no evidence yet. */
+    const named = said.map(nameOf);
+    for (const topic of ["ivc.page", "dev.dma", "vgic.lr", "timer.queue"]) {
+      assert.ok(named.includes(topic), `${topic} went unnamed`);
+    }
   });
 
   it("says it once for a name, however often it is asked", () => {
-    const said = harness({});
-    const names = said.map((line) => line.split(" ")[3]);
-    assert.deepEqual([...new Set(names)], names);
+    const named = harness({}).map(nameOf);
+    assert.deepEqual([...new Set(named)], named);
   });
 
   it("says nothing about the topics the manifest declares", () => {
+    /* Built from what the board itself named: writing the list out here
+       would be the painters' table kept in two places. */
     const declared = Object.fromEntries(
-      ["vm.generation", "sched.cpu"].map((topic) => [topic, { rate: 20, asserted: false }]),
+      harness({}).map(nameOf).map((topic) => [topic, { rate: 20, asserted: false }]),
     );
     assert.deepEqual(harness(declared), []);
   });

@@ -14,7 +14,7 @@
    carries and says which layer it came from; what is not observed today
    says so rather than being filled in plausibly. */
 
-import { accentOf, clear, ecName, el, stamp, vmAccent, vmSlot } from "./format.mjs";
+import { accentOf, clear, ecName, el, observationOf, stamp, vmAccent, vmSlot } from "./format.mjs";
 
 const SIZE_KEY = "nv-wb-view-h";
 const FOLD_KEY = "nv-wb-view-folded";
@@ -123,21 +123,8 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
      both belong to the manifests that know. A value on screen with no
      demo checking it is a claim; one with a predicate is a guarantee,
      and a reader cannot tell them apart from the number alone. */
-  const undeclared = new Set();
-  /* A topic named here that the manifest does not declare reads exactly
-     like one declared without a rate — an ordinary badge over a surface
-     that will never fill. Said once per name; the board draws on,
-     because a mismatch is no reason for the reader to lose it. */
-  const about = (topic) => {
-    const said = topology?.observations?.[topic];
-    if (said === undefined && topology?.observations && !undeclared.has(topic)) {
-      undeclared.add(topic);
-      console.error(`board asks about ${topic}, which the manifest does not declare`);
-    }
-    return said;
-  };
   const sampled = (topic) => {
-    const said = about(topic);
+    const said = observationOf(topic);
     const badge = evidence("s", said?.rate ? `S ${said.rate}Hz` : "S");
     if (said?.asserted) {
       badge.classList.add("held");
@@ -607,7 +594,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     if (edge.grade === "direct") return `${name} — 정지 가능 · 실측${seen}`;
     if (edge.grade === "console") return `${name} — 콘솔 이벤트 · 시각 정확${seen}`;
     if (edge.grade === "poll") {
-      const hz = about(edge.topic)?.rate;
+      const hz = observationOf(edge.topic)?.rate;
       return `${name} — ${edge.topic} 표본${hz ? ` · S ${hz}Hz` : ""}${seen}`;
     }
     return `${name} — 관측 없음 · 구조만 표시`;
@@ -1120,7 +1107,7 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
       link.title =
         cpu === undefined
           ? ""
-          : `s${link.slot} 거주 @ pCPU${cpu} — sched.cpu[${cpu}].current (S ${about("sched.cpu")?.rate}Hz)`;
+          : `s${link.slot} 거주 @ pCPU${cpu} — sched.cpu[${cpu}].current (S ${observationOf("sched.cpu")?.rate}Hz)`;
     }
   }
 
@@ -1554,6 +1541,13 @@ export function createBoard({ view, board, bands, wires, split, foldButton, onFo
     },
     setTopology(topo) {
       topology = topo && typeof topo === "object" ? topo : null;
+      /* Every topic this board holds a name for, asked of the manifest
+         that has just arrived. Before the signature below, which returns
+         early for a machine that has not changed while the manifest it
+         is described by may have. */
+      for (const painter of Object.values(painters)) {
+        for (const topic of painter.topics) observationOf(topic);
+      }
       const next = JSON.stringify([
         topology?.board?.name,
         topology?.board?.cpus,
