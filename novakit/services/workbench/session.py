@@ -114,12 +114,14 @@ def image_capability(view: observe.View | None, tracing: bool = False) -> set[st
     return events.observable(None if view is None else view.symbols, tracing)
 
 
-def _world(view: observe.View | None, elf: Path | None) -> dict:
+def world(view: observe.View | None, elf: Path | None) -> dict:
     """What every topology says regardless of which target is running.
 
     One place, because these are answers about the machine and the
     image rather than about the run, and two copies of them would let a
-    pre-run world and a running one describe different hardware.
+    pre-run world and a running one describe different hardware. Public
+    for the same reason: the perf harness stages a session and would
+    otherwise be that second copy.
     """
     identity = (
         cpu_profiles.runtime_profile(view.runtime_cpu).presented_identity
@@ -152,7 +154,7 @@ def initial_topology() -> dict:
     return {
         "demo": None,
         "guests": [],
-        **_world(image_answers(), cmake.default_image()),
+        **world(image_answers(), cmake.default_image()),
     }
 
 
@@ -193,7 +195,7 @@ def prepare(target: Target) -> Prepared:
             }
             for guest in demo_manifest.get("guests", [])
         ],
-        **_world(view, elf),
+        **world(view, elf),
     }
     return Prepared(scenario, topology)
 

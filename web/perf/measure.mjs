@@ -181,6 +181,20 @@ function session() {
   ];
 }
 
+/* Staging leaves deferred work behind, and a scenario measured while it
+   lands times the staging instead of itself. Waited out by the long
+   tasks it raises rather than by a constant, which stops being enough
+   without saying so as the world grows. */
+async function quiet(page, still = 300, cap = 30_000) {
+  const until = Date.now() + cap;
+  for (;;) {
+    const seen = await page.evaluate(() => window.__long.length);
+    await page.waitForTimeout(still);
+    const now = await page.evaluate(() => window.__long.length);
+    if (now === seen || Date.now() > until) return;
+  }
+}
+
 function report({ name, what, rate = null, once = false, samples, result, long = [] }) {
   const total = result.script + result.render;
   return {
@@ -250,7 +264,7 @@ async function main() {
 
   const page = await open();
   await page.evaluate((frames) => window.__feed(frames), session());
-  await page.waitForTimeout(300);
+  await quiet(page);
   for (const scenario of scenarios()) {
     const before = await page.evaluate(() => window.__long.length);
     const result = await page.evaluate(
