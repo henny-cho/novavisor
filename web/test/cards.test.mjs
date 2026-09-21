@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createCards } from "../workbench/js/cards.mjs";
-import { setGuestSlots } from "../workbench/js/format.mjs";
+import { setGuestSlots } from "../workbench/js/world.mjs";
 import { element, find, findAll, installDom } from "./dom.mjs";
 
 const GUESTS = [

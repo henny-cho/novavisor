@@ -14,7 +14,8 @@
    carries and says which layer it came from; what is not observed today
    says so rather than being filled in plausibly. */
 
-import { accentOf, clear, ecName, el, observationOf, stamp, vmAccent, vmSlot } from "./format.mjs";
+import { accentOf, clear, ecName, el, stamp, vmAccent, vmSlot } from "./format.mjs";
+import { observationOf } from "./world.mjs";
 
 const SIZE_KEY = "nv-wb-view-h";
 const FOLD_KEY = "nv-wb-view-folded";

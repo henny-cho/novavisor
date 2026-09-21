@@ -1,41 +1,8 @@
-/* Small shared helpers: time on the protocol's axis, safe DOM building.
-   Nothing here touches the wire or the layout. */
+/* Small shared helpers: time on the protocol's axis, the words a reading
+   is drawn with, and safe DOM building. Nothing here holds state or
+   touches the wire — what the topology said lives in `world.mjs`. */
 
 const NS_PER_SECOND = 1e9;
-
-/* Console lines carry a firmware-tagged VM slot; anything the board
-   cannot host is guest text that merely looks like a tag, and must not
-   mint tabs or cards. How many slots exist is the board's own answer, so
-   nothing is hostable before a topology arrives. */
-let guestSlots = 0;
-
-export function setGuestSlots(board) {
-  guestSlots = Number(board && board.max_guests) || 0;
-}
-
-export const hostsGuest = (vm) => Number.isInteger(vm) && vm >= 0 && vm < guestSlots;
-
-/* The topics the manifest declares, and a name the screen asks for that
-   is not among them — undeclared reads exactly like declared without a
-   rate, so a renamed topic draws an ordinary surface that never fills.
-   Said once per name per manifest, and the screen goes on drawing. */
-let declared = null;
-const unknown = new Set();
-
-export function setObservations(observations) {
-  declared = observations && typeof observations === "object" ? observations : null;
-  unknown.clear();
-}
-
-export function observationOf(topic) {
-  if (declared === null) return undefined;
-  const said = declared[topic];
-  if (said === undefined && !unknown.has(topic)) {
-    unknown.add(topic);
-    console.error(`the screen asks about ${topic}, which the manifest does not declare`);
-  }
-  return said;
-}
 
 /* One carried verification step as a line. A kind this build does not
    name still reads as itself rather than as a blank label, so the bridge

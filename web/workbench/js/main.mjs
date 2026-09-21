@@ -2,14 +2,8 @@
    the two pieces of UI state the wire does not carry — the theme and how
    much of the stream was lost. */
 
-import {
-  budgetWords,
-  clockLabel,
-  describeStep,
-  sealedFields,
-  setGuestSlots,
-  setObservations,
-} from "./format.mjs";
+import { budgetWords, clockLabel, describeStep, sealedFields } from "./format.mjs";
+import { setGuestSlots, setObservations } from "./world.mjs";
 import { connect } from "./net.mjs";
 import { createBoard } from "./board.mjs";
 import { createCards } from "./cards.mjs";

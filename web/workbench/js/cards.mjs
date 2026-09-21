@@ -2,7 +2,8 @@
    bridge actually knows at M1 — identity, vCPU count, console volume and
    the last line that guest printed. No state is inferred here. */
 
-import { clear, el, hostsGuest, vmAccent, vmSlot } from "./format.mjs";
+import { clear, el, vmAccent, vmSlot } from "./format.mjs";
+import { hostsGuest } from "./world.mjs";
 
 const ACTIVE_MS = 700;
 const IDLE_TEXT = "출력 없음";

@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { setObservations } from "../workbench/js/format.mjs";
+import { setObservations } from "../workbench/js/world.mjs";
 import { createMemory } from "../workbench/js/memory.mjs";
 import { element, find, findAll, fire, gesture, installDom } from "./dom.mjs";
 

@@ -10,7 +10,8 @@
    differing only in output address, and the bridge folds them before
    they travel. */
 
-import { clear, el, elapsed, micros, observationOf } from "./format.mjs";
+import { clear, el, elapsed, micros } from "./format.mjs";
+import { observationOf } from "./world.mjs";
 
 /* S-layer topics this view reads, held to the manifest by a test that
    reads this table and by the asking below. The stream table is polled

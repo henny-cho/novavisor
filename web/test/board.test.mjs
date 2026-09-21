@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createBoard } from "../workbench/js/board.mjs";
-import { setObservations } from "../workbench/js/format.mjs";
+import { setObservations } from "../workbench/js/world.mjs";
 import { element, installDom } from "./dom.mjs";
 
 const BOARD = {

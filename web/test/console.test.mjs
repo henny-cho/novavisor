@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createConsole } from "../workbench/js/console.mjs";
-import { setGuestSlots } from "../workbench/js/format.mjs";
+import { setGuestSlots } from "../workbench/js/world.mjs";
 import { StreamLog } from "../workbench/js/primitives/stream_log.mjs";
 import { element, findAll, fire, gesture, installDom } from "./dom.mjs";
 

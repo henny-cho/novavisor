@@ -1,4 +1,5 @@
-import { clear, el, hostsGuest, vmAccent, vmSlot } from "./format.mjs";
+import { clear, el, vmAccent, vmSlot } from "./format.mjs";
+import { hostsGuest } from "./world.mjs";
 import { StreamLog } from "./primitives/stream_log.mjs";
 
 
