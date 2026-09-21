@@ -32,6 +32,11 @@ steps:
     within_seconds: 5
   - pattern: "edu dma: pre-fault round-trip ok"
     within_seconds: 5
+  # The round-trip is the guest's word for it. This is the machine's:
+  # the device was handed a transfer, by a VM the SMMU had a stream for.
+  - event: "dma.start"
+    where: { vm: 0 }
+    within_seconds: 5
   - pattern: "edu dma: guest fault submitted"
     within_seconds: 5
   - pattern: "\\[smmu\\] fault type=0x0*10 sid=16 iova=0x0*50100000"
