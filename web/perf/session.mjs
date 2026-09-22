@@ -164,3 +164,43 @@ export function traceDrain(records, from = 1000) {
 }
 
 export const cursor = (wire) => frame("cursor", { wire, unread: [] });
+
+/* ---------- the memory view ----------
+   The walk the bridge answers a probe with: one L0 table, eight L1,
+   and folded runs of leaf slots the way a mapped region unfolds. A
+   captured regime, the kind whose tables do not move under a run. */
+
+const WALK = { read: 9, truncated: false, unreadable: [], wx: 0, wxn: true };
+
+const leaf = (index) => ({
+  level: 2, index, count: 8, base: "0x20000000", size: "0x2000",
+  kind: "block", output: "0x48000000", w: true, x: false, memory: "RAM", af: true,
+});
+WALK.nodes = [
+  {
+    level: 0, index: 0, count: 512, base: "0x0", size: "0x800000000",
+    kind: "table", output: "0x48200000",
+    children: Array.from({ length: 8 }, (_, index) => ({
+      level: 1, index, count: 64, base: "0x20000000", size: "0x2000000",
+      kind: "table", output: "0x48100000",
+      children: Array.from({ length: 38 }, (_, leafer) => leaf(index * 38 + leafer)),
+    })),
+  },
+];
+
+export function memoryAnswer() {
+  return frame("probe", {
+    regime: "el2.self",
+    ground: "captured",
+    root: "0x48200000",
+    tree: WALK,
+    beside: [],
+    moving: false,
+    isolation: null,
+  });
+}
+
+/* The stamp topic the view reads live, even over a captured walk: the
+   frame is what must not rebuild the tree. */
+export const syncedTick = (at = 1_000_000) =>
+  snapshot("ctx.synced", [{ synced_at: at }]);

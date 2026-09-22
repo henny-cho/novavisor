@@ -262,6 +262,38 @@ async function main() {
     }),
   ];
 
+  /* The memory view with an answered walk on screen, moved by the S-layer
+     frames of the run it sits in. On fresh pages like connect: the shared
+     session page is never sent a probe answer, so its walk is never
+     shown, and a scenario that measured it there would measure nothing.
+     What matters is the steady frame after the answer — the walk itself
+     belongs to the answer and must not be rebuilt by them. */
+  const walking = [];
+  const walkFrames = [
+    wire.topology(),
+    wire.life("running", { demo: "07-shm" }),
+    wire.memoryAnswer(),
+  ];
+  for (let round = 0; round < 5; round += 1) {
+    const page = await open();
+    await page.evaluate((frames) => window.__feed(frames), walkFrames);
+    await page.click(".vtab[data-view=memory]");
+    await quiet(page);
+    walking.push(await page.evaluate(
+      ({ batches, warm: w, samples: n }) => window.__measure(batches, w, n),
+      { batches: [[wire.syncedTick()]], warm, samples },
+    ));
+    await page.close();
+  }
+  walking.sort((a, b) => a.script + a.render - (b.script + b.render));
+  measured.push(report({
+    name: "memory-walk",
+    what: "a reader's walk on screen, moved by the stamp topic at its rate",
+    rate: 10,
+    samples: walking.length,
+    result: walking[walking.length >> 1],
+  }));
+
   const page = await open();
   await page.evaluate((frames) => window.__feed(frames), session());
   await quiet(page);
