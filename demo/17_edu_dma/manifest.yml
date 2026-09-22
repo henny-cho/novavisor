@@ -43,9 +43,22 @@ steps:
     within_seconds: 5
   - pattern: "\\[smp\\] DMA fault in VM 0 sid 16 generation 2"
     within_seconds: 5
+  # The same fault off the ring. The generation is what makes it this
+  # one: the isolation probe at boot faults the same stream, and without
+  # it the step would be satisfied by that and assert nothing about the
+  # transfer the guest submitted.
+  - event: "smmu.fault"
+    where: { stream: 16, generation: 2 }
+    within_seconds: 5
   - pattern: "\\[dma\\] VM 0 quiesced"
     within_seconds: 5
   - pattern: "\\[dma\\] VM 0 resumed generation 3"
+    within_seconds: 5
+  # What the resume line claims, read off the ring: the generation the
+  # recovery actually reached, carried by the machine's own record of
+  # the lifecycle it ended.
+  - event: "vm.lifecycle"
+    where: { vm: 0, generation: 3 }
     within_seconds: 5
   - pattern: "edu dma: recovery round-trip and 2 irqs ok"
     within_seconds: 5
