@@ -39,6 +39,7 @@ from novakit.services.workbench.session import (
     Session,
     Target,
     _catalog,
+    requested_guests,
 )
 from novakit.services.workbench.store import StateStore
 from novakit.services.workbench.trace_drain import (
@@ -653,6 +654,45 @@ class GuestTableTest(unittest.TestCase):
         made = self.session([asked])
         made.adopt_guest_table([{"vm": 1, "vmid": 2, "ipa": 9, "pa": 9, "size": 9, "vcpus": 1, "uart": "kNone"}])
         self.assertEqual(made._store.topology["guests"], [asked])
+
+
+    def test_a_field_the_request_left_out_is_not_a_disagreement(self):
+        """A variant built from a config states only the guest's name:
+        the config is what the DTB and the table are both made from, and
+        the manifest's memory_size is the payload reservation. A request
+        that says nothing about a field cannot be contradicted about it."""
+        made = self.session([{"name": "one"}])
+        self.frames(made)  # the topology set above
+        made.adopt_guest_table(
+            [{"vm": 0, "vmid": 1, "ipa": 0x4000, "pa": 0x8000, "size": 0x200000,
+              "vcpus": 1, "uart": "kVuart"}]
+        )
+        said = [frame["data"] for frame in self.frames(made)
+                if frame["data"].get("phase") == "guests-differ"]
+        self.assertEqual(said, [])
+        (guest,) = made._store.topology["guests"]
+        # The machine fills what the request did not claim.
+        self.assertEqual((guest["size"], guest["vcpus"], guest["uart"]), (0x200000, 1, "vuart"))
+
+
+class RequestedGuestsTest(unittest.TestCase):
+    """What the manifest is entitled to claim about a run's guests."""
+
+    GUESTS = [{"name": "vm0", "load_addr": 1, "ipa_base": 2, "memory_size": 3, "vcpus": 2}]
+
+    def test_a_manifest_that_is_the_request_states_the_placement(self):
+        (guest,) = requested_guests({"guests": self.GUESTS}, {})
+        self.assertEqual(guest, {"name": "vm0", "vcpus": 2, "pa": 1, "ipa": 2,
+                                 "size": 3, "uart": "none"})
+
+    def test_a_variant_built_from_a_config_states_only_the_name(self):
+        """The config is what the DTB and the guest table are both made
+        from; the manifest's memory_size beside it is the payload
+        reservation, a different number about a different thing."""
+        self.assertEqual(
+            requested_guests({"guests": self.GUESTS}, {"config": "configs/small.yml"}),
+            [{"name": "vm0"}],
+        )
 
 
 class PollLoopTest(Draining):

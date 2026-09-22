@@ -168,6 +168,31 @@ def _select_variant(demo_manifest: dict, name: str | None) -> dict:
     raise SystemExit(f"[workbench] unknown variant '{name}'")
 
 
+def requested_guests(demo_manifest: dict, variant: dict) -> list[dict]:
+    """What this run asked for, as far as the manifest is the one asking.
+
+    The placement the board map cannot state: where the guests land
+    inside the window it describes. A variant built from a config states
+    only their names — that document is what the DTB and the guest table
+    are both made from, and the manifest's `memory_size` is the payload
+    reservation beside it, a different number about a different thing.
+    """
+    guests = demo_manifest.get("guests", [])
+    if variant.get("config"):
+        return [{"name": guest.get("name")} for guest in guests]
+    return [
+        {
+            "name": guest.get("name"),
+            "vcpus": guest.get("vcpus"),
+            "pa": guest.get("load_addr"),
+            "ipa": guest.get("ipa_base"),
+            "size": guest.get("memory_size"),
+            "uart": guest.get("uart", "none"),
+        }
+        for guest in guests
+    ]
+
+
 def prepare(target: Target) -> Prepared:
     """Blocking: resolve the demo, build everything, describe the run."""
     name = manifest.resolve_demo(target.demo)
@@ -182,19 +207,7 @@ def prepare(target: Target) -> Prepared:
         "demo": name,
         "variant": target.variant,
         "description": demo_manifest.get("description", ""),
-        # The placement the board map cannot state: where this run's
-        # guests landed inside the window it describes.
-        "guests": [
-            {
-                "name": guest.get("name"),
-                "vcpus": guest.get("vcpus"),
-                "pa": guest.get("load_addr"),
-                "ipa": guest.get("ipa_base"),
-                "size": guest.get("memory_size"),
-                "uart": guest.get("uart", "none"),
-            }
-            for guest in demo_manifest.get("guests", [])
-        ],
+        "guests": requested_guests(demo_manifest, variant),
         **world(view, elf),
     }
     return Prepared(scenario, topology)
@@ -338,9 +351,9 @@ class Session:
                 "size": entry.get("size"),
                 "uart": uart,
             }
-            # Named per field: a guest's name alone says that the machine
-            # disagreed and leaves the reader to find out where.
-            moved = [key for key in says if says[key] != guest.get(key)]
+            # Named per field, and only for what the request stated: a
+            # field it left out is not a claim the machine can contradict.
+            moved = [key for key in says if key in guest and says[key] != guest[key]]
             if moved:
                 differs[guest.get("name") or f"vm{index}"] = moved
             merged.append(guest | says)
