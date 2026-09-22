@@ -859,6 +859,7 @@ function onBatch() {
   panels.settle();
   boardView.settle();
   cards.settle();
+  memory.settle();
 }
 
 /* ---------------- theme ---------------- */

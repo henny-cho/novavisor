@@ -240,6 +240,49 @@ describe("address view: the age of the root", () => {
     memory.answer(CLOSED);
     assert.ok(!findAll(body, "mnote").some((node) => node.textContent.includes("뿌리는")));
   });
+
+  it("moves to the newer stamp at the batch, not at the frame", () => {
+    /* The walk is the answer's to draw; a frame that arrived only marks
+       the batch, so ten readings a second cost one redraw of the note.
+       Until then the answer stands as it was drawn. */
+    const { memory, body } = harness();
+    memory.setClock(HZ);
+    world(memory, [GUEST]);
+    memory.apply(synced([{ synced_at: 1_000_000 - 62_500 }]));
+    memory.answer(ROOTED);
+    assert.ok(findAll(body, "mnote").some((node) => node.textContent === "뿌리는 1.0ms 전 사본"));
+
+    memory.apply(synced([{ synced_at: 1_000_000 - 3 * 62_500 }]));
+    assert.ok(findAll(body, "mnote").some((node) => node.textContent === "뿌리는 1.0ms 전 사본"));
+    assert.ok(!findAll(body, "mnote").some((node) => node.textContent.includes("3.0ms")));
+
+    memory.settle();
+    assert.ok(findAll(body, "mnote").some((node) => node.textContent === "뿌리는 3.0ms 전 사본"));
+  });
+});
+
+describe("address view: what a live frame moves", () => {
+  const HOSTROOT = { ...CPU, root: "0x100000" };
+  const CAPTURED = { regime: CPU.id, ground: "captured", root: "0x40000000", tree: { nodes: [] } };
+  const streamFrame = (values) => ({ topic: "smmu.stream", kind: "snapshot", data: { values } });
+
+  it("waits for the batch to redraw the stream strip", () => {
+    const { memory, body } = harness();
+    world(memory, [HOSTROOT]);
+    memory.apply(streamFrame([{ stream: 0, state: "translate", vmid: 1, root: "0x100000" }]));
+    memory.answer(CAPTURED);
+    assert.ok(findAll(body, "mstream").some((node) => node.classes.has("on")));
+
+    memory.apply(streamFrame([{ stream: 0, state: "abort", vmid: 1 }]));
+    /* The strip is the batch's, not the frame's: the answer stands
+       until the window that carried the frame settles. */
+    assert.ok(findAll(body, "mstream").some((node) => node.classes.has("on")));
+    assert.ok(!findAll(body, "mstream").some((node) => node.classes.has("off")));
+
+    memory.settle();
+    assert.ok(findAll(body, "mstream").some((node) => node.classes.has("off")));
+    assert.ok(!findAll(body, "mstream").some((node) => node.classes.has("on")));
+  });
 });
 
 describe("address view: an empty tree", () => {

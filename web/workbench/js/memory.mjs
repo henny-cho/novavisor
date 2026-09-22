@@ -46,6 +46,12 @@ export function createMemory({ pick, form, input, note, body, request }) {
   let told = false; /* whether this run has said anything about its regimes */
   const readings = new Map(); /* topic -> values, for the topic a walk is dated by */
   let counterHz = 0;
+  /* The two pieces a live frame can move, as slots the answer left
+     behind. Written at answer time; a batch only ever touches these two,
+     so the walk itself is never rebuilt per snapshot. */
+  let liveAge = null;
+  let liveStreams = null;
+  let touched = false;
 
   /* An absent address is the map alone — what the walk reads an empty one
      as too, so callers pass whatever the box holds, and this is the only
@@ -232,23 +238,34 @@ export function createMemory({ pick, form, input, note, body, request }) {
     );
   }
 
+  /* The regime a live section reads, by the id the answer names. */
+  const regimeOf = (id) => regimes.find((entry) => entry.id === id);
+
   function renderAnswer() {
     clear(body);
+    touched = false; /* a full render draws the freshest readings it has */
     if (!shown) return;
     const tree = shown.tree || {};
     const steps = shown.probe?.steps || [];
     const rows = tree.nodes || [];
-    const regime = regimes.find((entry) => entry.id === chosen);
+    const regime = regimeOf(chosen);
     input.placeholder = firstMapped(rows);
     /* The table the walk started from. A live regime's root is read per
        answer, so it is a fact about this walk and not about the regime. */
     if (shown.root) body.append(el("div", "mnote", `뿌리 ${shown.root}`));
-    renderRooted(shown.rooted, body);
+    /* The answer owns the order; the batch owns the two live sections
+       it leaves behind, each in its own slot. A slot is a plain div, so
+       an empty one collapses to nothing. */
+    liveAge = el("div");
+    body.append(liveAge);
+    renderRooted(shown.rooted, liveAge);
     renderBeside(shown.beside, body);
     renderThrough(shown.through, shown.probe || {}, body);
     renderMoving(shown.moving, body);
     renderIsolation(shown.isolation, body);
-    renderStreams(regime, body);
+    liveStreams = el("div");
+    body.append(liveStreams);
+    renderStreams(regime, liveStreams);
     if (!rows.length) {
       /* "No mappings" is an answer about the tables; a regime that is
          walked as it is asked has no map to answer it with, and saying
@@ -342,21 +359,39 @@ export function createMemory({ pick, form, input, note, body, request }) {
     accepts: (topic) => TOPICS.has(topic),
 
     /* An S-layer reading, in the shape every panel takes one. The map
-       does not change under a run; what a stream may do does. */
+       does not change under a run; what a stream may do does. Stored,
+       never drawn: the batch's settle below is the only caller that
+       paints a live frame, so ten reads a second cost one redraw of the
+       two small sections rather than a rebuild of the whole walk. */
     apply(frame) {
       if (frame.kind !== "snapshot") return;
       const values = frame.data?.values;
       if (!Array.isArray(values)) return;
       readings.set(frame.topic, values);
       if (frame.topic === "smmu.stream") streams = values;
-      if (shown) renderAnswer();
+      touched = true;
+    },
+
+    /* End of a flush window: only the live sections move, inside the
+       slots the answer left behind. The walk itself is the answer's. */
+    settle() {
+      if (!shown || !touched) return;
+      touched = false;
+      clear(liveAge);
+      renderRooted(shown.rooted, liveAge);
+      clear(liveStreams);
+      renderStreams(regimeOf(chosen), liveStreams);
     },
 
     /* The counter's rate, learned with the first trace window. Until it
        arrives an age is a tick count, which is wrong by whatever the
-       clock turns out to be. */
+       clock turns out to be. The note appears the moment the rate is
+       known rather than with the next frame that happened to arrive. */
     setClock(hz) {
-      counterHz = Number(hz) || 0;
+      const next = Number(hz) || 0;
+      if (next === counterHz) return;
+      counterHz = next;
+      touched = true;
     },
 
     /* Asked again when the view opens: a run that started since the
