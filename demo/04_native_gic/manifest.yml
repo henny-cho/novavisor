@@ -13,13 +13,27 @@ guests:
     memory_size: 0x00100000
     vcpus: 1
 
-steps:
-  - pattern: "native tick 5"
-    within_seconds: 5
-  # Five ticks is what the guest counted. This is EL2 posting the PPI it
-  # enabled — the delivery half, which no line of guest output shows.
-  - event: "vgic.private"
-    where: { vintid: 27 }
-    within_seconds: 5
-  - pattern: "demo_exit code=0"
-    within_seconds: 10
+variants:
+  - name: "default"
+    steps:
+      - pattern: "native tick 5"
+        within_seconds: 5
+      # Five ticks is what the guest counted. This is EL2 posting the PPI it
+      # enabled — the delivery half, which no line of guest output shows.
+      - event: "vgic.private"
+        where: { vintid: 27 }
+        within_seconds: 5
+      - pattern: "demo_exit code=0"
+        within_seconds: 10
+
+  # The same guest where no demo hypercall is served: every PUTS, PUTC and
+  # EXIT comes back NOT_SUPPORTED with x1..x3 zeroed, so a stub that keeps
+  # a live value there spins instead of finishing. Reaching EXIT is the proof.
+  - name: "minimal"
+    preset: "aarch64-minimal-release"
+    steps:
+      - event: "vgic.private"
+        where: { vintid: 27 }
+        within_seconds: 5
+      - pattern: "unknown HVC func_id=0x0*1002"
+        within_seconds: 5

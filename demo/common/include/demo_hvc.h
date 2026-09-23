@@ -2,13 +2,13 @@
 //
 // Inline stubs for the NovaVisor guest hypercall ABI. Shared by every
 // demo guest. Function IDs come from nova/abi/hvc_abi.h — the single source
-// shared with the hypervisor's dispatcher (the demo_hvc component).
-//
-// Function ID lives in x0. Arguments in x1..x6. Return (if any) in x0.
+// shared with the hypervisor's dispatcher (the demo_hvc component). The
+// register contract is the conduit's, in guest_smccc.h.
 
 #ifndef NOVAVISOR_DEMO_HVC_H
 #define NOVAVISOR_DEMO_HVC_H
 
+#include "guest_smccc.h"
 #include "nova/abi/hvc_abi.h"
 
 #include <stddef.h>
@@ -33,16 +33,11 @@ enum {
 };
 
 static inline void hvc_putc(char c) {
-  register uint64_t x0 __asm__("x0") = HVC_PUTC;
-  register uint64_t x1 __asm__("x1") = (uint64_t)(unsigned char)c;
-  __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
+  (void)smccc_call(HVC_PUTC, (uint64_t)(unsigned char)c, 0, 0);
 }
 
 static inline void hvc_puts(const char* s, size_t n) {
-  register uint64_t x0 __asm__("x0") = HVC_PUTS;
-  register uint64_t x1 __asm__("x1") = (uint64_t)(uintptr_t)s;
-  register uint64_t x2 __asm__("x2") = (uint64_t)n;
-  __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1), "r"(x2) : "memory");
+  (void)smccc_call(HVC_PUTS, (uint64_t)(uintptr_t)s, (uint64_t)n, 0);
 }
 
 // Convenience: print a C string literal whose length the compiler knows.
@@ -62,77 +57,55 @@ static inline void hvc_put_dec(uint64_t v) {
 }
 
 static inline void hvc_exit(int code) {
-  register uint64_t x0 __asm__("x0") = HVC_EXIT;
-  register uint64_t x1 __asm__("x1") = (uint64_t)code;
-  __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
-  __builtin_unreachable();
+  (void)smccc_call(HVC_EXIT, (uint64_t)code, 0, 0);
+  smccc_park();
 }
 
 // Report one interrupt-latency sample: the deadline this guest armed and
 // the counter it read on handler entry, both virtual. Called after the
 // read, so the hypercall's own cost is outside the sample.
 static inline void hvc_irq_sample(uint64_t vintid, uint64_t deadline, uint64_t entry) {
-  register uint64_t x0 __asm__("x0") = HVC_DIAG_IRQ_SAMPLE;
-  register uint64_t x1 __asm__("x1") = vintid;
-  register uint64_t x2 __asm__("x2") = deadline;
-  register uint64_t x3 __asm__("x3") = entry;
-  __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x3) : "memory");
+  (void)smccc_call(HVC_DIAG_IRQ_SAMPLE, vintid, deadline, entry);
 }
 
 // Ask EL2 to fault itself (panic-path smoke). Never returns.
 static inline void hvc_diag_el2_fault(void) {
-  register uint64_t x0 __asm__("x0") = HVC_DIAG_EL2_FAULT;
-  __asm__ volatile("hvc #0" : "+r"(x0)::"memory");
-  for (;;) {
-  }
+  (void)smccc_call(HVC_DIAG_EL2_FAULT, 0, 0, 0);
+  smccc_park();
 }
 
 static inline void hvc_yield(void) {
-  register uint64_t x0 __asm__("x0") = HVC_YIELD;
-  __asm__ volatile("hvc #0" : "+r"(x0)::"memory");
+  (void)smccc_call(HVC_YIELD, 0, 0, 0);
 }
 
 // Re-arm the caller's watchdog: a warm reset follows if the next
 // heartbeat does not arrive within `window_ms`. 0 disarms.
 static inline void hvc_heartbeat(uint64_t window_ms) {
-  register uint64_t x0 __asm__("x0") = HVC_HEARTBEAT;
-  register uint64_t x1 __asm__("x1") = window_ms;
-  __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
+  (void)smccc_call(HVC_HEARTBEAT, window_ms, 0, 0);
 }
 
 // One-shot hypervisor timer: injects vINTID 27 (virtual timer PPI)
 // after `ticks` counter cycles (CNTFRQ rate). Returns 0 on success.
 static inline uint64_t hvc_timer_set(uint64_t ticks) {
-  register uint64_t x0 __asm__("x0") = HVC_TIMER_SET;
-  register uint64_t x1 __asm__("x1") = ticks;
-  __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
-  return x0;
+  return (uint64_t)smccc_call(HVC_TIMER_SET, ticks, 0, 0);
 }
 
 // Start a not-yet-running VM (guest_table index). The new VM runs when
 // someone yields. Returns 0 on success.
 static inline uint64_t hvc_vm_start(uint64_t vm_index) {
-  register uint64_t x0 __asm__("x0") = HVC_VM_START;
-  register uint64_t x1 __asm__("x1") = vm_index;
-  __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
-  return x0;
+  return (uint64_t)smccc_call(HVC_VM_START, vm_index, 0, 0);
 }
 
 // Ring the doorbell of another VM: injects the doorbell vIRQ
 // (vINTID NOVA_IVC_DOORBELL_VINTID) into it. Returns 0 on success.
 static inline uint64_t hvc_ivc_doorbell(uint64_t vm_index) {
-  register uint64_t x0 __asm__("x0") = HVC_IVC_DOORBELL;
-  register uint64_t x1 __asm__("x1") = vm_index;
-  __asm__ volatile("hvc #0" : "+r"(x0) : "r"(x1) : "memory");
-  return x0;
+  return (uint64_t)smccc_call(HVC_IVC_DOORBELL, vm_index, 0, 0);
 }
 
 // Request one DMA beyond the caller's assigned window. Returns 0 when
 // the EL2-owned test device accepted the request.
 static inline uint64_t hvc_dma_fault_inject(void) {
-  register uint64_t x0 __asm__("x0") = HVC_DMA_FAULT_INJECT;
-  __asm__ volatile("hvc #0" : "+r"(x0)::"memory");
-  return x0;
+  return (uint64_t)smccc_call(HVC_DMA_FAULT_INJECT, 0, 0, 0);
 }
 
 #endif // NOVAVISOR_DEMO_HVC_H

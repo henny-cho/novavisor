@@ -23,7 +23,7 @@ extern char __stack_top[];      // linker script (boot vCPU's stack)
 // of this silicon, so the harness pins them: guest Linux gates all of
 // SMCCC 1.1 on PSCI_FEATURES(SMCCC_VERSION).
 static void report_firmware(void) {
-  const uint64_t version = (uint64_t)smccc_call(SMCCC_FN_VERSION, 0);
+  const uint64_t version = (uint64_t)smccc_call(SMCCC_FN_VERSION, 0, 0, 0);
   hvc_puts_lit("smccc: version ");
   hvc_put_dec((uint32_t)(version >> 16));
   hvc_putc('.');
@@ -33,14 +33,14 @@ static void report_firmware(void) {
   hvc_puts_lit(" psci_features ");
   hvc_puts(psci_features(SMCCC_FN_VERSION) == SMCCC_SUCCESS ? "ok" : "no", 2);
   hvc_puts_lit(" arch_features ");
-  hvc_puts(smccc_call(SMCCC_FN_ARCH_FEATURES, SMCCC_FN_VERSION) == SMCCC_SUCCESS ? "ok" : "no", 2);
+  hvc_puts(smccc_call(SMCCC_FN_ARCH_FEATURES, SMCCC_FN_VERSION, 0, 0) == SMCCC_SUCCESS ? "ok" : "no", 2);
   hvc_putc('\n');
   // What these answer is the part's business, so nothing pins it. Asked
   // anyway: an unclaimed ID reaches the console as an unknown HVC, and
   // the manifest forbids that.
   static const uint32_t kWorkarounds[] = {SMCCC_FN_WORKAROUND_1, SMCCC_FN_WORKAROUND_2, SMCCC_FN_WORKAROUND_3};
   for (unsigned i = 0; i < sizeof kWorkarounds / sizeof kWorkarounds[0]; ++i) {
-    (void)smccc_call(kWorkarounds[i], 0);
+    (void)smccc_call(kWorkarounds[i], 0, 0, 0);
   }
 }
 
